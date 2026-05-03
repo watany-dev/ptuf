@@ -1,0 +1,15 @@
+{
+  "effortLevel": "high",
+  "language": "japanese",
+  "autoMemoryEnabled": false,
+  "env": {
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(make:*)",
+      "Bash(cargo:*)",
+      "Bash(git:*)"
+    ]
+  }
+}
