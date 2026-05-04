@@ -46,34 +46,6 @@ pub static REMOTE_PIPE: LazyLock<Regex> = LazyLock::new(|| {
     .expect("REMOTE_PIPE regex")
 });
 
-/// Strip single, double, and back quotes from a Bash command string so that
-/// patterns like `rm -rf "${HOME}"` or `rm -rf '/'` reduce to the bare token
-/// form expected by [`DESTRUCTIVE_PATH`].
-pub fn strip_quotes(command: &str) -> String {
-    command.replace(['\'', '"', '`'], "")
-}
-
-/// Dangerous filesystem targets after quote stripping.
-/// Used by `core.filesystem.destructive-rm`.
-///
-/// `~` and `$HOME` are only flagged when they stand alone (or end with `/`),
-/// not when followed by a child path like `$HOME/scratch/foo`.
-#[allow(clippy::expect_used)]
-pub static DESTRUCTIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(concat!(
-        r"(?x)",
-        r"(?:^|\s)",
-        r"(?:",
-        r"/(?:\s|$|\*)",
-        r"|~/?(?:\s|$)",
-        r"|\$HOME/?(?:\s|$)",
-        r"|\$\{HOME\}/?(?:\s|$)",
-        r"|/(?:etc|usr|var|bin|boot|lib|lib32|lib64|sbin|opt|root|sys|proc)(?:/|\s|$)",
-        r")",
-    ))
-    .expect("DESTRUCTIVE_PATH regex")
-});
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,13 +58,5 @@ mod tests {
         LazyLock::force(&NETWORK_SINK);
         LazyLock::force(&SENSITIVE_PATH);
         LazyLock::force(&REMOTE_PIPE);
-        LazyLock::force(&DESTRUCTIVE_PATH);
-    }
-
-    #[test]
-    fn strip_quotes_removes_all_quote_variants() {
-        assert_eq!(strip_quotes(r#"rm -rf "${HOME}""#), "rm -rf ${HOME}");
-        assert_eq!(strip_quotes("rm -rf '/'"), "rm -rf /");
-        assert_eq!(strip_quotes("`echo x`"), "echo x");
     }
 }

@@ -16,16 +16,22 @@ pub mod shell;
 
 /// Aggregated facts derived from a single hook payload.
 ///
-/// Subsequent commits will populate `shell`, `urls`, `paths`, etc. The
-/// initial skeleton is intentionally empty so that the
-/// `evaluate(&Facts, &HookInput)` signature can be threaded through the
-/// rule layer before any extractor exists.
+/// Populated lazily as the layered rule set demands: each new fact
+/// extractor (urls, paths, dataflow, …) lands as another field with its
+/// own `Option<…>` so that non-Bash tools simply leave the relevant
+/// shapes unset.
 #[derive(Debug, Default)]
-pub struct Facts {}
+pub struct Facts {
+    /// Parsed Bash command line, present only for `Bash` tool calls
+    /// whose payload carries a `command` string.
+    pub bash: Option<shell::Bash>,
+}
 
 /// Build a [`Facts`] view of a hook input. Pure function with no I/O.
-pub fn extract(_input: &HookInput) -> Facts {
-    Facts::default()
+pub fn extract(input: &HookInput) -> Facts {
+    Facts {
+        bash: input.bash_command().map(shell::parse),
+    }
 }
 
 #[cfg(test)]

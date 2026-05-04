@@ -1,14 +1,23 @@
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
+use crate::facts::shell::Argv;
 use crate::hook_input::HookInput;
 use crate::reason;
 
 use super::ConfigRule;
-use super::patterns::{DESTRUCTIVE_PATH, strip_quotes};
 
 pub struct DestructiveRm;
 
 const RULE_ID: &str = "core.filesystem.destructive-rm";
+
+const RM_HEADS: &[&str] = &["rm", "/bin/rm", "/usr/bin/rm"];
+
+const SYSTEM_ROOTS: &[&str] = &[
+    "/etc", "/usr", "/var", "/bin", "/boot", "/lib", "/lib32", "/lib64", "/sbin", "/opt", "/root",
+    "/sys", "/proc",
+];
+
+const HOME_TARGETS: &[&str] = &["~", "~/", "$HOME", "$HOME/", "${HOME}", "${HOME}/"];
 
 impl ConfigRule for DestructiveRm {
     fn id(&self) -> &'static str {
@@ -23,10 +32,14 @@ impl ConfigRule for DestructiveRm {
         true
     }
 
-    fn evaluate(&self, _facts: &Facts, input: &HookInput) -> Option<Decision> {
-        let command = input.bash_command()?;
-        let stripped = strip_quotes(command);
-        if !contains_destructive_rm(&stripped) {
+    fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
+        let bash = facts.bash.as_ref()?;
+        let triggered = bash
+            .segments
+            .iter()
+            .flat_map(|p| p.commands.iter())
+            .any(is_destructive_rm_invocation);
+        if !triggered {
             return None;
         }
 
@@ -48,78 +61,37 @@ impl ConfigRule for DestructiveRm {
     }
 }
 
-fn contains_destructive_rm(command: &str) -> bool {
-    for segment in split_top_level(command) {
-        let trimmed = segment.trim_start();
-        let mut tokens = trimmed.split_whitespace();
-        let head = match tokens.next() {
-            Some(h) => h,
-            None => continue,
-        };
-        if head != "rm" && head != "/bin/rm" && head != "/usr/bin/rm" {
-            continue;
-        }
-
-        let rest_tokens: Vec<&str> = tokens.collect();
-        if !has_recursive_force_flag(&rest_tokens) {
-            continue;
-        }
-
-        let rest = rest_tokens.join(" ");
-        let with_leading_space = format!(" {rest}");
-        if DESTRUCTIVE_PATH.is_match(&with_leading_space) {
-            return true;
-        }
-    }
-    false
+fn is_destructive_rm_invocation(argv: &Argv) -> bool {
+    is_rm_head(&argv.head)
+        && has_recursive_force_flag(argv)
+        && argv.positional().any(is_destructive_target)
 }
 
-/// Split a command on top-level `;`, `&&`, `||`, `|` boundaries.
-/// Naive: does not handle quoted separators, but quotes are stripped upstream.
-fn split_top_level(command: &str) -> Vec<&str> {
-    let mut segments = Vec::new();
-    let bytes = command.as_bytes();
-    let mut start = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        let two = if i + 1 < bytes.len() {
-            &bytes[i..i + 2]
-        } else {
-            &[][..]
-        };
-        if two == b"&&" || two == b"||" {
-            segments.push(&command[start..i]);
-            i += 2;
-            start = i;
-            continue;
-        }
-        if c == b';' || c == b'|' {
-            segments.push(&command[start..i]);
-            i += 1;
-            start = i;
-            continue;
-        }
-        i += 1;
-    }
-    segments.push(&command[start..]);
-    segments
+fn is_rm_head(head: &str) -> bool {
+    RM_HEADS.contains(&head)
 }
 
-fn has_recursive_force_flag(tokens: &[&str]) -> bool {
-    if tokens.contains(&"--recursive") && tokens.contains(&"--force") {
+fn has_recursive_force_flag(argv: &Argv) -> bool {
+    let flags: Vec<&str> = argv.flags().collect();
+    if flags.contains(&"--recursive") && flags.contains(&"--force") {
         return true;
     }
-    for tok in tokens {
-        if !tok.starts_with('-') || tok.starts_with("--") {
-            continue;
+    flags.iter().any(|flag| {
+        if flag.starts_with("--") {
+            return false;
         }
-        let body = &tok[1..];
-        if body.contains('r') && body.contains('f') {
-            return true;
-        }
-    }
-    false
+        let body = &flag[1..];
+        body.contains('r') && body.contains('f')
+    })
+}
+
+fn is_destructive_target(arg: &str) -> bool {
+    arg == "/"
+        || arg == "/*"
+        || HOME_TARGETS.contains(&arg)
+        || SYSTEM_ROOTS
+            .iter()
+            .any(|root| arg == *root || arg.starts_with(&format!("{root}/")))
 }
 
 #[cfg(test)]
@@ -229,6 +201,5 @@ mod tests {
     #[test]
     fn allows_other_commands_with_rm_substring() {
         assert_allow("echo rm -rf / # not actually deleting");
-        // The above tokenises with `echo` as head, so no destructive rm fires.
     }
 }
