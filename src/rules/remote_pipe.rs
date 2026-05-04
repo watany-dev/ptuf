@@ -1,17 +1,25 @@
-use crate::decision::Decision;
+use crate::decision::{Decision, Severity};
 use crate::hook_input::HookInput;
 use crate::reason;
 
-use super::Rule;
+use super::ConfigRule;
 use super::patterns::REMOTE_PIPE;
 
 pub struct RemoteScriptPipe;
 
 const RULE_ID: &str = "core.network.remote-script-pipe";
 
-impl Rule for RemoteScriptPipe {
+impl ConfigRule for RemoteScriptPipe {
     fn id(&self) -> &'static str {
         RULE_ID
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Critical
+    }
+
+    fn hard_deny(&self) -> bool {
+        true
     }
 
     fn evaluate(&self, input: &HookInput) -> Option<Decision> {

@@ -9,6 +9,30 @@ pub enum Decision {
     Deny { rule_id: String, reason: String },
 }
 
+/// Coarse risk grade attached to each rule. Used by plugin authors and
+/// future audit log fields (`docs/design/config-and-plugins.md` §rules).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Info,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+/// Variant tag of [`Decision`] without the carried payload. Lets a rule
+/// declare its `defaultDecision` independently from the per-call
+/// `rule_id` / `reason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DecisionKind {
+    Allow,
+    Monitor,
+    Ask,
+    Deny,
+}
+
 impl Decision {
     /// Strictness ranking used by [`aggregate`].
     /// `allow=0 < monitor=1 < ask=2 < deny=3`.
@@ -34,6 +58,17 @@ impl Decision {
         match self {
             Decision::Ask { reason, .. } | Decision::Deny { reason, .. } => Some(reason.as_str()),
             Decision::Allow | Decision::Monitor { .. } => None,
+        }
+    }
+
+    /// Variant tag without the payload. Useful for matching against a
+    /// rule's `defaultDecision`.
+    pub fn kind(&self) -> DecisionKind {
+        match self {
+            Decision::Allow => DecisionKind::Allow,
+            Decision::Monitor { .. } => DecisionKind::Monitor,
+            Decision::Ask { .. } => DecisionKind::Ask,
+            Decision::Deny { .. } => DecisionKind::Deny,
         }
     }
 }
@@ -137,6 +172,40 @@ mod tests {
     fn aggregate_empty_is_allow() {
         let empty: Vec<Decision> = Vec::new();
         assert_eq!(aggregate(empty), Decision::Allow);
+    }
+
+    #[test]
+    fn severity_enum_orders_info_below_critical() {
+        assert!(Severity::Info < Severity::Low);
+        assert!(Severity::Low < Severity::Medium);
+        assert!(Severity::Medium < Severity::High);
+        assert!(Severity::High < Severity::Critical);
+    }
+
+    #[test]
+    fn severity_serialises_lowercase() {
+        let json = serde_json::to_string(&Severity::Critical).expect("serialise");
+        assert_eq!(json, "\"critical\"");
+        let parsed: Severity = serde_json::from_str("\"info\"").expect("parse");
+        assert_eq!(parsed, Severity::Info);
+    }
+
+    #[test]
+    fn decision_kind_serialises_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&DecisionKind::Deny).expect("serialise"),
+            "\"deny\"",
+        );
+        let parsed: DecisionKind = serde_json::from_str("\"monitor\"").expect("parse");
+        assert_eq!(parsed, DecisionKind::Monitor);
+    }
+
+    #[test]
+    fn decision_kind_matches_variant() {
+        assert_eq!(Decision::Allow.kind(), DecisionKind::Allow);
+        assert_eq!(monitor("x").kind(), DecisionKind::Monitor);
+        assert_eq!(ask("x").kind(), DecisionKind::Ask);
+        assert_eq!(deny("x").kind(), DecisionKind::Deny);
     }
 
     #[test]
