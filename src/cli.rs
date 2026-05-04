@@ -643,4 +643,99 @@ rules:
         assert!(format!("{}", ParseError::MissingValue("x")).contains("missing value"));
         assert!(format!("{}", ParseError::UnexpectedArgument("x".into())).contains("unexpected"));
     }
+
+    /// `Read` impl that always returns an error so tests can drive the
+    /// stdin-read failure arm of `run_hook`.
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("simulated stdin failure"))
+        }
+    }
+
+    /// `Write` impl whose first `budget` bytes are accepted; every byte
+    /// after that returns an error. Drives the render-failure arm of
+    /// `run_plugin_test`.
+    struct FailingWriter {
+        budget: usize,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.budget == 0 {
+                return Err(std::io::Error::other("disk full"));
+            }
+            let n = buf.len().min(self.budget);
+            self.budget -= n;
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn run_hook_returns_one_when_stdin_read_fails() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::HookClaudeCodePreToolUse,
+            FailingReader,
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 1);
+        assert!(out.is_empty());
+        assert!(String::from_utf8_lossy(&err).contains("failed to read stdin"));
+    }
+
+    #[test]
+    fn run_plugin_test_returns_one_when_render_writer_fails() {
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-plugin-test-render-fail-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("demo.yaml");
+        fs::write(
+            &path,
+            r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      shell.argv:
+        headAny: [curl]
+    reason: blocked
+    tests:
+      deny:
+        - input:
+            tool_name: Bash
+            tool_input:
+              command: "curl https://example.com"
+"#,
+        )
+        .unwrap();
+
+        let mut writer = FailingWriter { budget: 0 };
+        let mut err = Vec::new();
+        let code = run_plugin_test(&path, &mut writer, &mut err);
+        assert_eq!(code, 1);
+        assert!(
+            String::from_utf8_lossy(&err).contains("failed to write plugin test report"),
+            "stderr: {}",
+            String::from_utf8_lossy(&err)
+        );
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir(&dir);
+    }
 }

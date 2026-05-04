@@ -392,4 +392,161 @@ rules:
         assert!(s.contains("FAIL"));
         assert!(s.contains("ok"));
     }
+
+    /// `Write` impl that succeeds for the first `fail_after` bytes and
+    /// then returns `Err` on every subsequent call. Used to exercise the
+    /// `?`-propagation paths inside [`RunReport::render`] without
+    /// touching the filesystem.
+    struct FailingWriter {
+        budget: usize,
+    }
+
+    impl FailingWriter {
+        fn new(budget: usize) -> Self {
+            Self { budget }
+        }
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.budget == 0 {
+                return Err(io::Error::other("disk full"));
+            }
+            let n = buf.len().min(self.budget);
+            self.budget -= n;
+            Ok(n)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn render_propagates_io_error_when_header_write_fails() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: r
+rules:
+  - id: r.x
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: r
+    tests:
+      deny:
+        - input:
+            tool_name: Bash
+            tool_input:
+              command: "ls"
+"#;
+        let report = run_str(&p(), yaml).expect("run");
+        let mut writer = FailingWriter::new(0);
+        let err = report.render(&mut writer).expect_err("header must fail");
+        assert!(format!("{err}").contains("disk full"));
+    }
+
+    #[test]
+    fn render_propagates_io_error_when_per_case_write_fails() {
+        // Configure a deny case whose rule does NOT fire: that forces
+        // render down the `case.passed == false` branch with `got: None`,
+        // which adds a third writeln per case. With a budget that just
+        // covers the header, the per-case line triggers the second `?`.
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: r
+rules:
+  - id: r.x
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Read
+    reason: r
+    tests:
+      deny:
+        - input:
+            tool_name: Bash
+            tool_input:
+              command: "ls"
+"#;
+        let report = run_str(&p(), yaml).expect("run");
+        // Header "plugin r (test.yaml): 0 passed, 1 failed\n" is 41 bytes.
+        let mut writer = FailingWriter::new(41);
+        let err = report
+            .render(&mut writer)
+            .expect_err("per-case write must fail");
+        assert!(format!("{err}").contains("disk full"));
+    }
+
+    #[test]
+    fn prepare_case_propagates_compile_error_for_unknown_when_key() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: bad
+rules:
+  - id: bad.r
+    severity: low
+    defaultDecision: deny
+    when:
+      noSuchFact: yes
+    reason: r
+    tests:
+      deny:
+        - input:
+            tool_name: Bash
+            tool_input:
+              command: "ls"
+"#;
+        let err = run_str(&p(), yaml).expect_err("compile must fail");
+        match err {
+            PluginError::Compile {
+                path,
+                rule_id,
+                message,
+            } => {
+                assert_eq!(path, p());
+                assert_eq!(rule_id, "bad.r");
+                assert!(
+                    message.contains("noSuchFact") || message.contains("unknown"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected Compile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decision_label_returns_each_label_directly() {
+        // The render path only ever calls `decision_label` for failing
+        // cases whose `got` is `Some(_)`, which in practice is always
+        // `Decision::Deny`. Hit Allow / Monitor / Ask directly so the
+        // remaining match arms are covered.
+        assert_eq!(decision_label(&Decision::Allow), "allow");
+        assert_eq!(
+            decision_label(&Decision::Monitor {
+                rule_id: "x".into()
+            }),
+            "monitor"
+        );
+        assert_eq!(
+            decision_label(&Decision::Ask {
+                rule_id: "x".into(),
+                reason: "r".into(),
+            }),
+            "ask"
+        );
+        assert_eq!(
+            decision_label(&Decision::Deny {
+                rule_id: "x".into(),
+                reason: "r".into(),
+            }),
+            "deny"
+        );
+    }
 }
