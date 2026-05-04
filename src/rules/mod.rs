@@ -8,6 +8,7 @@ pub mod patterns;
 pub mod remote_pipe;
 pub mod self_protection;
 pub mod sensitive_net;
+pub mod sensitive_read;
 
 /// Trait implemented by every rule that the engine evaluates, both
 /// builtin and (eventually) plugin-loaded.
@@ -55,6 +56,7 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &self_protection::PLUGIN_RULE,
     &self_protection::CLAUDE_SETTINGS_RULE,
     &self_protection::HOOK_SCRIPT_RULE,
+    &sensitive_read::SensitiveRead,
 ];
 
 /// Run every built-in rule against `facts` + `input` and collect
@@ -126,6 +128,7 @@ mod tests {
         ] {
             assert!(ids.contains(&self_id), "missing rule_id {self_id}");
         }
+        assert!(ids.contains(&"core.secrets.sensitive-read"));
     }
 
     #[test]
