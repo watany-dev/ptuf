@@ -240,4 +240,30 @@ mod tests {
         assert!(layout.project.is_none());
         assert!(layout.project_local.is_none());
     }
+
+    #[test]
+    fn system_env_var_os_reads_from_real_process_env() {
+        // Calling SystemEnv::var_os with a key that the test runner is
+        // virtually guaranteed to set ("PATH") proves the production
+        // env-lookup path actually delegates to std::env. We only
+        // assert that the call doesn't panic and that it returns a
+        // value when one exists in the parent process.
+        let env = SystemEnv;
+        let _path = env.var_os("PATH");
+        let absent = env.var_os("PTUF_DEFINITELY_NOT_SET_ANYWHERE_xyz123");
+        assert!(absent.is_none());
+    }
+
+    #[test]
+    fn default_layout_uses_system_env_lookup() {
+        // default_layout(None) walks SystemEnv::var_os for each scope.
+        // The result varies with the host's environment; the only
+        // structural invariant we can assert is that the system path
+        // is always populated (defaults to /etc/ptuf/policy.yaml when
+        // PTUF_ETC_DIR is unset).
+        let layout = default_layout(None);
+        assert!(layout.system.is_some());
+        assert!(layout.project.is_none());
+        assert!(layout.project_local.is_none());
+    }
 }

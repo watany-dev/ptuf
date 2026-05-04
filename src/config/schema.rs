@@ -175,3 +175,86 @@ impl<'de> Deserialize<'de> for Mode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn redaction_mode_parses_strict_and_off() {
+        let strict: RedactionMode = serde_yaml_ng::from_str("strict").expect("strict");
+        assert_eq!(strict, RedactionMode::Strict);
+        let off: RedactionMode = serde_yaml_ng::from_str("off").expect("off");
+        assert_eq!(off, RedactionMode::Off);
+    }
+
+    #[test]
+    fn redaction_mode_rejects_unknown_variant() {
+        let err = serde_yaml_ng::from_str::<RedactionMode>("loose")
+            .expect_err("unknown variant must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("loose"), "unexpected message: {msg}");
+    }
+
+    #[test]
+    fn mode_parses_each_known_variant() {
+        let enforce: Mode = serde_yaml_ng::from_str("enforce").expect("enforce");
+        assert_eq!(enforce, Mode::Enforce);
+        let monitor: Mode = serde_yaml_ng::from_str("monitor").expect("monitor");
+        assert_eq!(monitor, Mode::Monitor);
+        let observe: Mode = serde_yaml_ng::from_str("observe").expect("observe");
+        assert_eq!(observe, Mode::Observe);
+    }
+
+    #[test]
+    fn mode_rejects_unknown_variant() {
+        let err = serde_yaml_ng::from_str::<Mode>("yolo").expect_err("unknown variant must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("yolo"), "unexpected message: {msg}");
+    }
+
+    #[test]
+    fn raw_allowlist_into_allowlist_passes_fields_through() {
+        let raw = RawAllowlist {
+            id: "x".into(),
+            applies_to: RawAllowlistApplies {
+                rules: vec!["r1".into(), "r2".into()],
+            },
+            expires_at: Some("2099-01-01T00:00:00Z".into()),
+            reason: Some("ok".into()),
+        };
+        let a: Allowlist = raw.into();
+        assert_eq!(a.id, "x");
+        assert_eq!(a.rule_ids, vec!["r1".to_string(), "r2".to_string()]);
+        assert_eq!(a.expires_at.as_deref(), Some("2099-01-01T00:00:00Z"));
+        assert_eq!(a.reason.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn into_merge_layer_drops_disabled_plugins() {
+        let raw = RawConfig {
+            plugins: vec![
+                RawPluginRef {
+                    path: PathBuf::from("/a.yaml"),
+                    enabled: Some(true),
+                },
+                RawPluginRef {
+                    path: PathBuf::from("/b.yaml"),
+                    enabled: Some(false),
+                },
+                RawPluginRef {
+                    path: PathBuf::from("/c.yaml"),
+                    enabled: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let layer = raw.into_merge_layer();
+        assert_eq!(
+            layer.plugin_paths,
+            vec![PathBuf::from("/a.yaml"), PathBuf::from("/c.yaml")]
+        );
+    }
+}

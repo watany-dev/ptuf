@@ -136,4 +136,47 @@ audit:
         let raw = parse_str(&p(), "").expect("parse empty");
         assert_eq!(raw, RawConfig::default());
     }
+
+    #[test]
+    fn load_path_reads_a_real_file() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-yaml-load-{}-{}", std::process::id(), line!()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("config.yaml");
+        std::fs::write(&path, "mode: monitor\n").expect("write");
+
+        let raw = load_path(&path).expect("load");
+        assert_eq!(raw.mode, Some(Mode::Monitor));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn load_path_returns_io_error_for_missing_file() {
+        let path = PathBuf::from("/nonexistent/ptuf-load-path-does-not-exist.yaml");
+        let err = load_path(&path).expect_err("should fail");
+        match err {
+            ConfigError::Io {
+                path: returned,
+                source: _,
+            } => assert_eq!(returned, path),
+            other => panic!("expected Io error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_path_propagates_yaml_error() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-yaml-bad-{}-{}", std::process::id(), line!()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("bad.yaml");
+        std::fs::write(&path, "mode: yolo\n").expect("write");
+
+        let err = load_path(&path).expect_err("should fail");
+        assert!(matches!(err, ConfigError::Yaml { .. }));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
 }
