@@ -67,6 +67,15 @@ raw な Bash 文字列を直接 regex で判定するのではなく、構造化
 - project facts: lockfile 種別、protected branch、generated file 規約
 - git facts: working tree 状態、現在の branch、remote URL
 
+> v0.1 における意図的な MVP 逸脱: fact extraction 層はまだ存在しない。
+> 組み込み 3 rule (`core.filesystem.destructive-rm` /
+> `core.network.remote-script-pipe` /
+> `core.secrets.sensitive-path-to-network`) は `tool_input.command` の
+> raw 文字列を `LazyLock<Regex>` で直接マッチして判定する。
+> これは MVP として割り切った選択であり、YAML plugin pack を導入する
+> v0.2 以降では fact extraction 層を追加し、plugin 側に raw shell regex を
+> 許さない方針へ移行する。
+
 ### policy merge
 
 `builtin → org → user → project → local` の順で設定を重ねる。
@@ -103,21 +112,32 @@ JSONL audit log に出す ([`audit.md`](audit.md))。
 
 ### 出力
 
-| Decision | exit code | stderr |
+`ptuf` の起動形態は 3 つあり、それぞれ stdout / stderr / exit code の組み合わせが
+異なる。判定そのもの (exit code 0/2) と内部エラー (exit code 1) を厳密に区別する。
+
+| 起動形態 | 例 | stdout | stderr | exit code |
+| --- | --- | --- | --- | --- |
+| 互換モード (引数なし) | `ptuf` | (空) | deny 時のみ reason | 0 / 2 |
+| `hook` サブコマンド | `ptuf hook claude-code pre-tool-use` | deny / ask 時に `hookSpecificOutput` JSON | reason | 0 / 2 |
+| `eval` サブコマンド | `ptuf eval --tool Bash 'rm -rf /'` | 人間可読な判定結果 | deny 時のみ reason | 0 / 2 |
+
+| 内部エラー | stderr | exit code |
 | --- | --- | --- |
-| `Allow` | `0` | (空) |
-| `Deny { reason }` | `2` | `reason` の文字列 |
+| stdin 読み取り失敗 | `ptuf: failed to read stdin` | 1 |
+| JSON parse 失敗 | `ptuf: invalid hook payload: <err>` | 1 |
+| 不明なサブコマンド / 引数不足 | usage メッセージ | 1 |
 
 `Decision` は serde で以下の JSON にもシリアライズ可能 (組み込み利用時)。
 
 ```json
 { "decision": "allow" }
-{ "decision": "deny", "reason": "blocked by policy" }
+{ "decision": "monitor", "rule_id": "core.filesystem.destructive-rm" }
+{ "decision": "ask",     "rule_id": "core.network.remote-script-pipe", "reason": "..." }
+{ "decision": "deny",    "rule_id": "core.filesystem.destructive-rm",  "reason": "..." }
 ```
 
-`monitor` / `ask` の追加と Claude Code 専用 `hookSpecificOutput` 形式の出力は
-v0.1 以降で導入する ([`decision-model.md`](decision-model.md),
-[`cli-and-hooks.md`](cli-and-hooks.md))。
+Claude Code 専用 `hookSpecificOutput` envelope のフィールド一覧は
+[`cli-and-hooks.md`](cli-and-hooks.md) を参照。
 
 ## エラーハンドリング方針
 
