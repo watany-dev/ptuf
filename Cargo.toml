@@ -1,0 +1,28 @@
+[package]
+name = "ptuf"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.93.0"
+license = "Apache-2.0"
+description = "PreToolUseFilter: a generic guardrail layer for coding agents"
+repository = "https://github.com/watany-dev/ptuf"
+readme = "README.md"
+keywords = ["claude-code", "guardrail", "hook", "pretooluse", "agent"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "ptuf"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ptuf"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
