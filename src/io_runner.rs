@@ -126,7 +126,7 @@ mod tests {
     fn run_reports_unknown_command_to_stderr_with_exit_one() {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let args: Vec<&str> = vec!["doctor"];
+        let args: Vec<&str> = vec!["unknown-cmd"];
         let _exit = run(&args, b"" as &[u8], &mut out, &mut err);
         let err_s = String::from_utf8_lossy(&err);
         assert!(err_s.contains("unknown command"));

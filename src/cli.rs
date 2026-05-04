@@ -49,6 +49,8 @@ pub enum Command {
         dry_run: bool,
         settings_path: Option<PathBuf>,
     },
+    /// `ptuf doctor [--json]` — print a diagnostic report.
+    Doctor { json: bool },
     /// `--help` / `-h`.
     Help,
     /// `--version` / `-V`.
@@ -90,8 +92,23 @@ pub fn parse(args: &[String]) -> Result<Command, ParseError> {
         "eval" => parse_eval(&mut iter),
         "plugin" => parse_plugin(&mut iter),
         "init" => parse_init(&mut iter),
+        "doctor" => parse_doctor(&mut iter),
         other => Err(ParseError::UnknownCommand(other.to_string())),
     }
+}
+
+fn parse_doctor<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let mut json = false;
+    for arg in iter {
+        match arg.as_str() {
+            "--json" => json = true,
+            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
+        }
+    }
+    Ok(Command::Doctor { json })
 }
 
 fn parse_init<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -193,6 +210,7 @@ USAGE:
     ptuf plugin test <PATH>                      (run a plugin's deny/allow tests)
     ptuf init claude-code [--dry-run]            (register PreToolUse hook in
                           [--settings <PATH>]    ~/.claude/settings.json)
+    ptuf doctor [--json]                         (print a diagnostic report)
     ptuf --help | --version
 
 EXIT CODES:
@@ -219,6 +237,7 @@ pub fn run<R: Read, W1: Write, W2: Write>(
             dry_run,
             settings_path,
         } => run_init(&agent, dry_run, settings_path.as_deref(), stdout, stderr),
+        Command::Doctor { json } => run_doctor(json, stdout, stderr),
         Command::Help => {
             let _ = writeln!(stdout, "{HELP}");
             0
@@ -328,6 +347,28 @@ fn run_init<W1: Write, W2: Write>(
         }
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: init failed: {err}");
+            1
+        }
+    }
+}
+
+fn run_doctor<W1: Write, W2: Write>(json: bool, stdout: &mut W1, stderr: &mut W2) -> u8 {
+    if json {
+        let _ = writeln!(
+            stderr,
+            "ptuf: --json output is not yet implemented (planned for v0.4); falling back to text"
+        );
+    }
+    match crate::doctor::render_doctor(stdout) {
+        Ok(failure) => {
+            if failure {
+                1
+            } else {
+                0
+            }
+        }
+        Err(err) => {
+            let _ = writeln!(stderr, "ptuf: doctor failed: {err}");
             1
         }
     }
@@ -605,6 +646,23 @@ mod tests {
         assert!(matches!(
             parse(&s(&["init", "claude-code", "--settings"])),
             Err(ParseError::MissingValue("--settings"))
+        ));
+    }
+
+    #[test]
+    fn parses_doctor_subcommand() {
+        assert_eq!(parse(&s(&["doctor"])).unwrap(), Command::Doctor { json: false });
+        assert_eq!(
+            parse(&s(&["doctor", "--json"])).unwrap(),
+            Command::Doctor { json: true }
+        );
+    }
+
+    #[test]
+    fn doctor_rejects_unknown_flags() {
+        assert!(matches!(
+            parse(&s(&["doctor", "--bogus"])),
+            Err(ParseError::UnexpectedArgument(_))
         ));
     }
 
@@ -960,6 +1018,21 @@ rules:
         assert_eq!(code, 1);
         assert!(String::from_utf8_lossy(&err).contains("init failed"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_doctor_writes_text_report_to_stdout() {
+        let (code, out, _err) = run_with(&["doctor"], "");
+        assert!(code == 0 || code == 1, "doctor must return 0 or 1, got {code}");
+        assert!(out.contains("ptuf doctor"));
+        assert!(out.contains("Binary"));
+    }
+
+    #[test]
+    fn run_doctor_with_json_flag_warns_and_falls_back_to_text() {
+        let (_code, out, err) = run_with(&["doctor", "--json"], "");
+        assert!(out.contains("ptuf doctor"));
+        assert!(err.contains("--json output is not yet implemented"));
     }
 
     #[test]

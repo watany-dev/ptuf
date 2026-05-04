@@ -5,6 +5,7 @@ pub mod audit;
 pub mod cli;
 pub mod config;
 pub mod decision;
+pub mod doctor;
 pub mod engine;
 pub mod facts;
 pub mod hook_input;
