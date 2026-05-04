@@ -1,4 +1,5 @@
 use crate::decision::{Decision, Severity};
+use crate::facts::Facts;
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -22,7 +23,7 @@ impl ConfigRule for DestructiveRm {
         true
     }
 
-    fn evaluate(&self, input: &HookInput) -> Option<Decision> {
+    fn evaluate(&self, _facts: &Facts, input: &HookInput) -> Option<Decision> {
         let command = input.bash_command()?;
         let stripped = strip_quotes(command);
         if !contains_destructive_rm(&stripped) {
@@ -134,7 +135,9 @@ mod tests {
     }
 
     fn assert_deny(cmd: &str) {
-        let result = DestructiveRm.evaluate(&bash(cmd));
+        let input = bash(cmd);
+        let facts = crate::facts::extract(&input);
+        let result = DestructiveRm.evaluate(&facts, &input);
         assert!(
             matches!(&result, Some(Decision::Deny { rule_id, .. }) if rule_id == RULE_ID),
             "expected deny for {cmd:?}, got {result:?}",
@@ -142,7 +145,9 @@ mod tests {
     }
 
     fn assert_allow(cmd: &str) {
-        let result = DestructiveRm.evaluate(&bash(cmd));
+        let input = bash(cmd);
+        let facts = crate::facts::extract(&input);
+        let result = DestructiveRm.evaluate(&facts, &input);
         assert!(
             result.is_none(),
             "expected allow for {cmd:?}, got {result:?}"
@@ -217,7 +222,8 @@ mod tests {
             tool_name: "Read".into(),
             tool_input: serde_json::json!({ "command": "rm -rf /" }),
         };
-        assert!(DestructiveRm.evaluate(&input).is_none());
+        let facts = crate::facts::extract(&input);
+        assert!(DestructiveRm.evaluate(&facts, &input).is_none());
     }
 
     #[test]

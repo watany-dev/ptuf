@@ -3,6 +3,7 @@
 
 pub mod cli;
 pub mod decision;
+pub mod facts;
 pub mod hook_input;
 pub mod hook_output;
 pub mod io_runner;
@@ -10,10 +11,12 @@ pub mod reason;
 pub mod rules;
 
 pub use decision::{Decision, aggregate};
+pub use facts::Facts;
 pub use hook_input::HookInput;
 
 pub fn decide(input: &HookInput) -> Decision {
-    aggregate(rules::evaluate_all(input))
+    let facts = facts::extract(input);
+    aggregate(rules::evaluate_all(&facts, input))
 }
 
 #[cfg(test)]
