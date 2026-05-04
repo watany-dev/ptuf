@@ -497,4 +497,263 @@ shell.pipeline:
         let node = WhenNode::ShellArgvHeadAny(vec!["rm".into()]);
         assert!(!evaluate(&node, &facts, &input));
     }
+
+    #[test]
+    fn evaluate_shell_pipeline_returns_false_for_non_bash_input() {
+        let input = HookInput {
+            tool_name: "Read".into(),
+            tool_input: json!({ "file_path": "/tmp/x" }),
+        };
+        let facts = facts::extract(&input);
+        let node = WhenNode::ShellPipelineFromTo {
+            from: vec!["curl".into()],
+            to: vec!["bash".into()],
+        };
+        assert!(!evaluate(&node, &facts, &input));
+    }
+
+    #[test]
+    fn compile_error_display_covers_every_variant() {
+        let unknown = CompileError::UnknownKey("foo".into());
+        assert!(format!("{unknown}").contains("foo"));
+
+        let invalid = CompileError::InvalidShape {
+            key: "tool".into(),
+            message: "expected string".into(),
+        };
+        let s = format!("{invalid}");
+        assert!(s.contains("tool"));
+        assert!(s.contains("expected string"));
+
+        let empty = CompileError::EmptyMapping;
+        assert!(format!("{empty}").contains("empty"));
+
+        let not_map = CompileError::NotAMapping;
+        assert!(format!("{not_map}").contains("mapping"));
+    }
+
+    #[test]
+    fn compile_error_is_a_std_error() {
+        let err: Box<dyn std::error::Error> = Box::new(CompileError::EmptyMapping);
+        assert!(format!("{err}").contains("empty"));
+    }
+
+    #[test]
+    fn compile_rejects_non_mapping_top_level() {
+        let v = yaml("- a\n- b\n");
+        let err = compile(&v).expect_err("should fail");
+        assert_eq!(err, CompileError::NotAMapping);
+    }
+
+    #[test]
+    fn compile_rejects_empty_mapping() {
+        let v = yaml("{}\n");
+        let err = compile(&v).expect_err("should fail");
+        assert_eq!(err, CompileError::EmptyMapping);
+    }
+
+    #[test]
+    fn compile_rejects_non_string_key_in_single_mapping() {
+        let v = yaml("1: foo\n");
+        let err = compile(&v).expect_err("should fail");
+        assert!(matches!(err, CompileError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn compile_rejects_non_string_key_in_multi_mapping() {
+        let v = yaml("tool: Bash\n1: bar\n");
+        let err = compile(&v).expect_err("should fail");
+        assert!(matches!(err, CompileError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn compile_list_rejects_non_sequence() {
+        let v = yaml("all: 42\n");
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::InvalidShape { key, message } => {
+                assert_eq!(key, "all");
+                assert!(message.contains("list"));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compile_list_rejects_empty_sequence() {
+        let v = yaml("all: []\n");
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::InvalidShape { key, message } => {
+                assert_eq!(key, "all");
+                assert!(message.contains("empty"));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shell_argv_rejects_non_mapping() {
+        let v = yaml("shell.argv: 42\n");
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::InvalidShape { key, .. } => assert_eq!(key, "shell.argv"),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shell_argv_rejects_non_string_key() {
+        let v = yaml("shell.argv:\n  1: foo\n");
+        let err = compile(&v).expect_err("should fail");
+        assert!(matches!(err, CompileError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn shell_argv_rejects_unknown_subkey() {
+        let v = yaml("shell.argv:\n  pathAny: [/bin/rm]\n");
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::UnknownKey(k) => assert_eq!(k, "shell.argv.pathAny"),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shell_pipeline_rejects_non_mapping() {
+        let v = yaml("shell.pipeline: 42\n");
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::InvalidShape { key, .. } => assert_eq!(key, "shell.pipeline"),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shell_pipeline_rejects_non_string_key() {
+        let v = yaml("shell.pipeline:\n  1: bar\n");
+        let err = compile(&v).expect_err("should fail");
+        assert!(matches!(err, CompileError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn shell_pipeline_rejects_unknown_subkey() {
+        let v = yaml("shell.pipeline:\n  via:\n    commandAny: [sudo]\n");
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::UnknownKey(k) => assert_eq!(k, "shell.pipeline.via"),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shell_pipeline_rejects_missing_from() {
+        let v = yaml(
+            r#"
+shell.pipeline:
+  to:
+    commandAny: [bash]
+"#,
+        );
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::InvalidShape { key, message } => {
+                assert_eq!(key, "shell.pipeline");
+                assert!(message.contains("from"));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_endpoint_rejects_non_mapping() {
+        let v = yaml(
+            r#"
+shell.pipeline:
+  from: 42
+  to:
+    commandAny: [bash]
+"#,
+        );
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::InvalidShape { key, .. } => assert_eq!(key, "shell.pipeline.from"),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_endpoint_rejects_non_string_key() {
+        let v = yaml(
+            r#"
+shell.pipeline:
+  from:
+    1: foo
+  to:
+    commandAny: [bash]
+"#,
+        );
+        let err = compile(&v).expect_err("should fail");
+        assert!(matches!(err, CompileError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn parse_endpoint_rejects_missing_command_any() {
+        let v = yaml(
+            r#"
+shell.pipeline:
+  from:
+    other: value
+  to:
+    commandAny: [bash]
+"#,
+        );
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::InvalidShape { key, message } => {
+                assert_eq!(key, "shell.pipeline.from");
+                assert!(message.contains("commandAny"));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn expect_string_rejects_non_string() {
+        let v = yaml("tool: 42\n");
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::InvalidShape { key, message } => {
+                assert_eq!(key, "tool");
+                assert!(message.contains("string"));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn expect_string_list_rejects_non_sequence() {
+        let v = yaml("toolAny: 42\n");
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::InvalidShape { key, message } => {
+                assert_eq!(key, "toolAny");
+                assert!(message.contains("sequence"));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn expect_string_list_rejects_non_string_item() {
+        let v = yaml("toolAny: [Bash, 42]\n");
+        let err = compile(&v).expect_err("should fail");
+        match err {
+            CompileError::InvalidShape { key, message } => {
+                assert_eq!(key, "toolAny");
+                assert!(message.contains("string"));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
 }
