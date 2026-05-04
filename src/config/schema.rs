@@ -30,6 +30,8 @@ pub struct RawConfig {
     #[serde(default)]
     pub allowlists: Vec<RawAllowlist>,
     #[serde(default)]
+    pub plugins: Vec<RawPluginRef>,
+    #[serde(default)]
     pub audit: RawAudit,
 }
 
@@ -48,6 +50,12 @@ impl RawConfig {
                 .map(|(k, v)| (k, PackOverride { enabled: v.enabled }))
                 .collect(),
             allowlists: self.allowlists.into_iter().map(Into::into).collect(),
+            plugin_paths: self
+                .plugins
+                .into_iter()
+                .filter(|p| p.enabled.unwrap_or(true))
+                .map(|p| p.path)
+                .collect(),
             audit_path: self.audit.path,
         }
     }
@@ -57,6 +65,17 @@ impl RawConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RawPack {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+/// Reference to a plugin YAML on disk. `enabled: false` keeps the
+/// reference around (handy for project-local overrides) but skips the
+/// load.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RawPluginRef {
+    pub path: PathBuf,
     #[serde(default)]
     pub enabled: Option<bool>,
 }
@@ -109,6 +128,7 @@ pub(super) struct MergeLayer {
     pub fail_closed: Option<bool>,
     pub pack_overrides: BTreeMap<String, PackOverride>,
     pub allowlists: Vec<Allowlist>,
+    pub plugin_paths: Vec<PathBuf>,
     pub audit_path: Option<PathBuf>,
 }
 

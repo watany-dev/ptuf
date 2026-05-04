@@ -20,7 +20,7 @@ const SYSTEM_ROOTS: &[&str] = &[
 const HOME_TARGETS: &[&str] = &["~", "~/", "$HOME", "$HOME/", "${HOME}", "${HOME}/"];
 
 impl ConfigRule for DestructiveRm {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         RULE_ID
     }
 

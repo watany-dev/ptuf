@@ -14,7 +14,7 @@ const RULE_ID: &str = "core.secrets.sensitive-path-to-network";
 const NETWORK_SINK_HEADS: &[&str] = &["curl", "wget", "nc", "ncat", "scp", "rsync", "ftp", "sftp"];
 
 impl ConfigRule for SensitivePathToNetwork {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         RULE_ID
     }
 

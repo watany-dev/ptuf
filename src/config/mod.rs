@@ -48,6 +48,10 @@ pub struct Config {
     pub pack_overrides: BTreeMap<String, PackOverride>,
     /// Time-bound exceptions; later commits gate them by `expires_at`.
     pub allowlists: Vec<Allowlist>,
+    /// Filesystem paths of `apiVersion: ptuf.dev/v1, kind: Plugin`
+    /// YAML files that the engine should load. Lower scopes are
+    /// listed first; the engine loads them in order.
+    pub plugin_paths: Vec<PathBuf>,
     pub audit: AuditConfig,
 }
 
@@ -58,6 +62,7 @@ impl Default for Config {
             fail_closed: true,
             pack_overrides: BTreeMap::new(),
             allowlists: Vec::new(),
+            plugin_paths: Vec::new(),
             audit: AuditConfig::default(),
         }
     }

@@ -17,7 +17,7 @@ const INTERPRETERS: &[&str] = &[
 ];
 
 impl ConfigRule for RemoteScriptPipe {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         RULE_ID
     }
 

@@ -38,6 +38,7 @@ fn apply(acc: &mut Config, layer: MergeLayer) {
         merge_pack_override(entry, overlay);
     }
     acc.allowlists.extend(layer.allowlists);
+    acc.plugin_paths.extend(layer.plugin_paths);
     if let Some(path) = layer.audit_path {
         acc.audit.path = Some(path);
     }
@@ -224,6 +225,39 @@ mod tests {
             },
         ]);
         assert_eq!(cfg.audit.path, Some(PathBuf::from("/tmp/higher.jsonl")));
+    }
+
+    #[test]
+    fn plugin_paths_concatenate_across_layers_and_skip_disabled() {
+        use super::super::schema::RawPluginRef;
+        let lower = RawConfig {
+            plugins: vec![RawPluginRef {
+                path: PathBuf::from("/etc/p1.yaml"),
+                enabled: None,
+            }],
+            ..raw()
+        };
+        let higher = RawConfig {
+            plugins: vec![
+                RawPluginRef {
+                    path: PathBuf::from("/home/p2.yaml"),
+                    enabled: Some(true),
+                },
+                RawPluginRef {
+                    path: PathBuf::from("/home/p3.yaml"),
+                    enabled: Some(false),
+                },
+            ],
+            ..raw()
+        };
+        let cfg = merge(vec![lower, higher]);
+        assert_eq!(
+            cfg.plugin_paths,
+            vec![
+                PathBuf::from("/etc/p1.yaml"),
+                PathBuf::from("/home/p2.yaml"),
+            ]
+        );
     }
 
     #[test]

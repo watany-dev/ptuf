@@ -12,11 +12,13 @@ use crate::config::{self, Config, ConfigError, Mode, PackOverride};
 use crate::decision::{Decision, aggregate};
 use crate::facts;
 use crate::hook_input::HookInput;
+use crate::plugin::{PluginError, PluginSet};
 use crate::rules::{self, ConfigRule};
 
 /// Resolved engine ready to evaluate hook payloads.
 pub struct Engine {
     config: Config,
+    plugins: PluginSet,
 }
 
 /// Result of [`Engine::decide`].
@@ -33,17 +35,18 @@ pub struct Outcome {
     pub mode_demoted: bool,
 }
 
-/// Errors raised while building an engine. Currently a thin wrapper
-/// over [`ConfigError`]; later commits add plugin / audit init paths.
+/// Errors raised while building an engine.
 #[derive(Debug)]
 pub enum EngineError {
     Config(ConfigError),
+    Plugin(PluginError),
 }
 
 impl std::fmt::Display for EngineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EngineError::Config(e) => write!(f, "engine: {e}"),
+            EngineError::Plugin(e) => write!(f, "engine: {e}"),
         }
     }
 }
@@ -52,6 +55,7 @@ impl std::error::Error for EngineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             EngineError::Config(e) => Some(e),
+            EngineError::Plugin(e) => Some(e),
         }
     }
 }
@@ -62,19 +66,37 @@ impl From<ConfigError> for EngineError {
     }
 }
 
+impl From<PluginError> for EngineError {
+    fn from(value: PluginError) -> Self {
+        EngineError::Plugin(value)
+    }
+}
+
 impl Engine {
     /// Build an engine using the merged configuration discovered for
-    /// `repo_root` (or no project scope when `None`).
+    /// `repo_root` (or no project scope when `None`) and load every
+    /// plugin referenced by the merged config.
     pub fn new(repo_root: Option<&Path>) -> Result<Self, EngineError> {
-        Ok(Self {
-            config: config::load_for(repo_root)?,
-        })
+        let config = config::load_for(repo_root)?;
+        let mut plugins = PluginSet::new();
+        plugins.load_paths(&config.plugin_paths)?;
+        Ok(Self { config, plugins })
     }
 
     /// Build an engine from an explicit config — used by tests and by
-    /// the backward-compatible [`crate::decide`] shim.
-    pub fn with_config(config: Config) -> Self {
-        Self { config }
+    /// the backward-compatible [`crate::decide`] shim. Plugins listed
+    /// in the config are loaded eagerly.
+    pub fn with_config(config: Config) -> Result<Self, EngineError> {
+        let mut plugins = PluginSet::new();
+        plugins.load_paths(&config.plugin_paths)?;
+        Ok(Self { config, plugins })
+    }
+
+    /// Build an engine from the supplied components. Used by tests
+    /// that need to inject a hand-built [`PluginSet`] without going
+    /// through the YAML loader.
+    pub(crate) fn with_components(config: Config, plugins: PluginSet) -> Self {
+        Self { config, plugins }
     }
 
     /// Read-only view of the merged configuration.
@@ -82,13 +104,24 @@ impl Engine {
         &self.config
     }
 
+    /// Read-only view of the loaded plugin set.
+    pub fn plugins(&self) -> &PluginSet {
+        &self.plugins
+    }
+
     /// Evaluate a single hook payload.
     pub fn decide(&self, input: &HookInput) -> Outcome {
         let facts = facts::extract(input);
-        let decisions: Vec<Decision> = rules::iter()
+        let builtin = rules::iter()
             .filter(|rule| !is_pack_disabled(*rule, &self.config))
-            .filter_map(|rule| rule.evaluate(&facts, input))
-            .collect();
+            .filter_map(|rule| rule.evaluate(&facts, input));
+        let from_plugins = self
+            .plugins
+            .rules()
+            .map(|r| r as &(dyn ConfigRule + Sync))
+            .filter(|rule| !is_pack_disabled(*rule, &self.config))
+            .filter_map(|rule| rule.evaluate(&facts, input));
+        let decisions: Vec<Decision> = builtin.chain(from_plugins).collect();
         let raw = aggregate(decisions);
         let demoted_decision = demote_for_mode(raw.clone(), self.config.mode);
         let mode_demoted = matches!(raw, Decision::Deny { .. })
@@ -103,7 +136,8 @@ impl Engine {
 
 impl Default for Engine {
     fn default() -> Self {
-        Self::with_config(Config::default())
+        // `Config::default()` lists no plugins, so this cannot fail.
+        Self::with_components(Config::default(), PluginSet::new())
     }
 }
 
@@ -149,7 +183,7 @@ mod tests {
     }
 
     fn engine_with(cfg: Config) -> Engine {
-        Engine::with_config(cfg)
+        Engine::with_components(cfg, PluginSet::new())
     }
 
     #[test]
@@ -232,5 +266,72 @@ mod tests {
         };
         let engine = engine_with(cfg);
         assert_eq!(engine.config().mode, Mode::Monitor);
+    }
+
+    #[test]
+    fn plugin_rule_fires_alongside_builtins() {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      all:
+        - tool: Bash
+        - shell.argv:
+            headAny: [curl]
+    reason: curl is forbidden
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let engine = Engine::with_components(Config::default(), set);
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        match outcome.decision {
+            Decision::Deny { rule_id, .. } => assert_eq!(rule_id, "pack.demo.no-curl"),
+            other => panic!("expected Deny, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugin_pack_can_be_disabled_via_config() {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.pack_overrides.insert(
+            "pack.demo".into(),
+            PackOverride {
+                enabled: Some(false),
+            },
+        );
+        let engine = Engine::with_components(cfg, set);
+        let outcome = engine.decide(&bash("ls"));
+        assert_eq!(outcome.decision, Decision::Allow);
     }
 }

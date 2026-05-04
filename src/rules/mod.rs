@@ -16,7 +16,7 @@ pub mod sensitive_net;
 /// v0.1 unconditional-deny semantics
 /// (`docs/design/decision-model.md:61-64`).
 pub trait ConfigRule: Sync + Send {
-    fn id(&self) -> &'static str;
+    fn id(&self) -> &str;
 
     fn severity(&self) -> Severity {
         Severity::Medium
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn rule_ids_are_stable_strings() {
-        let ids: Vec<&'static str> = RULES.iter().map(|r| r.id()).collect();
+        let ids: Vec<&str> = RULES.iter().map(|r| r.id()).collect();
         assert!(ids.contains(&"core.filesystem.destructive-rm"));
         assert!(ids.contains(&"core.network.remote-script-pipe"));
         assert!(ids.contains(&"core.secrets.sensitive-path-to-network"));
@@ -124,7 +124,7 @@ mod tests {
 
     struct MinimalRule;
     impl ConfigRule for MinimalRule {
-        fn id(&self) -> &'static str {
+        fn id(&self) -> &str {
             "test.minimal"
         }
         fn evaluate(&self, _facts: &Facts, _input: &HookInput) -> Option<Decision> {
