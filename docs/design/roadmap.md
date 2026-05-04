@@ -55,11 +55,13 @@
 
 - `core.project_hygiene`
 - `dataflow.basic` facts (同一 transcript 内の co-occur を超えた追跡)
-- MCP tool 対応
+- MCP tool 対応 — fact extraction 完了 (`mcp__*` の generic
+  `path` / `url` / `content` キー抽出)。専用 rule pack は今後
 - org policy 配布 (`/etc/ptuf/policy.yaml`)
 - 署名 / pin 付き plugin
 - optional WASM plugin runtime
 - Codex / Cursor / Gemini CLI adapter
+- audit ログの schemaVersion / agent / pluginVersions / allowlistId 追加 (実装済み)
 
 各 milestone の rule と CLI が揃った時点でリリースタグを切る。
 

@@ -37,7 +37,9 @@ impl ConfigRule for SensitiveRead {
     }
 
     fn evaluate(&self, facts: &Facts, input: &HookInput) -> Option<Decision> {
-        if !matches!(input.tool_name.as_str(), "Read" | "Edit") {
+        let is_read_like = matches!(input.tool_name.as_str(), "Read" | "Edit")
+            || (input.is_mcp_tool() && facts.path.is_some());
+        if !is_read_like {
             return None;
         }
         if facts.sensitive.is_empty() {
@@ -153,5 +155,43 @@ mod tests {
         assert_eq!(SensitiveRead.severity(), Severity::High);
         assert_eq!(SensitiveRead.default_decision(), DecisionKind::Deny);
         assert_eq!(SensitiveRead.id(), RULE_ID);
+    }
+
+    #[test]
+    fn denies_mcp_filesystem_read_of_aws_credentials() {
+        let input = HookInput {
+            tool_name: "mcp__filesystem__read_file".into(),
+            tool_input: serde_json::json!({"path": "~/.aws/credentials"}),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(matches!(
+            SensitiveRead.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
+    }
+
+    #[test]
+    fn denies_mcp_github_create_or_update_of_pem_path() {
+        let input = HookInput {
+            tool_name: "mcp__github__create_or_update_file".into(),
+            tool_input: serde_json::json!({"path": "~/.ssh/id_rsa", "content": "secret"}),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(matches!(
+            SensitiveRead.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
+    }
+
+    #[test]
+    fn does_not_fire_for_mcp_tool_without_a_path_field() {
+        // An mcp__* tool that exposes only a `url` (e.g. mcp__fetch__fetch)
+        // never sets facts.path, so the Read-style rule must not fire.
+        let input = HookInput {
+            tool_name: "mcp__fetch__fetch".into(),
+            tool_input: serde_json::json!({"url": "https://example.com/x"}),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(SensitiveRead.evaluate(&facts, &input).is_none());
     }
 }

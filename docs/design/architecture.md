@@ -74,6 +74,7 @@ raw な Bash 文字列を直接 regex で判定するのではなく、構造化
 | `url` (scheme / host / port / path) | v0.3 で実装済み |
 | `sensitive_path` (`SshDir` / `AwsDir` / `GcloudDir` / `KubeDir` / `DockerDir` / `PrivateKey` / `Dotenv` / `Npmrc` / `Pypirc` / `Tfstate` / `PemBlob`) | v0.3 で実装済み |
 | `protected` (Engine が決定する self_protection マッチ) | v0.3 で実装済み |
+| MCP fact 抽出 (`mcp__*` の汎用 `path` / `url` / `content` キー) | v0.4 で実装済み ([`cli-and-hooks.md`](cli-and-hooks.md#mcp-fact-抽出-v04)) |
 | `dataflow.basic` (sensitive → network、同一コマンド co-occur を超えた追跡) | v0.4 以降 |
 | project / git facts (lockfile / branch / remote) | v0.4 以降 |
 

@@ -32,7 +32,8 @@ Allow / Deny を exit code と stderr メッセージで返す CLI バイナリ 
   `aggregate` を公開し、内部モジュールへ委譲する
 - `src/decision.rs` — `Decision` (4 variants) と `severity` / `aggregate`
 - `src/hook_input.rs` — `HookInput` と `bash_command()` / `file_path()` /
-  `web_fetch_url()` / `write_payload()` accessor
+  `web_fetch_url()` / `write_payload()` accessor。`mcp__<server>__<tool>`
+  形式の MCP tool は `path` / `url` / `content` の汎用キーを認識する
 - `src/hook_output.rs` — Claude Code `hookSpecificOutput` envelope
 - `src/reason.rs` — `reason::build` (deny / ask の Rule Feedback 整形)
 - `src/rules/` — `ConfigRule` trait、組み込み rule (filesystem / network /

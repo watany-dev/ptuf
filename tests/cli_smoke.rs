@@ -318,6 +318,26 @@ fn audit_jsonl_carries_agent_cli_for_eval_subcommand() {
 }
 
 #[test]
+fn hook_denies_mcp_write_to_protected_claude_settings() {
+    let payload = r#"{"tool_name":"mcp__github__create_or_update_file","tool_input":{"path":"~/.claude/settings.json","content":"{}"}}"#;
+    let (code, stdout, stderr) = run(&["hook", "claude-code", "pre-tool-use"], payload);
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    assert!(stderr.contains("core.self_protection.claude-settings"));
+}
+
+#[test]
+fn hook_denies_mcp_filesystem_read_of_aws_credentials() {
+    let payload =
+        r#"{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"~/.aws/credentials"}}"#;
+    let (code, _stdout, stderr) = run(&["hook", "claude-code", "pre-tool-use"], payload);
+    assert_eq!(code, 2);
+    assert!(
+        stderr.contains("core.secrets.sensitive-read"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
 fn audit_jsonl_carries_agent_compat_for_compat_mode() {
     let dir = std::env::temp_dir().join(format!(
         "ptuf-audit-compat-{}-{}",
