@@ -2,6 +2,7 @@
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod cli;
+pub mod config;
 pub mod decision;
 pub mod facts;
 pub mod hook_input;
