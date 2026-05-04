@@ -42,4 +42,63 @@ mod tests {
         let expected = "Blocked by ptuf rule core.x.\n\nProblem statement.\n\nSafer alternative:\n1. Step one.\n2. Step two.\n";
         assert_eq!(s, expected);
     }
+
+    use crate::testing::proptest::{reason_text, rule_id};
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+
+    proptest! {
+        // Header is fixed regardless of payload contents.
+        #[test]
+        fn pbt_starts_with_header(
+            id in rule_id(),
+            problem in reason_text(),
+            alts in vec(reason_text(), 0..5),
+        ) {
+            let alt_refs: Vec<&str> = alts.iter().map(String::as_str).collect();
+            let s = build(&id, &problem, &alt_refs);
+            let header = format!("Blocked by ptuf rule {id}.\n\n");
+            prop_assert!(s.starts_with(&header), "missing header in {s:?}");
+        }
+
+        // Empty alternatives ⇒ no "Safer alternative:" section.
+        #[test]
+        fn pbt_no_alternatives_section_when_empty(
+            id in rule_id(),
+            problem in reason_text(),
+        ) {
+            let s = build(&id, &problem, &[]);
+            prop_assert!(!s.contains("Safer alternative:"));
+        }
+
+        // Non-empty alternatives ⇒ section present and numbered 1..n.
+        #[test]
+        fn pbt_alternatives_are_numbered(
+            id in rule_id(),
+            problem in reason_text(),
+            alts in vec(reason_text(), 1..6),
+        ) {
+            let alt_refs: Vec<&str> = alts.iter().map(String::as_str).collect();
+            let s = build(&id, &problem, &alt_refs);
+            prop_assert!(s.contains("Safer alternative:"));
+            for (i, _) in alts.iter().enumerate() {
+                let prefix = format!("\n{}. ", i + 1);
+                prop_assert!(
+                    s.contains(&prefix),
+                    "missing number {i}: {s:?}",
+                );
+            }
+        }
+
+        // `build` must not panic for any printable inputs.
+        #[test]
+        fn pbt_never_panics(
+            id in "[ -~]{0,30}",
+            problem in "[ -~]{0,80}",
+            alts in vec("[ -~]{0,30}", 0..6),
+        ) {
+            let alt_refs: Vec<&str> = alts.iter().map(String::as_str).collect();
+            let _ = build(&id, &problem, &alt_refs);
+        }
+    }
 }

@@ -822,6 +822,100 @@ rules:
         assert!(engine.severity_for("nonexistent.rule").is_none());
     }
 
+    use crate::testing::proptest::{decision, hook_input};
+    use proptest::prelude::*;
+
+    fn mode_strategy() -> impl Strategy<Value = Mode> {
+        prop_oneof![
+            Just(Mode::Enforce),
+            Just(Mode::Monitor),
+            Just(Mode::Observe),
+        ]
+    }
+
+    fn demoting_mode() -> impl Strategy<Value = Mode> {
+        prop_oneof![Just(Mode::Monitor), Just(Mode::Observe)]
+    }
+
+    fn non_deny_decision() -> impl Strategy<Value = Decision> {
+        use crate::testing::proptest::{reason_text, rule_id};
+        prop_oneof![
+            Just(Decision::Allow),
+            rule_id().prop_map(|rule_id| Decision::Monitor { rule_id }),
+            (rule_id(), reason_text())
+                .prop_map(|(rule_id, reason)| Decision::Ask { rule_id, reason }),
+        ]
+    }
+
+    proptest! {
+        // Enforce never demotes anything.
+        #[test]
+        fn pbt_enforce_is_identity(d in decision()) {
+            let out = demote_for_mode(d.clone(), Mode::Enforce);
+            prop_assert_eq!(out, d);
+        }
+
+        // Allow / Monitor / Ask are unaffected by Monitor and Observe.
+        #[test]
+        fn pbt_monitor_observe_only_touch_deny(d in non_deny_decision(), mode in demoting_mode()) {
+            let out = demote_for_mode(d.clone(), mode);
+            prop_assert_eq!(out, d);
+        }
+
+        // Deny under Monitor / Observe ⇒ Monitor with same rule_id.
+        #[test]
+        fn pbt_deny_demotes_to_monitor_preserving_rule_id(
+            id in crate::testing::proptest::rule_id(),
+            reason in crate::testing::proptest::reason_text(),
+            mode in demoting_mode(),
+        ) {
+            let d = Decision::Deny {
+                rule_id: id.clone(),
+                reason,
+            };
+            let out = demote_for_mode(d, mode);
+            prop_assert_eq!(out, Decision::Monitor { rule_id: id });
+        }
+
+        // Demotion never strengthens the decision (severity does not grow).
+        #[test]
+        fn pbt_demote_never_increases_severity(d in decision(), mode in mode_strategy()) {
+            let raw = d.clone();
+            let out = demote_for_mode(d, mode);
+            prop_assert!(out.severity() <= raw.severity());
+        }
+
+        // The default-engine end-to-end pipeline must not panic.
+        #[test]
+        fn pbt_default_engine_decide_never_panics(input in hook_input()) {
+            let _ = Engine::default().decide(&input);
+        }
+
+        // Default engine runs in Enforce mode and never reports a demotion.
+        #[test]
+        fn pbt_default_engine_never_demotes(input in hook_input()) {
+            let outcome = Engine::default().decide(&input);
+            prop_assert_eq!(outcome.mode, Mode::Enforce);
+            prop_assert!(!outcome.mode_demoted);
+        }
+
+        // Under Monitor mode, the outcome decision is never Deny, and
+        // mode_demoted iff the same input under Enforce produced Deny.
+        #[test]
+        fn pbt_monitor_mode_demotion_flag_matches_enforce_baseline(input in hook_input()) {
+            let baseline = Engine::default().decide(&input).decision;
+            let cfg = Config {
+                mode: Mode::Monitor,
+                ..Config::default()
+            };
+            let monitored = engine_with(cfg).decide(&input);
+            let monitored_is_deny = matches!(monitored.decision, Decision::Deny { .. });
+            prop_assert!(!monitored_is_deny);
+            let baseline_was_deny = matches!(baseline, Decision::Deny { .. });
+            prop_assert_eq!(monitored.mode_demoted, baseline_was_deny);
+        }
+    }
+
     #[test]
     fn plugin_pack_can_be_disabled_via_config() {
         #![allow(clippy::expect_used)]

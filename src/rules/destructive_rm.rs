@@ -202,4 +202,59 @@ mod tests {
     fn allows_other_commands_with_rm_substring() {
         assert_allow("echo rm -rf / # not actually deleting");
     }
+
+    use crate::testing::proptest::{arbitrary_command, bash_command, non_bash_hook_input};
+    use proptest::prelude::*;
+
+    fn evaluate_for(input: &HookInput) -> Option<Decision> {
+        let facts = crate::facts::extract(input);
+        DestructiveRm.evaluate(&facts, input)
+    }
+
+    proptest! {
+        // Non-Bash tool ⇒ always None, regardless of payload contents.
+        #[test]
+        fn pbt_non_bash_yields_none(input in non_bash_hook_input()) {
+            prop_assert!(evaluate_for(&input).is_none());
+        }
+
+        // Adversarial: never panics on any printable ASCII bash string.
+        #[test]
+        fn pbt_evaluate_never_panics(cmd in arbitrary_command()) {
+            let input = bash(&cmd);
+            let _ = evaluate_for(&input);
+        }
+
+        // When the rule fires, the result is always Deny with this rule's id.
+        #[test]
+        fn pbt_only_emits_deny_with_correct_id(cmd in bash_command()) {
+            let input = bash(&cmd);
+            if let Some(d) = evaluate_for(&input) {
+                match d {
+                    Decision::Deny { rule_id, .. } => prop_assert_eq!(rule_id, RULE_ID),
+                    other => prop_assert!(
+                        false,
+                        "expected Deny, got {other:?}",
+                    ),
+                }
+            }
+        }
+
+        // Negative space: commands whose argv head never matches an rm
+        // binary cannot trigger this rule.
+        #[test]
+        fn pbt_no_rm_head_means_no_fire(
+            head in "[a-z][a-z0-9]{0,5}",
+            args in proptest::collection::vec("[a-zA-Z0-9_./-]{1,8}", 0..4),
+        ) {
+            prop_assume!(!RM_HEADS.contains(&head.as_str()));
+            let cmd = if args.is_empty() {
+                head
+            } else {
+                format!("{} {}", head, args.join(" "))
+            };
+            let input = bash(&cmd);
+            prop_assert!(evaluate_for(&input).is_none());
+        }
+    }
 }
