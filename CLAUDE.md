@@ -28,7 +28,9 @@ Allow / Deny を exit code と stderr メッセージで返す CLI バイナリ 
 
 - `src/lib.rs` — 判定コア。`Decision`, `HookInput`, `decide()` を公開
 - `src/main.rs` — CLI エントリ。stdin JSON → `decide` → exit code
-- `docs/design/` — 日本語の設計書群
+- `docs/design/` — 日本語の設計書群。エントリポイントは `docs/design/overview.md` で、
+  そこから architecture / decision-model / policy-packs / config-and-plugins /
+  cli-and-hooks / audit / roadmap にリンクが張られている
 
 `src/main.rs` は coverage 集計から除外する (CLI shim のため)。新規ロジックは必ず `src/lib.rs` 配下に置く。
 
