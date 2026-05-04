@@ -22,9 +22,13 @@ CLI の exit code との対応は次の通り。
 | `ask` | `0` | reason | hook response 経由でユーザ確認に昇格 |
 | `deny` | `2` | reason | |
 
-> 現状の bootstrap 実装では `Decision::Allow` と `Decision::Deny { reason }` の
-> 2 値のみ。`monitor` / `ask` は v0.1 以降で導入する
-> ([`roadmap.md`](roadmap.md))。
+> v0.1 時点で `Decision` は 4 variants (`Allow`, `Monitor { rule_id }`,
+> `Ask { rule_id, reason }`, `Deny { rule_id, reason }`) を実装済み。
+> ただし組み込み 3 rule (`core.filesystem.destructive-rm` /
+> `core.network.remote-script-pipe` /
+> `core.secrets.sensitive-path-to-network`) はすべて `deny` を返すため、
+> `monitor` / `ask` は実利用としては v0.2 (config scope と plugin pack 導入)
+> 以降に登場する ([`roadmap.md`](roadmap.md))。
 
 ## 集約規則
 
@@ -53,6 +57,11 @@ security pack の rule は user / local config による弱化を防げるよう
 
 scope の順序とマージ規則は [`config-and-plugins.md`](config-and-plugins.md) を
 参照。
+
+> v0.1 時点では config merge 機構が未実装のため、`Rule` trait に
+> `overridable()` / `hard_deny()` 属性は持たせていない。組み込み 3 rule は
+> 実質 `hardDeny: true` 相当 (無条件 deny) として動く。これらの属性は
+> v0.2 で config scope の実装と同時に導入する。
 
 ## モード
 
