@@ -1,4 +1,4 @@
-//! Layered (Optional-field) shapes used during scope merge.
+//! Layered, optional-field shapes used during scope merge.
 //!
 //! `RawConfig` mirrors [`Config`](super::Config) but every scalar is
 //! `Option<T>` so the merge step can distinguish "this layer
@@ -9,21 +9,123 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use super::{Allowlist, Mode, RuleOverride};
+use serde::Deserialize;
+
+use super::{Allowlist, Mode, PackOverride};
 
 /// Single-scope view of the user's policy. All scalars are optional;
 /// missing fields defer to the layer below.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RawConfig {
+    /// Currently always `1`. Reserved for future incompatible breaks.
+    #[serde(default)]
+    pub version: Option<u32>,
+    #[serde(default)]
     pub mode: Option<Mode>,
+    #[serde(default)]
     pub fail_closed: Option<bool>,
-    pub rule_overrides: BTreeMap<String, RuleOverride>,
-    pub allowlists: Vec<Allowlist>,
+    #[serde(default)]
+    pub packs: BTreeMap<String, RawPack>,
+    #[serde(default)]
+    pub allowlists: Vec<RawAllowlist>,
+    #[serde(default)]
     pub audit: RawAudit,
 }
 
+impl RawConfig {
+    /// Move the YAML-shape RawConfig fields into the merge-shape
+    /// fields used by [`merge::merge`](super::merge::merge). The two
+    /// forms differ only in nesting; this conversion is purely a
+    /// rename.
+    pub(super) fn into_merge_layer(self) -> MergeLayer {
+        MergeLayer {
+            mode: self.mode,
+            fail_closed: self.fail_closed,
+            pack_overrides: self
+                .packs
+                .into_iter()
+                .map(|(k, v)| (k, PackOverride { enabled: v.enabled }))
+                .collect(),
+            allowlists: self.allowlists.into_iter().map(Into::into).collect(),
+            audit_path: self.audit.path,
+        }
+    }
+}
+
+/// Per-pack toggle parsed from `packs: { <name>: { enabled: ... } }`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RawPack {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
 /// Layer-local audit overlay.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RawAudit {
+    #[serde(default)]
     pub path: Option<PathBuf>,
+}
+
+/// YAML-shape allowlist entry. `appliesTo.rules` is the list of rule
+/// ids the entry applies to.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RawAllowlist {
+    pub id: String,
+    #[serde(default)]
+    pub applies_to: RawAllowlistApplies,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawAllowlistApplies {
+    #[serde(default)]
+    pub rules: Vec<String>,
+}
+
+impl From<RawAllowlist> for Allowlist {
+    fn from(value: RawAllowlist) -> Self {
+        Allowlist {
+            id: value.id,
+            rule_ids: value.applies_to.rules,
+            expires_at: value.expires_at,
+            reason: value.reason,
+        }
+    }
+}
+
+/// The struct-level shape that [`merge::merge`](super::merge::merge)
+/// consumes. Crate-private; the public façade is [`RawConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(super) struct MergeLayer {
+    pub mode: Option<Mode>,
+    pub fail_closed: Option<bool>,
+    pub pack_overrides: BTreeMap<String, PackOverride>,
+    pub allowlists: Vec<Allowlist>,
+    pub audit_path: Option<PathBuf>,
+}
+
+impl<'de> Deserialize<'de> for Mode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        match raw.as_str() {
+            "enforce" => Ok(Mode::Enforce),
+            "monitor" => Ok(Mode::Monitor),
+            "observe" => Ok(Mode::Observe),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["enforce", "monitor", "observe"],
+            )),
+        }
+    }
 }

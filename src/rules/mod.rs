@@ -52,6 +52,13 @@ pub fn evaluate_all(facts: &Facts, input: &HookInput) -> Vec<Decision> {
         .collect()
 }
 
+/// Iterate over the static slice of built-in rules. Used by the
+/// engine layer to apply per-pack disables before evaluating each
+/// rule.
+pub fn iter() -> impl Iterator<Item = &'static (dyn ConfigRule + Sync)> {
+    RULES.iter().copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,8 +4,8 @@
 //! Merge rules:
 //! * Scalars (`mode`, `fail_closed`, `audit.path`): later layers'
 //!   `Some(_)` wins.
-//! * `rule_overrides`: union by rule id; for the same rule id the
-//!   later layer's [`RuleOverride`] wins for any `Some(_)` field.
+//! * `pack_overrides`: union by pack name; for the same name the later
+//!   layer's [`PackOverride`] wins for any `Some(_)` field.
 //! * `allowlists`: concatenate in scope order so audit can attribute a
 //!   match to the layer that contributed it.
 //!
@@ -13,37 +13,37 @@
 //! time, not in merge — the engine inspects the rule's static metadata
 //! and refuses `Disable` overrides for `hardDeny: true` rules.
 
-use super::schema::RawConfig;
-use super::{Config, RuleOverride};
+use super::schema::{MergeLayer, RawConfig};
+use super::{Config, PackOverride};
 
 /// Fold `layers` into a final [`Config`]. Layers are applied in the
 /// order they appear (so `layers[0]` is the lowest-priority scope).
 pub fn merge(layers: Vec<RawConfig>) -> Config {
     let mut acc = Config::default();
     for layer in layers {
-        apply(&mut acc, layer);
+        apply(&mut acc, layer.into_merge_layer());
     }
     acc
 }
 
-fn apply(acc: &mut Config, layer: RawConfig) {
+fn apply(acc: &mut Config, layer: MergeLayer) {
     if let Some(mode) = layer.mode {
         acc.mode = mode;
     }
     if let Some(fc) = layer.fail_closed {
         acc.fail_closed = fc;
     }
-    for (rule_id, overlay) in layer.rule_overrides {
-        let entry = acc.rule_overrides.entry(rule_id).or_default();
-        merge_rule_override(entry, overlay);
+    for (pack, overlay) in layer.pack_overrides {
+        let entry = acc.pack_overrides.entry(pack).or_default();
+        merge_pack_override(entry, overlay);
     }
     acc.allowlists.extend(layer.allowlists);
-    if let Some(path) = layer.audit.path {
+    if let Some(path) = layer.audit_path {
         acc.audit.path = Some(path);
     }
 }
 
-fn merge_rule_override(into: &mut RuleOverride, from: RuleOverride) {
+fn merge_pack_override(into: &mut PackOverride, from: PackOverride) {
     if from.enabled.is_some() {
         into.enabled = from.enabled;
     }
@@ -51,8 +51,8 @@ fn merge_rule_override(into: &mut RuleOverride, from: RuleOverride) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::schema::{RawAudit, RawConfig};
-    use super::super::{Allowlist, Config, Mode, RuleOverride};
+    use super::super::schema::{RawAllowlist, RawAllowlistApplies, RawAudit, RawConfig, RawPack};
+    use super::super::{Allowlist, Config, Mode};
     use super::*;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -61,13 +61,10 @@ mod tests {
         RawConfig::default()
     }
 
-    fn override_for(rule: &str, enabled: bool) -> (String, RuleOverride) {
-        (
-            rule.to_string(),
-            RuleOverride {
-                enabled: Some(enabled),
-            },
-        )
+    fn pack(enabled: bool) -> RawPack {
+        RawPack {
+            enabled: Some(enabled),
+        }
     }
 
     #[test]
@@ -76,7 +73,7 @@ mod tests {
         assert_eq!(cfg, Config::default());
         assert_eq!(cfg.mode, Mode::Enforce);
         assert!(cfg.fail_closed);
-        assert!(cfg.rule_overrides.is_empty());
+        assert!(cfg.pack_overrides.is_empty());
         assert!(cfg.allowlists.is_empty());
         assert!(cfg.audit.path.is_none());
     }
@@ -112,81 +109,84 @@ mod tests {
     }
 
     #[test]
-    fn rule_overrides_are_merged_per_rule_id() {
+    fn pack_overrides_are_merged_per_name() {
         let lower = RawConfig {
-            rule_overrides: BTreeMap::from([override_for(
-                "core.network.remote-script-pipe",
-                false,
-            )]),
+            packs: BTreeMap::from([("core.network".to_string(), pack(false))]),
             ..raw()
         };
         let higher = RawConfig {
-            rule_overrides: BTreeMap::from([override_for("core.filesystem.destructive-rm", true)]),
+            packs: BTreeMap::from([("core.filesystem".to_string(), pack(true))]),
             ..raw()
         };
         let cfg = merge(vec![lower, higher]);
-        assert_eq!(cfg.rule_overrides.len(), 2);
+        assert_eq!(cfg.pack_overrides.len(), 2);
         assert_eq!(
-            cfg.rule_overrides
-                .get("core.network.remote-script-pipe")
+            cfg.pack_overrides
+                .get("core.network")
                 .and_then(|o| o.enabled),
             Some(false)
         );
         assert_eq!(
-            cfg.rule_overrides
-                .get("core.filesystem.destructive-rm")
+            cfg.pack_overrides
+                .get("core.filesystem")
                 .and_then(|o| o.enabled),
             Some(true)
         );
     }
 
     #[test]
-    fn rule_override_higher_layer_overrides_lower_for_same_id() {
-        let rule = "core.secrets.sensitive-path-to-network";
+    fn pack_override_higher_layer_overrides_lower_for_same_name() {
         let lower = RawConfig {
-            rule_overrides: BTreeMap::from([override_for(rule, false)]),
+            packs: BTreeMap::from([("core.secrets".to_string(), pack(false))]),
             ..raw()
         };
         let higher = RawConfig {
-            rule_overrides: BTreeMap::from([override_for(rule, true)]),
+            packs: BTreeMap::from([("core.secrets".to_string(), pack(true))]),
             ..raw()
         };
         let cfg = merge(vec![lower, higher]);
         assert_eq!(
-            cfg.rule_overrides.get(rule).and_then(|o| o.enabled),
+            cfg.pack_overrides
+                .get("core.secrets")
+                .and_then(|o| o.enabled),
             Some(true)
         );
     }
 
     #[test]
-    fn rule_override_higher_layer_with_none_does_not_clobber() {
-        let rule = "core.network.remote-script-pipe";
+    fn pack_override_higher_layer_with_none_does_not_clobber() {
         let lower = RawConfig {
-            rule_overrides: BTreeMap::from([override_for(rule, false)]),
+            packs: BTreeMap::from([("core.network".to_string(), pack(false))]),
             ..raw()
         };
         let higher = RawConfig {
-            rule_overrides: BTreeMap::from([(rule.to_string(), RuleOverride::default())]),
+            packs: BTreeMap::from([("core.network".to_string(), RawPack::default())]),
             ..raw()
         };
         let cfg = merge(vec![lower, higher]);
         assert_eq!(
-            cfg.rule_overrides.get(rule).and_then(|o| o.enabled),
+            cfg.pack_overrides
+                .get("core.network")
+                .and_then(|o| o.enabled),
             Some(false)
         );
     }
 
     #[test]
     fn allowlists_concatenate_in_scope_order() {
-        let lower_entry = Allowlist {
+        let lower_entry = RawAllowlist {
             id: "lower".into(),
-            rule_ids: vec!["a".into()],
+            applies_to: RawAllowlistApplies {
+                rules: vec!["a".into()],
+            },
             expires_at: None,
             reason: None,
         };
-        let higher_entry = Allowlist {
+        let higher_entry = RawAllowlist {
             id: "higher".into(),
-            rule_ids: vec!["b".into()],
+            applies_to: RawAllowlistApplies {
+                rules: vec!["b".into()],
+            },
             expires_at: Some("2099-01-01T00:00:00Z".into()),
             reason: Some("local override".into()),
         };
@@ -200,7 +200,10 @@ mod tests {
                 ..raw()
             },
         ]);
-        assert_eq!(cfg.allowlists, vec![lower_entry, higher_entry]);
+        assert_eq!(
+            cfg.allowlists,
+            vec![Allowlist::from(lower_entry), Allowlist::from(higher_entry)]
+        );
     }
 
     #[test]
