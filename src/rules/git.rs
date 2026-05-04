@@ -117,7 +117,10 @@ fn git_subcommand(argv: &Argv) -> Option<&str> {
     if !is_git(&argv.head) {
         return None;
     }
-    argv.args.iter().find(|a| !a.starts_with('-')).map(String::as_str)
+    argv.args
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .map(String::as_str)
 }
 
 fn args_after_subcommand<'a>(argv: &'a Argv, sub: &str) -> Vec<&'a str> {
@@ -172,9 +175,7 @@ fn matches_clean_fdx(argv: &Argv) -> bool {
     let long_flags: Vec<&&str> = rest.iter().filter(|a| a.starts_with("--")).collect();
     let has_long_force = long_flags.iter().any(|a| ***a == *"--force");
     let has_long_d = long_flags.iter().any(|a| ***a == *"-d");
-    let has_long_x = long_flags
-        .iter()
-        .any(|a| ***a == *"-x" || ***a == *"-X");
+    let has_long_x = long_flags.iter().any(|a| ***a == *"-x" || ***a == *"-X");
     if has_long_force && has_long_d && has_long_x {
         return true;
     }
@@ -194,9 +195,7 @@ fn matches_branch_delete_force(argv: &Argv) -> bool {
     let rest = args_after_subcommand(argv, "branch");
     rest.iter().any(|a| {
         *a == "-D"
-            || (a.starts_with('-')
-                && !a.starts_with("--")
-                && a.contains('D'))
+            || (a.starts_with('-') && !a.starts_with("--") && a.contains('D'))
             || *a == "--delete=force"
     })
 }
@@ -224,8 +223,7 @@ const FORCE_PUSH: RuleSpec = RuleSpec {
     decision_kind: DecisionKind::Deny,
     hard_deny: true,
     matcher: matches_force_push,
-    problem:
-        "git push --force rewrites remote history and can destroy collaborators' work \
+    problem: "git push --force rewrites remote history and can destroy collaborators' work \
          beyond local recovery.",
     alternatives: &[
         "Use git push --force-with-lease to refuse the push if the remote has moved.",
@@ -240,8 +238,7 @@ const FORCE_PUSH_WITH_LEASE: RuleSpec = RuleSpec {
     decision_kind: DecisionKind::Ask,
     hard_deny: false,
     matcher: matches_force_push_with_lease,
-    problem:
-        "git push --force-with-lease still rewrites the remote branch and is destructive \
+    problem: "git push --force-with-lease still rewrites the remote branch and is destructive \
          when other collaborators rely on the previous tip.",
     alternatives: &[
         "Confirm with the user that the remote is yours alone before continuing.",
@@ -255,8 +252,7 @@ const RESET_HARD: RuleSpec = RuleSpec {
     decision_kind: DecisionKind::Ask,
     hard_deny: false,
     matcher: matches_reset_hard,
-    problem:
-        "git reset --hard discards uncommitted changes and rewrites HEAD without warning.",
+    problem: "git reset --hard discards uncommitted changes and rewrites HEAD without warning.",
     alternatives: &[
         "Stash or commit the working tree first (git stash push -u).",
         "Use git reset --keep or git restore for a narrower change.",
@@ -270,8 +266,7 @@ const CLEAN_FDX: RuleSpec = RuleSpec {
     decision_kind: DecisionKind::Ask,
     hard_deny: false,
     matcher: matches_clean_fdx,
-    problem:
-        "git clean -fdx removes every untracked and ignored file, including local-only \
+    problem: "git clean -fdx removes every untracked and ignored file, including local-only \
          secrets, build artefacts, and editor state.",
     alternatives: &[
         "Run git clean -ndx first to preview what would be removed.",
@@ -286,8 +281,7 @@ const BRANCH_DELETE_FORCE: RuleSpec = RuleSpec {
     decision_kind: DecisionKind::Ask,
     hard_deny: false,
     matcher: matches_branch_delete_force,
-    problem:
-        "git branch -D force-deletes a branch even if it has unmerged commits, which can \
+    problem: "git branch -D force-deletes a branch even if it has unmerged commits, which can \
          lose work that lives only on that branch.",
     alternatives: &[
         "Verify the branch is fully merged with git branch --merged.",
@@ -302,8 +296,7 @@ const STASH_CLEAR: RuleSpec = RuleSpec {
     decision_kind: DecisionKind::Ask,
     hard_deny: false,
     matcher: matches_stash_clear,
-    problem:
-        "git stash clear deletes every stashed change at once with no per-entry recovery.",
+    problem: "git stash clear deletes every stashed change at once with no per-entry recovery.",
     alternatives: &[
         "List stashes first with git stash list and drop entries individually.",
         "Apply or pop stashes that you still need before clearing.",
@@ -317,8 +310,7 @@ const REMOTE_SET_URL: RuleSpec = RuleSpec {
     decision_kind: DecisionKind::Ask,
     hard_deny: false,
     matcher: matches_remote_set_url,
-    problem:
-        "git remote set-url silently re-points push and fetch traffic, which can redirect \
+    problem: "git remote set-url silently re-points push and fetch traffic, which can redirect \
          pushes to an attacker-controlled host.",
     alternatives: &[
         "Verify the new URL with the user before changing it.",
@@ -572,11 +564,7 @@ mod tests {
 
     #[test]
     fn stash_clear_asks_via_sudo() {
-        assert_decision(
-            &STASH_CLEAR_RULE,
-            "sudo git stash clear",
-            DecisionKind::Ask,
-        );
+        assert_decision(&STASH_CLEAR_RULE, "sudo git stash clear", DecisionKind::Ask);
     }
 
     #[test]
@@ -618,7 +606,10 @@ mod tests {
     #[test]
     fn remote_set_url_allows_other_remote_subcommands() {
         assert_allow(&REMOTE_SET_URL_RULE, "git remote -v");
-        assert_allow(&REMOTE_SET_URL_RULE, "git remote add upstream https://example.com/x.git");
+        assert_allow(
+            &REMOTE_SET_URL_RULE,
+            "git remote add upstream https://example.com/x.git",
+        );
     }
 
     #[test]

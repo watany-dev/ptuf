@@ -1,5 +1,5 @@
 //! Classify a string against the protected-credentials shapes defined in
-//! [`docs/design/policy-packs.md`] §`core.secrets`.
+//! `docs/design/policy-packs.md` §`core.secrets`.
 //!
 //! The legacy [`crate::rules::patterns::SENSITIVE_PATH`] regex remains
 //! the source of truth for the existing `core.secrets.sensitive-path-to-network`
@@ -90,8 +90,7 @@ static KUBE_CONFIG: LazyLock<Regex> =
 static DOCKER_CONFIG: LazyLock<Regex> =
     LazyLock::new(|| build(r"(?:~|\$HOME|\$\{HOME\})/\.docker/config\.json\b"));
 static PRIVATE_KEY_FILE: LazyLock<Regex> = LazyLock::new(|| build(r"\bid_(?:rsa|ed25519|ecdsa)\b"));
-static DOTENV: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s)\.env(?:\.[A-Za-z0-9_-]+)?\b"));
+static DOTENV: LazyLock<Regex> = LazyLock::new(|| build(r"(?:^|/|\s)\.env(?:\.[A-Za-z0-9_-]+)?\b"));
 static NPMRC: LazyLock<Regex> = LazyLock::new(|| build(r"\.npmrc\b"));
 static PYPIRC: LazyLock<Regex> = LazyLock::new(|| build(r"\.pypirc\b"));
 static TFSTATE: LazyLock<Regex> = LazyLock::new(|| build(r"\S+\.tfstate\b"));
@@ -150,8 +149,10 @@ mod tests {
 
     #[test]
     fn classifies_gcloud_dir() {
-        assert!(kinds("~/.config/gcloud/application_default_credentials.json")
-            .contains(&SensitiveKind::GcloudDir));
+        assert!(
+            kinds("~/.config/gcloud/application_default_credentials.json")
+                .contains(&SensitiveKind::GcloudDir)
+        );
     }
 
     #[test]

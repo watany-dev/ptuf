@@ -29,12 +29,23 @@ Allow / Deny を exit code と stderr メッセージで返す CLI バイナリ 
 - `src/lib.rs` — 判定コアの再エクスポート層。`Decision`, `HookInput`, `decide()`,
   `aggregate` を公開し、内部モジュールへ委譲する
 - `src/decision.rs` — `Decision` (4 variants) と `severity` / `aggregate`
-- `src/hook_input.rs` — `HookInput` と `bash_command()` ヘルパ
+- `src/hook_input.rs` — `HookInput` と `bash_command()` / `file_path()` /
+  `web_fetch_url()` / `write_payload()` accessor
 - `src/hook_output.rs` — Claude Code `hookSpecificOutput` envelope
 - `src/reason.rs` — `reason::build` (deny / ask の Rule Feedback 整形)
-- `src/rules/` — `Rule` trait、組み込み 3 rule、共有 `LazyLock<Regex>` 群
+- `src/rules/` — `ConfigRule` trait、組み込み rule (filesystem / network /
+  secrets / git / self_protection / sensitive_read)、共有 `LazyLock<Regex>` 群
+- `src/facts/` — fact extraction (`shell` / `path` / `url` / `sensitive`)。
+  `protected` は `Engine::decide` 時に注入
+- `src/self_paths.rs` — `ProtectedPaths` (binary / configs / plugins /
+  claude_settings / hook_scripts) の収集と分類
+- `src/engine.rs` — config / plugin / audit / `ProtectedPaths` を抱える Engine。
+  `for_cwd` / `for_path_opt` / `with_config` / `with_components`
+- `src/init/` — `ptuf init <agent>`。v0.3 では `claude_code` adapter のみ
+- `src/doctor.rs` — `ptuf doctor` 診断レポート (`Report::gather` + `render`)
 - `src/cli.rs` — 引数 parse とサブコマンド実行 (`Compat` /
-  `HookClaudeCodePreToolUse` / `Eval` / `Help` / `Version`)
+  `HookClaudeCodePreToolUse` / `Eval` / `PluginTest` / `Init` / `Doctor` /
+  `Help` / `Version`)。fail-closed は `build_engine_or_fail_closed`
 - `src/io_runner.rs` — stdin → `decide` → stdout / stderr / `ExitCode`
 - `src/main.rs` — argv / 各 stream を `io_runner::run` に渡す数行の shim
 - `docs/design/` — 日本語の設計書群。エントリポイントは `docs/design/overview.md` で、

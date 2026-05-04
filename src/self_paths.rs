@@ -12,7 +12,7 @@ use crate::config::{Config, repo};
 use crate::hook_input::HookInput;
 
 /// Categories of protected target. Paired with a path on every
-/// [`Facts::protected`] entry so rules can produce specific reasons.
+/// [`crate::facts::Facts::protected`] entry so rules can produce specific reasons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProtectedKind {
     Binary,

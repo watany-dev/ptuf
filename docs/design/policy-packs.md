@@ -82,35 +82,43 @@ private key らしきファイル (PEM ヘッダ等で判別)
 
 ## `core.git`
 
-危険な git 操作の default decision を以下に固定する。
+危険な git 操作の default decision を以下に固定する (v0.3 で 7 rule とも実装済み)。
 
-| Command | Decision |
-| --- | --- |
-| `git push --force` | `deny` |
-| `git push --force-with-lease` | `ask` |
-| `git reset --hard` | `ask` |
-| `git clean -fdx` | `ask` (strict profile では `deny`) |
-| `git branch -D` | `ask` |
-| `git stash clear` | `ask` |
-| `git remote set-url` | `ask` |
+| Rule id | Decision | hardDeny | severity |
+| --- | --- | --- | --- |
+| `core.git.force-push` | deny | true | critical |
+| `core.git.force-push-with-lease` | ask | false | high |
+| `core.git.reset-hard` | ask | false | high |
+| `core.git.clean-fdx` | ask | false | high |
+| `core.git.branch-delete-force` | ask | false | high |
+| `core.git.stash-clear` | ask | false | medium |
+| `core.git.remote-set-url` | ask | false | medium |
 
 protected branch (`main`, `master`, `release/*` 等、project facts で定義) では
-これらをさらに 1 段強める運用を推奨。
+これらをさらに 1 段強める運用を v0.4 以降で予定。
 
 ## `core.self_protection`
 
-prompt injection 等で agent が guardrail 自体を無効化することを防ぐ。
+prompt injection 等で agent が guardrail 自体を無効化することを防ぐ
+(v0.3 で 5 rule とも実装済み、すべて `hardDeny: true` / `severity: critical`)。
 
-**止めるもの:**
+| Rule id | 止めるもの |
+| --- | --- |
+| `core.self_protection.binary` | ptuf 実行ファイルの改変 (`current_exe()` で判定) |
+| `core.self_protection.config` | `.ptuf.yaml` / `.ptuf.local.yaml` / `~/.config/ptuf/config.yaml` / `/etc/ptuf/policy.yaml` |
+| `core.self_protection.plugin` | config で参照されている plugin YAML |
+| `core.self_protection.claude-settings` | `.claude/settings.json` / `.claude/settings.local.json` / `~/.claude/settings.json` |
+| `core.self_protection.hook-script` | `~/.claude/settings.json` の `command` で参照される実行可能ファイル |
 
-- ptuf binary / config / plugin ファイルの改変
-- `.claude/settings.json`
-- `.claude/settings.local.json`
-- `~/.claude/settings.json`
-- hook script / hook registration の削除や改変
+これらの rule は `hardDeny: true` のため下位 scope の allowlist で解除できない
+([`decision-model.md`](decision-model.md))。
 
-これらの rule は default で `hardDeny: true` 相当の扱いとし、下位 scope から
-解除できない ([`decision-model.md`](decision-model.md))。
+## `core.secrets`
+
+| Rule id | Decision | hardDeny | severity | 止めるもの |
+| --- | --- | --- | --- | --- |
+| `core.secrets.sensitive-path-to-network` | deny | true | critical | Bash で sensitive path と network sink が同一コマンド上に co-occur |
+| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` で sensitive path を直接対象にした |
 
 ## `core.project_hygiene`
 

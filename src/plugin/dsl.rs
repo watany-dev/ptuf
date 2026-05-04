@@ -100,9 +100,7 @@ fn compile_pair(key: &str, value: &Value) -> Result<WhenNode, CompileError> {
         )?)),
         "url.schemeAny" => Ok(WhenNode::UrlSchemeAny(expect_string_list(key, value)?)),
         "url.hostAny" => Ok(WhenNode::UrlHostAny(expect_string_list(key, value)?)),
-        "sensitive.pathKindAny" => Ok(WhenNode::SensitivePathAny(expect_string_list(
-            key, value,
-        )?)),
+        "sensitive.pathKindAny" => Ok(WhenNode::SensitivePathAny(expect_string_list(key, value)?)),
         other => Err(CompileError::UnknownKey(other.to_string())),
     }
 }

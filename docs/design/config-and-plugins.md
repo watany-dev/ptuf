@@ -178,6 +178,28 @@ rules:
 plugin が必要とする facts と扱う event を宣言する。
 `requires` に列挙した fact が ptuf 側で未実装ならロード時にエラー。
 
+v0.3 で `requires:` に書ける fact 名:
+
+- `tool` / `event`
+- `shell.ast` / `shell.argv` / `shell.pipeline`
+- `path` (Read/Edit/Write の `file_path`)
+- `url` (WebFetch の `url`)
+- `sensitive_path` (Read/Edit/Write/Bash いずれの引数からも採取)
+
+### `when:` リーフキー (v0.3)
+
+| key | shape | 意味 |
+| --- | --- | --- |
+| `tool` | `string` | `tool_name` と一致 |
+| `event` | `string` | hook 種別 (`pre-tool-use` のみ) |
+| `shell.argv` | `{ headAny: [string] }` | argv の先頭要素 |
+| `shell.pipeline` | `{ stages: [...] }` | パイプラインの内訳 |
+| `path.filePathPrefixAny` | `[string]` | `Read/Edit/Write` の `file_path` が prefix のいずれかで始まる |
+| `url.schemeAny` | `[string]` | WebFetch URL の scheme (case-insensitive) が一致 |
+| `url.hostAny` | `[string]` | WebFetch URL の host が一致 (case-insensitive) |
+| `sensitive.pathKindAny` | `[string]` | 抽出した sensitive path のうち少なくとも 1 つが指定 kind と一致 (`ssh_dir` / `aws_dir` / `gcloud_dir` / `kube_dir` / `docker_dir` / `private_key` / `dotenv` / `npmrc` / `pypirc` / `tfstate` / `pem_blob`) |
+| `all` / `any` / `not` | nested | 論理結合 |
+
 ### `rules[*]`
 
 | キー | 意味 |

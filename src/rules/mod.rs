@@ -149,7 +149,10 @@ mod tests {
             "core.network.remote-script-pipe",
             "core.secrets.sensitive-path-to-network",
         ];
-        for rule in RULES.iter().filter(|r| LEGACY_HARD_DENY_IDS.contains(&r.id())) {
+        for rule in RULES
+            .iter()
+            .filter(|r| LEGACY_HARD_DENY_IDS.contains(&r.id()))
+        {
             assert!(
                 rule.hard_deny(),
                 "legacy rule {} must remain hard_deny",

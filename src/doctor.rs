@@ -190,7 +190,11 @@ impl Report {
                     if present == 1 { "" } else { "s" }
                 )?;
                 for path in &layers {
-                    let label = if path.is_file() { "loaded" } else { "not found" };
+                    let label = if path.is_file() {
+                        "loaded"
+                    } else {
+                        "not found"
+                    };
                     writeln!(w, "       {:<60} ({label})", path.display().to_string())?;
                 }
             }
@@ -255,7 +259,10 @@ impl Report {
         writeln!(w, "Claude Code integration")?;
         match (&self.claude.settings_path, &self.claude.state) {
             (None, _) | (_, ClaudeState::HomeNotSet) => {
-                writeln!(w, "  ⚠ $HOME not set; cannot locate ~/.claude/settings.json")?;
+                writeln!(
+                    w,
+                    "  ⚠ $HOME not set; cannot locate ~/.claude/settings.json"
+                )?;
             }
             (Some(path), ClaudeState::Missing) => {
                 writeln!(
@@ -472,11 +479,7 @@ mod tests {
         let dir = workdir("bad-plugin");
         let proj = dir.join(".ptuf.yaml");
         let plugin = dir.join("nope.yaml");
-        fs::write(
-            &proj,
-            format!("plugins:\n  - path: {}\n", plugin.display()),
-        )
-        .unwrap();
+        fs::write(&proj, format!("plugins:\n  - path: {}\n", plugin.display())).unwrap();
         let layout = Layout {
             system: None,
             user: None,
@@ -515,11 +518,7 @@ rules:
         )
         .unwrap();
         let proj = dir.join(".ptuf.yaml");
-        fs::write(
-            &proj,
-            format!("plugins:\n  - path: {}\n", plugin.display()),
-        )
-        .unwrap();
+        fs::write(&proj, format!("plugins:\n  - path: {}\n", plugin.display())).unwrap();
         let layout = Layout {
             system: None,
             user: None,

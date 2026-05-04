@@ -1,12 +1,12 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
+use crate::Decision;
 use crate::engine::Engine;
 use crate::hook_input::HookInput;
 use crate::hook_output;
 use crate::init;
 use crate::plugin::runner as plugin_runner;
-use crate::Decision;
 
 /// Reserved rule id used when the engine itself failed to load policy
 /// and the CLI must fail-closed
@@ -374,11 +374,7 @@ fn run_doctor<W1: Write, W2: Write>(json: bool, stdout: &mut W1, stderr: &mut W2
     }
 }
 
-fn render_install_outcome<W: Write>(
-    outcome: &init::InstallOutcome,
-    dry_run: bool,
-    stdout: &mut W,
-) {
+fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: bool, stdout: &mut W) {
     let path = outcome.settings_path.display();
     match outcome.status {
         init::InstallStatus::AlreadyPresent => {
@@ -651,7 +647,10 @@ mod tests {
 
     #[test]
     fn parses_doctor_subcommand() {
-        assert_eq!(parse(&s(&["doctor"])).unwrap(), Command::Doctor { json: false });
+        assert_eq!(
+            parse(&s(&["doctor"])).unwrap(),
+            Command::Doctor { json: false }
+        );
         assert_eq!(
             parse(&s(&["doctor", "--json"])).unwrap(),
             Command::Doctor { json: true }
@@ -951,10 +950,8 @@ rules:
 
     #[test]
     fn run_init_writes_and_is_idempotent_on_second_call() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-init-idempotent-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-init-idempotent-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
@@ -1023,7 +1020,10 @@ rules:
     #[test]
     fn run_doctor_writes_text_report_to_stdout() {
         let (code, out, _err) = run_with(&["doctor"], "");
-        assert!(code == 0 || code == 1, "doctor must return 0 or 1, got {code}");
+        assert!(
+            code == 0 || code == 1,
+            "doctor must return 0 or 1, got {code}"
+        );
         assert!(out.contains("ptuf doctor"));
         assert!(out.contains("Binary"));
     }

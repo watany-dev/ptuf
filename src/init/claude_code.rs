@@ -100,10 +100,7 @@ fn read_settings(path: &Path) -> Result<Value, InitError> {
 }
 
 fn has_existing_hook(root: &Value) -> bool {
-    let Some(arr) = root
-        .pointer("/hooks/PreToolUse")
-        .and_then(Value::as_array)
-    else {
+    let Some(arr) = root.pointer("/hooks/PreToolUse").and_then(Value::as_array) else {
         return false;
     };
     for entry in arr {
@@ -323,11 +320,7 @@ mod tests {
     fn install_rejects_when_pre_tool_use_is_wrong_type() {
         let dir = workdir("wrong-type");
         let path = dir.join("settings.json");
-        fs::write(
-            &path,
-            r#"{"hooks": {"PreToolUse": "not-an-array"}}"#,
-        )
-        .unwrap();
+        fs::write(&path, r#"{"hooks": {"PreToolUse": "not-an-array"}}"#).unwrap();
         let err = install(&path, "/x/ptuf", false).unwrap_err();
         match err {
             InitError::Schema { message, .. } => {
@@ -477,7 +470,10 @@ mod tests {
         fs::write(&path, serde_json::to_string_pretty(&preset).unwrap()).unwrap();
         install(&path, "/usr/local/bin/ptuf", false).unwrap();
         let after: Value = serde_json::from_str(&read(&path)).unwrap();
-        assert_eq!(after.get("model").and_then(Value::as_str), Some("claude-opus-4-7"));
+        assert_eq!(
+            after.get("model").and_then(Value::as_str),
+            Some("claude-opus-4-7")
+        );
         assert_eq!(
             after.pointer("/extras/deep/value").and_then(Value::as_i64),
             Some(42)

@@ -10,31 +10,58 @@ decision via exit code and stderr.
 
 ## Status
 
-v0.2 — three built-in `core.*` rules with fact-based evaluation, YAML
-configuration scope merge, YAML plugin support with a `when:` DSL, and
-audit JSONL with strict redaction.
+v0.3 — broader tool coverage (`Read` / `Edit` / `Write` / `WebFetch` in
+addition to `Bash`), built-in packs for git and self-protection, and
+two new CLI subcommands (`ptuf init claude-code`, `ptuf doctor`) on top
+of the v0.2 plugin / audit foundation.
 
-Built-in rules (always enabled, hard-deny):
+Built-in rules (always enabled, hard-deny unless noted):
 
-- `core.filesystem.destructive-rm` — `rm -rf /`, `rm -rf ~`, `rm -rf /etc`, etc.
+- `core.filesystem.destructive-rm` — `rm -rf /`, `rm -rf ~`, `rm -rf /etc`, …
 - `core.network.remote-script-pipe` — `curl ... | bash` and friends
 - `core.secrets.sensitive-path-to-network` — co-occurrence of a sensitive
-  path (e.g. `~/.ssh/`, `*.tfstate`, `id_rsa`) with a network sink
-  (`curl`, `scp`, `rsync`, ...) in the same command
+  path with a network sink in the same command
+- `core.secrets.sensitive-read` *(new in v0.3)* — `Read` / `Edit` of a
+  credentials file (SSH key, AWS / gcloud / kube config, dotenv, npmrc,
+  pypirc, tfstate, PEM blob, …)
+- `core.git.*` *(new in v0.3, 7 rules)* — `force-push` (deny),
+  `force-push-with-lease` / `reset --hard` / `clean -fdx` /
+  `branch -D` / `stash clear` / `remote set-url` (ask)
+- `core.self_protection.*` *(new in v0.3, 5 rules)* — modifications to the
+  ptuf binary, its config files, registered plugin paths, the Claude Code
+  `settings.json` file, or any hook-script referenced by it
 
-v0.2 features:
+v0.3 features (additive on top of v0.2):
 
-- **Fact extraction** — shell argv / pipeline lexer, URL / path / sensitive-path
-  classifiers, and a basic dataflow (sensitive → network) check; plugins write
-  rules against these structured facts instead of raw shell regex.
+- **Tool-aware fact extraction** — `path` (`~`-expanded `file_path`),
+  `url` (scheme/host/port/path), `sensitive_path` (variant-tagged), and
+  `protected` (paths that ptuf must not let the agent touch).
+- **Plugin DSL leaves** — `path.filePathPrefixAny`, `url.schemeAny`,
+  `url.hostAny`, `sensitive.pathKindAny`. See
+  [`docs/examples/cloud-metadata.yaml`](docs/examples/cloud-metadata.yaml)
+  for an IMDS WebFetch deny sample.
+- **`ptuf init claude-code`** — idempotent install of the PreToolUse hook
+  entry into `~/.claude/settings.json` with `--dry-run` and
+  `--settings <PATH>` flags. Detection is token-based so a re-run with a
+  different binary path still recognises an existing entry.
+- **`ptuf doctor`** — diagnostic report covering the binary, project
+  scope, effective config, loaded plugins, and Claude Code integration.
+  Exit 0 when every section is ✓ or ⚠; exit 1 when any section reports ✗.
+  `--json` is parsed but currently falls back to text (planned for v0.4).
+- **Fail-closed CLI** — every CLI entry point (`ptuf` compat / `ptuf hook
+  ...` / `ptuf eval`) deny-fails when the engine cannot load policy,
+  surfacing the reserved rule id `core.engine.policy-load-failed`.
+  Library-mode `crate::decide` still falls back to a default engine for
+  embedded callers.
+
+v0.2 features carried forward:
+
 - **YAML config scope merge** — `/etc/ptuf/policy.yaml` →
   `~/.config/ptuf/config.yaml` → `<repo>/.ptuf.yaml` →
   `<repo>/.ptuf.local.yaml`. Each scope can set `mode`, `failClosed`,
   `packs.<id>.enabled`, `plugins`, `allowlists`, and `audit.*`.
 - **YAML plugins** — `apiVersion: ptuf.dev/v1, kind: Plugin` with a
-  `when:` DSL (`all` / `any` / `not` / `tool` / `shell.argv` /
-  `shell.pipeline` / `url.*` / `path.*`). `requires:` declarations
-  validated at load time.
+  `when:` DSL. `requires:` declarations validated at load time.
 - **`ptuf plugin test <path>`** — runs the plugin's `tests:` section
   end-to-end and exits non-zero on regressions.
 - **Audit JSONL** — every decision is recorded to
@@ -42,12 +69,7 @@ v0.2 features:
   masks env-var token assignments, GH / OpenAI / AWS keys, JWTs,
   HTTP basic auth, and PEM blobs.
 - **Allowlists with `expiresAt`** — time-bound exceptions per rule id.
-  `hardDeny: true` rules (the three builtins, and any plugin rule
-  marked as such) ignore allowlist suppression.
-
-Other tools (`Read`, `Write`, `Edit`, ...) are still passed through
-unchanged in v0.2; broader tool coverage and `core.self_protection`
-land in v0.3 ([`docs/design/roadmap.md`](docs/design/roadmap.md)).
+  `hardDeny: true` rules ignore allowlist suppression.
 
 > **Note on Windows:** the audit JSONL writer relies on POSIX
 > `O_APPEND` semantics for atomic concurrent appends. On Windows,

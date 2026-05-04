@@ -36,7 +36,11 @@ impl std::fmt::Display for InitError {
                 write!(f, "invalid JSON in {}: {message}", path.display())
             }
             Self::Schema { path, message } => {
-                write!(f, "unexpected settings shape in {}: {message}", path.display())
+                write!(
+                    f,
+                    "unexpected settings shape in {}: {message}",
+                    path.display()
+                )
             }
             Self::HomeNotSet => write!(f, "$HOME is not set; pass --settings <PATH> explicitly"),
         }

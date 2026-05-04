@@ -58,8 +58,7 @@ impl ConfigRule for SelfRule {
 const BINARY: RuleSpec = RuleSpec {
     id: "core.self_protection.binary",
     kind: ProtectedKind::Binary,
-    problem:
-        "The command targets the ptuf binary itself. Removing or replacing it would disable \
+    problem: "The command targets the ptuf binary itself. Removing or replacing it would disable \
          every guardrail in this and future sessions.",
     alternatives: &[
         "Use the package manager / installer that owns the binary.",
@@ -71,8 +70,7 @@ const BINARY: RuleSpec = RuleSpec {
 const CONFIG: RuleSpec = RuleSpec {
     id: "core.self_protection.config",
     kind: ProtectedKind::Config,
-    problem:
-        "The command modifies a ptuf config file. Editing this file from inside the agent \
+    problem: "The command modifies a ptuf config file. Editing this file from inside the agent \
          could silently widen what the agent itself is allowed to do.",
     alternatives: &[
         "Have the user edit ptuf config in a separate, audited workflow.",
@@ -84,8 +82,7 @@ const CONFIG: RuleSpec = RuleSpec {
 const PLUGIN: RuleSpec = RuleSpec {
     id: "core.self_protection.plugin",
     kind: ProtectedKind::Plugin,
-    problem:
-        "The command modifies a ptuf plugin file. Plugins extend the rule set, so an in-session \
+    problem: "The command modifies a ptuf plugin file. Plugins extend the rule set, so an in-session \
          edit can grant new capabilities to the same agent that requested the edit.",
     alternatives: &[
         "Ask the user to apply plugin changes themselves.",
@@ -97,8 +94,7 @@ const PLUGIN: RuleSpec = RuleSpec {
 const CLAUDE_SETTINGS: RuleSpec = RuleSpec {
     id: "core.self_protection.claude-settings",
     kind: ProtectedKind::ClaudeSettings,
-    problem:
-        "The command modifies a Claude Code settings file. The hook registration lives there, \
+    problem: "The command modifies a Claude Code settings file. The hook registration lives there, \
          so this edit could remove or short-circuit the ptuf hook entirely.",
     alternatives: &[
         "Use `ptuf init claude-code` to manage the hook entry safely.",
@@ -110,8 +106,7 @@ const CLAUDE_SETTINGS: RuleSpec = RuleSpec {
 const HOOK_SCRIPT: RuleSpec = RuleSpec {
     id: "core.self_protection.hook-script",
     kind: ProtectedKind::HookScript,
-    problem:
-        "The command modifies a script registered as a Claude Code hook. Editing or chmod-ing \
+    problem: "The command modifies a script registered as a Claude Code hook. Editing or chmod-ing \
          a hook script can disable ptuf-style enforcement at the next tool use.",
     alternatives: &[
         "Edit the hook script outside an agent session, after review.",
@@ -123,7 +118,9 @@ const HOOK_SCRIPT: RuleSpec = RuleSpec {
 pub static BINARY_RULE: SelfRule = SelfRule { spec: &BINARY };
 pub static CONFIG_RULE: SelfRule = SelfRule { spec: &CONFIG };
 pub static PLUGIN_RULE: SelfRule = SelfRule { spec: &PLUGIN };
-pub static CLAUDE_SETTINGS_RULE: SelfRule = SelfRule { spec: &CLAUDE_SETTINGS };
+pub static CLAUDE_SETTINGS_RULE: SelfRule = SelfRule {
+    spec: &CLAUDE_SETTINGS,
+};
 pub static HOOK_SCRIPT_RULE: SelfRule = SelfRule { spec: &HOOK_SCRIPT };
 
 #[cfg(test)]

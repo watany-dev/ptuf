@@ -70,15 +70,20 @@ raw な Bash 文字列を直接 regex で判定するのではなく、構造化
 | fact | 実装ステータス |
 | --- | --- |
 | `shell.argv` / `shell.pipeline` / `shell.env_assignments` | v0.2 で実装済み |
-| `path` (`~` 展開・絶対化) | v0.2 で実装済み |
-| `url` (scheme / host / port / path) | v0.2 で実装済み |
-| `sensitive_path` (`SshDir` / `AwsDir` / `PemKey` / `DotEnv` 等の分類) | v0.2 で実装済み |
-| `dataflow.basic` (sensitive → network) | v0.2 で実装済み |
-| project / git facts (lockfile / branch / remote) | v0.3 以降 |
+| `path` (`~` 展開・絶対化) | v0.3 で実装済み |
+| `url` (scheme / host / port / path) | v0.3 で実装済み |
+| `sensitive_path` (`SshDir` / `AwsDir` / `GcloudDir` / `KubeDir` / `DockerDir` / `PrivateKey` / `Dotenv` / `Npmrc` / `Pypirc` / `Tfstate` / `PemBlob`) | v0.3 で実装済み |
+| `protected` (Engine が決定する self_protection マッチ) | v0.3 で実装済み |
+| `dataflow.basic` (sensitive → network、同一コマンド co-occur を超えた追跡) | v0.4 以降 |
+| project / git facts (lockfile / branch / remote) | v0.4 以降 |
 
-組み込み 3 rule (`core.filesystem.destructive-rm` /
-`core.network.remote-script-pipe` /
-`core.secrets.sensitive-path-to-network`) は v0.2 で fact ベースに書き換え済み。
+組み込み rule のうち以下は facts ベース:
+
+- v0.2 から: `core.filesystem.destructive-rm` /
+  `core.network.remote-script-pipe` /
+  `core.secrets.sensitive-path-to-network`
+- v0.3 で追加: `core.secrets.sensitive-read` / `core.git.*` / `core.self_protection.*`
+
 YAML plugin の `when:` DSL も同じ facts に対して書ける。raw shell regex への
 直接アクセスは plugin 側からは不可視。
 
