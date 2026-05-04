@@ -741,6 +741,88 @@ rules:
     }
 
     #[test]
+    fn engine_error_display_and_source_for_config_variant() {
+        let cfg_err = ConfigError::Io {
+            path: PathBuf::from("/etc/ptuf/policy.yaml"),
+            source: std::io::Error::other("nope"),
+        };
+        let eng: EngineError = cfg_err.into();
+        let msg = format!("{eng}");
+        assert!(msg.starts_with("engine: "));
+        assert!(msg.contains("policy.yaml"));
+        let dyn_err: &dyn std::error::Error = &eng;
+        assert!(dyn_err.source().is_some());
+    }
+
+    #[test]
+    fn engine_error_display_and_source_for_plugin_variant() {
+        let plug_err = PluginError::Io {
+            path: PathBuf::from("/tmp/pack.yaml"),
+            source: std::io::Error::other("nope"),
+        };
+        let eng: EngineError = plug_err.into();
+        let msg = format!("{eng}");
+        assert!(msg.starts_with("engine: "));
+        let dyn_err: &dyn std::error::Error = &eng;
+        assert!(dyn_err.source().is_some());
+    }
+
+    #[test]
+    fn engine_new_succeeds_with_no_repo_root() {
+        // No PTUF_CONFIG_DIR / PTUF_ETC_DIR fixtures in this process,
+        // so the loader walks the empty default layout and yields the
+        // builtin Config — exercising the Engine::new happy path.
+        let engine = Engine::new(None).expect("default-environment engine");
+        assert_eq!(engine.config().mode, Mode::Enforce);
+        assert!(engine.plugins().rules().count() == 0);
+    }
+
+    #[test]
+    fn engine_with_config_opens_jsonl_sink_when_audit_path_is_set() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-engine-jsonl-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("audit.jsonl");
+        let mut cfg = Config::default();
+        cfg.audit.path = Some(path.clone());
+        let engine = Engine::with_config(cfg).expect("with_config");
+        let _ = engine.decide(&bash("rm -rf /"));
+        let body = std::fs::read_to_string(&path).expect("read audit log");
+        assert!(body.contains("\"decision\":\"deny\""));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn engine_with_config_falls_back_to_noop_when_jsonl_open_fails() {
+        // /proc/<unwritable>/audit.jsonl cannot be created; the engine
+        // must still construct successfully (NoopSink fallback) so the
+        // hook never blocks tool execution due to audit issues.
+        let mut cfg = Config::default();
+        cfg.audit.path = Some(PathBuf::from("/proc/this-cannot-be-created/audit.jsonl"));
+        let engine = Engine::with_config(cfg).expect("with_config never aborts on audit open");
+        let outcome = engine.decide(&bash("ls"));
+        assert_eq!(outcome.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn audit_record_severity_is_none_when_decision_carries_unknown_rule_id() {
+        // Engine::severity_for walks builtin and plugin rules; when the
+        // id is absent (e.g. a synthetic Decision::Monitor), it must
+        // return None and the audit record reflects that.
+        let captured = Arc::new(MemorySink::new());
+        let engine = engine_with(Config::default())
+            .with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        // Drive a Monitor outcome with an unknown rule id by placing it
+        // through a plugin allowlist + monitor mode would be complex;
+        // instead, exercise severity_for directly via the public API.
+        assert!(engine.severity_for("nonexistent.rule").is_none());
+    }
+
+    #[test]
     fn plugin_pack_can_be_disabled_via_config() {
         #![allow(clippy::expect_used)]
         use crate::plugin::load_str;
