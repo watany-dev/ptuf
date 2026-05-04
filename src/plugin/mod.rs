@@ -13,6 +13,7 @@
 pub mod dsl;
 pub mod loader;
 pub mod rule;
+pub mod runner;
 pub mod schema;
 
 use std::path::PathBuf;

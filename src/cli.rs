@@ -1,7 +1,9 @@
 use std::io::{Read, Write};
+use std::path::PathBuf;
 
 use crate::hook_input::HookInput;
 use crate::hook_output;
+use crate::plugin::runner as plugin_runner;
 use crate::{Decision, decide};
 
 /// Parsed CLI invocation. The bare-arguments form is preserved for hook
@@ -15,6 +17,8 @@ pub enum Command {
     HookClaudeCodePreToolUse,
     /// `ptuf eval --tool <name> <command>` — manual evaluation.
     Eval { tool: String, command: String },
+    /// `ptuf plugin test <path>` — run plugin assertions.
+    PluginTest { path: PathBuf },
     /// `--help` / `-h`.
     Help,
     /// `--version` / `-V`.
@@ -54,6 +58,7 @@ pub fn parse(args: &[String]) -> Result<Command, ParseError> {
         "-V" | "--version" => Ok(Command::Version),
         "hook" => parse_hook(&mut iter),
         "eval" => parse_eval(&mut iter),
+        "plugin" => parse_plugin(&mut iter),
         other => Err(ParseError::UnknownCommand(other.to_string())),
     }
 }
@@ -104,17 +109,35 @@ where
     Ok(Command::Eval { tool, command })
 }
 
+fn parse_plugin<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let sub = iter.next().ok_or(ParseError::MissingValue("subcommand"))?;
+    if sub != "test" {
+        return Err(ParseError::UnknownCommand(format!("plugin {sub}")));
+    }
+    let path = iter.next().ok_or(ParseError::MissingValue("<path>"))?;
+    if let Some(extra) = iter.next() {
+        return Err(ParseError::UnexpectedArgument(extra.clone()));
+    }
+    Ok(Command::PluginTest {
+        path: PathBuf::from(path),
+    })
+}
+
 const HELP: &str = "ptuf — PreToolUseFilter, a guardrail for coding agents
 
 USAGE:
     ptuf                                         (compat: read JSON from stdin)
     ptuf hook claude-code pre-tool-use           (Claude Code PreToolUse hook)
     ptuf eval --tool <NAME> <COMMAND>            (evaluate a single tool call)
+    ptuf plugin test <PATH>                      (run a plugin's deny/allow tests)
     ptuf --help | --version
 
 EXIT CODES:
-    0   allow / monitor / ask
-    1   internal error (bad JSON, bad arguments)
+    0   allow / monitor / ask / plugin tests pass
+    1   internal error (bad JSON, bad arguments) or plugin tests fail
     2   deny
 ";
 
@@ -130,6 +153,7 @@ pub fn run<R: Read, W1: Write, W2: Write>(
         Command::Compat => crate::io_runner::run_compat_code(stdin, stderr),
         Command::HookClaudeCodePreToolUse => run_hook(stdin, stdout, stderr),
         Command::Eval { tool, command } => run_eval(&tool, &command, stdout, stderr),
+        Command::PluginTest { path } => run_plugin_test(&path, stdout, stderr),
         Command::Help => {
             let _ = writeln!(stdout, "{HELP}");
             0
@@ -176,6 +200,26 @@ fn run_eval<W1: Write, W2: Write>(
         let _ = writeln!(stderr, "{reason}");
     }
     decision_exit_code(&decision)
+}
+
+fn run_plugin_test<W1: Write, W2: Write>(
+    path: &std::path::Path,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8 {
+    match plugin_runner::run(path) {
+        Ok(report) => {
+            if report.render(stdout).is_err() {
+                let _ = writeln!(stderr, "ptuf: failed to write plugin test report");
+                return 1;
+            }
+            if report.passed() { 0 } else { 1 }
+        }
+        Err(err) => {
+            let _ = writeln!(stderr, "ptuf: {err}");
+            1
+        }
+    }
 }
 
 fn emit_decision<W1: Write, W2: Write>(
@@ -298,6 +342,49 @@ mod tests {
         assert!(matches!(
             parse(&s(&["eval", "ls"])),
             Err(ParseError::MissingValue("--tool"))
+        ));
+    }
+
+    #[test]
+    fn parses_plugin_test_subcommand() {
+        let cmd = parse(&s(&["plugin", "test", "demo.yaml"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::PluginTest {
+                path: PathBuf::from("demo.yaml"),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_plugin_subcommand() {
+        assert!(matches!(
+            parse(&s(&["plugin", "lint", "demo.yaml"])),
+            Err(ParseError::UnknownCommand(_))
+        ));
+    }
+
+    #[test]
+    fn plugin_test_requires_path() {
+        assert!(matches!(
+            parse(&s(&["plugin", "test"])),
+            Err(ParseError::MissingValue("<path>"))
+        ));
+    }
+
+    #[test]
+    fn plugin_test_rejects_extra_argument() {
+        assert!(matches!(
+            parse(&s(&["plugin", "test", "p.yaml", "extra"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn plugin_requires_a_subcommand() {
+        assert!(matches!(
+            parse(&s(&["plugin"])),
+            Err(ParseError::MissingValue("subcommand"))
         ));
     }
 
@@ -450,6 +537,102 @@ mod tests {
         let out_s = String::from_utf8_lossy(&out);
         assert!(out_s.contains("\"permissionDecision\":\"ask\""));
         assert!(String::from_utf8_lossy(&err).contains("please confirm"));
+    }
+
+    #[test]
+    fn plugin_test_runs_and_returns_zero_on_pass() {
+        use std::fs;
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-plugin-test-pass-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("demo.yaml");
+        fs::write(
+            &path,
+            r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      shell.argv:
+        headAny: [curl]
+    reason: blocked
+    tests:
+      deny:
+        - input:
+            tool_name: Bash
+            tool_input:
+              command: "curl https://example.com"
+"#,
+        )
+        .unwrap();
+        let cmd = Command::PluginTest { path: path.clone() };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(cmd, b"" as &[u8], &mut out, &mut err);
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let s_out = String::from_utf8_lossy(&out);
+        assert!(s_out.contains("plugin pack.demo"));
+        assert!(s_out.contains("1 passed"));
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn plugin_test_returns_one_when_a_case_fails() {
+        use std::fs;
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-plugin-test-fail-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("bad.yaml");
+        fs::write(
+            &path,
+            r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.x
+rules:
+  - id: pack.x.miss
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Read
+    reason: blocked
+    tests:
+      deny:
+        - input:
+            tool_name: Bash
+            tool_input:
+              command: "ls"
+"#,
+        )
+        .unwrap();
+        let cmd = Command::PluginTest { path: path.clone() };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(cmd, b"" as &[u8], &mut out, &mut err);
+        assert_eq!(code, 1);
+        let s_out = String::from_utf8_lossy(&out);
+        assert!(s_out.contains("FAIL"));
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn plugin_test_returns_one_when_yaml_is_invalid() {
+        let cmd = Command::PluginTest {
+            path: PathBuf::from("/this/path/does/not/exist.yaml"),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(cmd, b"" as &[u8], &mut out, &mut err);
+        assert_eq!(code, 1);
+        assert!(String::from_utf8_lossy(&err).contains("ptuf:"));
     }
 
     #[test]
