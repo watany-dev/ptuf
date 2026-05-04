@@ -244,3 +244,109 @@ fn help_prints_usage_with_exit_zero() {
     assert!(stdout.contains("USAGE"));
     assert!(stdout.contains("ptuf eval"));
 }
+
+#[test]
+fn audit_jsonl_carries_schema_version_and_agent_for_hook_subcommand() {
+    let dir = std::env::temp_dir().join(format!(
+        "ptuf-audit-smoke-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+    let audit_path = dir.join("audit.jsonl");
+    let yaml = format!(
+        "audit:\n  path: {}\n  includeAllowed: true\n",
+        audit_path.display()
+    );
+    std::fs::write(dir.join(".ptuf.yaml"), yaml).expect("write yaml");
+
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
+    let mut child = binary()
+        .args(["hook", "claude-code", "pre-tool-use"])
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut sin = child.stdin.take().expect("stdin");
+        sin.write_all(payload.as_bytes()).expect("write stdin");
+    }
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(output.status.code(), Some(2));
+
+    let body = std::fs::read_to_string(&audit_path).expect("read audit");
+    let line = body.lines().next().expect("at least one line");
+    assert!(line.contains("\"schemaVersion\":1"), "line: {line}");
+    assert!(line.contains("\"agent\":\"claude-code\""), "line: {line}");
+    assert!(line.contains("\"decision\":\"deny\""), "line: {line}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn audit_jsonl_carries_agent_cli_for_eval_subcommand() {
+    let dir = std::env::temp_dir().join(format!(
+        "ptuf-audit-eval-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+    let audit_path = dir.join("audit.jsonl");
+    let yaml = format!("audit:\n  path: {}\n", audit_path.display());
+    std::fs::write(dir.join(".ptuf.yaml"), yaml).expect("write yaml");
+
+    let mut child = binary()
+        .args(["eval", "--tool", "Bash", "rm -rf /"])
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(output.status.code(), Some(2));
+
+    let body = std::fs::read_to_string(&audit_path).expect("read audit");
+    let line = body.lines().next().expect("at least one line");
+    assert!(line.contains("\"agent\":\"cli\""), "line: {line}");
+    assert!(line.contains("\"schemaVersion\":1"), "line: {line}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn audit_jsonl_carries_agent_compat_for_compat_mode() {
+    let dir = std::env::temp_dir().join(format!(
+        "ptuf-audit-compat-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+    let audit_path = dir.join("audit.jsonl");
+    let yaml = format!("audit:\n  path: {}\n", audit_path.display());
+    std::fs::write(dir.join(".ptuf.yaml"), yaml).expect("write yaml");
+
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
+    let mut child = binary()
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut sin = child.stdin.take().expect("stdin");
+        sin.write_all(payload.as_bytes()).expect("write stdin");
+    }
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(output.status.code(), Some(2));
+
+    let body = std::fs::read_to_string(&audit_path).expect("read audit");
+    let line = body.lines().next().expect("at least one line");
+    assert!(line.contains("\"agent\":\"compat\""), "line: {line}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -19,14 +19,22 @@ pub(crate) const POLICY_LOAD_FAILED_RULE: &str = "core.engine.policy-load-failed
 /// Production CLI entry points (compat / `hook ...` / `eval`) all go
 /// through this helper. The `crate::decide` shim is intentionally
 /// lenient (`Engine::default` fallback) for embedded library use.
-pub(crate) fn build_engine_or_fail_closed<W: Write>(stderr: &mut W) -> Result<Engine, Decision> {
-    Engine::for_cwd().map_err(|err| {
-        let _ = writeln!(stderr, "ptuf: could not load policy: {err}");
-        Decision::Deny {
-            rule_id: POLICY_LOAD_FAILED_RULE.into(),
-            reason: "ptuf could not load policy; failing closed.".into(),
-        }
-    })
+///
+/// `agent` is the adapter name surfaced in audit records — typically
+/// `"compat"`, `"claude-code"`, or `"cli"`.
+pub(crate) fn build_engine_or_fail_closed<W: Write>(
+    stderr: &mut W,
+    agent: &'static str,
+) -> Result<Engine, Decision> {
+    Engine::for_cwd()
+        .map(|engine| engine.with_agent(agent))
+        .map_err(|err| {
+            let _ = writeln!(stderr, "ptuf: could not load policy: {err}");
+            Decision::Deny {
+                rule_id: POLICY_LOAD_FAILED_RULE.into(),
+                reason: "ptuf could not load policy; failing closed.".into(),
+            }
+        })
 }
 
 /// Parsed CLI invocation. The bare-arguments form is preserved for hook
@@ -262,7 +270,7 @@ fn run_hook<R: Read, W1: Write, W2: Write>(mut stdin: R, stdout: &mut W1, stderr
             return 1;
         }
     };
-    let decision = match build_engine_or_fail_closed(stderr) {
+    let decision = match build_engine_or_fail_closed(stderr, "claude-code") {
         Ok(engine) => engine.decide(&input).decision,
         Err(deny) => deny,
     };
@@ -279,7 +287,7 @@ fn run_eval<W1: Write, W2: Write>(
         tool_name: tool.to_string(),
         tool_input: serde_json::json!({ "command": command }),
     };
-    let decision = match build_engine_or_fail_closed(stderr) {
+    let decision = match build_engine_or_fail_closed(stderr, "cli") {
         Ok(engine) => engine.decide(&input).decision,
         Err(deny) => deny,
     };

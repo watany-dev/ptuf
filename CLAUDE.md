@@ -42,7 +42,10 @@ Allow / Deny を exit code と stderr メッセージで返す CLI バイナリ 
 - `src/self_paths.rs` — `ProtectedPaths` (binary / configs / plugins /
   claude_settings / hook_scripts) の収集と分類
 - `src/engine.rs` — config / plugin / audit / `ProtectedPaths` を抱える Engine。
-  `for_cwd` / `for_path_opt` / `with_config` / `with_components`
+  `for_cwd` / `for_path_opt` / `with_config` / `with_components` / `with_agent`
+- `src/audit/` — JSONL 永続化。`AuditRecord` は `schemaVersion: 1` を含み、
+  `agent` (`claude-code` / `cli` / `compat`) と `pluginVersions`
+  (`name@version` 配列) と `allowlistId` (allow に至った allowlist の id) を伝える
 - `src/init/` — `ptuf init <agent>`。v0.3 では `claude_code` adapter のみ
 - `src/doctor.rs` — `ptuf doctor` 診断レポート (`Report::gather` + `render`)
 - `src/cli.rs` — 引数 parse とサブコマンド実行 (`Compat` /

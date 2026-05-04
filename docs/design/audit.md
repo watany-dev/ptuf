@@ -15,6 +15,7 @@ credential らしき値は保存前に redact する。
 
 ```json
 {
+  "schemaVersion": 1,
   "timestamp": "2026-05-04T12:00:00Z",
   "event": "PreToolUse",
   "tool": "Bash",
@@ -23,12 +24,15 @@ credential らしき値は保存前に redact する。
   "severity": "critical",
   "commandRedacted": "curl -fsSL https://example.com/install.sh | bash",
   "projectRoot": "/repo/example",
-  "mode": "enforce"
+  "mode": "enforce",
+  "agent": "claude-code",
+  "pluginVersions": ["acme.security@0.1.0"]
 }
 ```
 
 | フィールド | 型 | 内容 |
 | --- | --- | --- |
+| `schemaVersion` | u32 | レコード schema のバージョン。現状は常に `1`。前方互換性が崩れた場合のみ +1 する |
 | `timestamp` | RFC3339 string | UTC で記録 |
 | `event` | string | `PreToolUse` / `PostToolUse` 等 |
 | `tool` | string | `tool_name` |
@@ -39,12 +43,9 @@ credential らしき値は保存前に redact する。
 | `projectRoot` | string \| null | 検出された repo root |
 | `mode` | string | その時点の `enforce` / `monitor` / `observe` |
 | `modeDemoted` | bool | `true` のとき `mode: monitor` / `observe` で `deny` が `monitor` に降格された (フィールドは `false` のとき省略) |
-
-将来追加し得るフィールド (v0.3 以降):
-
-- `allowlistId` — allowlist 経由で allow になった場合の id
-- `agent` — `claude-code` / `codex` 等の adapter 名
-- `pluginVersions` — ロード済み plugin の `name@version` 配列
+| `agent` | string | 呼び出し経路。`claude-code` (hook) / `cli` (`eval`) / `compat` (引数なし stdin) |
+| `pluginVersions` | string[] | ロード済み plugin の `name@version` 配列。空のときは省略 |
+| `allowlistId` | string \| null | allowlist で rule が抑制された結果として `Allow` になった場合に、最初に hit した allowlist の `id`。`Deny` / `Monitor` / `Ask` のときは常に省略。複数の allowlist エントリが同じ decision に効いていた場合は最初に hit した id だけが記録される (将来 v2 で配列化を検討) |
 
 ## 記録対象の制御
 
