@@ -115,13 +115,29 @@ subcommand, ...).
 
 ## Use as a Claude Code PreToolUse hook
 
-Add an entry to `~/.claude/settings.json`:
+The simplest way is to let `ptuf init claude-code` write the entry for
+you (idempotent; safe to re-run after upgrades):
+
+```bash
+ptuf init claude-code             # writes ~/.claude/settings.json
+ptuf init claude-code --dry-run   # show the diff without touching the file
+```
+
+The resulting `~/.claude/settings.json` looks like:
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
-      { "command": "/absolute/path/to/ptuf hook claude-code pre-tool-use" }
+      {
+        "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/ptuf hook claude-code pre-tool-use"
+          }
+        ]
+      }
     ]
   }
 }
@@ -132,6 +148,9 @@ code blocks the tool call and the `hookSpecificOutput` JSON / stderr
 message is surfaced to both the agent and the user. The bare
 `/absolute/path/to/ptuf` form (without the subcommand) keeps working as a
 compatibility mode for older configurations.
+
+Run `ptuf doctor` afterwards to confirm the binary, repo scope, loaded
+plugins, and hook registration are all healthy.
 
 ## Configure
 
@@ -193,18 +212,26 @@ Run the full pipeline locally before pushing:
 ```bash
 make check       # fmt-check + clippy + test + doc + cargo-deny
 make coverage    # cargo-tarpaulin (>= 95%)
+make pbt         # property-based testing at PBT_CASES=10000 (override with PBT_CASES=N)
 ```
+
+`cargo test` runs every `proptest!` block at the default 256 cases as part of
+`make check`; `make pbt` re-runs the same suite at a higher case count for
+release-time deep checks. Shrunk counterexamples are persisted under
+`proptest-regressions/` and committed to git so the same seeds replay across
+machines.
 
 CI mirrors `make check` plus an MSRV check, an `actionlint` lint of the
 workflow itself, and a coverage gate.
 
 ## Design docs
 
-The intended scope reaches far beyond the current v0.1 milestone. Start
-with [`docs/design/overview.md`](docs/design/overview.md) for goals,
+The intended scope reaches beyond the current v0.3 milestone (multi-agent
+adapters, signed plugins, `dataflow.basic`, …). Start with
+[`docs/design/overview.md`](docs/design/overview.md) for goals,
 non-goals, and an index of the design notes (architecture, decision
 model, policy packs, config and plugins, CLI and hook integration, audit
-log, roadmap).
+log, testing, roadmap).
 
 ## License
 

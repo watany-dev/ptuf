@@ -163,6 +163,12 @@ Claude Code 専用 `hookSpecificOutput` envelope のフィールド一覧は
 - 判定コアは純粋関数なのでユニットテストで網羅する
 - `src/main.rs` は薄い shim のため coverage 集計から除外
 - `cargo-tarpaulin` で 95% 以上を維持 (CI でゲート)
+- example-based テストに加え `proptest` を併用し、`aggregate` の代数法則 /
+  `engine::demote_for_mode` / `facts::shell::parse` / 組み込み rule の全域性
+  (panic 安全) / `audit::redact_strict` の冪等性などコア不変条件を Property-Based
+  Testing で検証する。共通戦略は `src/testing/proptest.rs`、統合層 PBT は
+  `tests/engine_proptest.rs`、深掘りは `make pbt` (デフォルト 10000 ケース)。
+  詳細は [`testing.md`](testing.md)
 - plugin rule は `tests:` セクションで deny / allow ケースを宣言的に書き、
   `ptuf plugin test <path>` で検証する (v0.2 で実装済み、
   [`config-and-plugins.md`](config-and-plugins.md))

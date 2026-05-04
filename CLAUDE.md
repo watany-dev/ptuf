@@ -23,6 +23,8 @@ Allow / Deny を exit code と stderr メッセージで返す CLI バイナリ 
 - `make build` — release ビルド
 - `make coverage` — `cargo tarpaulin --fail-under 95 --exclude-files "src/main.rs"`
 - `make fmt` — 自動フォーマット
+- `make pbt` — `PROPTEST_CASES=10000 cargo test` (デフォルト 10000 ケース、
+  `PBT_CASES=N` で上書き)。リリース直前の深掘り PBT 用
 
 ## アーキテクチャ
 
@@ -48,9 +50,14 @@ Allow / Deny を exit code と stderr メッセージで返す CLI バイナリ 
   `Help` / `Version`)。fail-closed は `build_engine_or_fail_closed`
 - `src/io_runner.rs` — stdin → `decide` → stdout / stderr / `ExitCode`
 - `src/main.rs` — argv / 各 stream を `io_runner::run` に渡す数行の shim
+- `src/testing/` — `#[cfg(test)] pub(crate) mod testing` で公開する PBT 戦略
+  (`Decision` / `Severity` / `HookInput` / `bash_command`)。`tests/engine_proptest.rs`
+  は integration crate のため共通戦略を独立に複製
+- `proptest-regressions/` — proptest がシュリンクで見つけた最小反例の永続化先。
+  全環境で同シードで再現させるため git 管理する
 - `docs/design/` — 日本語の設計書群。エントリポイントは `docs/design/overview.md` で、
   そこから architecture / decision-model / policy-packs / config-and-plugins /
-  cli-and-hooks / audit / roadmap にリンクが張られている
+  cli-and-hooks / audit / testing / roadmap にリンクが張られている
 
 `src/main.rs` は coverage 集計から除外する (CLI shim のため)。新規ロジックは必ず `src/lib.rs` 配下に置く。
 
