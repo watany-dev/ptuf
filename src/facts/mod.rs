@@ -12,6 +12,8 @@
 
 use crate::HookInput;
 
+pub mod shell;
+
 /// Aggregated facts derived from a single hook payload.
 ///
 /// Subsequent commits will populate `shell`, `urls`, `paths`, etc. The
