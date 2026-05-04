@@ -33,8 +33,35 @@ ptuf audit
 > `ptuf plugin test <path>` / `ptuf init claude-code [--dry-run] [--settings <PATH>]` /
 > `ptuf doctor [--json]` と `--help` / `--version`、および引数なし
 > 互換モード (stdin → exit code)。
-> `ptuf doctor --json` (現状は warning を出して text にフォールバック) /
 > `ptuf explain` / `ptuf audit` は v0.4 以降で実装する。
+>
+> `ptuf doctor --json` は `Report` を構造化 JSON として stdout に書き、
+> exit code は text 版と同じ semantics (failure → 1, success → 0)。
+> スキーマ (`schemaVersion: 1`) は CI / 監査ツール向けの安定 contract:
+>
+> ```json
+> {
+>   "schemaVersion": 1,
+>   "binary":   { "path": "/usr/local/bin/ptuf", "version": "0.3.0" },
+>   "project":  { "repoRoot": "/home/user/proj" },
+>   "configLayers": [
+>     { "layer": "system",       "path": "...", "present": false },
+>     { "layer": "user",         "path": "...", "present": false },
+>     { "layer": "project",      "path": "...", "present": true  },
+>     { "layer": "projectLocal", "path": "...", "present": false }
+>   ],
+>   "config":   { "loaded": true, "mode": "enforce", "failClosed": true,
+>                 "auditPath": null },
+>   "plugins":  [],
+>   "claude":   { "settingsPath": "...", "state": "hookRegistered",
+>                 "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*" },
+>   "hasFailure": false
+> }
+> ```
+>
+> `state` は `homeNotSet` / `missing` / `hookRegistered` / `hookMissing` /
+> `invalidJson` / `io` のいずれか。`matcher` は `hookRegistered` の場合のみ、
+> `error` は `invalidJson` / `io` の場合のみ出力される。
 
 ## 出力規約
 

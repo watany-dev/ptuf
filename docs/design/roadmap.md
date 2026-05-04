@@ -46,7 +46,7 @@
 - `ptuf init claude-code` (`~/.claude/settings.json` 冪等 install、
   `--dry-run` / `--settings <PATH>` flag)
 - `ptuf doctor` (Binary / Project / Effective config / Plugins /
-  Claude integration の診断レポート、`--json` は v0.4)
+  Claude integration の診断レポート、`--json` 構造化出力 `schemaVersion: 1`)
 - CLI 経路の fail-closed (`core.engine.policy-load-failed`)
 - plugin DSL 4 leaf 追加: `path.filePathPrefixAny` / `url.schemeAny` /
   `url.hostAny` / `sensitive.pathKindAny`
@@ -60,7 +60,6 @@
 - 署名 / pin 付き plugin
 - optional WASM plugin runtime
 - Codex / Cursor / Gemini CLI adapter
-- `ptuf doctor --json` 出力
 
 各 milestone の rule と CLI が揃った時点でリリースタグを切る。
 

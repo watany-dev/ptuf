@@ -353,13 +353,12 @@ fn run_init<W1: Write, W2: Write>(
 }
 
 fn run_doctor<W1: Write, W2: Write>(json: bool, stdout: &mut W1, stderr: &mut W2) -> u8 {
-    if json {
-        let _ = writeln!(
-            stderr,
-            "ptuf: --json output is not yet implemented (planned for v0.4); falling back to text"
-        );
-    }
-    match crate::doctor::render_doctor(stdout) {
+    let result = if json {
+        crate::doctor::render_doctor_json(stdout)
+    } else {
+        crate::doctor::render_doctor(stdout)
+    };
+    match result {
         Ok(failure) => {
             if failure {
                 1
@@ -1029,10 +1028,20 @@ rules:
     }
 
     #[test]
-    fn run_doctor_with_json_flag_warns_and_falls_back_to_text() {
-        let (_code, out, err) = run_with(&["doctor", "--json"], "");
-        assert!(out.contains("ptuf doctor"));
-        assert!(err.contains("--json output is not yet implemented"));
+    fn run_doctor_with_json_flag_emits_structured_json() {
+        let (code, out, _err) = run_with(&["doctor", "--json"], "");
+        assert!(
+            code == 0 || code == 1,
+            "doctor --json must return 0 or 1, got {code}"
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&out).expect("doctor --json output must be valid JSON");
+        assert_eq!(value["schemaVersion"], 1);
+        assert!(value["binary"]["version"].is_string());
+        assert!(value["configLayers"].is_array());
+        assert!(value["plugins"].is_array());
+        assert!(value["claude"]["state"].is_string());
+        assert!(value["hasFailure"].is_boolean());
     }
 
     #[test]
