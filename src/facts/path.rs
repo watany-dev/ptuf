@@ -205,4 +205,91 @@ mod tests {
         let fp = extract(&i).unwrap();
         assert_eq!(fp.raw, "/tmp/sample");
     }
+
+    use crate::testing::proptest::{file_path, richer_hook_input};
+    use proptest::prelude::*;
+
+    proptest! {
+        // The extractor never panics for arbitrary HookInput shapes.
+        #[test]
+        fn pbt_extract_never_panics(i in richer_hook_input()) {
+            let _ = extract_with_env(&i, &MapEnv::with_home("/h"));
+            let _ = extract(&i);
+        }
+
+        // Tools other than Read/Edit/Write always yield None, even with
+        // a file_path field present.
+        #[test]
+        fn pbt_non_path_tool_yields_none(
+            tool in "[A-Z][A-Za-z]{0,8}",
+            fp in file_path(),
+        ) {
+            prop_assume!(!matches!(tool.as_str(), "Read" | "Edit" | "Write"));
+            let i = HookInput {
+                tool_name: tool,
+                tool_input: serde_json::json!({ "file_path": fp }),
+            };
+            prop_assert!(extract_with_env(&i, &MapEnv::with_home("/h")).is_none());
+        }
+
+        // Read/Edit/Write tools with a string file_path always extract,
+        // and the .raw field round-trips the input verbatim.
+        #[test]
+        fn pbt_path_tool_round_trips_raw(
+            tool in proptest::sample::select(&["Read", "Edit", "Write"][..]),
+            fp in file_path(),
+        ) {
+            let i = HookInput {
+                tool_name: tool.to_string(),
+                tool_input: serde_json::json!({ "file_path": fp.clone() }),
+            };
+            let out = extract_with_env(&i, &MapEnv::with_home("/h")).expect("path");
+            prop_assert_eq!(out.raw, fp);
+        }
+
+        // Absolute paths (starting with `/`) are returned identically as
+        // the absolute form — `~`/`$HOME` expansion is a no-op for them.
+        #[test]
+        fn pbt_absolute_paths_are_identity(
+            tool in proptest::sample::select(&["Read", "Edit", "Write"][..]),
+            tail in "[a-zA-Z0-9_./-]{0,20}",
+        ) {
+            let raw = format!("/{tail}");
+            let i = HookInput {
+                tool_name: tool.to_string(),
+                tool_input: serde_json::json!({ "file_path": raw.clone() }),
+            };
+            let out = extract_with_env(&i, &MapEnv::with_home("/h")).expect("path");
+            prop_assert_eq!(out.absolute, PathBuf::from(raw));
+        }
+
+        // `~/` prefix always expands to `<home>/...` when HOME is set.
+        #[test]
+        fn pbt_tilde_prefix_expands_to_home(
+            tail in "[a-zA-Z0-9_./-]{0,20}",
+            home in "/(?:home|h)/[a-z0-9_]{1,8}",
+        ) {
+            let raw = format!("~/{tail}");
+            let i = HookInput {
+                tool_name: "Read".into(),
+                tool_input: serde_json::json!({ "file_path": raw }),
+            };
+            let env = MapEnv::with_home(&home);
+            let out = extract_with_env(&i, &env).expect("path");
+            prop_assert_eq!(out.absolute, PathBuf::from(home).join(tail));
+        }
+
+        // When HOME is unset, ~ paths fall back to the raw form rather
+        // than panicking or producing a partial expansion.
+        #[test]
+        fn pbt_no_home_falls_back_to_raw(tail in "[a-zA-Z0-9_./-]{0,20}") {
+            let raw = format!("~/{tail}");
+            let i = HookInput {
+                tool_name: "Read".into(),
+                tool_input: serde_json::json!({ "file_path": raw.clone() }),
+            };
+            let out = extract_with_env(&i, &MapEnv::empty()).expect("path");
+            prop_assert_eq!(out.absolute, PathBuf::from(raw));
+        }
+    }
 }

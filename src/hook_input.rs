@@ -217,5 +217,122 @@ mod tests {
         fn pbt_bash_command_never_panics(input in hook_input()) {
             let _ = input.bash_command();
         }
+
+        // ----- file_path -----------------------------------------------
+
+        #[test]
+        fn pbt_file_path_round_trips(
+            tool in proptest::sample::select(&["Read", "Edit", "Write"][..]),
+            fp in crate::testing::proptest::file_path(),
+        ) {
+            let input = HookInput {
+                tool_name: tool.to_string(),
+                tool_input: serde_json::json!({ "file_path": fp.clone() }),
+            };
+            prop_assert_eq!(input.file_path(), Some(fp.as_str()));
+        }
+
+        #[test]
+        fn pbt_file_path_none_for_non_path_tool(
+            tool in "[A-Z][A-Za-z]{0,8}",
+            fp in crate::testing::proptest::file_path(),
+        ) {
+            prop_assume!(!matches!(tool.as_str(), "Read" | "Edit" | "Write"));
+            let input = HookInput {
+                tool_name: tool,
+                tool_input: serde_json::json!({ "file_path": fp }),
+            };
+            prop_assert_eq!(input.file_path(), None);
+        }
+
+        #[test]
+        fn pbt_file_path_none_for_non_string_value(
+            tool in proptest::sample::select(&["Read", "Edit", "Write"][..]),
+            n in 0i64..1_000,
+        ) {
+            let input = HookInput {
+                tool_name: tool.to_string(),
+                tool_input: serde_json::json!({ "file_path": n }),
+            };
+            prop_assert_eq!(input.file_path(), None);
+        }
+
+        // ----- web_fetch_url -------------------------------------------
+
+        #[test]
+        fn pbt_web_fetch_url_round_trips(
+            url in crate::testing::proptest::web_url(),
+        ) {
+            let input = HookInput {
+                tool_name: "WebFetch".into(),
+                tool_input: serde_json::json!({ "url": url.clone() }),
+            };
+            prop_assert_eq!(input.web_fetch_url(), Some(url.as_str()));
+        }
+
+        #[test]
+        fn pbt_web_fetch_url_none_for_non_webfetch_tool(
+            tool in "[A-Z][A-Za-z]{0,8}",
+            url in crate::testing::proptest::web_url(),
+        ) {
+            prop_assume!(tool != "WebFetch");
+            let input = HookInput {
+                tool_name: tool,
+                tool_input: serde_json::json!({ "url": url }),
+            };
+            prop_assert_eq!(input.web_fetch_url(), None);
+        }
+
+        // ----- write_payload -------------------------------------------
+
+        #[test]
+        fn pbt_write_payload_returns_content_for_write(
+            content in "[ -~]{0,40}",
+        ) {
+            let input = HookInput {
+                tool_name: "Write".into(),
+                tool_input: serde_json::json!({ "content": content.clone() }),
+            };
+            prop_assert_eq!(input.write_payload(), Some(content.as_str()));
+        }
+
+        #[test]
+        fn pbt_write_payload_returns_new_string_for_edit(
+            new_string in "[ -~]{0,40}",
+        ) {
+            let input = HookInput {
+                tool_name: "Edit".into(),
+                tool_input: serde_json::json!({ "new_string": new_string.clone() }),
+            };
+            prop_assert_eq!(input.write_payload(), Some(new_string.as_str()));
+        }
+
+        // Other tool names never expose a write_payload.
+        #[test]
+        fn pbt_write_payload_none_for_non_writer_tool(
+            tool in "[A-Z][A-Za-z]{0,8}",
+            content in "[ -~]{0,40}",
+        ) {
+            prop_assume!(!matches!(tool.as_str(), "Write" | "Edit"));
+            let input = HookInput {
+                tool_name: tool,
+                tool_input: serde_json::json!({
+                    "content": content.clone(),
+                    "new_string": content,
+                }),
+            };
+            prop_assert_eq!(input.write_payload(), None);
+        }
+
+        // None of the accessors panic for any richer_hook_input shape.
+        #[test]
+        fn pbt_accessors_never_panic(
+            input in crate::testing::proptest::richer_hook_input(),
+        ) {
+            let _ = input.bash_command();
+            let _ = input.file_path();
+            let _ = input.web_fetch_url();
+            let _ = input.write_payload();
+        }
     }
 }

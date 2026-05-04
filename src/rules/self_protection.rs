@@ -256,4 +256,65 @@ mod tests {
             assert!(id.starts_with("core.self_protection."), "id was {id}");
         }
     }
+
+    use crate::testing::proptest::{protected_kind, richer_hook_input};
+    use proptest::prelude::*;
+
+    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 5] {
+        [
+            (&BINARY_RULE, ProtectedKind::Binary),
+            (&CONFIG_RULE, ProtectedKind::Config),
+            (&PLUGIN_RULE, ProtectedKind::Plugin),
+            (&CLAUDE_SETTINGS_RULE, ProtectedKind::ClaudeSettings),
+            (&HOOK_SCRIPT_RULE, ProtectedKind::HookScript),
+        ]
+    }
+
+    proptest! {
+        // Empty `protected` ⇒ no self-protection rule fires, regardless
+        // of input shape.
+        #[test]
+        fn pbt_empty_protected_never_fires(input in richer_hook_input()) {
+            let facts = facts_with(&[]);
+            for (rule, _) in all_self_rules() {
+                prop_assert!(rule.evaluate(&facts, &input).is_none());
+            }
+        }
+
+        // When a single ProtectedKind label is present, exactly the
+        // rule for that kind fires; the other four stay silent.
+        #[test]
+        fn pbt_single_kind_fires_exactly_its_rule(
+            kind in protected_kind(),
+            input in richer_hook_input(),
+        ) {
+            let facts = facts_with(&[kind]);
+            for (rule, rule_kind) in all_self_rules() {
+                let d = rule.evaluate(&facts, &input);
+                if rule_kind == kind {
+                    let fired = matches!(
+                        &d,
+                        Some(Decision::Deny { rule_id, .. }) if rule_id == rule.spec.id,
+                    );
+                    prop_assert!(fired, "expected {} to fire, got {d:?}", rule.spec.id);
+                } else {
+                    prop_assert!(d.is_none(), "{} fired unexpectedly", rule.spec.id);
+                }
+            }
+        }
+
+        // Self-protection rules never panic on arbitrary HookInput shapes
+        // (the input parameter is unused by `evaluate`, but exercise the
+        // facts pipeline anyway).
+        #[test]
+        fn pbt_evaluate_never_panics(
+            kind in protected_kind(),
+            input in richer_hook_input(),
+        ) {
+            let facts = facts_with(&[kind]);
+            for (rule, _) in all_self_rules() {
+                let _ = rule.evaluate(&facts, &input);
+            }
+        }
+    }
 }

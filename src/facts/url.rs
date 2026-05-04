@@ -180,4 +180,85 @@ mod tests {
         assert!(parse("http://example.com:notaport/").is_none());
         assert!(parse("http://[::1]:abc/").is_none());
     }
+
+    use crate::testing::proptest::web_url;
+    use proptest::prelude::*;
+
+    proptest! {
+        // The parser must not panic for arbitrary printable ASCII.
+        #[test]
+        fn pbt_parse_never_panics(s in web_url()) {
+            let _ = parse(&s);
+        }
+
+        // Adversarial: arbitrary bytes (mod proptest's regex limits) also
+        // never panic.
+        #[test]
+        fn pbt_parse_arbitrary_never_panics(s in "[ -~]{0,80}") {
+            let _ = parse(&s);
+        }
+
+        // Whenever parsing succeeds, scheme and host are lowercased.
+        #[test]
+        fn pbt_scheme_and_host_are_lowercased(s in web_url()) {
+            if let Some(u) = parse(&s) {
+                prop_assert_eq!(&u.scheme, &u.scheme.to_ascii_lowercase());
+                prop_assert_eq!(&u.host, &u.host.to_ascii_lowercase());
+            }
+        }
+
+        // Successful parses preserve the original string in `raw`.
+        #[test]
+        fn pbt_raw_round_trips(s in web_url()) {
+            if let Some(u) = parse(&s) {
+                prop_assert_eq!(u.raw, s);
+            }
+        }
+
+        // userinfo (user[:pass]@) is stripped: the parsed host equals
+        // the supplied host literal verbatim (after lowercasing) and
+        // never contains an `@`.
+        #[test]
+        fn pbt_userinfo_stripped_from_host(
+            user in "[a-z][a-z0-9]{0,8}",
+            pass in "[a-zA-Z0-9_]{1,12}",
+            host in "[a-z][a-z0-9-]{1,16}\\.com",
+        ) {
+            let s = format!("https://{user}:{pass}@{host}/x");
+            let u = parse(&s).expect("parse");
+            prop_assert!(!u.host.contains('@'));
+            prop_assert_eq!(u.host, host.to_ascii_lowercase());
+        }
+
+        // Constructed canonical URLs always parse with the requested
+        // scheme and host (lowercased).
+        #[test]
+        fn pbt_canonical_urls_round_trip(
+            scheme in "(?:https?|ftp)",
+            host in "[a-z][a-z0-9.-]{1,16}",
+            path in "[a-z0-9/._-]{0,16}",
+        ) {
+            let s = format!("{scheme}://{host}/{path}");
+            let u = parse(&s).expect("parse");
+            prop_assert_eq!(u.scheme, scheme.to_ascii_lowercase());
+            prop_assert_eq!(u.host, host.to_ascii_lowercase());
+            prop_assert_eq!(u.path, format!("/{path}"));
+            prop_assert_eq!(u.port, None);
+        }
+
+        // Explicit port stays in u16 range and round-trips.
+        #[test]
+        fn pbt_port_round_trips(port in 0u16..=65_535) {
+            let s = format!("http://example.com:{port}/x");
+            let u = parse(&s).expect("parse");
+            prop_assert_eq!(u.port, Some(port));
+        }
+
+        // Strings without `://` always fail.
+        #[test]
+        fn pbt_no_scheme_separator_fails(s in "[^:]{0,40}") {
+            prop_assume!(!s.contains("://"));
+            prop_assert!(parse(&s).is_none());
+        }
+    }
 }
