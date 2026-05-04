@@ -67,14 +67,20 @@ raw な Bash 文字列を直接 regex で判定するのではなく、構造化
 - project facts: lockfile 種別、protected branch、generated file 規約
 - git facts: working tree 状態、現在の branch、remote URL
 
-> v0.1 における意図的な MVP 逸脱: fact extraction 層はまだ存在しない。
-> 組み込み 3 rule (`core.filesystem.destructive-rm` /
-> `core.network.remote-script-pipe` /
-> `core.secrets.sensitive-path-to-network`) は `tool_input.command` の
-> raw 文字列を `LazyLock<Regex>` で直接マッチして判定する。
-> これは MVP として割り切った選択であり、YAML plugin pack を導入する
-> v0.2 以降では fact extraction 層を追加し、plugin 側に raw shell regex を
-> 許さない方針へ移行する。
+| fact | 実装ステータス |
+| --- | --- |
+| `shell.argv` / `shell.pipeline` / `shell.env_assignments` | v0.2 で実装済み |
+| `path` (`~` 展開・絶対化) | v0.2 で実装済み |
+| `url` (scheme / host / port / path) | v0.2 で実装済み |
+| `sensitive_path` (`SshDir` / `AwsDir` / `PemKey` / `DotEnv` 等の分類) | v0.2 で実装済み |
+| `dataflow.basic` (sensitive → network) | v0.2 で実装済み |
+| project / git facts (lockfile / branch / remote) | v0.3 以降 |
+
+組み込み 3 rule (`core.filesystem.destructive-rm` /
+`core.network.remote-script-pipe` /
+`core.secrets.sensitive-path-to-network`) は v0.2 で fact ベースに書き換え済み。
+YAML plugin の `when:` DSL も同じ facts に対して書ける。raw shell regex への
+直接アクセスは plugin 側からは不可視。
 
 ### policy merge
 
@@ -153,7 +159,8 @@ Claude Code 専用 `hookSpecificOutput` envelope のフィールド一覧は
 - `src/main.rs` は薄い shim のため coverage 集計から除外
 - `cargo-tarpaulin` で 95% 以上を維持 (CI でゲート)
 - plugin rule は `tests:` セクションで deny / allow ケースを宣言的に書き、
-  `ptuf plugin test` で検証する ([`config-and-plugins.md`](config-and-plugins.md))
+  `ptuf plugin test <path>` で検証する (v0.2 で実装済み、
+  [`config-and-plugins.md`](config-and-plugins.md))
 
 ## 開発・依存方針
 

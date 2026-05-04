@@ -22,13 +22,14 @@ CLI の exit code との対応は次の通り。
 | `ask` | `0` | reason | hook response 経由でユーザ確認に昇格 |
 | `deny` | `2` | reason | |
 
-> v0.1 時点で `Decision` は 4 variants (`Allow`, `Monitor { rule_id }`,
-> `Ask { rule_id, reason }`, `Deny { rule_id, reason }`) を実装済み。
-> ただし組み込み 3 rule (`core.filesystem.destructive-rm` /
-> `core.network.remote-script-pipe` /
-> `core.secrets.sensitive-path-to-network`) はすべて `deny` を返すため、
-> `monitor` / `ask` は実利用としては v0.2 (config scope と plugin pack 導入)
-> 以降に登場する ([`roadmap.md`](roadmap.md))。
+v0.2 時点で `Decision` は 4 variants (`Allow`, `Monitor { rule_id }`,
+`Ask { rule_id, reason }`, `Deny { rule_id, reason }`) を実装済み。
+組み込み 3 rule (`core.filesystem.destructive-rm` /
+`core.network.remote-script-pipe` /
+`core.secrets.sensitive-path-to-network`) はすべて `deny` を返すが、
+`monitor` / `ask` は plugin の `defaultDecision` で利用できるほか、
+`mode: monitor` / `mode: observe` 設定下で `deny` が `monitor` に降格される
+ことでも観測される。
 
 ## 集約規則
 
@@ -58,10 +59,11 @@ security pack の rule は user / local config による弱化を防げるよう
 scope の順序とマージ規則は [`config-and-plugins.md`](config-and-plugins.md) を
 参照。
 
-> v0.1 時点では config merge 機構が未実装のため、`Rule` trait に
-> `overridable()` / `hard_deny()` 属性は持たせていない。組み込み 3 rule は
-> 実質 `hardDeny: true` 相当 (無条件 deny) として動く。これらの属性は
-> v0.2 で config scope の実装と同時に導入する。
+v0.2 で `ConfigRule` trait に `severity()` / `default_decision()` /
+`overridable()` / `hard_deny()` の 4 属性を導入済み。組み込み 3 rule は
+`hard_deny: true` で固定されており、下位 scope の allowlist 経由で
+覆すことはできない。`expiresAt` を過ぎた allowlist は engine 評価時に
+自動失効する。
 
 ## モード
 
@@ -69,8 +71,9 @@ scope の順序とマージ規則は [`config-and-plugins.md`](config-and-plugin
 
 | mode | 振る舞い |
 | --- | --- |
-| `enforce` | rule が `deny` ならツール実行を止める。`failClosed: true` で policy 読込失敗時も deny |
+| `enforce` (default) | rule が `deny` ならツール実行を止める。`failClosed: true` で policy 読込失敗時も deny |
 | `monitor` | すべての `deny` を `monitor` に降格して記録だけ取る。導入直後の dry-run 用途 |
+| `observe` | `monitor` と同じく `deny` を降格する。将来 `Outcome` に観測専用フラグを足すための予約変種 |
 
 `failClosed` を `false` にすると `enforce` モードでも policy 読込失敗時に
 `allow` を返すが、本番では推奨しない。

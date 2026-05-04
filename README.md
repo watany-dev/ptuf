@@ -10,8 +10,11 @@ decision via exit code and stderr.
 
 ## Status
 
-v0.1 — minimal guardrail. Three built-in `core.*` rules ship enabled and
-will deny dangerous Bash invocations:
+v0.2 — three built-in `core.*` rules with fact-based evaluation, YAML
+configuration scope merge, YAML plugin support with a `when:` DSL, and
+audit JSONL with strict redaction.
+
+Built-in rules (always enabled, hard-deny):
 
 - `core.filesystem.destructive-rm` — `rm -rf /`, `rm -rf ~`, `rm -rf /etc`, etc.
 - `core.network.remote-script-pipe` — `curl ... | bash` and friends
@@ -19,9 +22,37 @@ will deny dangerous Bash invocations:
   path (e.g. `~/.ssh/`, `*.tfstate`, `id_rsa`) with a network sink
   (`curl`, `scp`, `rsync`, ...) in the same command
 
-Other tools (`Read`, `Write`, `Edit`, ...) are passed through unchanged.
-Configuration files, plugin packs, and the audit log are scheduled for
-v0.2+ ([`docs/design/roadmap.md`](docs/design/roadmap.md)).
+v0.2 features:
+
+- **Fact extraction** — shell argv / pipeline lexer, URL / path / sensitive-path
+  classifiers, and a basic dataflow (sensitive → network) check; plugins write
+  rules against these structured facts instead of raw shell regex.
+- **YAML config scope merge** — `/etc/ptuf/policy.yaml` →
+  `~/.config/ptuf/config.yaml` → `<repo>/.ptuf.yaml` →
+  `<repo>/.ptuf.local.yaml`. Each scope can set `mode`, `failClosed`,
+  `packs.<id>.enabled`, `plugins`, `allowlists`, and `audit.*`.
+- **YAML plugins** — `apiVersion: ptuf.dev/v1, kind: Plugin` with a
+  `when:` DSL (`all` / `any` / `not` / `tool` / `shell.argv` /
+  `shell.pipeline` / `url.*` / `path.*`). `requires:` declarations
+  validated at load time.
+- **`ptuf plugin test <path>`** — runs the plugin's `tests:` section
+  end-to-end and exits non-zero on regressions.
+- **Audit JSONL** — every decision is recorded to
+  `~/.local/share/ptuf/audit.jsonl` (overridable). Strict redaction
+  masks env-var token assignments, GH / OpenAI / AWS keys, JWTs,
+  HTTP basic auth, and PEM blobs.
+- **Allowlists with `expiresAt`** — time-bound exceptions per rule id.
+  `hardDeny: true` rules (the three builtins, and any plugin rule
+  marked as such) ignore allowlist suppression.
+
+Other tools (`Read`, `Write`, `Edit`, ...) are still passed through
+unchanged in v0.2; broader tool coverage and `core.self_protection`
+land in v0.3 ([`docs/design/roadmap.md`](docs/design/roadmap.md)).
+
+> **Note on Windows:** the audit JSONL writer relies on POSIX
+> `O_APPEND` semantics for atomic concurrent appends. On Windows,
+> ptuf still writes the file but interleaving across processes is
+> best-effort.
 
 ## Requirements
 
@@ -79,6 +110,45 @@ code blocks the tool call and the `hookSpecificOutput` JSON / stderr
 message is surfaced to both the agent and the user. The bare
 `/absolute/path/to/ptuf` form (without the subcommand) keeps working as a
 compatibility mode for older configurations.
+
+## Configure
+
+Drop a YAML file at `~/.config/ptuf/config.yaml` (or any of the four
+scope locations above) to control the engine:
+
+```yaml
+version: 1
+
+mode: enforce            # enforce | monitor | observe
+failClosed: true
+
+packs:
+  core.network:
+    enabled: true
+
+plugins:
+  - path: ~/.config/ptuf/plugins/no-curl.yaml
+
+allowlists:
+  - id: allow-localhost-curl
+    appliesTo:
+      rules:
+        - pack.demo.no-curl
+    expiresAt: "2026-12-31T23:59:59Z"
+    reason: Local dev callbacks.
+
+audit:
+  path: ~/.local/share/ptuf/audit.jsonl
+  includeAllowed: false
+  includeDenied: true
+  redaction: strict      # or "off" if you understand the risk
+```
+
+Validate a plugin and its bundled `tests:` section:
+
+```bash
+ptuf plugin test ./ptuf-plugin.yaml
+```
 
 ## Embed as a library
 

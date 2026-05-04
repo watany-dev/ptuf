@@ -28,11 +28,12 @@ ptuf audit
 | `ptuf plugin test <path>` | plugin の `tests:` セクションを走らせる |
 | `ptuf audit` | audit log を tail / フィルタする |
 
-> v0.1 時点で実装済みのサブコマンドは
-> `ptuf hook claude-code pre-tool-use` / `ptuf eval --tool <name> <command>`
-> の 2 つと `--help` / `--version`、および引数なし互換モード (stdin → exit code)。
-> `ptuf init` / `ptuf explain` / `ptuf doctor` / `ptuf plugin test` /
-> `ptuf audit` は [`roadmap.md`](roadmap.md) の v0.2〜v0.3 で順次追加する。
+> v0.2 時点で実装済みのサブコマンドは
+> `ptuf hook claude-code pre-tool-use` / `ptuf eval --tool <name> <command>` /
+> `ptuf plugin test <path>` の 3 つと `--help` / `--version`、および引数なし
+> 互換モード (stdin → exit code)。
+> `ptuf init` / `ptuf explain` / `ptuf doctor` / `ptuf audit` は
+> [`roadmap.md`](roadmap.md) の v0.3〜v0.4 で順次追加する。
 
 ## 出力規約
 
@@ -67,7 +68,7 @@ stdout への余計な print は hook protocol を壊すので禁止。
 }
 ```
 
-v0.1 では `ptuf init claude-code` 未実装のため上記スニペットは手動で追記する。
+v0.2 でも `ptuf init claude-code` は未実装なので上記スニペットは手動で追記する。
 `command` を引数なしの `/usr/local/bin/ptuf` にすれば互換モード (stdin → exit code)
 としても動作するが、`hookSpecificOutput` JSON を返すには
 `ptuf hook claude-code pre-tool-use` 形式を推奨する。

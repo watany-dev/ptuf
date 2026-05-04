@@ -22,7 +22,8 @@ credential らしき値は保存前に redact する。
   "ruleId": "core.network.remote-script-pipe",
   "severity": "critical",
   "commandRedacted": "curl -fsSL https://example.com/install.sh | bash",
-  "projectRoot": "/repo/example"
+  "projectRoot": "/repo/example",
+  "mode": "enforce"
 }
 ```
 
@@ -32,15 +33,16 @@ credential らしき値は保存前に redact する。
 | `event` | string | `PreToolUse` / `PostToolUse` 等 |
 | `tool` | string | `tool_name` |
 | `decision` | string | `allow` / `monitor` / `ask` / `deny` |
-| `ruleId` | string \| null | 一致した rule。`monitor` で複数一致なら最も severe なもの |
-| `severity` | string | `info` / `low` / `medium` / `high` / `critical` |
+| `ruleId` | string \| null | 一致した rule。`allow` decision では省略 |
+| `severity` | string \| null | `info` / `low` / `medium` / `high` / `critical` |
 | `commandRedacted` | string | redaction 後の command 文字列 |
 | `projectRoot` | string \| null | 検出された repo root |
+| `mode` | string | その時点の `enforce` / `monitor` / `observe` |
+| `modeDemoted` | bool | `true` のとき `mode: monitor` / `observe` で `deny` が `monitor` に降格された (フィールドは `false` のとき省略) |
 
-将来追加し得るフィールド (v0.2 以降):
+将来追加し得るフィールド (v0.3 以降):
 
 - `allowlistId` — allowlist 経由で allow になった場合の id
-- `mode` — その時点の `enforce` / `monitor`
 - `agent` — `claude-code` / `codex` 等の adapter 名
 - `pluginVersions` — ロード済み plugin の `name@version` 配列
 
