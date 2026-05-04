@@ -1,14 +1,20 @@
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
+use crate::facts::shell::{Argv, Pipeline};
 use crate::hook_input::HookInput;
 use crate::reason;
 
 use super::ConfigRule;
-use super::patterns::REMOTE_PIPE;
 
 pub struct RemoteScriptPipe;
 
 const RULE_ID: &str = "core.network.remote-script-pipe";
+
+const FETCHERS: &[&str] = &["curl", "wget", "fetch"];
+
+const INTERPRETERS: &[&str] = &[
+    "bash", "sh", "zsh", "fish", "ksh", "dash", "python", "python3", "ruby", "node", "perl",
+];
 
 impl ConfigRule for RemoteScriptPipe {
     fn id(&self) -> &'static str {
@@ -23,9 +29,9 @@ impl ConfigRule for RemoteScriptPipe {
         true
     }
 
-    fn evaluate(&self, _facts: &Facts, input: &HookInput) -> Option<Decision> {
-        let command = input.bash_command()?;
-        if !REMOTE_PIPE.is_match(command) {
+    fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
+        let bash = facts.bash.as_ref()?;
+        if !bash.segments.iter().any(pipeline_pipes_to_interpreter) {
             return None;
         }
 
@@ -45,6 +51,42 @@ impl ConfigRule for RemoteScriptPipe {
             reason,
         })
     }
+}
+
+fn pipeline_pipes_to_interpreter(pipe: &Pipeline) -> bool {
+    let mut seen_fetcher = false;
+    for cmd in &pipe.commands {
+        if !seen_fetcher {
+            if is_fetcher(&cmd.head) {
+                seen_fetcher = true;
+            }
+            continue;
+        }
+        if is_interpreter_invocation(cmd) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_fetcher(head: &str) -> bool {
+    FETCHERS.contains(&head)
+}
+
+fn is_interpreter(head: &str) -> bool {
+    INTERPRETERS.contains(&head)
+}
+
+fn is_interpreter_invocation(argv: &Argv) -> bool {
+    if is_interpreter(&argv.head) {
+        return true;
+    }
+    if argv.head == "sudo"
+        && let Some(first) = argv.positional().next()
+    {
+        return is_interpreter(first);
+    }
+    false
 }
 
 #[cfg(test)]

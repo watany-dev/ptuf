@@ -1,14 +1,17 @@
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
+use crate::facts::shell::Argv;
 use crate::hook_input::HookInput;
 use crate::reason;
 
 use super::ConfigRule;
-use super::patterns::{NETWORK_SINK, SENSITIVE_PATH};
+use super::patterns::SENSITIVE_PATH;
 
 pub struct SensitivePathToNetwork;
 
 const RULE_ID: &str = "core.secrets.sensitive-path-to-network";
+
+const NETWORK_SINK_HEADS: &[&str] = &["curl", "wget", "nc", "ncat", "scp", "rsync", "ftp", "sftp"];
 
 impl ConfigRule for SensitivePathToNetwork {
     fn id(&self) -> &'static str {
@@ -23,9 +26,16 @@ impl ConfigRule for SensitivePathToNetwork {
         true
     }
 
-    fn evaluate(&self, _facts: &Facts, input: &HookInput) -> Option<Decision> {
-        let command = input.bash_command()?;
-        if !SENSITIVE_PATH.is_match(command) || !NETWORK_SINK.is_match(command) {
+    fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
+        let bash = facts.bash.as_ref()?;
+        let commands: Vec<&Argv> = bash
+            .segments
+            .iter()
+            .flat_map(|p| p.commands.iter())
+            .collect();
+        let has_sink = commands.iter().any(|c| invokes_network_sink(c));
+        let has_sensitive = commands.iter().any(|c| references_sensitive_token(c));
+        if !(has_sink && has_sensitive) {
             return None;
         }
 
@@ -45,6 +55,35 @@ impl ConfigRule for SensitivePathToNetwork {
             reason,
         })
     }
+}
+
+fn invokes_network_sink(argv: &Argv) -> bool {
+    if NETWORK_SINK_HEADS.contains(&argv.head.as_str()) {
+        return true;
+    }
+    if argv.head == "sudo"
+        && let Some(first) = argv.positional().next()
+    {
+        return NETWORK_SINK_HEADS.contains(&first);
+    }
+    false
+}
+
+fn references_sensitive_token(argv: &Argv) -> bool {
+    if SENSITIVE_PATH.is_match(&argv.head) {
+        return true;
+    }
+    if argv.args.iter().any(|a| SENSITIVE_PATH.is_match(a)) {
+        return true;
+    }
+    if argv
+        .env_assignments
+        .iter()
+        .any(|e| SENSITIVE_PATH.is_match(&e.value))
+    {
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]
