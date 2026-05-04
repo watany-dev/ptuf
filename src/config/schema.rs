@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use super::{Allowlist, Mode, PackOverride};
+use super::{Allowlist, Mode, PackOverride, RedactionMode};
 
 /// Single-scope view of the user's policy. All scalars are optional;
 /// missing fields defer to the layer below.
@@ -57,6 +57,9 @@ impl RawConfig {
                 .map(|p| p.path)
                 .collect(),
             audit_path: self.audit.path,
+            audit_include_allowed: self.audit.include_allowed,
+            audit_include_denied: self.audit.include_denied,
+            audit_redaction: self.audit.redaction,
         }
     }
 }
@@ -86,6 +89,12 @@ pub struct RawPluginRef {
 pub struct RawAudit {
     #[serde(default)]
     pub path: Option<PathBuf>,
+    #[serde(default)]
+    pub include_allowed: Option<bool>,
+    #[serde(default)]
+    pub include_denied: Option<bool>,
+    #[serde(default)]
+    pub redaction: Option<RedactionMode>,
 }
 
 /// YAML-shape allowlist entry. `appliesTo.rules` is the list of rule
@@ -130,6 +139,23 @@ pub(super) struct MergeLayer {
     pub allowlists: Vec<Allowlist>,
     pub plugin_paths: Vec<PathBuf>,
     pub audit_path: Option<PathBuf>,
+    pub audit_include_allowed: Option<bool>,
+    pub audit_include_denied: Option<bool>,
+    pub audit_redaction: Option<RedactionMode>,
+}
+
+impl<'de> Deserialize<'de> for RedactionMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        match raw.as_str() {
+            "strict" => Ok(RedactionMode::Strict),
+            "off" => Ok(RedactionMode::Off),
+            other => Err(serde::de::Error::unknown_variant(other, &["strict", "off"])),
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for Mode {

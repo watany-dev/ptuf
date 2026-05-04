@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 
+pub mod audit;
 pub mod cli;
 pub mod config;
 pub mod decision;

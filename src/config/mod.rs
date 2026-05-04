@@ -87,9 +87,39 @@ pub struct Allowlist {
 }
 
 /// Audit-sink configuration. Absent path means audit is disabled.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditConfig {
     pub path: Option<PathBuf>,
+    /// Record allow decisions. Defaults to `false` to keep the audit
+    /// volume manageable.
+    pub include_allowed: bool,
+    /// Record deny decisions. Defaults to `true`.
+    pub include_denied: bool,
+    /// Strict redaction is the only supported mode in v0.2; the field
+    /// is kept so the schema does not break when a future release
+    /// introduces less aggressive policies.
+    pub redaction: RedactionMode,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            path: None,
+            include_allowed: false,
+            include_denied: true,
+            redaction: RedactionMode::default(),
+        }
+    }
+}
+
+/// Redaction strength. Only `Strict` is honoured today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RedactionMode {
+    #[default]
+    Strict,
+    /// Disabled — the user must opt in explicitly. Audit consumers
+    /// should treat this as a self-inflicted risk.
+    Off,
 }
 
 /// Errors raised while loading the layered policy.

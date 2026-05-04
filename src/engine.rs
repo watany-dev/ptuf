@@ -6,10 +6,12 @@
 //! merge, `mode: monitor` demotion, future plugin loading and audit)
 //! construct an [`Engine`] once and reuse it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::config::{self, Config, ConfigError, Mode, PackOverride};
-use crate::decision::{Decision, aggregate};
+use crate::audit::record::AuditRecord;
+use crate::audit::{AuditSink, JsonlSink, NoopSink, redact_strict};
+use crate::config::{self, Config, ConfigError, Mode, PackOverride, RedactionMode};
+use crate::decision::{Decision, Severity, aggregate};
 use crate::facts;
 use crate::hook_input::HookInput;
 use crate::plugin::{PluginError, PluginSet};
@@ -19,6 +21,8 @@ use crate::rules::{self, ConfigRule};
 pub struct Engine {
     config: Config,
     plugins: PluginSet,
+    audit_sink: Box<dyn AuditSink>,
+    repo_root: Option<PathBuf>,
 }
 
 /// Result of [`Engine::decide`].
@@ -75,12 +79,20 @@ impl From<PluginError> for EngineError {
 impl Engine {
     /// Build an engine using the merged configuration discovered for
     /// `repo_root` (or no project scope when `None`) and load every
-    /// plugin referenced by the merged config.
+    /// plugin referenced by the merged config. The audit sink is wired
+    /// from `config.audit.path`; failure to open the sink is reported
+    /// as a `[NoopSink]` fallback rather than aborting engine startup.
     pub fn new(repo_root: Option<&Path>) -> Result<Self, EngineError> {
         let config = config::load_for(repo_root)?;
         let mut plugins = PluginSet::new();
         plugins.load_paths(&config.plugin_paths)?;
-        Ok(Self { config, plugins })
+        let audit_sink = audit_sink_from_config(&config);
+        Ok(Self {
+            config,
+            plugins,
+            audit_sink,
+            repo_root: repo_root.map(Path::to_path_buf),
+        })
     }
 
     /// Build an engine from an explicit config — used by tests and by
@@ -89,14 +101,43 @@ impl Engine {
     pub fn with_config(config: Config) -> Result<Self, EngineError> {
         let mut plugins = PluginSet::new();
         plugins.load_paths(&config.plugin_paths)?;
-        Ok(Self { config, plugins })
+        let audit_sink = audit_sink_from_config(&config);
+        Ok(Self {
+            config,
+            plugins,
+            audit_sink,
+            repo_root: None,
+        })
     }
 
     /// Build an engine from the supplied components. Used by tests
     /// that need to inject a hand-built [`PluginSet`] without going
     /// through the YAML loader.
     pub(crate) fn with_components(config: Config, plugins: PluginSet) -> Self {
-        Self { config, plugins }
+        Self {
+            config,
+            plugins,
+            audit_sink: Box::new(NoopSink),
+            repo_root: None,
+        }
+    }
+
+    /// Replace the audit sink. Returned `Self` keeps the builder
+    /// pattern terse for tests and integration code that constructs
+    /// an engine without a sink and attaches a
+    /// [`crate::audit::MemorySink`] (or any other implementor of
+    /// [`AuditSink`]) afterwards.
+    pub fn with_audit_sink(mut self, sink: Box<dyn AuditSink>) -> Self {
+        self.audit_sink = sink;
+        self
+    }
+
+    /// Override the engine's recorded project root. Useful for tests
+    /// that construct an engine directly without going through
+    /// [`Engine::new`].
+    pub fn with_repo_root(mut self, repo_root: Option<PathBuf>) -> Self {
+        self.repo_root = repo_root;
+        self
     }
 
     /// Read-only view of the merged configuration.
@@ -126,11 +167,76 @@ impl Engine {
         let demoted_decision = demote_for_mode(raw.clone(), self.config.mode);
         let mode_demoted = matches!(raw, Decision::Deny { .. })
             && matches!(demoted_decision, Decision::Monitor { .. });
-        Outcome {
+        let outcome = Outcome {
             decision: demoted_decision,
             mode: self.config.mode,
             mode_demoted,
+        };
+        self.record_audit(input, &outcome);
+        outcome
+    }
+
+    /// Look up the severity of a rule by id across builtin and plugin
+    /// rules. Used when assembling audit records.
+    fn severity_for(&self, rule_id: &str) -> Option<Severity> {
+        for r in rules::iter() {
+            if r.id() == rule_id {
+                return Some(r.severity());
+            }
         }
+        for r in self.plugins.rules() {
+            if (r as &(dyn ConfigRule + Sync)).id() == rule_id {
+                return Some(r.severity());
+            }
+        }
+        None
+    }
+
+    fn record_audit(&self, input: &HookInput, outcome: &Outcome) {
+        if !should_record(&outcome.decision, &self.config) {
+            return;
+        }
+        let raw_command = input
+            .bash_command()
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("(tool={})", input.tool_name));
+        let command_redacted = match self.config.audit.redaction {
+            RedactionMode::Strict => redact_strict(&raw_command),
+            RedactionMode::Off => raw_command,
+        };
+        let severity = outcome
+            .decision
+            .rule_id()
+            .and_then(|id| self.severity_for(id));
+        let record = AuditRecord::build(
+            std::time::SystemTime::now(),
+            &outcome.decision,
+            outcome.mode,
+            outcome.mode_demoted,
+            input,
+            self.repo_root.as_deref(),
+            severity,
+            command_redacted,
+        );
+        let _ = self.audit_sink.record(&record);
+    }
+}
+
+fn audit_sink_from_config(config: &Config) -> Box<dyn AuditSink> {
+    match &config.audit.path {
+        Some(p) => match JsonlSink::open(p) {
+            Ok(s) => Box::new(s),
+            Err(_) => Box::new(NoopSink),
+        },
+        None => Box::new(NoopSink),
+    }
+}
+
+fn should_record(decision: &Decision, config: &Config) -> bool {
+    match decision {
+        Decision::Allow => config.audit.include_allowed,
+        Decision::Deny { .. } => config.audit.include_denied,
+        Decision::Monitor { .. } | Decision::Ask { .. } => true,
     }
 }
 
@@ -171,9 +277,13 @@ fn demote_for_mode(decision: Decision, mode: Mode) -> Decision {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
     use super::*;
+    use crate::audit::MemorySink;
     use crate::config::PackOverride;
     use serde_json::json;
+    use std::sync::Arc;
 
     fn bash(cmd: &str) -> HookInput {
         HookInput {
@@ -184,6 +294,16 @@ mod tests {
 
     fn engine_with(cfg: Config) -> Engine {
         Engine::with_components(cfg, PluginSet::new())
+    }
+
+    /// Wrap a shared `MemorySink` so the test can both inject it into
+    /// the engine and inspect the captured records afterwards.
+    struct SharedMemorySink(Arc<MemorySink>);
+
+    impl AuditSink for SharedMemorySink {
+        fn record(&self, record: &AuditRecord) -> Result<(), crate::audit::AuditError> {
+            self.0.record(record)
+        }
     }
 
     #[test]
@@ -299,6 +419,107 @@ rules:
             Decision::Deny { rule_id, .. } => assert_eq!(rule_id, "pack.demo.no-curl"),
             other => panic!("expected Deny, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn audit_sink_receives_deny_record_with_severity_and_redacted_command() {
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = Config::default();
+        cfg.audit.include_denied = true;
+        let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("rm -rf / && export GITHUB_TOKEN=ghp_ABCDEFGHIJ12345"));
+        let recs = captured.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].decision, "deny");
+        assert_eq!(recs[0].severity, Some("critical"));
+        assert_eq!(
+            recs[0].rule_id.as_deref(),
+            Some("core.filesystem.destructive-rm")
+        );
+        assert!(!recs[0].command_redacted.contains("ghp_ABCDEFGHIJ"));
+    }
+
+    #[test]
+    fn audit_skips_allow_when_include_allowed_is_false() {
+        let captured = Arc::new(MemorySink::new());
+        let cfg = Config::default();
+        let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("ls"));
+        assert!(captured.records().is_empty());
+    }
+
+    #[test]
+    fn audit_records_allow_when_include_allowed_is_true() {
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = Config::default();
+        cfg.audit.include_allowed = true;
+        let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("ls"));
+        let recs = captured.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].decision, "allow");
+        assert!(recs[0].rule_id.is_none());
+    }
+
+    #[test]
+    fn audit_skips_deny_when_include_denied_is_false() {
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = Config::default();
+        cfg.audit.include_denied = false;
+        let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("rm -rf /"));
+        assert!(captured.records().is_empty());
+    }
+
+    #[test]
+    fn audit_record_for_monitor_demoted_deny_carries_mode_demoted_flag() {
+        let captured = Arc::new(MemorySink::new());
+        let cfg = Config {
+            mode: Mode::Monitor,
+            ..Config::default()
+        };
+        let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("rm -rf /"));
+        let recs = captured.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].decision, "monitor");
+        assert!(recs[0].mode_demoted);
+        assert_eq!(recs[0].mode, "monitor");
+    }
+
+    #[test]
+    fn audit_records_repo_root_when_engine_carries_one() {
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = Config::default();
+        cfg.audit.include_allowed = true;
+        let engine = engine_with(cfg)
+            .with_audit_sink(Box::new(SharedMemorySink(captured.clone())))
+            .with_repo_root(Some(PathBuf::from("/repo/example")));
+        let _ = engine.decide(&bash("ls"));
+        let recs = captured.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].project_root.as_deref(), Some("/repo/example"));
+    }
+
+    #[test]
+    fn audit_record_uses_redaction_off_when_configured() {
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = Config::default();
+        cfg.audit.redaction = RedactionMode::Off;
+        let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("rm -rf / && TOKEN=abcdef"));
+        let recs = captured.records();
+        assert_eq!(recs.len(), 1);
+        assert!(recs[0].command_redacted.contains("TOKEN=abcdef"));
+    }
+
+    #[test]
+    fn engine_with_config_uses_noop_sink_when_audit_path_is_unset() {
+        let cfg = Config::default();
+        let engine = Engine::with_config(cfg).expect("with_config");
+        // No assertion beyond "doesn't panic" — the engine is now
+        // fully constructed and decides cleanly.
+        let _ = engine.decide(&bash("ls"));
     }
 
     #[test]

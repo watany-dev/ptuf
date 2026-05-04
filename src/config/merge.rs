@@ -42,6 +42,15 @@ fn apply(acc: &mut Config, layer: MergeLayer) {
     if let Some(path) = layer.audit_path {
         acc.audit.path = Some(path);
     }
+    if let Some(b) = layer.audit_include_allowed {
+        acc.audit.include_allowed = b;
+    }
+    if let Some(b) = layer.audit_include_denied {
+        acc.audit.include_denied = b;
+    }
+    if let Some(r) = layer.audit_redaction {
+        acc.audit.redaction = r;
+    }
 }
 
 fn merge_pack_override(into: &mut PackOverride, from: PackOverride) {
@@ -213,6 +222,7 @@ mod tests {
             RawConfig {
                 audit: RawAudit {
                     path: Some(PathBuf::from("/tmp/lower.jsonl")),
+                    ..Default::default()
                 },
                 ..raw()
             },
@@ -220,6 +230,7 @@ mod tests {
             RawConfig {
                 audit: RawAudit {
                     path: Some(PathBuf::from("/tmp/higher.jsonl")),
+                    ..Default::default()
                 },
                 ..raw()
             },
@@ -261,11 +272,39 @@ mod tests {
     }
 
     #[test]
+    fn audit_flags_and_redaction_merge_with_later_layer_wins() {
+        use super::super::RedactionMode;
+        let lower = RawConfig {
+            audit: RawAudit {
+                include_allowed: Some(true),
+                include_denied: Some(false),
+                redaction: Some(RedactionMode::Strict),
+                ..Default::default()
+            },
+            ..raw()
+        };
+        let higher = RawConfig {
+            audit: RawAudit {
+                include_allowed: Some(false),
+                include_denied: None,
+                redaction: Some(RedactionMode::Off),
+                ..Default::default()
+            },
+            ..raw()
+        };
+        let cfg = merge(vec![lower, higher]);
+        assert!(!cfg.audit.include_allowed);
+        assert!(!cfg.audit.include_denied);
+        assert!(matches!(cfg.audit.redaction, RedactionMode::Off));
+    }
+
+    #[test]
     fn audit_path_unset_in_top_does_not_clobber_lower_set_value() {
         let cfg = merge(vec![
             RawConfig {
                 audit: RawAudit {
                     path: Some(PathBuf::from("/tmp/lower.jsonl")),
+                    ..Default::default()
                 },
                 ..raw()
             },
