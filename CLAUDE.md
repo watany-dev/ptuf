@@ -26,8 +26,17 @@ Allow / Deny を exit code と stderr メッセージで返す CLI バイナリ 
 
 ## アーキテクチャ
 
-- `src/lib.rs` — 判定コア。`Decision`, `HookInput`, `decide()` を公開
-- `src/main.rs` — CLI エントリ。stdin JSON → `decide` → exit code
+- `src/lib.rs` — 判定コアの再エクスポート層。`Decision`, `HookInput`, `decide()`,
+  `aggregate` を公開し、内部モジュールへ委譲する
+- `src/decision.rs` — `Decision` (4 variants) と `severity` / `aggregate`
+- `src/hook_input.rs` — `HookInput` と `bash_command()` ヘルパ
+- `src/hook_output.rs` — Claude Code `hookSpecificOutput` envelope
+- `src/reason.rs` — `reason::build` (deny / ask の Rule Feedback 整形)
+- `src/rules/` — `Rule` trait、組み込み 3 rule、共有 `LazyLock<Regex>` 群
+- `src/cli.rs` — 引数 parse とサブコマンド実行 (`Compat` /
+  `HookClaudeCodePreToolUse` / `Eval` / `Help` / `Version`)
+- `src/io_runner.rs` — stdin → `decide` → stdout / stderr / `ExitCode`
+- `src/main.rs` — argv / 各 stream を `io_runner::run` に渡す数行の shim
 - `docs/design/` — 日本語の設計書群。エントリポイントは `docs/design/overview.md` で、
   そこから architecture / decision-model / policy-packs / config-and-plugins /
   cli-and-hooks / audit / roadmap にリンクが張られている

@@ -108,10 +108,11 @@ workflow itself, and a coverage gate.
 
 ## Design docs
 
-The intended scope reaches far beyond the current bootstrap. Start with
-[`docs/design/overview.md`](docs/design/overview.md) for goals, non-goals, and
-an index of the design notes (architecture, decision model, policy packs,
-config and plugins, CLI and hook integration, audit log, roadmap).
+The intended scope reaches far beyond the current v0.1 milestone. Start
+with [`docs/design/overview.md`](docs/design/overview.md) for goals,
+non-goals, and an index of the design notes (architecture, decision
+model, policy packs, config and plugins, CLI and hook integration, audit
+log, roadmap).
 
 ## License
 

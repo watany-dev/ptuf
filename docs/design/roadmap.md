@@ -5,17 +5,23 @@
 
 ## MVP スコープ
 
-### v0.1 — 最小ガードレール
+### v0.1 — 最小ガードレール (実装済み)
 
 判定コアの拡張と、最も重要な 3 rule + `eval` 動作確認 CLI を提供する。
 
-- `ptuf hook claude-code pre-tool-use` (現状の引数なし起動も互換維持)
-- Bash command の AST / argv / pipeline 抽出
+- `ptuf hook claude-code pre-tool-use` (引数なし互換モードも維持)
+- `ptuf eval --tool Bash '<cmd>'`、`--help` / `--version`
 - structured JSON response (Claude Code 形式の `hookSpecificOutput`)
-- `core.network.remote-script-pipe`
+- `Decision` 4 variants (`allow` / `monitor` / `ask` / `deny`) と
+  `aggregate` (`deny > ask > monitor > allow`)
 - `core.filesystem.destructive-rm`
+- `core.network.remote-script-pipe`
 - `core.secrets.sensitive-path-to-network`
-- `ptuf eval --tool Bash '<cmd>'`
+
+> 上記 3 rule は v0.1 MVP として `tool_input.command` を `LazyLock<Regex>`
+> で直接マッチして判定する。Bash AST / argv / pipeline / dataflow facts への
+> 抽出層は v0.2 に持ち越し、YAML plugin が入る v0.2 以降は plugin に raw shell
+> regex を許さない方針へ移行する ([`architecture.md`](architecture.md))。
 
 ### v0.2 — Plugin と Audit
 
