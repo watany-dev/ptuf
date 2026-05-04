@@ -7,10 +7,12 @@
 //! construct an [`Engine`] once and reuse it.
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::audit::record::AuditRecord;
+use crate::audit::time::parse_rfc3339_to_secs;
 use crate::audit::{AuditSink, JsonlSink, NoopSink, redact_strict};
-use crate::config::{self, Config, ConfigError, Mode, PackOverride, RedactionMode};
+use crate::config::{self, Allowlist, Config, ConfigError, Mode, PackOverride, RedactionMode};
 use crate::decision::{Decision, Severity, aggregate};
 use crate::facts;
 use crate::hook_input::HookInput;
@@ -153,14 +155,17 @@ impl Engine {
     /// Evaluate a single hook payload.
     pub fn decide(&self, input: &HookInput) -> Outcome {
         let facts = facts::extract(input);
+        let now = SystemTime::now();
         let builtin = rules::iter()
             .filter(|rule| !is_pack_disabled(*rule, &self.config))
+            .filter(|rule| !is_allowlisted(*rule, &self.config, now))
             .filter_map(|rule| rule.evaluate(&facts, input));
         let from_plugins = self
             .plugins
             .rules()
             .map(|r| r as &(dyn ConfigRule + Sync))
             .filter(|rule| !is_pack_disabled(*rule, &self.config))
+            .filter(|rule| !is_allowlisted(*rule, &self.config, now))
             .filter_map(|rule| rule.evaluate(&facts, input));
         let decisions: Vec<Decision> = builtin.chain(from_plugins).collect();
         let raw = aggregate(decisions);
@@ -256,6 +261,36 @@ fn is_pack_disabled(rule: &(dyn ConfigRule + Sync), config: &Config) -> bool {
         .pack_overrides
         .iter()
         .any(|(pack, overlay)| pack_disabled(overlay) && rule_matches_pack(id, pack))
+}
+
+/// Whether the rule should be skipped because a non-expired allowlist
+/// entry covers it. `hardDeny` rules ignore allowlist entries entirely
+/// (`docs/design/config-and-plugins.md:89`).
+fn is_allowlisted(rule: &(dyn ConfigRule + Sync), config: &Config, now: SystemTime) -> bool {
+    if rule.hard_deny() {
+        return false;
+    }
+    let id = rule.id();
+    config
+        .allowlists
+        .iter()
+        .any(|entry| allowlist_covers(entry, id, now))
+}
+
+fn allowlist_covers(entry: &Allowlist, rule_id: &str, now: SystemTime) -> bool {
+    if !entry.rule_ids.iter().any(|r| r == rule_id) {
+        return false;
+    }
+    match &entry.expires_at {
+        None => true,
+        Some(s) => match parse_rfc3339_to_secs(s) {
+            Some(expiry) => now
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() < expiry)
+                .unwrap_or(true),
+            None => false,
+        },
+    }
 }
 
 fn pack_disabled(overlay: &PackOverride) -> bool {
@@ -520,6 +555,189 @@ rules:
         // No assertion beyond "doesn't panic" — the engine is now
         // fully constructed and decides cleanly.
         let _ = engine.decide(&bash("ls"));
+    }
+
+    #[test]
+    fn allowlist_entry_does_not_suppress_hard_deny_builtin() {
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "ignore-fs".into(),
+            rule_ids: vec!["core.filesystem.destructive-rm".into()],
+            expires_at: Some("2099-01-01T00:00:00Z".into()),
+            reason: None,
+        });
+        let outcome = engine_with(cfg).decide(&bash("rm -rf /"));
+        assert!(matches!(outcome.decision, Decision::Deny { .. }));
+    }
+
+    #[test]
+    fn allowlist_entry_suppresses_overridable_plugin_rule() {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "ignore-curl".into(),
+            rule_ids: vec!["pack.demo.no-curl".into()],
+            expires_at: Some("2099-01-01T00:00:00Z".into()),
+            reason: None,
+        });
+        let engine = Engine::with_components(cfg, set);
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert_eq!(outcome.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn expired_allowlist_entry_is_ignored() {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "expired".into(),
+            rule_ids: vec!["pack.demo.no-curl".into()],
+            expires_at: Some("2000-01-01T00:00:00Z".into()),
+            reason: None,
+        });
+        let engine = Engine::with_components(cfg, set);
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert!(matches!(outcome.decision, Decision::Deny { .. }));
+    }
+
+    #[test]
+    fn allowlist_without_expiry_suppresses_indefinitely() {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "forever".into(),
+            rule_ids: vec!["pack.demo.no-curl".into()],
+            expires_at: None,
+            reason: None,
+        });
+        let engine = Engine::with_components(cfg, set);
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert_eq!(outcome.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn malformed_expiry_is_treated_as_already_expired() {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "garbage".into(),
+            rule_ids: vec!["pack.demo.no-curl".into()],
+            expires_at: Some("not-a-timestamp".into()),
+            reason: None,
+        });
+        let engine = Engine::with_components(cfg, set);
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert!(matches!(outcome.decision, Decision::Deny { .. }));
+    }
+
+    #[test]
+    fn allowlist_with_unrelated_rule_id_is_ignored() {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "unrelated".into(),
+            rule_ids: vec!["some.other.rule".into()],
+            expires_at: None,
+            reason: None,
+        });
+        let engine = Engine::with_components(cfg, set);
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert!(matches!(outcome.decision, Decision::Deny { .. }));
     }
 
     #[test]

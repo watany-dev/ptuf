@@ -20,6 +20,99 @@ pub fn rfc3339_utc(t: SystemTime) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
 }
 
+/// Parse a minimal RFC3339 timestamp (`YYYY-MM-DDTHH:MM:SS` followed by
+/// `Z` or `±HH:MM`) into seconds since the Unix epoch. Fractional
+/// seconds, lowercase `t`, and offsets without a colon are rejected;
+/// allowlist authors are expected to write timestamps in canonical
+/// form. Returns `None` on any parse failure.
+pub fn parse_rfc3339_to_secs(s: &str) -> Option<u64> {
+    // YYYY-MM-DDTHH:MM:SS = 19 chars, plus zone (`Z` or `±HH:MM`).
+    let bytes = s.as_bytes();
+    if bytes.len() < 20 {
+        return None;
+    }
+    let year: i32 = s.get(0..4)?.parse().ok()?;
+    if bytes[4] != b'-' {
+        return None;
+    }
+    let month: u32 = s.get(5..7)?.parse().ok()?;
+    if bytes[7] != b'-' {
+        return None;
+    }
+    let day: u32 = s.get(8..10)?.parse().ok()?;
+    if bytes[10] != b'T' {
+        return None;
+    }
+    let hour: u32 = s.get(11..13)?.parse().ok()?;
+    if bytes[13] != b':' {
+        return None;
+    }
+    let minute: u32 = s.get(14..16)?.parse().ok()?;
+    if bytes[16] != b':' {
+        return None;
+    }
+    let second: u32 = s.get(17..19)?.parse().ok()?;
+
+    let (zone_sign, zone_hours, zone_minutes) = match bytes[19] {
+        b'Z' => {
+            if bytes.len() != 20 {
+                return None;
+            }
+            (1i64, 0u32, 0u32)
+        }
+        sign @ (b'+' | b'-') => {
+            if bytes.len() != 25 || bytes[22] != b':' {
+                return None;
+            }
+            let zh: u32 = s.get(20..22)?.parse().ok()?;
+            let zm: u32 = s.get(23..25)?.parse().ok()?;
+            let mul: i64 = if sign == b'+' { 1 } else { -1 };
+            (mul, zh, zm)
+        }
+        _ => return None,
+    };
+
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+        || zone_hours > 23
+        || zone_minutes > 59
+    {
+        return None;
+    }
+
+    let local = ymdhms_to_secs((year, month, day, hour, minute, second))?;
+    let offset = (zone_hours as i64) * 3600 + (zone_minutes as i64) * 60;
+    let utc = local.checked_sub(zone_sign * offset)?;
+    if utc < 0 { None } else { Some(utc as u64) }
+}
+
+/// Convert a UTC date-time tuple into seconds since 1970-01-01T00:00:00Z.
+/// Returns `None` for years before 1970 (the project never emits or
+/// accepts pre-epoch timestamps).
+fn ymdhms_to_secs(parts: (i32, u32, u32, u32, u32, u32)) -> Option<i64> {
+    let (year, month, day, hour, minute, second) = parts;
+    if year < 1970 {
+        return None;
+    }
+    let mut days: i64 = 0;
+    for y in 1970..year {
+        days += days_in_year(y) as i64;
+    }
+    let leap = is_leap(year);
+    for m in 1..month {
+        days += days_in_month(m, leap) as i64;
+    }
+    if day == 0 || day > days_in_month(month, leap) {
+        return None;
+    }
+    days += (day - 1) as i64;
+    let secs = days * 86_400 + (hour as i64) * 3600 + (minute as i64) * 60 + second as i64;
+    Some(secs)
+}
+
 /// Convert a Unix timestamp (seconds since epoch, UTC) into
 /// `(year, month, day, hour, minute, second)` components. Pure
 /// computation, no allocations beyond the return tuple.
@@ -132,5 +225,55 @@ mod tests {
         assert_eq!(days_in_month(4, false), 30);
         assert_eq!(days_in_month(7, false), 31);
         assert_eq!(days_in_month(13, false), 0);
+    }
+
+    #[test]
+    fn parses_canonical_utc_timestamp() {
+        assert_eq!(
+            parse_rfc3339_to_secs("2024-01-01T00:00:00Z"),
+            Some(1_704_067_200)
+        );
+        assert_eq!(parse_rfc3339_to_secs("1970-01-01T00:00:00Z"), Some(0));
+    }
+
+    #[test]
+    fn parses_positive_and_negative_offsets() {
+        // 09:00 +09:00 == 00:00 UTC
+        assert_eq!(
+            parse_rfc3339_to_secs("2024-01-01T09:00:00+09:00"),
+            Some(1_704_067_200)
+        );
+        // 23:00 prior day -01:00 == 00:00 UTC
+        assert_eq!(
+            parse_rfc3339_to_secs("2023-12-31T23:00:00-01:00"),
+            Some(1_704_067_200)
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_timestamps() {
+        assert!(parse_rfc3339_to_secs("").is_none());
+        assert!(parse_rfc3339_to_secs("2024-01-01").is_none());
+        assert!(parse_rfc3339_to_secs("2024-01-01T00:00:00").is_none());
+        assert!(parse_rfc3339_to_secs("2024-01-01t00:00:00Z").is_none()); // lowercase t
+        assert!(parse_rfc3339_to_secs("2024-13-01T00:00:00Z").is_none()); // month 13
+        assert!(parse_rfc3339_to_secs("2024-01-32T00:00:00Z").is_none()); // day 32
+        assert!(parse_rfc3339_to_secs("2024-01-01T24:00:00Z").is_none()); // hour 24
+        assert!(parse_rfc3339_to_secs("2024-01-01T00:60:00Z").is_none()); // minute 60
+        assert!(parse_rfc3339_to_secs("2024-01-01T00:00:00+0900").is_none()); // missing colon
+        assert!(parse_rfc3339_to_secs("2024-01-01T00:00:00Z00").is_none()); // trailing data
+        assert!(parse_rfc3339_to_secs("2024-02-30T00:00:00Z").is_none()); // invalid day for Feb
+        assert!(parse_rfc3339_to_secs("1969-12-31T23:59:59Z").is_none()); // pre-epoch
+    }
+
+    #[test]
+    fn parses_leap_day() {
+        // 2024-02-29 is a valid leap-year date.
+        assert_eq!(
+            parse_rfc3339_to_secs("2024-02-29T00:00:00Z"),
+            Some(1_709_164_800)
+        );
+        // 2023 was not a leap year.
+        assert!(parse_rfc3339_to_secs("2023-02-29T00:00:00Z").is_none());
     }
 }
