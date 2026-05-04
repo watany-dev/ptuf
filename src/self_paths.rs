@@ -310,4 +310,59 @@ mod tests {
         let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
         assert!(p.claude_settings.is_empty());
     }
+
+    use crate::testing::proptest::{protected_kind, richer_hook_input};
+    use proptest::prelude::*;
+
+    proptest! {
+        // ProtectedKind::as_str is total and the labels are non-empty.
+        #[test]
+        fn pbt_kind_label_is_non_empty(k in protected_kind()) {
+            prop_assert!(!k.as_str().is_empty());
+        }
+
+        // An empty ProtectedPaths classifies every input as
+        // non-protected. This is the safe-baseline guarantee that
+        // self-protection rules rely on when running outside a repo.
+        #[test]
+        fn pbt_empty_protected_classifies_to_empty(input in richer_hook_input()) {
+            let p = ProtectedPaths::default();
+            prop_assert!(p.classify_input(&input).is_empty());
+        }
+
+        // classify_input must not panic for any well-formed HookInput
+        // shape, including arbitrary Bash strings, missing fields, and
+        // non-string payload values.
+        #[test]
+        fn pbt_classify_never_panics(input in richer_hook_input()) {
+            let env = MapEnv::with(&[("HOME", "/h")]);
+            let cfg = Config::default();
+            let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+            let _ = p.classify_input(&input);
+        }
+
+        // collect_with_env over an arbitrary HOME / repo path never
+        // panics and always yields a `ProtectedPaths` whose lists are
+        // sorted-deduplicated invariants.
+        #[test]
+        fn pbt_collect_yields_sorted_dedup_lists(
+            home in "/(?:home|h)/[a-z0-9_]{1,8}",
+            repo in "/(?:repo|src|home/[a-z]{1,5}/proj)",
+        ) {
+            let env = MapEnv::with(&[("HOME", home.as_str())]);
+            let cfg = Config::default();
+            let p = ProtectedPaths::collect_with_env(Some(Path::new(&repo)), &cfg, &env);
+            // claude_settings is the only list whose ordering matters
+            // for the dedup contract; verify it's sorted and unique.
+            let mut sorted = p.claude_settings.clone();
+            sorted.sort();
+            sorted.dedup();
+            prop_assert_eq!(p.claude_settings.clone(), sorted);
+            // configs is also sort+dedup'd.
+            let mut sorted_cfg = p.configs.clone();
+            sorted_cfg.sort();
+            sorted_cfg.dedup();
+            prop_assert_eq!(p.configs.clone(), sorted_cfg);
+        }
+    }
 }

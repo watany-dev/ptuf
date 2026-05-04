@@ -938,6 +938,120 @@ rules:
             let baseline_was_deny = matches!(baseline, Decision::Deny { .. });
             prop_assert_eq!(monitored.mode_demoted, baseline_was_deny);
         }
+
+        // Default engine on richer hook inputs (Bash + Read/Edit/Write +
+        // WebFetch + arbitrary tools) never panics and never demotes.
+        #[test]
+        fn pbt_default_engine_never_panics_on_richer_inputs(
+            input in crate::testing::proptest::richer_hook_input(),
+        ) {
+            let outcome = Engine::default().decide(&input);
+            prop_assert!(!outcome.mode_demoted);
+        }
+
+        // Allowlisting an overridable builtin rule must suppress that
+        // rule's contribution; if it was the sole non-Allow decision,
+        // the outcome flips back to Allow. `force-push-with-lease` is
+        // overridable (hard_deny == false); `force-push` itself is not.
+        #[test]
+        fn pbt_allowlist_suppresses_overridable_git_rule(_dummy in 0u8..=0u8) {
+            let mut cfg = Config::default();
+            cfg.allowlists.push(Allowlist {
+                id: "pbt-test".into(),
+                rule_ids: vec!["core.git.force-push-with-lease".into()],
+                expires_at: None,
+                reason: None,
+            });
+            let outcome = engine_with(cfg)
+                .decide(&bash("git push --force-with-lease origin main"));
+            // Without allowlist this would be Deny; with allowlist it
+            // should fall through to Allow (no other rule matches).
+            prop_assert_eq!(outcome.decision, Decision::Allow);
+        }
+
+        // Disabling an overridable pack via pack_overrides has the same
+        // effect as the allowlist for the same rule.
+        #[test]
+        fn pbt_pack_override_suppresses_overridable_git_pack(_dummy in 0u8..=0u8) {
+            let mut cfg = Config::default();
+            cfg.pack_overrides.insert(
+                "core.git.force-push-with-lease".into(),
+                PackOverride { enabled: Some(false) },
+            );
+            let outcome = engine_with(cfg)
+                .decide(&bash("git push --force-with-lease origin main"));
+            prop_assert_eq!(outcome.decision, Decision::Allow);
+        }
+
+        // Hard-deny rules ignore both pack overrides and allowlists.
+        // `core.filesystem.destructive-rm` is hard-deny, so disabling
+        // its pack and allowlisting its id must not let it through.
+        #[test]
+        fn pbt_hard_deny_ignores_pack_and_allowlist(_dummy in 0u8..=0u8) {
+            let mut cfg = Config::default();
+            cfg.pack_overrides.insert(
+                "core.filesystem".into(),
+                PackOverride { enabled: Some(false) },
+            );
+            cfg.allowlists.push(Allowlist {
+                id: "pbt-test".into(),
+                rule_ids: vec!["core.filesystem.destructive-rm".into()],
+                expires_at: None,
+                reason: None,
+            });
+            let outcome = engine_with(cfg).decide(&bash("rm -rf /"));
+            let is_deny = matches!(outcome.decision, Decision::Deny { .. });
+            prop_assert!(is_deny);
+        }
+
+        // Expired allowlists do not suppress: an `expiresAt` in the past
+        // (year 2000) leaves the rule effective.
+        #[test]
+        fn pbt_expired_allowlist_does_not_suppress(_dummy in 0u8..=0u8) {
+            let mut cfg = Config::default();
+            cfg.allowlists.push(Allowlist {
+                id: "pbt-test".into(),
+                rule_ids: vec!["core.git.force-push-with-lease".into()],
+                expires_at: Some("2000-01-01T00:00:00Z".into()),
+                reason: None,
+            });
+            let outcome = engine_with(cfg)
+                .decide(&bash("git push --force-with-lease origin main"));
+            // The rule must still fire — exact decision shape depends on
+            // its default (Ask in this case), but it must not be Allow.
+            let is_allow = outcome.decision == Decision::Allow;
+            prop_assert!(!is_allow);
+        }
+
+        // Observe mode never produces a Deny on any input.
+        #[test]
+        fn pbt_observe_mode_never_denies(input in hook_input()) {
+            let cfg = Config { mode: Mode::Observe, ..Config::default() };
+            let outcome = engine_with(cfg).decide(&input);
+            let is_deny = matches!(outcome.decision, Decision::Deny { .. });
+            prop_assert!(!is_deny);
+        }
+
+        // The audited record's command_redacted is exactly redact_strict
+        // applied to the raw bash command for Bash inputs.
+        #[test]
+        fn pbt_audit_redaction_matches_redact_strict(cmd in crate::testing::proptest::bash_command()) {
+            let captured = Arc::new(MemorySink::new());
+            let cfg = Config {
+                audit: crate::config::AuditConfig {
+                    include_allowed: true,
+                    ..Config::default().audit
+                },
+                ..Config::default()
+            };
+            let engine = engine_with(cfg)
+                .with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+            let _ = engine.decide(&bash(&cmd));
+            let recs = captured.records();
+            prop_assert!(!recs.is_empty(), "expected at least one audit record");
+            let expected = redact_strict(&cmd);
+            prop_assert_eq!(&recs[0].command_redacted, &expected);
+        }
     }
 
     #[test]

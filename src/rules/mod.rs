@@ -77,6 +77,8 @@ pub fn iter() -> impl Iterator<Item = &'static (dyn ConfigRule + Sync)> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
     use super::*;
     use crate::hook_input::sample;
 
@@ -220,5 +222,51 @@ mod tests {
             .collect();
         assert!(ids.contains(&"core.network.remote-script-pipe".into()));
         assert!(ids.contains(&"core.secrets.sensitive-path-to-network".into()));
+    }
+
+    use crate::testing::proptest::richer_hook_input;
+    use proptest::prelude::*;
+
+    proptest! {
+        // evaluate_all never panics for any well-formed HookInput.
+        #[test]
+        fn pbt_evaluate_all_never_panics(input in richer_hook_input()) {
+            let facts = crate::facts::extract(&input);
+            let _ = evaluate_all(&facts, &input);
+        }
+
+        // Every decision returned by evaluate_all carries a rule_id that
+        // matches one of the static built-in rule ids.
+        #[test]
+        fn pbt_decision_rule_ids_are_known(input in richer_hook_input()) {
+            let facts = crate::facts::extract(&input);
+            let known: Vec<&str> = RULES.iter().map(|r| r.id()).collect();
+            for d in evaluate_all(&facts, &input) {
+                let id = d.rule_id().expect("non-Allow decision carries a rule_id");
+                prop_assert!(
+                    known.contains(&id),
+                    "unknown rule_id {id:?} (not in built-in slice)",
+                );
+            }
+        }
+
+        // Every rule's id is unique across the static slice.
+        #[test]
+        fn pbt_rule_ids_are_unique(_dummy in 0u8..=0u8) {
+            let mut ids: Vec<&str> = RULES.iter().map(|r| r.id()).collect();
+            ids.sort();
+            let len_before = ids.len();
+            ids.dedup();
+            prop_assert_eq!(ids.len(), len_before);
+        }
+
+        // iter() returns the same rules as the static slice (same count
+        // and same ids in the same order).
+        #[test]
+        fn pbt_iter_matches_rules_slice(_dummy in 0u8..=0u8) {
+            let from_iter: Vec<&str> = iter().map(|r| r.id()).collect();
+            let from_slice: Vec<&str> = RULES.iter().map(|r| r.id()).collect();
+            prop_assert_eq!(from_iter, from_slice);
+        }
     }
 }

@@ -25,8 +25,11 @@ use proptest::collection::vec;
 use proptest::prelude::*;
 use serde_json::json;
 
+use crate::config::Mode;
 use crate::decision::{Decision, DecisionKind, Severity};
+use crate::facts::sensitive::SensitiveKind;
 use crate::hook_input::HookInput;
+use crate::self_paths::ProtectedKind;
 
 /// Short, dotted rule identifiers similar to `core.network.foo`.
 pub fn rule_id() -> impl Strategy<Value = String> {
@@ -234,6 +237,207 @@ pub fn non_bash_hook_input() -> impl Strategy<Value = HookInput> {
         }),
         1 => names.prop_map(|tool_name| HookInput {
             tool_name,
+            tool_input: json!({}),
+        }),
+    ]
+}
+
+/// All four engine [`Mode`] variants drawn uniformly.
+pub fn mode() -> impl Strategy<Value = Mode> {
+    prop_oneof![
+        Just(Mode::Enforce),
+        Just(Mode::Monitor),
+        Just(Mode::Observe),
+    ]
+}
+
+/// All five [`ProtectedKind`] variants drawn uniformly.
+pub fn protected_kind() -> impl Strategy<Value = ProtectedKind> {
+    prop_oneof![
+        Just(ProtectedKind::Binary),
+        Just(ProtectedKind::Config),
+        Just(ProtectedKind::Plugin),
+        Just(ProtectedKind::ClaudeSettings),
+        Just(ProtectedKind::HookScript),
+    ]
+}
+
+/// All eleven [`SensitiveKind`] variants drawn uniformly.
+pub fn sensitive_kind() -> impl Strategy<Value = SensitiveKind> {
+    prop_oneof![
+        Just(SensitiveKind::SshDir),
+        Just(SensitiveKind::AwsDir),
+        Just(SensitiveKind::GcloudDir),
+        Just(SensitiveKind::KubeConfig),
+        Just(SensitiveKind::DockerConfig),
+        Just(SensitiveKind::PrivateKeyFile),
+        Just(SensitiveKind::Dotenv),
+        Just(SensitiveKind::Npmrc),
+        Just(SensitiveKind::Pypirc),
+        Just(SensitiveKind::Tfstate),
+        Just(SensitiveKind::PemBlob),
+    ]
+}
+
+/// File-path strings: a mix of project-relative paths, absolute paths
+/// under common system roots, `~`/`$HOME` forms, and well-known
+/// sensitive paths. The mix is heavily biased so that `path` /
+/// `sensitive` extractors actually exercise their non-empty arms.
+pub fn file_path() -> impl Strategy<Value = String> {
+    let safe_abs =
+        "/(?:tmp|repo|home/me|var/log|opt/app)/[a-zA-Z0-9_./-]{0,16}".prop_map(|s| s.to_string());
+    let project_rel = "[a-zA-Z0-9_./-]{1,20}".prop_map(|s| s.to_string());
+    let home_form = prop_oneof![
+        Just("~".to_string()),
+        Just("$HOME".to_string()),
+        Just("${HOME}".to_string()),
+    ];
+    let home_with_suffix =
+        (home_form.clone(), "[a-zA-Z0-9_./-]{0,16}").prop_map(|(prefix, rest)| {
+            if rest.is_empty() {
+                prefix
+            } else {
+                format!("{prefix}/{rest}")
+            }
+        });
+    let sensitive_paths = proptest::sample::select(
+        &[
+            "~/.ssh/id_rsa",
+            "~/.ssh/id_ed25519",
+            "~/.ssh/config",
+            "~/.aws/credentials",
+            "~/.aws/config",
+            "~/.config/gcloud/application_default_credentials.json",
+            "~/.kube/config",
+            "~/.docker/config.json",
+            ".env",
+            ".env.production",
+            "/srv/app/.env",
+            "infra/main.tfstate",
+            ".npmrc",
+            ".pypirc",
+            "/etc/passwd",
+            "/etc/shadow",
+            "/etc/ptuf/policy.yaml",
+            "/repo/.ptuf.yaml",
+            "/repo/.claude/settings.json",
+        ][..],
+    )
+    .prop_map(|s| s.to_string());
+    prop_oneof![
+        2 => safe_abs,
+        2 => project_rel,
+        1 => home_form,
+        2 => home_with_suffix,
+        2 => sensitive_paths,
+    ]
+}
+
+/// URL-shaped strings spanning safe HTTPs, SSRF-style cloud-metadata
+/// endpoints, alternative schemes, malformed strings, and arbitrary
+/// printable ASCII. Used by URL-fact and rule PBT to exercise both
+/// happy and adversarial paths through `url::parse`.
+pub fn web_url() -> impl Strategy<Value = String> {
+    let safe = proptest::sample::select(
+        &[
+            "https://example.com/",
+            "https://api.github.com/repos/x/y",
+            "http://example.com:8080/admin",
+            "https://example.com:443",
+            "https://user:pass@example.com/x",
+        ][..],
+    )
+    .prop_map(|s| s.to_string());
+    let cloud = proptest::sample::select(
+        &[
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[fd00:ec2::254]/latest/",
+            "http://metadata.google.internal/computeMetadata/v1/",
+        ][..],
+    )
+    .prop_map(|s| s.to_string());
+    let weird_scheme = proptest::sample::select(
+        &[
+            "file:///etc/shadow",
+            "ftp://example.com/",
+            "data:,abc",
+            "javascript:alert(1)",
+        ][..],
+    )
+    .prop_map(|s| s.to_string());
+    let malformed = proptest::sample::select(
+        &[
+            "example.com/foo",
+            "http:///foo",
+            "://x",
+            "http://example.com:notaport/",
+            "http://[::1]:abc/",
+            "",
+        ][..],
+    )
+    .prop_map(|s| s.to_string());
+    let arbitrary = "[ -~]{0,40}".prop_map(|s| s.to_string());
+    prop_oneof![
+        4 => safe,
+        2 => cloud,
+        1 => weird_scheme,
+        2 => malformed,
+        1 => arbitrary,
+    ]
+}
+
+/// `HookInput` for `Read` / `Edit` / `Write` covering the three tool
+/// names with realistic `file_path` distributions.
+pub fn read_edit_write_input() -> impl Strategy<Value = HookInput> {
+    let tool = proptest::sample::select(&["Read", "Edit", "Write"][..]).prop_map(|s| s.to_string());
+    prop_oneof![
+        4 => (tool.clone(), file_path()).prop_map(|(tool_name, fp)| HookInput {
+            tool_name,
+            tool_input: json!({ "file_path": fp }),
+        }),
+        // Edit has new_string, Write has content.
+        1 => (file_path(), "[ -~]{0,40}").prop_map(|(fp, body)| HookInput {
+            tool_name: "Write".into(),
+            tool_input: json!({ "file_path": fp, "content": body }),
+        }),
+        1 => (file_path(), "[ -~]{0,40}").prop_map(|(fp, body)| HookInput {
+            tool_name: "Edit".into(),
+            tool_input: json!({ "file_path": fp, "new_string": body }),
+        }),
+        // Missing or non-string field — exercises None branches.
+        1 => Just(HookInput {
+            tool_name: "Read".into(),
+            tool_input: json!({}),
+        }),
+    ]
+}
+
+/// `HookInput` for the `WebFetch` tool, biased toward URL shapes that
+/// the URL fact extractor and the cloud-metadata rule actually care
+/// about.
+pub fn web_fetch_input() -> impl Strategy<Value = HookInput> {
+    prop_oneof![
+        4 => web_url().prop_map(|u| HookInput {
+            tool_name: "WebFetch".into(),
+            tool_input: json!({ "url": u }),
+        }),
+        1 => Just(HookInput {
+            tool_name: "WebFetch".into(),
+            tool_input: json!({}),
+        }),
+    ]
+}
+
+/// Superset hook-input strategy spanning every tool surface the engine
+/// is exercised against (Bash, Read/Edit/Write, WebFetch, plus
+/// arbitrary unknown tools).
+pub fn richer_hook_input() -> impl Strategy<Value = HookInput> {
+    prop_oneof![
+        4 => hook_input(),
+        2 => read_edit_write_input(),
+        2 => web_fetch_input(),
+        1 => "[A-Z][A-Za-z]{0,8}".prop_map(|s| HookInput {
+            tool_name: s.to_string(),
             tool_input: json!({}),
         }),
     ]

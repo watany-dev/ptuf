@@ -132,4 +132,49 @@ proptest! {
         let shim_dec = ptuf::decide(&input);
         prop_assert_eq!(engine_dec, shim_dec);
     }
+
+    // Every non-Allow decision must carry a non-empty `rule_id` so that
+    // audit consumers can deduplicate and reason about origin. The
+    // engine never invents free-floating Deny/Ask/Monitor decisions.
+    #[test]
+    fn pbt_non_allow_decisions_carry_non_empty_rule_id(input in hook_input()) {
+        let dec = Engine::default().decide(&input).decision;
+        match &dec {
+            Decision::Allow => {}
+            Decision::Monitor { rule_id }
+            | Decision::Ask { rule_id, .. }
+            | Decision::Deny { rule_id, .. } => {
+                prop_assert!(!rule_id.is_empty());
+            }
+        }
+    }
+
+    // The Outcome.mode field is stable: a default engine is in Enforce
+    // and never reports a demotion.
+    #[test]
+    fn pbt_default_engine_outcome_is_enforce(input in hook_input()) {
+        let outcome = Engine::default().decide(&input);
+        prop_assert_eq!(outcome.mode, ptuf::config::Mode::Enforce);
+        prop_assert!(!outcome.mode_demoted);
+    }
+
+    // Calling `decide` twice with the same input is deterministic for
+    // the default engine.
+    #[test]
+    fn pbt_default_engine_is_deterministic(input in hook_input()) {
+        let a = Engine::default().decide(&input).decision;
+        let b = Engine::default().decide(&input).decision;
+        prop_assert_eq!(a, b);
+    }
+
+    // Every emitted Deny carries a reason that mentions either the rule
+    // id or a "Safer alternative" hint; this matches the contract of
+    // `crate::reason::build`. We assert a softer "non-empty reason" to
+    // stay decoupled from the message format.
+    #[test]
+    fn pbt_deny_reason_is_non_empty(input in hook_input()) {
+        if let Decision::Deny { reason, .. } = Engine::default().decide(&input).decision {
+            prop_assert!(!reason.is_empty());
+        }
+    }
 }

@@ -924,4 +924,133 @@ all:
             }
         }
     }
+
+    use crate::testing::proptest::richer_hook_input;
+    use proptest::prelude::*;
+
+    /// Strategy: arbitrary YAML strings drawn from a printable ASCII
+    /// soup. Most will fail to parse; the ones that do parse must not
+    /// cause `compile` or `evaluate` to panic.
+    fn arbitrary_yaml() -> impl Strategy<Value = String> {
+        "[ -~\n]{0,80}".prop_map(|s| s.to_string())
+    }
+
+    fn yaml_or_default(s: &str) -> Value {
+        serde_yaml_ng::from_str::<Value>(s).unwrap_or(Value::Null)
+    }
+
+    proptest! {
+        // compile never panics on arbitrary YAML strings — failures
+        // come back as Err, never as a panic.
+        #[test]
+        fn pbt_compile_never_panics(s in arbitrary_yaml()) {
+            let v = yaml_or_default(&s);
+            let _ = compile(&v);
+        }
+
+        // For any compiled WhenNode, evaluate never panics on arbitrary
+        // hook inputs.
+        #[test]
+        fn pbt_evaluate_simple_leaves_never_panic(input in richer_hook_input()) {
+            let facts = crate::facts::extract(&input);
+            let nodes = [
+                WhenNode::Tool("Bash".into()),
+                WhenNode::ToolAny(vec!["Bash".into(), "Read".into()]),
+                WhenNode::Event("PreToolUse".into()),
+                WhenNode::ShellArgvHeadAny(vec!["rm".into()]),
+                WhenNode::ShellPipelineFromTo {
+                    from: vec!["curl".into()],
+                    to: vec!["bash".into()],
+                },
+                WhenNode::PathFilePathPrefixAny(vec!["/etc".into()]),
+                WhenNode::UrlSchemeAny(vec!["http".into()]),
+                WhenNode::UrlHostAny(vec!["example.com".into()]),
+                WhenNode::SensitivePathAny(vec!["ssh_dir".into()]),
+                WhenNode::Not(Box::new(WhenNode::Tool("Bash".into()))),
+                WhenNode::All(vec![WhenNode::Tool("Bash".into())]),
+                WhenNode::Any(vec![WhenNode::Tool("Bash".into())]),
+            ];
+            for node in &nodes {
+                let _ = evaluate(node, &facts, &input);
+            }
+        }
+
+        // `Tool(t)` evaluates true iff input.tool_name == t.
+        #[test]
+        fn pbt_tool_leaf_correct(
+            input in richer_hook_input(),
+            target in "[A-Z][A-Za-z]{0,8}",
+        ) {
+            let facts = crate::facts::extract(&input);
+            let result = evaluate(&WhenNode::Tool(target.clone()), &facts, &input);
+            prop_assert_eq!(result, input.tool_name == target);
+        }
+
+        // `ToolAny(list)` evaluates true iff input.tool_name is in list.
+        #[test]
+        fn pbt_tool_any_membership(
+            input in richer_hook_input(),
+            extras in proptest::collection::vec("[A-Z][A-Za-z]{0,6}", 0..3),
+        ) {
+            let facts = crate::facts::extract(&input);
+            let result = evaluate(&WhenNode::ToolAny(extras.clone()), &facts, &input);
+            prop_assert_eq!(result, extras.contains(&input.tool_name));
+        }
+
+        // `Not(child)` always inverts `child`.
+        #[test]
+        fn pbt_not_inverts(input in richer_hook_input(), tool in "[A-Z][A-Za-z]{0,6}") {
+            let facts = crate::facts::extract(&input);
+            let inner = WhenNode::Tool(tool);
+            let direct = evaluate(&inner, &facts, &input);
+            let negated = evaluate(&WhenNode::Not(Box::new(inner)), &facts, &input);
+            prop_assert_eq!(direct, !negated);
+        }
+
+        // `All([])` is vacuously true; `Any([])` is vacuously false.
+        // (compile() rejects empty mappings, but the AST itself permits
+        // these and evaluate() must respect their algebraic identities.)
+        #[test]
+        fn pbt_all_any_vacuous(input in richer_hook_input()) {
+            let facts = crate::facts::extract(&input);
+            prop_assert!(evaluate(&WhenNode::All(vec![]), &facts, &input));
+            prop_assert!(!evaluate(&WhenNode::Any(vec![]), &facts, &input));
+        }
+
+        // `Event(s)` only ever matches the literal "PreToolUse".
+        #[test]
+        fn pbt_event_only_pre_tool_use(
+            input in richer_hook_input(),
+            event in "[A-Za-z]{1,16}",
+        ) {
+            let facts = crate::facts::extract(&input);
+            let result = evaluate(&WhenNode::Event(event.clone()), &facts, &input);
+            prop_assert_eq!(result, event == "PreToolUse");
+        }
+
+        // shell.argv head matching is gated on facts.bash being Some,
+        // which in turn requires tool_name == "Bash".
+        #[test]
+        fn pbt_shell_argv_requires_bash(input in richer_hook_input()) {
+            let facts = crate::facts::extract(&input);
+            let node = WhenNode::ShellArgvHeadAny(vec!["whatever".into()]);
+            let result = evaluate(&node, &facts, &input);
+            if input.tool_name != "Bash" {
+                prop_assert!(!result);
+            }
+        }
+
+        // url.* leaves can only match when facts.url is populated, which
+        // requires tool_name == "WebFetch" with a parseable URL.
+        #[test]
+        fn pbt_url_leaves_require_webfetch(input in richer_hook_input()) {
+            let facts = crate::facts::extract(&input);
+            let scheme = WhenNode::UrlSchemeAny(vec!["http".into(), "https".into(), "ftp".into()]);
+            let host = WhenNode::UrlHostAny(vec!["example.com".into(), "169.254.169.254".into()]);
+            if input.tool_name != "WebFetch" {
+                prop_assert!(!evaluate(&scheme, &facts, &input));
+                prop_assert!(!evaluate(&host, &facts, &input));
+            }
+        }
+    }
 }

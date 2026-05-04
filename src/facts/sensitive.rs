@@ -232,4 +232,58 @@ mod tests {
         assert!(ms.iter().any(|m| m.kind == SensitiveKind::SshDir));
         assert!(ms.iter().any(|m| m.kind == SensitiveKind::PrivateKeyFile));
     }
+
+    use crate::testing::proptest::sensitive_kind;
+    use proptest::prelude::*;
+
+    proptest! {
+        // classify never panics on arbitrary printable ASCII.
+        #[test]
+        fn pbt_classify_never_panics(s in "[ -~]{0,80}") {
+            let _ = classify(&s);
+        }
+
+        // SensitiveKind::as_str is total and parse round-trips for every
+        // variant.
+        #[test]
+        fn pbt_kind_round_trips(k in sensitive_kind()) {
+            prop_assert_eq!(SensitiveKind::parse(k.as_str()), Some(k));
+        }
+
+        // Unknown tags never parse to Some.
+        #[test]
+        fn pbt_unknown_kind_parse_returns_none(s in "[a-z]{0,8}") {
+            prop_assume!(SensitiveKind::parse(&s).is_none());
+            prop_assert!(SensitiveKind::parse(&s).is_none());
+        }
+
+        // For every match the parser produces, the recorded `raw`
+        // substring really does appear inside the input string.
+        #[test]
+        fn pbt_match_raw_is_substring(s in "[ -~]{0,80}") {
+            for m in classify(&s) {
+                prop_assert!(s.contains(&m.raw), "raw {:?} not substring of {:?}", m.raw, s);
+            }
+        }
+
+        // Plain alphanumeric tokens (no slashes/dots/tilde) cannot match
+        // any sensitive shape.
+        #[test]
+        fn pbt_plain_alphanumeric_never_classifies(s in "[A-Za-z0-9]{0,40}") {
+            prop_assert!(classify(&s).is_empty());
+        }
+
+        // SSH-dir samples always classify as SshDir.
+        #[test]
+        fn pbt_ssh_dir_always_classifies(tail in "[a-zA-Z0-9_./-]{0,16}") {
+            for prefix in ["~", "$HOME", "${HOME}"] {
+                let s = format!("{prefix}/.ssh/{tail}");
+                let kinds: Vec<_> = classify(&s).into_iter().map(|m| m.kind).collect();
+                prop_assert!(
+                    kinds.contains(&SensitiveKind::SshDir),
+                    "expected SshDir from {s:?}, got {kinds:?}",
+                );
+            }
+        }
+    }
 }

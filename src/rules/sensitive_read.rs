@@ -154,4 +154,85 @@ mod tests {
         assert_eq!(SensitiveRead.default_decision(), DecisionKind::Deny);
         assert_eq!(SensitiveRead.id(), RULE_ID);
     }
+
+    use crate::testing::proptest::{file_path, richer_hook_input};
+    use proptest::prelude::*;
+
+    proptest! {
+        // Tools other than Read/Edit never fire this rule, even with
+        // a sensitive path attached.
+        #[test]
+        fn pbt_non_read_edit_yields_none(
+            tool in "[A-Z][A-Za-z]{0,8}",
+            fp in file_path(),
+        ) {
+            prop_assume!(!matches!(tool.as_str(), "Read" | "Edit"));
+            let input = HookInput {
+                tool_name: tool,
+                tool_input: serde_json::json!({ "file_path": fp }),
+            };
+            let facts = crate::facts::extract(&input);
+            prop_assert!(SensitiveRead.evaluate(&facts, &input).is_none());
+        }
+
+        // Empty `facts.sensitive` ⇒ rule never fires, regardless of tool
+        // name. We exercise this by handing the rule a hand-built Facts.
+        #[test]
+        fn pbt_empty_sensitive_yields_none(input in richer_hook_input()) {
+            let facts = crate::facts::Facts::default();
+            prop_assert!(SensitiveRead.evaluate(&facts, &input).is_none());
+        }
+
+        // Adversarial: never panic on any well-formed HookInput.
+        #[test]
+        fn pbt_evaluate_never_panics(input in richer_hook_input()) {
+            let facts = crate::facts::extract(&input);
+            let _ = SensitiveRead.evaluate(&facts, &input);
+        }
+
+        // When the rule fires, the resulting Decision is always a Deny
+        // carrying this rule's id.
+        #[test]
+        fn pbt_only_emits_deny_with_correct_id(input in richer_hook_input()) {
+            let facts = crate::facts::extract(&input);
+            if let Some(d) = SensitiveRead.evaluate(&facts, &input) {
+                match d {
+                    Decision::Deny { rule_id, .. } => prop_assert_eq!(rule_id, RULE_ID),
+                    other => prop_assert!(false, "expected Deny, got {other:?}"),
+                }
+            }
+        }
+
+        // Read/Edit on any sensitive path classification fires the rule.
+        // Use known-sensitive paths to exercise the positive arm.
+        #[test]
+        fn pbt_sensitive_read_paths_always_fire(
+            tool in proptest::sample::select(&["Read", "Edit"][..]),
+            sensitive_fp in proptest::sample::select(
+                &[
+                    "~/.ssh/id_rsa",
+                    "~/.ssh/id_ed25519",
+                    "~/.aws/credentials",
+                    "~/.kube/config",
+                    "~/.docker/config.json",
+                    ".env",
+                    ".env.production",
+                    "infra/main.tfstate",
+                    ".npmrc",
+                    ".pypirc",
+                ][..],
+            ),
+        ) {
+            let input = HookInput {
+                tool_name: tool.to_string(),
+                tool_input: serde_json::json!({ "file_path": sensitive_fp }),
+            };
+            let facts = crate::facts::extract(&input);
+            let d = SensitiveRead.evaluate(&facts, &input);
+            prop_assert!(
+                matches!(d, Some(Decision::Deny { ref rule_id, .. }) if rule_id == RULE_ID),
+                "expected Deny for {sensitive_fp:?}, got {d:?}",
+            );
+        }
+    }
 }
