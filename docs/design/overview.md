@@ -1,14 +1,46 @@
 # ptuf 設計概要
 
-本書は ptuf (PreToolUseFilter) の最小設計書。
-詳細仕様は `src/lib.rs` および `src/main.rs` を一次情報とし、本書は意図と契約を記す。
+本書は ptuf (PreToolUseFilter) のドキュメント群のエントリポイント。
+個別の関心事は本書からリンクされる各文書にまとめる。
+詳細仕様の一次情報は `src/lib.rs` および `src/main.rs` のコードであり、
+本書群は意図と契約を記述する。
+
+## 現状と本書群の射程
+
+ptuf は現状 bootstrap フェーズにあり、`decide()` は常に `Decision::Allow` を返す。
+本書群は MVP v0.1 以降で到達すべき設計を含み、現実装と将来像が混在する。
+各章は「今あるもの」と「これから入るもの」を可能な限り区別して記述する。
+roadmap は [`roadmap.md`](roadmap.md) を参照。
 
 ## 目的
 
-コーディングエージェント (Claude Code 等) が外部ツールを呼び出す前に介在し、
-組織ポリシー・セキュリティ要件・運用上の制約に基づいて Allow / Deny を返すガードレール層を提供する。
+コーディングエージェント (Claude Code 等) が外部ツールを呼び出す直前に介在し、
+危険な CLI 操作・情報漏洩・プロジェクト規約違反を deterministic に判定する
+汎用ガードレール層を提供する。最初の主対象は Claude Code の `PreToolUse` hook
+とし、将来は Codex / Cursor / Gemini CLI / MCP tools にも adapter で対応できる
+構造を取る。
 
-## アーキテクチャ
+## Goals
+
+- `curl | bash`、`wget | sh`、秘密情報の外部送信、破壊的 filesystem / git 操作を
+  default で防ぐ
+- Bash 文字列の単純 grep ではなく、shell AST・argv・pipeline・redirect・path・
+  URL・dataflow facts に変換して判定する
+- ユーザ管理の YAML plugin で project-specific / team-specific guardrail を
+  追加できる
+- agent に対して「なぜ止めたか」「どう直すべきか」を返し、再試行可能な安全経路
+  に誘導する
+- default は強いが開発体験を壊さない。危険度に応じて
+  `allow / monitor / ask / deny` を使い分ける
+
+## Non-goals
+
+- すべての shell command を完全に安全化すること
+- LLM による曖昧な安全判定を default にすること
+- 任意 executable plugin を default 許可すること
+- 企業向け DLP 製品の完全代替になること
+
+## 全体像
 
 ```
 +----------------------+        stdin (JSON)         +-----------+
@@ -17,68 +49,31 @@
 +----------------------+ ◀───── exit code 0 / 2 ──── +-----------+
                                   + stderr reason            │
                                                              ▼
-                                                     +-----------------+
-                                                     | ptuf::decide    |
-                                                     | (src/lib.rs)    |
-                                                     +-----------------+
+                                              +-----------------------------+
+                                              | adapter → fact extraction → |
+                                              | policy merge → rule eval →  |
+                                              | decision aggregation        |
+                                              | (src/lib.rs)                |
+                                              +-----------------------------+
 ```
 
-- **CLI shim** (`src/main.rs`) は I/O とプロセス終了コードのみを担当する
-- **判定コア** (`src/lib.rs`) は純粋関数として実装し、ライブラリ利用者にも公開する
+詳細パイプラインは [`architecture.md`](architecture.md) を参照。
 
-## フック契約 (PreToolUse JSON I/O)
+## 関連文書
 
-### 入力 (`HookInput`)
+| ファイル | 内容 |
+| --- | --- |
+| [`architecture.md`](architecture.md) | adapter → fact extraction → policy merge → rule evaluation → decision aggregation のパイプラインと I/O 契約 |
+| [`decision-model.md`](decision-model.md) | 4 種類 (allow / monitor / ask / deny) の semantics、優先順位、`hardDeny` / `overridable` |
+| [`policy-packs.md`](policy-packs.md) | built-in 6 packs (network / secrets / filesystem / git / self_protection / project_hygiene) |
+| [`config-and-plugins.md`](config-and-plugins.md) | 設定スコープのマージ、YAML plugin 形式、plugin tests、allowlists |
+| [`cli-and-hooks.md`](cli-and-hooks.md) | `ptuf` サブコマンド一覧、Claude Code 統合、将来の adapter 戦略 |
+| [`audit.md`](audit.md) | JSONL 監査ログのスキーマと redaction 規約 |
+| [`roadmap.md`](roadmap.md) | MVP v0.1〜v0.4 のスコープと設計原則 |
 
-```json
-{
-  "tool_name": "Bash",
-  "tool_input": { "command": "ls" }
-}
-```
+## 言語・運用規約
 
-| フィールド | 型 | 必須 | 説明 |
-| --- | --- | --- | --- |
-| `tool_name` | string | yes | エージェントが呼ぼうとしているツール名 |
-| `tool_input` | object (任意) | no | ツール固有の引数 (省略時は `null` を許容) |
-
-不正 JSON や stdin 読み取り失敗は exit code `1` (内部エラー)。
-
-### 出力
-
-| Decision | exit code | stderr |
-| --- | --- | --- |
-| `Allow` | `0` | (空) |
-| `Deny { reason }` | `2` | `reason` の文字列 |
-
-`Decision` は serde で以下の JSON にもシリアライズ可能 (組み込み利用時)。
-
-```json
-{ "decision": "allow" }
-{ "decision": "deny", "reason": "blocked by policy" }
-```
-
-## 判定ルール / ポリシー (現状)
-
-`decide()` は常に `Decision::Allow` を返す。
-将来は `tool_name` ベースのマッチングと `tool_input` パターン (regex / prefix 等) を加え、
-ルールセットは設定ファイルから読み込めるようにする (未確定)。
-
-## エラーハンドリング方針
-
-- `#![forbid(unsafe_code)]` を全クレートで強制
-- 本体コードでは `unwrap()` / `expect()` 禁止 (clippy で warn)
-- テスト内のみ `#![allow(clippy::expect_used, clippy::unwrap_used)]` を許容
-- I/O 失敗は exit code `1`、ポリシー違反は exit code `2`、正常通過は exit code `0`
-
-## テスト戦略
-
-- 判定コアは純粋関数なのでユニットテストで網羅する
-- `src/main.rs` は薄い shim のため coverage 集計から除外 (`--exclude-files "src/main.rs"`)
-- `cargo-tarpaulin` で 95% 以上を維持 (CI でゲート)
-
-## 開発・依存方針
-
-- MSRV: `1.93.0` (`Cargo.toml` の `rust-version` に記載)
-- edition: `2024`
-- 依存追加時は `deny.toml` の `licenses.allow` 範囲で済むこと、`bans.wildcards = "deny"` を満たすことを必須とする
+- 本書群はすべて日本語、`README.md` のみ英語
+- コード識別子は Rust 標準 (PascalCase 型 / snake_case 関数)
+- 設計上の安定 ID (rule id `core.network.remote-script-pipe` 等、severity
+  `critical` 等) は実装で同名を維持し、本書群でも変更しない

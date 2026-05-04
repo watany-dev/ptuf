@@ -1,0 +1,143 @@
+# アーキテクチャ
+
+ptuf はコーディングエージェントの `PreToolUse` 相当の hook から呼び出される
+CLI バイナリと、判定コアを公開するライブラリの 2 面構成を持つ。
+本書はパイプライン全体と、現状の I/O 契約を記述する。
+
+## 二層構成
+
+- **CLI shim** (`src/main.rs`) — stdin / stdout / stderr / プロセス終了コードのみ
+  を担当する薄い層。coverage 集計から除外する (`--exclude-files "src/main.rs"`)。
+- **判定コア** (`src/lib.rs`) — 純粋関数として実装し、ライブラリ利用者にも
+  公開する。新規ロジックは必ずこちらに置く。
+
+## 評価パイプライン
+
+将来到達形のパイプラインは以下の 6 段で構成する。
+
+```
+stdin JSON
+  ↓
+adapter
+  - claude-code         (v0.1)
+  - codex               (v0.4 以降)
+  - cursor              (v0.4 以降)
+  - gemini              (v0.4 以降)
+  ↓
+normalized event
+  ↓
+fact extraction
+  - shell AST / argv / pipeline / redirect
+  - path normalization
+  - URL classification
+  - sensitive path classification
+  - project facts
+  - git facts
+  ↓
+policy merge
+  - builtin packs
+  - org config
+  - user config
+  - project config
+  - local config
+  ↓
+rule evaluation
+  ↓
+decision aggregation
+  ↓
+hook response + audit log
+```
+
+### adapter
+
+エージェントごとの hook ペイロード形状の差異を吸収し、内部の normalized event
+に変換する。最初は Claude Code の `PreToolUse` のみ対応 (`HookInput` 構造体)。
+他エージェントは [`roadmap.md`](roadmap.md) の v0.4 で追加する。
+
+### fact extraction
+
+raw な Bash 文字列を直接 regex で判定するのではなく、構造化された facts に
+落とし込む。これにより plugin rule が安定的に書ける。
+
+- shell AST: 単純な lexer / parser で argv・pipeline・redirect を抽出
+- path normalization: `~` 展開、相対 → 絶対化、シンボリックリンク解決
+- URL classification: scheme / host / port / path、cloud metadata endpoint 判別
+- sensitive path classification: `~/.ssh/**` 等、[`policy-packs.md`](policy-packs.md)
+  の `core.secrets` 一覧に基づく分類
+- project facts: lockfile 種別、protected branch、generated file 規約
+- git facts: working tree 状態、現在の branch、remote URL
+
+### policy merge
+
+`builtin → org → user → project → local` の順で設定を重ねる。
+詳細は [`config-and-plugins.md`](config-and-plugins.md) を参照。
+
+### rule evaluation
+
+各 rule は facts に対する条件と decision を返す。
+複数 rule が一致する場合の集約規則は [`decision-model.md`](decision-model.md)
+を参照。
+
+### hook response + audit log
+
+stdout は hook protocol 専用に保つ。debug / audit は stderr または
+JSONL audit log に出す ([`audit.md`](audit.md))。
+
+## フック契約 (PreToolUse JSON I/O)
+
+### 入力 (`HookInput`)
+
+```json
+{
+  "tool_name": "Bash",
+  "tool_input": { "command": "ls" }
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+| --- | --- | --- | --- |
+| `tool_name` | string | yes | エージェントが呼ぼうとしているツール名 |
+| `tool_input` | object (任意) | no | ツール固有の引数 (省略時は `null` を許容) |
+
+不正 JSON や stdin 読み取り失敗は exit code `1` (内部エラー)。
+
+### 出力
+
+| Decision | exit code | stderr |
+| --- | --- | --- |
+| `Allow` | `0` | (空) |
+| `Deny { reason }` | `2` | `reason` の文字列 |
+
+`Decision` は serde で以下の JSON にもシリアライズ可能 (組み込み利用時)。
+
+```json
+{ "decision": "allow" }
+{ "decision": "deny", "reason": "blocked by policy" }
+```
+
+`monitor` / `ask` の追加と Claude Code 専用 `hookSpecificOutput` 形式の出力は
+v0.1 以降で導入する ([`decision-model.md`](decision-model.md),
+[`cli-and-hooks.md`](cli-and-hooks.md))。
+
+## エラーハンドリング方針
+
+- `#![forbid(unsafe_code)]` を全クレートで強制
+- 本体コードでは `unwrap()` / `expect()` 禁止 (clippy で warn)
+- テスト内のみ `#![allow(clippy::expect_used, clippy::unwrap_used)]` を許容
+- I/O 失敗は exit code `1`、ポリシー違反は exit code `2`、正常通過は exit code `0`
+- `enforce` モードで policy が読み込めない場合は fail-closed (deny)
+
+## テスト戦略
+
+- 判定コアは純粋関数なのでユニットテストで網羅する
+- `src/main.rs` は薄い shim のため coverage 集計から除外
+- `cargo-tarpaulin` で 95% 以上を維持 (CI でゲート)
+- plugin rule は `tests:` セクションで deny / allow ケースを宣言的に書き、
+  `ptuf plugin test` で検証する ([`config-and-plugins.md`](config-and-plugins.md))
+
+## 開発・依存方針
+
+- MSRV: `1.93.0` (`Cargo.toml` の `rust-version` に記載)
+- edition: `2024`
+- 依存追加時は `deny.toml` の `licenses.allow` 範囲で済むこと、
+  `bans.wildcards = "deny"` を満たすことを必須とする
