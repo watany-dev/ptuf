@@ -222,6 +222,55 @@ mod tests {
     }
 
     #[test]
+    fn memory_sink_records_handles_poisoned_mutex() {
+        use std::sync::Arc;
+        let sink = Arc::new(MemorySink::new());
+        sink.record(&rec()).unwrap();
+
+        // Poison the mutex by panicking inside a held guard.
+        let inner_arc = sink.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = inner_arc.inner.lock().unwrap();
+            panic!("intentional poison");
+        })
+        .join();
+
+        // records() must surface the captured row even though the
+        // mutex is now poisoned.
+        let recs = sink.records();
+        assert_eq!(recs.len(), 1);
+    }
+
+    #[test]
+    fn jsonl_sink_record_is_ok_when_mutex_is_poisoned() {
+        use std::sync::Arc;
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-audit-poison-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("audit.jsonl");
+
+        let sink = Arc::new(JsonlSink::open(&path).expect("open"));
+
+        // Poison the file mutex by panicking inside a held guard.
+        let inner = sink.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = inner.file.lock().unwrap();
+            panic!("intentional poison");
+        })
+        .join();
+
+        // record() must swallow the poison and return Ok so the engine
+        // does not surface audit errors to the agent.
+        assert!(sink.record(&rec()).is_ok());
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
     fn audit_error_source_visible_via_dyn_error() {
         let write = AuditError::Write(WriteError::Io(std::io::Error::other("boom")));
         let dyn_err: &dyn std::error::Error = &write;

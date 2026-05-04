@@ -179,3 +179,88 @@ pub fn load_with_layout(layout: scope::Layout) -> Result<Config, ConfigError> {
     }
     Ok(merge::merge(layers))
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn config_error_display_io_includes_path_and_source() {
+        let err = ConfigError::Io {
+            path: PathBuf::from("/etc/ptuf/policy.yaml"),
+            source: io::Error::other("nope"),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("/etc/ptuf/policy.yaml"));
+        assert!(msg.contains("nope"));
+    }
+
+    #[test]
+    fn config_error_display_yaml_includes_path_and_message() {
+        let err = ConfigError::Yaml {
+            path: PathBuf::from("/repo/.ptuf.yaml"),
+            message: "bad indent".into(),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("/repo/.ptuf.yaml"));
+        assert!(msg.contains("bad indent"));
+    }
+
+    #[test]
+    fn config_error_source_returns_io_for_io_variant() {
+        let err = ConfigError::Io {
+            path: PathBuf::from("/x"),
+            source: io::Error::other("boom"),
+        };
+        let dyn_err: &dyn std::error::Error = &err;
+        assert!(dyn_err.source().is_some());
+    }
+
+    #[test]
+    fn config_error_source_returns_none_for_yaml_variant() {
+        let err = ConfigError::Yaml {
+            path: PathBuf::from("/x"),
+            message: "broken".into(),
+        };
+        let dyn_err: &dyn std::error::Error = &err;
+        assert!(dyn_err.source().is_none());
+    }
+
+    #[test]
+    fn load_with_layout_reads_existing_files_and_merges() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-config-load-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let user = dir.join("user.yaml");
+        std::fs::write(&user, "mode: monitor\n").expect("write");
+
+        let layout = scope::Layout {
+            system: None,
+            user: Some(user.clone()),
+            project: None,
+            project_local: None,
+        };
+        let config = load_with_layout(layout).expect("load");
+        assert_eq!(config.mode, Mode::Monitor);
+
+        let _ = std::fs::remove_file(&user);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn load_with_layout_with_no_files_returns_default_config() {
+        let layout = scope::Layout {
+            system: Some(PathBuf::from("/nonexistent/does-not-exist.yaml")),
+            user: None,
+            project: None,
+            project_local: None,
+        };
+        let config = load_with_layout(layout).expect("load");
+        assert_eq!(config, Config::default());
+    }
+}

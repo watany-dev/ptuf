@@ -276,4 +276,34 @@ mod tests {
         // 2023 was not a leap year.
         assert!(parse_rfc3339_to_secs("2023-02-29T00:00:00Z").is_none());
     }
+
+    #[test]
+    fn rejects_wrong_separator_after_year() {
+        // bytes[4] must be '-'.
+        assert!(parse_rfc3339_to_secs("2024.01-01T00:00:00Z").is_none());
+    }
+
+    #[test]
+    fn rejects_wrong_separator_after_month() {
+        // bytes[7] must be '-'.
+        assert!(parse_rfc3339_to_secs("2024-01.01T00:00:00Z").is_none());
+    }
+
+    #[test]
+    fn rejects_wrong_separator_after_hour() {
+        // bytes[13] must be ':'.
+        assert!(parse_rfc3339_to_secs("2024-01-01T00.00:00Z").is_none());
+    }
+
+    #[test]
+    fn rejects_wrong_separator_after_minute() {
+        // bytes[16] must be ':'.
+        assert!(parse_rfc3339_to_secs("2024-01-01T00:00.00Z").is_none());
+    }
+
+    #[test]
+    fn rejects_unrecognised_zone_marker() {
+        // bytes[19] must be 'Z', '+', or '-'.
+        assert!(parse_rfc3339_to_secs("2024-01-01T00:00:00X").is_none());
+    }
 }

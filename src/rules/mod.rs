@@ -142,6 +142,19 @@ mod tests {
     }
 
     #[test]
+    fn config_rule_defaults_match_documented_baseline_via_dyn_dispatch() {
+        // Calling the default methods through `&dyn ConfigRule`
+        // forces dynamic dispatch; otherwise the compiler can inline
+        // the static-impl bodies and their lines never appear in the
+        // coverage report.
+        let r: &dyn ConfigRule = &MinimalRule;
+        assert_eq!(r.severity(), Severity::Medium);
+        assert_eq!(r.default_decision(), DecisionKind::Deny);
+        assert!(r.overridable());
+        assert!(!r.hard_deny());
+    }
+
+    #[test]
     fn evaluate_all_can_fire_multiple_rules() {
         let input = HookInput {
             tool_name: "Bash".into(),
