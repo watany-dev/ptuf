@@ -17,6 +17,9 @@ pub mod reason;
 pub mod rules;
 pub mod self_paths;
 
+#[cfg(test)]
+pub(crate) mod testing;
+
 pub use decision::{Decision, aggregate};
 pub use engine::{Engine, EngineError, Outcome};
 pub use facts::Facts;

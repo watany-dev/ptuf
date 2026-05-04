@@ -222,4 +222,105 @@ mod tests {
         let result = aggregate([Decision::Allow, Decision::Allow]);
         assert_eq!(result, Decision::Allow);
     }
+
+    use crate::testing::proptest::{decision, decision_kind, decision_list, severity};
+    use proptest::prelude::*;
+
+    proptest! {
+        // Empty input is the unit element.
+        #[test]
+        fn pbt_aggregate_empty_is_allow(_dummy in 0u8..1) {
+            prop_assert_eq!(aggregate(Vec::<Decision>::new()), Decision::Allow);
+        }
+
+        // A single-element aggregate is the element itself.
+        #[test]
+        fn pbt_aggregate_singleton_is_identity(d in decision()) {
+            prop_assert_eq!(aggregate([d.clone()]), d);
+        }
+
+        // Idempotence: replicating the same decision does not change the result.
+        #[test]
+        fn pbt_aggregate_is_idempotent(d in decision(), n in 1usize..6) {
+            let xs: Vec<Decision> = std::iter::repeat_n(d.clone(), n).collect();
+            prop_assert_eq!(aggregate(xs), d);
+        }
+
+        // Associativity: aggregating a split list is the same as aggregating the whole.
+        #[test]
+        fn pbt_aggregate_is_associative(xs in decision_list(), ys in decision_list()) {
+            let combined: Vec<Decision> = xs.iter().chain(ys.iter()).cloned().collect();
+            let split = aggregate([aggregate(xs.clone()), aggregate(ys.clone())]);
+            prop_assert_eq!(aggregate(combined), split);
+        }
+
+        // Commutativity: reversed input yields the same severity. Equality on
+        // the full payload only holds when only one element shares the
+        // maximum severity, so we compare severity (the ordering key) here.
+        #[test]
+        fn pbt_aggregate_is_severity_invariant_under_permutation(
+            xs in decision_list(),
+        ) {
+            let mut reversed = xs.clone();
+            reversed.reverse();
+            prop_assert_eq!(aggregate(xs).severity(), aggregate(reversed).severity());
+        }
+
+        // Upper bound: the aggregated severity dominates every input.
+        #[test]
+        fn pbt_aggregate_is_upper_bound(xs in decision_list()) {
+            let agg = aggregate(xs.clone());
+            for x in &xs {
+                prop_assert!(agg.severity() >= x.severity());
+            }
+        }
+
+        // Severity ordering matches the documented hierarchy.
+        #[test]
+        fn pbt_severity_matches_kind_order(d in decision()) {
+            let expected = match d.kind() {
+                DecisionKind::Allow => 0,
+                DecisionKind::Monitor => 1,
+                DecisionKind::Ask => 2,
+                DecisionKind::Deny => 3,
+            };
+            prop_assert_eq!(d.severity(), expected);
+        }
+
+        // JSON round-trip stability for every variant.
+        #[test]
+        fn pbt_decision_round_trips_through_json(d in decision()) {
+            let s = serde_json::to_string(&d).expect("serialise");
+            let back: Decision = serde_json::from_str(&s).expect("deserialise");
+            prop_assert_eq!(back, d);
+        }
+
+        // Severity enum round-trips and ordering is total.
+        #[test]
+        fn pbt_severity_round_trips(s in severity()) {
+            let json = serde_json::to_string(&s).expect("serialise");
+            let back: Severity = serde_json::from_str(&json).expect("deserialise");
+            prop_assert_eq!(back, s);
+        }
+
+        // DecisionKind round-trips.
+        #[test]
+        fn pbt_decision_kind_round_trips(k in decision_kind()) {
+            let json = serde_json::to_string(&k).expect("serialise");
+            let back: DecisionKind = serde_json::from_str(&json).expect("deserialise");
+            prop_assert_eq!(back, k);
+        }
+
+        // `kind()` matches the variant of the value it was extracted from.
+        #[test]
+        fn pbt_kind_matches_variant(d in decision()) {
+            let expected = match &d {
+                Decision::Allow => DecisionKind::Allow,
+                Decision::Monitor { .. } => DecisionKind::Monitor,
+                Decision::Ask { .. } => DecisionKind::Ask,
+                Decision::Deny { .. } => DecisionKind::Deny,
+            };
+            prop_assert_eq!(d.kind(), expected);
+        }
+    }
 }

@@ -200,4 +200,85 @@ mod tests {
     fn placeholder_constant_is_stable() {
         assert_eq!(PLACEHOLDER, "***");
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        // Idempotence: redacting twice yields the same result as once.
+        #[test]
+        fn pbt_redact_is_idempotent(s in "[ -~]{0,80}") {
+            let once = redact_strict(&s);
+            let twice = redact_strict(&once);
+            prop_assert_eq!(once, twice);
+        }
+
+        // Never panics on adversarial input.
+        #[test]
+        fn pbt_redact_never_panics(s in ".{0,80}") {
+            let _ = redact_strict(&s);
+        }
+
+        // GitHub token shape is always replaced.
+        #[test]
+        fn pbt_redacts_github_tokens(suffix in "[A-Za-z0-9]{10,30}") {
+            for prefix in ["ghp", "gho", "ghu", "ghs", "ghr"] {
+                let needle = format!("{prefix}_{suffix}");
+                let s = format!("echo {needle} done");
+                let out = redact_strict(&s);
+                prop_assert!(!out.contains(&needle), "kept {needle:?} in {out:?}");
+                prop_assert!(out.contains("***"));
+            }
+        }
+
+        // OpenAI-style key shape is replaced when the trailing token is
+        // word-boundary-terminated. The detector regex anchors with `\b`
+        // on both sides, so a suffix ending in `-` (a non-word char) is
+        // intentionally not detected — guard the suffix accordingly.
+        #[test]
+        fn pbt_redacts_openai_keys(suffix in "[A-Za-z0-9_-]{15,39}[A-Za-z0-9_]") {
+            let needle = format!("sk-{suffix}");
+            let s = format!("ENV={needle} cmd");
+            let out = redact_strict(&s);
+            prop_assert!(!out.contains(&needle));
+        }
+
+        // AWS access key id shape is always replaced.
+        #[test]
+        fn pbt_redacts_aws_akid(suffix in "[A-Z0-9]{16}") {
+            let needle = format!("AKIA{suffix}");
+            let s = format!("echo {needle}");
+            let out = redact_strict(&s);
+            prop_assert!(!out.contains(&needle));
+        }
+
+        // Sensitive `KEY=VALUE` shape (with sensitive substring in key)
+        // strips the value.
+        #[test]
+        fn pbt_redacts_sensitive_env_assignments(value in "[A-Za-z0-9_]{1,30}") {
+            for k in ["GITHUB_TOKEN", "MY_SECRET", "DB_PASSWORD", "API_KEY"] {
+                let s = format!("{k}={value} cmd");
+                let out = redact_strict(&s);
+                let placeholder_form = format!("{k}=***");
+                let raw_form = format!("{k}={value}");
+                prop_assert!(out.contains(&placeholder_form));
+                prop_assert!(!out.contains(&raw_form));
+            }
+        }
+
+        // Plain ascii without any sensitive tokens passes through unchanged.
+        #[test]
+        fn pbt_benign_passes_through(s in "[a-zA-Z0-9 /._-]{0,60}") {
+            // Avoid accidental key-shaped substrings.
+            prop_assume!(!s.contains("AKIA"));
+            prop_assume!(!s.contains("ghp_"));
+            prop_assume!(!s.contains("sk-"));
+            prop_assume!(!s.contains("eyJ"));
+            // No `KEY=VALUE` shape with sensitive substrings:
+            let lower = s.to_lowercase();
+            for needle in ["token", "key", "secret", "password", "credential", "private"] {
+                prop_assume!(!lower.contains(needle));
+            }
+            prop_assert_eq!(redact_strict(&s), s);
+        }
+    }
 }
