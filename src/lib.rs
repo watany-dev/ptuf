@@ -9,6 +9,7 @@ pub mod engine;
 pub mod facts;
 pub mod hook_input;
 pub mod hook_output;
+pub mod init;
 pub mod io_runner;
 pub mod plugin;
 pub mod reason;

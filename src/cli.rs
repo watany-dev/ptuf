@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::engine::Engine;
 use crate::hook_input::HookInput;
 use crate::hook_output;
+use crate::init;
 use crate::plugin::runner as plugin_runner;
 use crate::Decision;
 
@@ -41,6 +42,13 @@ pub enum Command {
     Eval { tool: String, command: String },
     /// `ptuf plugin test <path>` — run plugin assertions.
     PluginTest { path: PathBuf },
+    /// `ptuf init <agent> [--dry-run] [--settings <PATH>]` — install the
+    /// PreToolUse hook entry.
+    Init {
+        agent: String,
+        dry_run: bool,
+        settings_path: Option<PathBuf>,
+    },
     /// `--help` / `-h`.
     Help,
     /// `--version` / `-V`.
@@ -81,8 +89,36 @@ pub fn parse(args: &[String]) -> Result<Command, ParseError> {
         "hook" => parse_hook(&mut iter),
         "eval" => parse_eval(&mut iter),
         "plugin" => parse_plugin(&mut iter),
+        "init" => parse_init(&mut iter),
         other => Err(ParseError::UnknownCommand(other.to_string())),
     }
+}
+
+fn parse_init<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let agent = iter.next().ok_or(ParseError::MissingValue("agent"))?;
+    let mut dry_run = false;
+    let mut settings_path: Option<PathBuf> = None;
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--dry-run" => dry_run = true,
+            "--settings" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--settings"))?;
+                settings_path = Some(PathBuf::from(value));
+            }
+            other if other.starts_with("--settings=") => {
+                settings_path = Some(PathBuf::from(other.trim_start_matches("--settings=")));
+            }
+            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
+        }
+    }
+    Ok(Command::Init {
+        agent: agent.clone(),
+        dry_run,
+        settings_path,
+    })
 }
 
 fn parse_hook<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -155,6 +191,8 @@ USAGE:
     ptuf hook claude-code pre-tool-use           (Claude Code PreToolUse hook)
     ptuf eval --tool <NAME> <COMMAND>            (evaluate a single tool call)
     ptuf plugin test <PATH>                      (run a plugin's deny/allow tests)
+    ptuf init claude-code [--dry-run]            (register PreToolUse hook in
+                          [--settings <PATH>]    ~/.claude/settings.json)
     ptuf --help | --version
 
 EXIT CODES:
@@ -176,6 +214,11 @@ pub fn run<R: Read, W1: Write, W2: Write>(
         Command::HookClaudeCodePreToolUse => run_hook(stdin, stdout, stderr),
         Command::Eval { tool, command } => run_eval(&tool, &command, stdout, stderr),
         Command::PluginTest { path } => run_plugin_test(&path, stdout, stderr),
+        Command::Init {
+            agent,
+            dry_run,
+            settings_path,
+        } => run_init(&agent, dry_run, settings_path.as_deref(), stdout, stderr),
         Command::Help => {
             let _ = writeln!(stdout, "{HELP}");
             0
@@ -247,6 +290,76 @@ fn run_plugin_test<W1: Write, W2: Write>(
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: {err}");
             1
+        }
+    }
+}
+
+fn run_init<W1: Write, W2: Write>(
+    agent: &str,
+    dry_run: bool,
+    settings_path: Option<&std::path::Path>,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8 {
+    if agent != "claude-code" {
+        let _ = writeln!(stderr, "ptuf: unknown agent: {agent}");
+        return 1;
+    }
+
+    let resolved_path = match settings_path {
+        Some(p) => p.to_path_buf(),
+        None => match init::claude_code::default_settings_path() {
+            Some(p) => p,
+            None => {
+                let _ = writeln!(
+                    stderr,
+                    "ptuf: $HOME is not set; pass --settings <PATH> explicitly"
+                );
+                return 1;
+            }
+        },
+    };
+    let binary = init::claude_code::detect_binary();
+
+    match init::claude_code::install(&resolved_path, &binary, dry_run) {
+        Ok(outcome) => {
+            render_install_outcome(&outcome, dry_run, stdout);
+            0
+        }
+        Err(err) => {
+            let _ = writeln!(stderr, "ptuf: init failed: {err}");
+            1
+        }
+    }
+}
+
+fn render_install_outcome<W: Write>(
+    outcome: &init::InstallOutcome,
+    dry_run: bool,
+    stdout: &mut W,
+) {
+    let path = outcome.settings_path.display();
+    match outcome.status {
+        init::InstallStatus::AlreadyPresent => {
+            let suffix = if dry_run { " (dry-run)" } else { "" };
+            let _ = writeln!(
+                stdout,
+                "ptuf init claude-code{suffix}: {path} already contains a ptuf hook entry; nothing to do."
+            );
+        }
+        init::InstallStatus::Installed => {
+            let _ = writeln!(stdout, "ptuf init claude-code: registered hook in {path}");
+            let _ = writeln!(stdout, "  matcher: {}", outcome.matcher);
+            let _ = writeln!(stdout, "  command: {}", outcome.command);
+        }
+        init::InstallStatus::WouldInstall => {
+            let _ = writeln!(
+                stdout,
+                "ptuf init claude-code (dry-run): would register hook in {path}"
+            );
+            let _ = writeln!(stdout, "  matcher: {}", outcome.matcher);
+            let _ = writeln!(stdout, "  command: {}", outcome.command);
+            let _ = writeln!(stdout, "Run without --dry-run to apply.");
         }
     }
 }
@@ -420,8 +533,78 @@ mod tests {
     #[test]
     fn rejects_unknown_top_level_command() {
         assert!(matches!(
-            parse(&s(&["doctor"])),
+            parse(&s(&["unknown-cmd"])),
             Err(ParseError::UnknownCommand(_))
+        ));
+    }
+
+    #[test]
+    fn parses_init_with_just_agent() {
+        let cmd = parse(&s(&["init", "claude-code"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                agent: "claude-code".into(),
+                dry_run: false,
+                settings_path: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_init_with_dry_run_and_settings() {
+        let cmd = parse(&s(&[
+            "init",
+            "claude-code",
+            "--dry-run",
+            "--settings",
+            "/tmp/x.json",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                agent: "claude-code".into(),
+                dry_run: true,
+                settings_path: Some(PathBuf::from("/tmp/x.json")),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_init_with_equals_settings_form() {
+        let cmd = parse(&s(&["init", "claude-code", "--settings=/tmp/x.json"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                agent: "claude-code".into(),
+                dry_run: false,
+                settings_path: Some(PathBuf::from("/tmp/x.json")),
+            }
+        );
+    }
+
+    #[test]
+    fn init_requires_agent() {
+        assert!(matches!(
+            parse(&s(&["init"])),
+            Err(ParseError::MissingValue("agent"))
+        ));
+    }
+
+    #[test]
+    fn init_rejects_unknown_flags() {
+        assert!(matches!(
+            parse(&s(&["init", "claude-code", "--bogus"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn init_settings_flag_requires_value() {
+        assert!(matches!(
+            parse(&s(&["init", "claude-code", "--settings"])),
+            Err(ParseError::MissingValue("--settings"))
         ));
     }
 
@@ -662,6 +845,121 @@ rules:
         let code = run(cmd, b"" as &[u8], &mut out, &mut err);
         assert_eq!(code, 1);
         assert!(String::from_utf8_lossy(&err).contains("ptuf:"));
+    }
+
+    #[test]
+    fn run_init_unknown_agent_returns_one() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                agent: "codex".into(),
+                dry_run: true,
+                settings_path: Some(PathBuf::from("/tmp/should-not-be-touched.json")),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 1);
+        assert!(String::from_utf8_lossy(&err).contains("unknown agent"));
+    }
+
+    #[test]
+    fn run_init_dry_run_writes_outcome_summary() {
+        let dir = std::env::temp_dir().join(format!("ptuf-cli-init-dry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                agent: "claude-code".into(),
+                dry_run: true,
+                settings_path: Some(path.clone()),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0);
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.contains("would register hook"));
+        assert!(s.contains("Run without --dry-run"));
+        assert!(!path.exists(), "dry-run must not write file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_writes_and_is_idempotent_on_second_call() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-init-idempotent-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut out1 = Vec::new();
+        let mut err1 = Vec::new();
+        let code1 = run(
+            Command::Init {
+                agent: "claude-code".into(),
+                dry_run: false,
+                settings_path: Some(path.clone()),
+            },
+            b"" as &[u8],
+            &mut out1,
+            &mut err1,
+        );
+        assert_eq!(code1, 0);
+        assert!(String::from_utf8_lossy(&out1).contains("registered hook"));
+        let after_first = std::fs::read_to_string(&path).unwrap();
+
+        let mut out2 = Vec::new();
+        let mut err2 = Vec::new();
+        let code2 = run(
+            Command::Init {
+                agent: "claude-code".into(),
+                dry_run: false,
+                settings_path: Some(path.clone()),
+            },
+            b"" as &[u8],
+            &mut out2,
+            &mut err2,
+        );
+        assert_eq!(code2, 0);
+        assert!(String::from_utf8_lossy(&out2).contains("already contains"));
+        assert_eq!(
+            after_first,
+            std::fs::read_to_string(&path).unwrap(),
+            "second run must not rewrite the file",
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_reports_invalid_json_via_stderr() {
+        let dir = std::env::temp_dir().join(format!("ptuf-cli-init-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{not json").unwrap();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                agent: "claude-code".into(),
+                dry_run: false,
+                settings_path: Some(path.clone()),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 1);
+        assert!(String::from_utf8_lossy(&err).contains("init failed"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
