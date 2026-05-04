@@ -1,10 +1,32 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
+use crate::engine::Engine;
 use crate::hook_input::HookInput;
 use crate::hook_output;
 use crate::plugin::runner as plugin_runner;
-use crate::{Decision, decide};
+use crate::Decision;
+
+/// Reserved rule id used when the engine itself failed to load policy
+/// and the CLI must fail-closed
+/// (`docs/design/cli-and-hooks.md:104-114`).
+pub(crate) const POLICY_LOAD_FAILED_RULE: &str = "core.engine.policy-load-failed";
+
+/// Build the engine for the CWD-derived project scope, or surface a
+/// reserved deny so the CLI can render a fail-closed response.
+///
+/// Production CLI entry points (compat / `hook ...` / `eval`) all go
+/// through this helper. The `crate::decide` shim is intentionally
+/// lenient (`Engine::default` fallback) for embedded library use.
+pub(crate) fn build_engine_or_fail_closed<W: Write>(stderr: &mut W) -> Result<Engine, Decision> {
+    Engine::for_cwd().map_err(|err| {
+        let _ = writeln!(stderr, "ptuf: could not load policy: {err}");
+        Decision::Deny {
+            rule_id: POLICY_LOAD_FAILED_RULE.into(),
+            reason: "ptuf could not load policy; failing closed.".into(),
+        }
+    })
+}
 
 /// Parsed CLI invocation. The bare-arguments form is preserved for hook
 /// compatibility with the bootstrap (`echo ... | ptuf`) usage.
@@ -178,7 +200,11 @@ fn run_hook<R: Read, W1: Write, W2: Write>(mut stdin: R, stdout: &mut W1, stderr
             return 1;
         }
     };
-    emit_decision(&decide(&input), stdout, stderr)
+    let decision = match build_engine_or_fail_closed(stderr) {
+        Ok(engine) => engine.decide(&input).decision,
+        Err(deny) => deny,
+    };
+    emit_decision(&decision, stdout, stderr)
 }
 
 fn run_eval<W1: Write, W2: Write>(
@@ -191,7 +217,10 @@ fn run_eval<W1: Write, W2: Write>(
         tool_name: tool.to_string(),
         tool_input: serde_json::json!({ "command": command }),
     };
-    let decision = decide(&input);
+    let decision = match build_engine_or_fail_closed(stderr) {
+        Ok(engine) => engine.decide(&input).decision,
+        Err(deny) => deny,
+    };
     let _ = writeln!(stdout, "Decision: {}", decision_label(&decision));
     if let Some(rule_id) = decision.rule_id() {
         let _ = writeln!(stdout, "Rule: {rule_id}");

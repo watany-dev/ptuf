@@ -3,8 +3,10 @@ use crate::facts::Facts;
 use crate::{Decision, HookInput};
 
 pub mod destructive_rm;
+pub mod git;
 pub mod patterns;
 pub mod remote_pipe;
+pub mod self_protection;
 pub mod sensitive_net;
 
 /// Trait implemented by every rule that the engine evaluates, both
@@ -41,6 +43,18 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &destructive_rm::DestructiveRm,
     &remote_pipe::RemoteScriptPipe,
     &sensitive_net::SensitivePathToNetwork,
+    &git::FORCE_PUSH_RULE,
+    &git::FORCE_PUSH_WITH_LEASE_RULE,
+    &git::RESET_HARD_RULE,
+    &git::CLEAN_FDX_RULE,
+    &git::BRANCH_DELETE_FORCE_RULE,
+    &git::STASH_CLEAR_RULE,
+    &git::REMOTE_SET_URL_RULE,
+    &self_protection::BINARY_RULE,
+    &self_protection::CONFIG_RULE,
+    &self_protection::PLUGIN_RULE,
+    &self_protection::CLAUDE_SETTINGS_RULE,
+    &self_protection::HOOK_SCRIPT_RULE,
 ];
 
 /// Run every built-in rule against `facts` + `input` and collect
@@ -92,31 +106,62 @@ mod tests {
         assert!(ids.contains(&"core.filesystem.destructive-rm"));
         assert!(ids.contains(&"core.network.remote-script-pipe"));
         assert!(ids.contains(&"core.secrets.sensitive-path-to-network"));
+        for git_id in [
+            "core.git.force-push",
+            "core.git.force-push-with-lease",
+            "core.git.reset-hard",
+            "core.git.clean-fdx",
+            "core.git.branch-delete-force",
+            "core.git.stash-clear",
+            "core.git.remote-set-url",
+        ] {
+            assert!(ids.contains(&git_id), "missing rule_id {git_id}");
+        }
+        for self_id in [
+            "core.self_protection.binary",
+            "core.self_protection.config",
+            "core.self_protection.plugin",
+            "core.self_protection.claude-settings",
+            "core.self_protection.hook-script",
+        ] {
+            assert!(ids.contains(&self_id), "missing rule_id {self_id}");
+        }
     }
 
     #[test]
-    fn builtin_rules_are_hard_deny_critical() {
+    fn builtin_rules_keep_overridable_true() {
         for rule in RULES {
             assert!(
+                rule.overridable(),
+                "builtin rule {} keeps overridable=true (hard_deny is the lock)",
+                rule.id()
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_v0_1_rules_are_hard_deny_critical() {
+        const LEGACY_HARD_DENY_IDS: &[&str] = &[
+            "core.filesystem.destructive-rm",
+            "core.network.remote-script-pipe",
+            "core.secrets.sensitive-path-to-network",
+        ];
+        for rule in RULES.iter().filter(|r| LEGACY_HARD_DENY_IDS.contains(&r.id())) {
+            assert!(
                 rule.hard_deny(),
-                "builtin rule {} must be hard_deny",
+                "legacy rule {} must remain hard_deny",
                 rule.id()
             );
             assert_eq!(
                 rule.severity(),
                 Severity::Critical,
-                "builtin rule {} must be severity::critical",
+                "legacy rule {} must remain severity::critical",
                 rule.id()
             );
             assert_eq!(
                 rule.default_decision(),
                 DecisionKind::Deny,
-                "builtin rule {} must default to deny",
-                rule.id()
-            );
-            assert!(
-                rule.overridable(),
-                "builtin rule {} keeps overridable=true (hard_deny is the lock)",
+                "legacy rule {} must default to deny",
                 rule.id()
             );
         }

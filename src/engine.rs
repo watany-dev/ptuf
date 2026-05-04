@@ -18,6 +18,7 @@ use crate::facts;
 use crate::hook_input::HookInput;
 use crate::plugin::{PluginError, PluginSet};
 use crate::rules::{self, ConfigRule};
+use crate::self_paths::ProtectedPaths;
 
 /// Resolved engine ready to evaluate hook payloads.
 pub struct Engine {
@@ -25,6 +26,7 @@ pub struct Engine {
     plugins: PluginSet,
     audit_sink: Box<dyn AuditSink>,
     repo_root: Option<PathBuf>,
+    protected: ProtectedPaths,
 }
 
 /// Result of [`Engine::decide`].
@@ -89,12 +91,29 @@ impl Engine {
         let mut plugins = PluginSet::new();
         plugins.load_paths(&config.plugin_paths)?;
         let audit_sink = audit_sink_from_config(&config);
+        let protected = ProtectedPaths::collect(repo_root, &config);
         Ok(Self {
             config,
             plugins,
             audit_sink,
             repo_root: repo_root.map(Path::to_path_buf),
+            protected,
         })
+    }
+
+    /// CWD-derived constructor used by the CLI entry points.
+    /// Walks the repo root via `git`-like discovery before loading
+    /// scoped policy. Errors propagate so the caller can fail-closed.
+    pub fn for_cwd() -> Result<Self, EngineError> {
+        let cwd = std::env::current_dir().ok();
+        Self::for_path_opt(cwd.as_deref())
+    }
+
+    /// Test-friendly variant of [`Self::for_cwd`]. `start = None`
+    /// builds the engine without a project scope.
+    pub fn for_path_opt(start: Option<&Path>) -> Result<Self, EngineError> {
+        let repo_root = start.and_then(crate::config::repo::discover);
+        Self::new(repo_root.as_deref())
     }
 
     /// Build an engine from an explicit config — used by tests and by
@@ -104,11 +123,13 @@ impl Engine {
         let mut plugins = PluginSet::new();
         plugins.load_paths(&config.plugin_paths)?;
         let audit_sink = audit_sink_from_config(&config);
+        let protected = ProtectedPaths::collect(None, &config);
         Ok(Self {
             config,
             plugins,
             audit_sink,
             repo_root: None,
+            protected,
         })
     }
 
@@ -116,11 +137,13 @@ impl Engine {
     /// that need to inject a hand-built [`PluginSet`] without going
     /// through the YAML loader.
     pub(crate) fn with_components(config: Config, plugins: PluginSet) -> Self {
+        let protected = ProtectedPaths::collect(None, &config);
         Self {
             config,
             plugins,
             audit_sink: Box::new(NoopSink),
             repo_root: None,
+            protected,
         }
     }
 
@@ -154,7 +177,8 @@ impl Engine {
 
     /// Evaluate a single hook payload.
     pub fn decide(&self, input: &HookInput) -> Outcome {
-        let facts = facts::extract(input);
+        let mut facts = facts::extract(input);
+        facts.protected = self.protected.classify_input(input);
         let now = SystemTime::now();
         let builtin = rules::iter()
             .filter(|rule| !is_pack_disabled(*rule, &self.config))
@@ -854,5 +878,37 @@ rules:
         let engine = Engine::with_components(cfg, set);
         let outcome = engine.decide(&bash("ls"));
         assert_eq!(outcome.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn self_protection_fires_when_input_targets_protected_path() {
+        #![allow(clippy::expect_used)]
+        use crate::self_paths::ProtectedPaths;
+        use std::path::PathBuf;
+
+        let plugin_path = PathBuf::from("/tmp/ptuf-test-plugin.yaml");
+        let mut cfg = Config::default();
+        cfg.plugin_paths.push(plugin_path.clone());
+        let mut engine = Engine::with_components(cfg, PluginSet::new());
+        // Inject a deterministic protected set rather than relying on
+        // process state.
+        engine.protected = ProtectedPaths {
+            binary: None,
+            configs: Vec::new(),
+            plugins: vec![plugin_path.clone()],
+            claude_settings: Vec::new(),
+            hook_scripts: Vec::new(),
+        };
+        let input = HookInput {
+            tool_name: "Edit".into(),
+            tool_input: serde_json::json!({ "file_path": plugin_path }),
+        };
+        let outcome = engine.decide(&input);
+        match &outcome.decision {
+            Decision::Deny { rule_id, .. } => {
+                assert_eq!(rule_id, "core.self_protection.plugin");
+            }
+            other => panic!("expected deny from self_protection, got {other:?}"),
+        }
     }
 }

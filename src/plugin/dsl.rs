@@ -24,6 +24,10 @@ pub enum WhenNode {
     ToolAny(Vec<String>),
     ShellArgvHeadAny(Vec<String>),
     ShellPipelineFromTo { from: Vec<String>, to: Vec<String> },
+    PathFilePathPrefixAny(Vec<String>),
+    UrlSchemeAny(Vec<String>),
+    UrlHostAny(Vec<String>),
+    SensitivePathAny(Vec<String>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -91,6 +95,14 @@ fn compile_pair(key: &str, value: &Value) -> Result<WhenNode, CompileError> {
         "toolAny" => Ok(WhenNode::ToolAny(expect_string_list(key, value)?)),
         "shell.argv" => compile_shell_argv(value),
         "shell.pipeline" => compile_shell_pipeline(value),
+        "path.filePathPrefixAny" => Ok(WhenNode::PathFilePathPrefixAny(expect_string_list(
+            key, value,
+        )?)),
+        "url.schemeAny" => Ok(WhenNode::UrlSchemeAny(expect_string_list(key, value)?)),
+        "url.hostAny" => Ok(WhenNode::UrlHostAny(expect_string_list(key, value)?)),
+        "sensitive.pathKindAny" => Ok(WhenNode::SensitivePathAny(expect_string_list(
+            key, value,
+        )?)),
         other => Err(CompileError::UnknownKey(other.to_string())),
     }
 }
@@ -266,6 +278,27 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
                 false
             }),
         },
+        WhenNode::PathFilePathPrefixAny(prefixes) => match facts.path.as_ref() {
+            None => false,
+            Some(path) => {
+                let abs = path.absolute.to_string_lossy();
+                prefixes
+                    .iter()
+                    .any(|p| path.raw.starts_with(p) || abs.starts_with(p))
+            }
+        },
+        WhenNode::UrlSchemeAny(schemes) => facts
+            .url
+            .as_ref()
+            .is_some_and(|u| schemes.iter().any(|s| s.eq_ignore_ascii_case(&u.scheme))),
+        WhenNode::UrlHostAny(hosts) => facts
+            .url
+            .as_ref()
+            .is_some_and(|u| hosts.iter().any(|h| h.eq_ignore_ascii_case(&u.host))),
+        WhenNode::SensitivePathAny(kinds) => facts.sensitive.iter().any(|s| {
+            let tag = s.kind.as_str();
+            kinds.iter().any(|k| k == tag)
+        }),
     }
 }
 

@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 
 use crate::cli;
-use crate::{Decision, HookInput, decide};
+use crate::{Decision, HookInput};
 
 /// Top-level CLI entry. Parses argv, dispatches to a [`crate::cli::Command`],
 /// and returns an [`ExitCode`].
@@ -49,7 +49,11 @@ pub(crate) fn run_compat_code<R: Read, W: Write>(mut stdin: R, stderr: &mut W) -
         }
     };
 
-    emit_compat_decision(&decide(&input), stderr)
+    let decision = match cli::build_engine_or_fail_closed(stderr) {
+        Ok(engine) => engine.decide(&input).decision,
+        Err(deny) => deny,
+    };
+    emit_compat_decision(&decision, stderr)
 }
 
 /// Emit a compat-mode decision: allow/monitor are silent, ask writes the

@@ -13,6 +13,7 @@ pub mod io_runner;
 pub mod plugin;
 pub mod reason;
 pub mod rules;
+pub mod self_paths;
 
 pub use decision::{Decision, aggregate};
 pub use engine::{Engine, EngineError, Outcome};
@@ -21,11 +22,14 @@ pub use hook_input::HookInput;
 
 /// Stateless decision API kept for backward compatibility.
 ///
-/// Internally delegates to a default-configured [`Engine`]; callers
-/// that need YAML config, audit, or `mode: monitor` demotion should
-/// instantiate [`Engine`] directly.
+/// Tries the CWD-derived [`Engine::for_cwd`] first so embedded callers
+/// pick up project policy when one exists. On failure (config / plugin
+/// load error) falls back silently to a default-configured engine —
+/// CLI entry points instead route through `cli::build_engine_or_fail_closed`,
+/// which fail-closes per `docs/design/cli-and-hooks.md:104-114`.
 pub fn decide(input: &HookInput) -> Decision {
-    Engine::default().decide(input).decision
+    let engine = Engine::for_cwd().unwrap_or_else(|_| Engine::default());
+    engine.decide(input).decision
 }
 
 #[cfg(test)]
