@@ -1,22 +1,37 @@
-use crate::decision::Decision;
+use crate::decision::{Decision, Severity};
+use crate::facts::Facts;
+use crate::facts::shell::{Argv, Pipeline};
 use crate::hook_input::HookInput;
 use crate::reason;
 
-use super::Rule;
-use super::patterns::REMOTE_PIPE;
+use super::ConfigRule;
 
 pub struct RemoteScriptPipe;
 
 const RULE_ID: &str = "core.network.remote-script-pipe";
 
-impl Rule for RemoteScriptPipe {
-    fn id(&self) -> &'static str {
+const FETCHERS: &[&str] = &["curl", "wget", "fetch"];
+
+const INTERPRETERS: &[&str] = &[
+    "bash", "sh", "zsh", "fish", "ksh", "dash", "python", "python3", "ruby", "node", "perl",
+];
+
+impl ConfigRule for RemoteScriptPipe {
+    fn id(&self) -> &str {
         RULE_ID
     }
 
-    fn evaluate(&self, input: &HookInput) -> Option<Decision> {
-        let command = input.bash_command()?;
-        if !REMOTE_PIPE.is_match(command) {
+    fn severity(&self) -> Severity {
+        Severity::Critical
+    }
+
+    fn hard_deny(&self) -> bool {
+        true
+    }
+
+    fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
+        let bash = facts.bash.as_ref()?;
+        if !bash.segments.iter().any(pipeline_pipes_to_interpreter) {
             return None;
         }
 
@@ -38,6 +53,42 @@ impl Rule for RemoteScriptPipe {
     }
 }
 
+fn pipeline_pipes_to_interpreter(pipe: &Pipeline) -> bool {
+    let mut seen_fetcher = false;
+    for cmd in &pipe.commands {
+        if !seen_fetcher {
+            if is_fetcher(&cmd.head) {
+                seen_fetcher = true;
+            }
+            continue;
+        }
+        if is_interpreter_invocation(cmd) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_fetcher(head: &str) -> bool {
+    FETCHERS.contains(&head)
+}
+
+fn is_interpreter(head: &str) -> bool {
+    INTERPRETERS.contains(&head)
+}
+
+fn is_interpreter_invocation(argv: &Argv) -> bool {
+    if is_interpreter(&argv.head) {
+        return true;
+    }
+    if argv.head == "sudo"
+        && let Some(first) = argv.positional().next()
+    {
+        return is_interpreter(first);
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,7 +102,9 @@ mod tests {
     }
 
     fn assert_deny(cmd: &str) {
-        let result = RemoteScriptPipe.evaluate(&bash(cmd));
+        let input = bash(cmd);
+        let facts = crate::facts::extract(&input);
+        let result = RemoteScriptPipe.evaluate(&facts, &input);
         assert!(
             matches!(&result, Some(Decision::Deny { rule_id, .. }) if rule_id == RULE_ID),
             "expected deny for {cmd:?}, got {result:?}",
@@ -59,7 +112,9 @@ mod tests {
     }
 
     fn assert_allow(cmd: &str) {
-        let result = RemoteScriptPipe.evaluate(&bash(cmd));
+        let input = bash(cmd);
+        let facts = crate::facts::extract(&input);
+        let result = RemoteScriptPipe.evaluate(&facts, &input);
         assert!(
             result.is_none(),
             "expected allow for {cmd:?}, got {result:?}"

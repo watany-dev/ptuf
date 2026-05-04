@@ -1,19 +1,31 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 
+pub mod audit;
 pub mod cli;
+pub mod config;
 pub mod decision;
+pub mod engine;
+pub mod facts;
 pub mod hook_input;
 pub mod hook_output;
 pub mod io_runner;
+pub mod plugin;
 pub mod reason;
 pub mod rules;
 
 pub use decision::{Decision, aggregate};
+pub use engine::{Engine, EngineError, Outcome};
+pub use facts::Facts;
 pub use hook_input::HookInput;
 
+/// Stateless decision API kept for backward compatibility.
+///
+/// Internally delegates to a default-configured [`Engine`]; callers
+/// that need YAML config, audit, or `mode: monitor` demotion should
+/// instantiate [`Engine`] directly.
 pub fn decide(input: &HookInput) -> Decision {
-    aggregate(rules::evaluate_all(input))
+    Engine::default().decide(input).decision
 }
 
 #[cfg(test)]

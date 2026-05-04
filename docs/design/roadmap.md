@@ -18,18 +18,22 @@
 - `core.network.remote-script-pipe`
 - `core.secrets.sensitive-path-to-network`
 
-> 上記 3 rule は v0.1 MVP として `tool_input.command` を `LazyLock<Regex>`
-> で直接マッチして判定する。Bash AST / argv / pipeline / dataflow facts への
-> 抽出層は v0.2 に持ち越し、YAML plugin が入る v0.2 以降は plugin に raw shell
-> regex を許さない方針へ移行する ([`architecture.md`](architecture.md))。
+### v0.2 — Plugin と Audit (実装済み)
 
-### v0.2 — Plugin と Audit
-
-- YAML plugin loader
-- plugin 内 `tests:` の実行 (`ptuf plugin test`)
-- config scope merge (`builtin → org → user → project → local`)
-- audit JSONL 出力
-- redaction (strict)
+- fact extraction 層 (`shell.argv` / `shell.pipeline` / `path` / `url` /
+  `sensitive_path` / `dataflow.basic`)。組み込み 3 rule もすべて facts ベースに
+  書き換え済み
+- YAML plugin loader (`apiVersion: ptuf.dev/v1, kind: Plugin`、`when:` DSL、
+  `requires:` 検証)
+- plugin 内 `tests:` の実行 (`ptuf plugin test <path>`)
+- config scope merge (`builtin → /etc/ptuf → ~/.config/ptuf → <repo>/.ptuf.yaml
+  → <repo>/.ptuf.local.yaml`)、`mode` / `failClosed` / `packs.*.enabled` /
+  `plugins` / `allowlists` / `audit.*` を扱う
+- audit JSONL 出力 (`AuditSink` trait、`NoopSink` / `MemorySink` / `JsonlSink`)
+- redaction (strict): env token 代入、GH / OpenAI / AWS / JWT トークン、
+  HTTP basic auth、PEM blob を `***` 置換
+- `hardDeny: true` rule は下位 scope の allowlist で覆せない。
+  `expiresAt` を過ぎた allowlist は自動失効
 
 ### v0.3 — Tool 拡張と self-protection
 

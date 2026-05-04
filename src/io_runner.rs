@@ -159,4 +159,23 @@ mod tests {
         let err_s = String::from_utf8_lossy(&err);
         assert!(err_s.contains("invalid hook payload"));
     }
+
+    /// `Read` impl that always returns `ErrorKind::Other`. Used to drive
+    /// the stdin-read failure arm without spawning a real process or
+    /// touching the filesystem.
+    struct FailingReader;
+
+    impl std::io::Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("simulated stdin failure"))
+        }
+    }
+
+    #[test]
+    fn run_compat_returns_one_when_stdin_read_fails() {
+        let mut stderr = Vec::new();
+        let code = run_compat_code(FailingReader, &mut stderr);
+        assert_eq!(code, 1);
+        assert!(String::from_utf8_lossy(&stderr).contains("failed to read stdin"));
+    }
 }
