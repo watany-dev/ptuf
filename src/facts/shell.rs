@@ -100,9 +100,17 @@ fn tokenize(s: &str) -> Vec<Token> {
             }
             continue;
         }
-        if c == b'&' && i + 1 < bytes.len() && bytes[i + 1] == b'&' {
-            out.push(Token::And);
-            i += 2;
+        if c == b'&' {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'&' {
+                out.push(Token::And);
+                i += 2;
+            } else {
+                // Lone `&` (background operator). ptuf does not model
+                // background semantics; skip it so the lexer always makes
+                // forward progress. Without this, `read_word` would return
+                // (empty, 0 bytes) and `tokenize` would infinite-loop.
+                i += 1;
+            }
             continue;
         }
         if c == b';' {
@@ -449,11 +457,133 @@ mod tests {
     }
 
     #[test]
+    fn lone_ampersand_does_not_loop() {
+        // Found by PBT: a bare `&` (not part of `&&`) used to cause an
+        // infinite loop in tokenize. Verify the lexer terminates and
+        // produces no segments for inputs that contain only `&`s.
+        let b = parse("&");
+        assert!(b.segments.is_empty());
+        let b = parse("ls & echo done");
+        // The `&` is dropped; `ls` and `echo done` collapse into one
+        // segment because there is no separator between them.
+        assert!(!b.segments.is_empty());
+    }
+
+    #[test]
     fn empty_pipeline_segment_is_dropped() {
         // `|;` would yield an empty pipeline; ensure parse drops it.
         let b = parse("ls | ; echo done");
         // first segment "ls |" produces a pipeline with [ls]
         assert!(!b.segments.is_empty());
         assert_eq!(b.segments[0].commands[0].head, "ls");
+    }
+
+    use crate::testing::proptest::{arbitrary_command, bash_command};
+    use proptest::collection::vec as pvec;
+    use proptest::prelude::*;
+
+    proptest! {
+        // Adversarial: the parser must not panic, hang, or blow up memory
+        // for any printable ASCII. (PBT discovered a real infinite-loop
+        // bug here when fed a lone `&` — see `lone_ampersand_does_not_loop`.)
+        #[test]
+        fn pbt_parse_never_panics(s in arbitrary_command()) {
+            let _ = parse(&s);
+        }
+
+        // Structured generator: the parser still succeeds and produces
+        // at least one segment whenever the source has non-whitespace
+        // content.
+        #[test]
+        fn pbt_structured_command_yields_segments(s in bash_command()) {
+            let b = parse(&s);
+            if s.chars().any(|c| !c.is_whitespace()) {
+                prop_assert!(!b.segments.is_empty());
+            }
+        }
+
+        // Whitespace-only input parses to an empty segment list.
+        #[test]
+        fn pbt_blank_input_has_no_segments(spaces in "[ \\t]{0,20}") {
+            let b = parse(&spaces);
+            prop_assert!(b.segments.is_empty());
+        }
+
+        // Single-quoted text protects shell separators: any printable
+        // ASCII (without single quotes) wrapped in `'…'` becomes one
+        // segment with one command.
+        #[test]
+        fn pbt_single_quotes_protect_separators(inner in "[ -&(-~]{0,30}") {
+            // Exclude ' (0x27) from the inner so we don't terminate the quote.
+            let cmd = format!("echo '{inner}'");
+            let b = parse(&cmd);
+            prop_assert_eq!(b.segments.len(), 1);
+            prop_assert_eq!(b.segments[0].commands.len(), 1);
+            prop_assert_eq!(&b.segments[0].commands[0].head, "echo");
+        }
+
+        // is_flag invariant lifted to user-facing semantics.
+        #[test]
+        fn pbt_flags_partition_args(args in pvec("[A-Za-z0-9_./-]{1,8}", 0..6)) {
+            let cmd = format!("ls {}", args.join(" "));
+            let b = parse(&cmd);
+            if let Some(first) = b.segments.first().and_then(|p| p.commands.first()) {
+                let flags: Vec<&str> = first.flags().collect();
+                let positional: Vec<&str> = first.positional().collect();
+                // Disjoint:
+                for f in &flags {
+                    prop_assert!(!positional.contains(f));
+                }
+                // Union spans every recorded arg:
+                prop_assert_eq!(flags.len() + positional.len(), first.args.len());
+            }
+        }
+
+        // Joining N safe heads with `|` produces one segment with N commands.
+        #[test]
+        fn pbt_pipe_produces_n_commands(heads in pvec("[a-z][a-z0-9]{0,5}", 1..4)) {
+            let cmd = heads.join(" | ");
+            let b = parse(&cmd);
+            prop_assert_eq!(b.segments.len(), 1);
+            prop_assert_eq!(b.segments[0].commands.len(), heads.len());
+            for (i, h) in heads.iter().enumerate() {
+                prop_assert_eq!(&b.segments[0].commands[i].head, h);
+            }
+        }
+
+        // Joining N safe heads with `;` produces N segments.
+        #[test]
+        fn pbt_semicolon_produces_n_segments(heads in pvec("[a-z][a-z0-9]{0,5}", 1..4)) {
+            let cmd = heads.join("; ");
+            let b = parse(&cmd);
+            prop_assert_eq!(b.segments.len(), heads.len());
+            for (i, h) in heads.iter().enumerate() {
+                prop_assert_eq!(&b.segments[i].commands[0].head, h);
+            }
+        }
+
+        // Env assignments come before the head and are stripped from args.
+        #[test]
+        fn pbt_env_assignments_precede_head(
+            keys in pvec("[A-Z_][A-Z0-9_]{0,6}", 0..3),
+            vals in pvec("[a-zA-Z0-9]{1,6}", 0..3),
+        ) {
+            // Build matching K=V pairs, then a head + flag.
+            let n = keys.len().min(vals.len());
+            let mut prefix = String::new();
+            for i in 0..n {
+                prefix.push_str(&format!("{}={} ", keys[i], vals[i]));
+            }
+            let cmd = format!("{prefix}cmd --flag");
+            let b = parse(&cmd);
+            prop_assert_eq!(b.segments.len(), 1);
+            let argv = &b.segments[0].commands[0];
+            prop_assert_eq!(&argv.head, "cmd");
+            prop_assert_eq!(argv.env_assignments.len(), n);
+            for i in 0..n {
+                prop_assert_eq!(&argv.env_assignments[i].key, &keys[i]);
+                prop_assert_eq!(&argv.env_assignments[i].value, &vals[i]);
+            }
+        }
     }
 }

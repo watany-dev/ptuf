@@ -81,4 +81,51 @@ mod tests {
         assert!(json.contains("\"permissionDecision\":\"ask\""));
         assert!(json.contains("\"permissionDecisionReason\":\"confirm please\""));
     }
+
+    use crate::testing::proptest::{decision, reason_text, rule_id};
+    use proptest::prelude::*;
+
+    proptest! {
+        // Allow / Monitor never produce a hook response.
+        #[test]
+        fn pbt_allow_and_monitor_yield_none(rule_id in rule_id()) {
+            let allow_response = from_decision(&Decision::Allow);
+            let monitor_response = from_decision(&Decision::Monitor { rule_id });
+            prop_assert!(allow_response.is_none());
+            prop_assert!(monitor_response.is_none());
+        }
+
+        // Ask emits an `ask` verdict carrying the reason verbatim.
+        #[test]
+        fn pbt_ask_emits_ask_verdict(id in rule_id(), reason in reason_text()) {
+            let d = Decision::Ask {
+                rule_id: id,
+                reason: reason.clone(),
+            };
+            let resp = from_decision(&d).expect("ask emits a response");
+            prop_assert_eq!(resp.hook_specific_output.permission_decision, "ask");
+            prop_assert_eq!(resp.hook_specific_output.hook_event_name, "PreToolUse");
+            prop_assert_eq!(resp.hook_specific_output.permission_decision_reason, reason);
+        }
+
+        // Deny emits a `deny` verdict with the reason verbatim.
+        #[test]
+        fn pbt_deny_emits_deny_verdict(id in rule_id(), reason in reason_text()) {
+            let d = Decision::Deny {
+                rule_id: id,
+                reason: reason.clone(),
+            };
+            let resp = from_decision(&d).expect("deny emits a response");
+            prop_assert_eq!(resp.hook_specific_output.permission_decision, "deny");
+            prop_assert_eq!(resp.hook_specific_output.hook_event_name, "PreToolUse");
+            prop_assert_eq!(resp.hook_specific_output.permission_decision_reason, reason);
+        }
+
+        // The Some/None split mirrors the variant of the decision.
+        #[test]
+        fn pbt_response_presence_matches_variant(d in decision()) {
+            let expects_response = matches!(d, Decision::Ask { .. } | Decision::Deny { .. });
+            prop_assert_eq!(from_decision(&d).is_some(), expects_response);
+        }
+    }
 }

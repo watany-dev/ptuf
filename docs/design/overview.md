@@ -74,6 +74,7 @@ roadmap は [`roadmap.md`](roadmap.md) を参照。
 | [`config-and-plugins.md`](config-and-plugins.md) | 設定スコープのマージ、YAML plugin 形式、plugin tests、allowlists |
 | [`cli-and-hooks.md`](cli-and-hooks.md) | `ptuf` サブコマンド一覧、Claude Code 統合、将来の adapter 戦略 |
 | [`audit.md`](audit.md) | JSONL 監査ログのスキーマと redaction 規約 |
+| [`testing.md`](testing.md) | example-based テストと Property-Based Testing (PBT) の役割分担 |
 | [`roadmap.md`](roadmap.md) | MVP v0.1〜v0.4 のスコープと設計原則 |
 
 ## 言語・運用規約
