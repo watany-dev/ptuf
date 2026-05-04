@@ -28,12 +28,13 @@ ptuf audit
 | `ptuf plugin test <path>` | plugin の `tests:` セクションを走らせる |
 | `ptuf audit` | audit log を tail / フィルタする |
 
-> v0.2 時点で実装済みのサブコマンドは
+> v0.3 時点で実装済みのサブコマンドは
 > `ptuf hook claude-code pre-tool-use` / `ptuf eval --tool <name> <command>` /
-> `ptuf plugin test <path>` の 3 つと `--help` / `--version`、および引数なし
+> `ptuf plugin test <path>` / `ptuf init claude-code [--dry-run] [--settings <PATH>]` /
+> `ptuf doctor [--json]` と `--help` / `--version`、および引数なし
 > 互換モード (stdin → exit code)。
-> `ptuf init` / `ptuf explain` / `ptuf doctor` / `ptuf audit` は
-> [`roadmap.md`](roadmap.md) の v0.3〜v0.4 で順次追加する。
+> `ptuf doctor --json` (現状は warning を出して text にフォールバック) /
+> `ptuf explain` / `ptuf audit` は v0.4 以降で実装する。
 
 ## 出力規約
 
@@ -68,10 +69,45 @@ stdout への余計な print は hook protocol を壊すので禁止。
 }
 ```
 
-v0.2 でも `ptuf init claude-code` は未実装なので上記スニペットは手動で追記する。
+v0.3 で `ptuf init claude-code` が冪等 install を提供する。既存
+`hooks.PreToolUse[].hooks[].command` の末尾 3 トークンが
+`hook claude-code pre-tool-use` であれば既設定とみなして再書き込みは行わない
+(binary path の差異は無視する)。`--dry-run` で書き込まずに計画を表示でき、
+`--settings <PATH>` で対象ファイルを差し替えられる。
 `command` を引数なしの `/usr/local/bin/ptuf` にすれば互換モード (stdin → exit code)
 としても動作するが、`hookSpecificOutput` JSON を返すには
 `ptuf hook claude-code pre-tool-use` 形式を推奨する。
+
+### `ptuf doctor` の出力例
+
+```text
+ptuf doctor
+
+Binary
+  ✓ /usr/local/bin/ptuf  (version 0.3.0)
+
+Project
+  ✓ repository root: /home/user/proj
+  ✓ config layers loaded (4 scopes considered, 1 file present)
+       /etc/ptuf/policy.yaml                                       (not found)
+       /home/user/.config/ptuf/config.yaml                         (not found)
+       /home/user/proj/.ptuf.yaml                                  (loaded)
+       /home/user/proj/.ptuf.local.yaml                            (not found)
+
+Effective config
+  mode:        enforce
+  failClosed:  true
+  audit.path:  /home/user/.local/share/ptuf/audit.jsonl
+
+Plugins (1)
+  ✓ /home/user/proj/.ptuf-plugins/team.yaml  (acme.security 0.1.0, 3 rules)
+
+Claude Code integration
+  ✓ /home/user/.claude/settings.json present
+  ✓ ptuf hook registered (matcher: "Bash|Read|Edit|Write|WebFetch|mcp__.*")
+```
+
+セクションが ✗ を出した場合は exit code 1。⚠ のみで ✗ がない場合は 0。
 
 ### deny の hook response 例
 
@@ -103,12 +139,16 @@ adapter は payload 正規化のみを行い、判定コアは共通。
 
 ## fail-closed の挙動
 
-`mode: enforce` かつ `failClosed: true` のとき、以下は deny として扱う。
+CLI 経路 (`ptuf` 引数なし互換モード / `ptuf hook ...` / `ptuf eval`) では、
+Engine 構築失敗時 (config / plugin 読込失敗) を **常に** deny で扱う。
+予約 rule_id `core.engine.policy-load-failed` を返し、reason は
+「ptuf could not load policy; failing closed.」、stderr に詳細を付ける。
+`failClosed: false` の opt-out は、設定ファイル自体が読めない時点では
+評価できないので CLI では無効。
 
-- config / plugin の読込失敗
-- 必須 fact extractor の初期化失敗
-- 内部例外
+ライブラリ呼び出し (`crate::decide`) は組込み第三者の驚き最小化のため
+`Engine::for_cwd()` 失敗時に `Engine::default()` へ寛容にフォールバックする
+(CLI と意図的に挙動を分けている)。
 
-ユーザに見える reason は「ptuf could not load policy; failing closed.」のような
-1 行と、stderr の詳細スタックを併記する。`failClosed: false` では同状況で
-allow を返すが本番運用では非推奨。
+`mode: enforce` で deny 以外の理由 (必須 fact extractor 失敗、内部例外) も
+v0.4 以降は同様に fail-closed する予定。

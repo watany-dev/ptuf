@@ -22,8 +22,16 @@ use super::schema::{RawPlugin, RawRule};
 /// Facts that can be referenced from a plugin's
 /// `capabilities.requires`. Must stay in sync with the supported
 /// `when:` leaves in [`super::dsl`].
-pub const SUPPORTED_FACTS: &[&str] =
-    &["shell.ast", "shell.argv", "shell.pipeline", "tool", "event"];
+pub const SUPPORTED_FACTS: &[&str] = &[
+    "shell.ast",
+    "shell.argv",
+    "shell.pipeline",
+    "tool",
+    "event",
+    "path",
+    "url",
+    "sensitive_path",
+];
 
 /// A successfully loaded and validated plugin.
 #[derive(Debug)]
@@ -254,8 +262,17 @@ rules:
     }
 
     #[test]
-    fn supported_facts_includes_expected_v0_2_set() {
-        for f in ["shell.ast", "shell.argv", "shell.pipeline", "tool", "event"] {
+    fn supported_facts_includes_expected_v0_3_set() {
+        for f in [
+            "shell.ast",
+            "shell.argv",
+            "shell.pipeline",
+            "tool",
+            "event",
+            "path",
+            "url",
+            "sensitive_path",
+        ] {
             assert!(SUPPORTED_FACTS.contains(&f), "missing: {f}");
         }
     }

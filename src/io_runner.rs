@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 
 use crate::cli;
-use crate::{Decision, HookInput, decide};
+use crate::{Decision, HookInput};
 
 /// Top-level CLI entry. Parses argv, dispatches to a [`crate::cli::Command`],
 /// and returns an [`ExitCode`].
@@ -49,7 +49,11 @@ pub(crate) fn run_compat_code<R: Read, W: Write>(mut stdin: R, stderr: &mut W) -
         }
     };
 
-    emit_compat_decision(&decide(&input), stderr)
+    let decision = match cli::build_engine_or_fail_closed(stderr) {
+        Ok(engine) => engine.decide(&input).decision,
+        Err(deny) => deny,
+    };
+    emit_compat_decision(&decision, stderr)
 }
 
 /// Emit a compat-mode decision: allow/monitor are silent, ask writes the
@@ -122,7 +126,7 @@ mod tests {
     fn run_reports_unknown_command_to_stderr_with_exit_one() {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let args: Vec<&str> = vec!["doctor"];
+        let args: Vec<&str> = vec!["unknown-cmd"];
         let _exit = run(&args, b"" as &[u8], &mut out, &mut err);
         let err_s = String::from_utf8_lossy(&err);
         assert!(err_s.contains("unknown command"));

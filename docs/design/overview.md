@@ -7,13 +7,15 @@
 
 ## 現状と本書群の射程
 
-ptuf は v0.1 「最小ガードレール」を実装済み。`decide()` は組み込み 3 rule
+ptuf は v0.3 まで実装済み。`decide()` は組み込みパック
 (`core.filesystem.destructive-rm` / `core.network.remote-script-pipe` /
-`core.secrets.sensitive-path-to-network`) を順に評価して
-`Decision` を集約する。CLI は引数なし互換モード /
-`ptuf hook claude-code pre-tool-use` / `ptuf eval --tool <name> <command>`
-の 3 形態に加え `--help` / `--version` を提供する。
-本書群は v0.1 以降で到達すべき設計を含み、現実装と将来像が混在する。
+`core.secrets.sensitive-path-to-network` / `core.secrets.sensitive-read` /
+`core.git.*` 7 件 / `core.self_protection.*` 5 件) と YAML plugin の rule を
+順に評価し、`Decision` を集約する。CLI は引数なし互換モード /
+`ptuf hook claude-code pre-tool-use` / `ptuf eval --tool <name> <command>` /
+`ptuf plugin test <path>` / `ptuf init claude-code [--dry-run] [--settings <PATH>]` /
+`ptuf doctor [--json]` に加え `--help` / `--version` を提供する。
+本書群は v0.3 以降で到達すべき設計を含み、現実装と将来像が混在する。
 各章は「今あるもの」と「これから入るもの」を可能な限り区別して記述する。
 roadmap は [`roadmap.md`](roadmap.md) を参照。
 

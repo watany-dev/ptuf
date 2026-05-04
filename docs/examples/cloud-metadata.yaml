@@ -1,0 +1,31 @@
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: examples.cloud-metadata
+  version: 0.1.0
+capabilities:
+  requires: [tool, url]
+rules:
+  - id: examples.cloud-metadata.deny-imds
+    title: Block WebFetch to cloud metadata services
+    severity: critical
+    defaultDecision: deny
+    hardDeny: true
+    when:
+      all:
+        - tool: WebFetch
+        - any:
+            - url.hostAny:
+                - "169.254.169.254"
+                - "metadata.google.internal"
+                - "metadata.azure.com"
+            - url.schemeAny: [file]
+    reason: |
+      Cloud metadata services (IMDS) expose ephemeral credentials and
+      should never be accessed from an agent-initiated WebFetch. Reading
+      them silently grants the calling principal's role to whatever the
+      transcript later sends.
+    remediation:
+      - "Have the user fetch the metadata themselves if it's truly needed."
+      - "If you're debugging a workload, run `curl` from inside that workload, not from the agent."
+      - "Switch to a least-privilege credential injected by the runtime instead."

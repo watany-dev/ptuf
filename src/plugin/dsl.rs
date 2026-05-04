@@ -24,6 +24,10 @@ pub enum WhenNode {
     ToolAny(Vec<String>),
     ShellArgvHeadAny(Vec<String>),
     ShellPipelineFromTo { from: Vec<String>, to: Vec<String> },
+    PathFilePathPrefixAny(Vec<String>),
+    UrlSchemeAny(Vec<String>),
+    UrlHostAny(Vec<String>),
+    SensitivePathAny(Vec<String>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -91,6 +95,12 @@ fn compile_pair(key: &str, value: &Value) -> Result<WhenNode, CompileError> {
         "toolAny" => Ok(WhenNode::ToolAny(expect_string_list(key, value)?)),
         "shell.argv" => compile_shell_argv(value),
         "shell.pipeline" => compile_shell_pipeline(value),
+        "path.filePathPrefixAny" => Ok(WhenNode::PathFilePathPrefixAny(expect_string_list(
+            key, value,
+        )?)),
+        "url.schemeAny" => Ok(WhenNode::UrlSchemeAny(expect_string_list(key, value)?)),
+        "url.hostAny" => Ok(WhenNode::UrlHostAny(expect_string_list(key, value)?)),
+        "sensitive.pathKindAny" => Ok(WhenNode::SensitivePathAny(expect_string_list(key, value)?)),
         other => Err(CompileError::UnknownKey(other.to_string())),
     }
 }
@@ -266,6 +276,27 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
                 false
             }),
         },
+        WhenNode::PathFilePathPrefixAny(prefixes) => match facts.path.as_ref() {
+            None => false,
+            Some(path) => {
+                let abs = path.absolute.to_string_lossy();
+                prefixes
+                    .iter()
+                    .any(|p| path.raw.starts_with(p) || abs.starts_with(p))
+            }
+        },
+        WhenNode::UrlSchemeAny(schemes) => facts
+            .url
+            .as_ref()
+            .is_some_and(|u| schemes.iter().any(|s| s.eq_ignore_ascii_case(&u.scheme))),
+        WhenNode::UrlHostAny(hosts) => facts
+            .url
+            .as_ref()
+            .is_some_and(|u| hosts.iter().any(|h| h.eq_ignore_ascii_case(&u.host))),
+        WhenNode::SensitivePathAny(kinds) => facts.sensitive.iter().any(|s| {
+            let tag = s.kind.as_str();
+            kinds.iter().any(|k| k == tag)
+        }),
     }
 }
 
@@ -754,6 +785,143 @@ shell.pipeline:
                 assert!(message.contains("string"));
             }
             other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    // --- v0.3 leaves ---------------------------------------------------
+
+    #[test]
+    fn compiles_path_file_path_prefix_any() {
+        let v = yaml("path.filePathPrefixAny: [/etc/, /var/]\n");
+        let node = compile(&v).expect("compile");
+        assert_eq!(
+            node,
+            WhenNode::PathFilePathPrefixAny(vec!["/etc/".into(), "/var/".into()]),
+        );
+    }
+
+    #[test]
+    fn evaluate_path_prefix_against_read_input() {
+        let input = HookInput {
+            tool_name: "Read".into(),
+            tool_input: json!({ "file_path": "/etc/shadow" }),
+        };
+        let facts = facts::extract(&input);
+        let node = WhenNode::PathFilePathPrefixAny(vec!["/etc/".into()]);
+        assert!(evaluate(&node, &facts, &input));
+        let other = WhenNode::PathFilePathPrefixAny(vec!["/var/".into()]);
+        assert!(!evaluate(&other, &facts, &input));
+    }
+
+    #[test]
+    fn evaluate_path_prefix_returns_false_for_non_path_tool() {
+        let input = bash_input("ls /etc");
+        let facts = facts::extract(&input);
+        let node = WhenNode::PathFilePathPrefixAny(vec!["/etc".into()]);
+        assert!(!evaluate(&node, &facts, &input));
+    }
+
+    #[test]
+    fn compiles_url_scheme_any_and_host_any() {
+        let v = yaml(
+            r#"
+all:
+  - url.schemeAny: [http, https]
+  - url.hostAny: ["169.254.169.254"]
+"#,
+        );
+        let node = compile(&v).expect("compile");
+        match node {
+            WhenNode::All(children) => {
+                assert_eq!(
+                    children[0],
+                    WhenNode::UrlSchemeAny(vec!["http".into(), "https".into()]),
+                );
+                assert_eq!(
+                    children[1],
+                    WhenNode::UrlHostAny(vec!["169.254.169.254".into()]),
+                );
+            }
+            other => panic!("expected All, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn evaluate_url_scheme_and_host_against_webfetch() {
+        let input = HookInput {
+            tool_name: "WebFetch".into(),
+            tool_input: json!({ "url": "http://169.254.169.254/latest/meta-data" }),
+        };
+        let facts = facts::extract(&input);
+        let scheme = WhenNode::UrlSchemeAny(vec!["HTTP".into()]);
+        assert!(evaluate(&scheme, &facts, &input));
+        let host = WhenNode::UrlHostAny(vec!["169.254.169.254".into()]);
+        assert!(evaluate(&host, &facts, &input));
+        let other = WhenNode::UrlHostAny(vec!["example.com".into()]);
+        assert!(!evaluate(&other, &facts, &input));
+    }
+
+    #[test]
+    fn evaluate_url_leaves_return_false_when_no_url() {
+        let input = bash_input("ls");
+        let facts = facts::extract(&input);
+        assert!(!evaluate(
+            &WhenNode::UrlSchemeAny(vec!["http".into()]),
+            &facts,
+            &input,
+        ));
+        assert!(!evaluate(
+            &WhenNode::UrlHostAny(vec!["x".into()]),
+            &facts,
+            &input,
+        ));
+    }
+
+    #[test]
+    fn compiles_sensitive_path_kind_any() {
+        let v = yaml("sensitive.pathKindAny: [ssh_dir, dotenv]\n");
+        let node = compile(&v).expect("compile");
+        assert_eq!(
+            node,
+            WhenNode::SensitivePathAny(vec!["ssh_dir".into(), "dotenv".into()]),
+        );
+    }
+
+    #[test]
+    fn evaluate_sensitive_kind_against_read_of_ssh() {
+        let input = HookInput {
+            tool_name: "Read".into(),
+            tool_input: json!({ "file_path": "~/.ssh/id_ed25519" }),
+        };
+        let facts = facts::extract(&input);
+        let node = WhenNode::SensitivePathAny(vec!["ssh_dir".into()]);
+        assert!(evaluate(&node, &facts, &input));
+        let other = WhenNode::SensitivePathAny(vec!["dotenv".into()]);
+        assert!(!evaluate(&other, &facts, &input));
+    }
+
+    #[test]
+    fn evaluate_sensitive_kind_returns_false_when_no_match() {
+        let input = bash_input("ls");
+        let facts = facts::extract(&input);
+        let node = WhenNode::SensitivePathAny(vec!["ssh_dir".into()]);
+        assert!(!evaluate(&node, &facts, &input));
+    }
+
+    #[test]
+    fn new_leaf_keys_reject_non_sequence() {
+        for key in [
+            "path.filePathPrefixAny",
+            "url.schemeAny",
+            "url.hostAny",
+            "sensitive.pathKindAny",
+        ] {
+            let v = yaml(&format!("{key}: 42\n"));
+            let err = compile(&v).expect_err("should fail");
+            match err {
+                CompileError::InvalidShape { key: got, .. } => assert_eq!(got, key),
+                other => panic!("unexpected: {other:?}"),
+            }
         }
     }
 }

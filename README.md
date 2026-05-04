@@ -10,31 +10,58 @@ decision via exit code and stderr.
 
 ## Status
 
-v0.2 — three built-in `core.*` rules with fact-based evaluation, YAML
-configuration scope merge, YAML plugin support with a `when:` DSL, and
-audit JSONL with strict redaction.
+v0.3 — broader tool coverage (`Read` / `Edit` / `Write` / `WebFetch` in
+addition to `Bash`), built-in packs for git and self-protection, and
+two new CLI subcommands (`ptuf init claude-code`, `ptuf doctor`) on top
+of the v0.2 plugin / audit foundation.
 
-Built-in rules (always enabled, hard-deny):
+Built-in rules (always enabled, hard-deny unless noted):
 
-- `core.filesystem.destructive-rm` — `rm -rf /`, `rm -rf ~`, `rm -rf /etc`, etc.
+- `core.filesystem.destructive-rm` — `rm -rf /`, `rm -rf ~`, `rm -rf /etc`, …
 - `core.network.remote-script-pipe` — `curl ... | bash` and friends
 - `core.secrets.sensitive-path-to-network` — co-occurrence of a sensitive
-  path (e.g. `~/.ssh/`, `*.tfstate`, `id_rsa`) with a network sink
-  (`curl`, `scp`, `rsync`, ...) in the same command
+  path with a network sink in the same command
+- `core.secrets.sensitive-read` *(new in v0.3)* — `Read` / `Edit` of a
+  credentials file (SSH key, AWS / gcloud / kube config, dotenv, npmrc,
+  pypirc, tfstate, PEM blob, …)
+- `core.git.*` *(new in v0.3, 7 rules)* — `force-push` (deny),
+  `force-push-with-lease` / `reset --hard` / `clean -fdx` /
+  `branch -D` / `stash clear` / `remote set-url` (ask)
+- `core.self_protection.*` *(new in v0.3, 5 rules)* — modifications to the
+  ptuf binary, its config files, registered plugin paths, the Claude Code
+  `settings.json` file, or any hook-script referenced by it
 
-v0.2 features:
+v0.3 features (additive on top of v0.2):
 
-- **Fact extraction** — shell argv / pipeline lexer, URL / path / sensitive-path
-  classifiers, and a basic dataflow (sensitive → network) check; plugins write
-  rules against these structured facts instead of raw shell regex.
+- **Tool-aware fact extraction** — `path` (`~`-expanded `file_path`),
+  `url` (scheme/host/port/path), `sensitive_path` (variant-tagged), and
+  `protected` (paths that ptuf must not let the agent touch).
+- **Plugin DSL leaves** — `path.filePathPrefixAny`, `url.schemeAny`,
+  `url.hostAny`, `sensitive.pathKindAny`. See
+  [`docs/examples/cloud-metadata.yaml`](docs/examples/cloud-metadata.yaml)
+  for an IMDS WebFetch deny sample.
+- **`ptuf init claude-code`** — idempotent install of the PreToolUse hook
+  entry into `~/.claude/settings.json` with `--dry-run` and
+  `--settings <PATH>` flags. Detection is token-based so a re-run with a
+  different binary path still recognises an existing entry.
+- **`ptuf doctor`** — diagnostic report covering the binary, project
+  scope, effective config, loaded plugins, and Claude Code integration.
+  Exit 0 when every section is ✓ or ⚠; exit 1 when any section reports ✗.
+  `--json` is parsed but currently falls back to text (planned for v0.4).
+- **Fail-closed CLI** — every CLI entry point (`ptuf` compat / `ptuf hook
+  ...` / `ptuf eval`) deny-fails when the engine cannot load policy,
+  surfacing the reserved rule id `core.engine.policy-load-failed`.
+  Library-mode `crate::decide` still falls back to a default engine for
+  embedded callers.
+
+v0.2 features carried forward:
+
 - **YAML config scope merge** — `/etc/ptuf/policy.yaml` →
   `~/.config/ptuf/config.yaml` → `<repo>/.ptuf.yaml` →
   `<repo>/.ptuf.local.yaml`. Each scope can set `mode`, `failClosed`,
   `packs.<id>.enabled`, `plugins`, `allowlists`, and `audit.*`.
 - **YAML plugins** — `apiVersion: ptuf.dev/v1, kind: Plugin` with a
-  `when:` DSL (`all` / `any` / `not` / `tool` / `shell.argv` /
-  `shell.pipeline` / `url.*` / `path.*`). `requires:` declarations
-  validated at load time.
+  `when:` DSL. `requires:` declarations validated at load time.
 - **`ptuf plugin test <path>`** — runs the plugin's `tests:` section
   end-to-end and exits non-zero on regressions.
 - **Audit JSONL** — every decision is recorded to
@@ -42,12 +69,7 @@ v0.2 features:
   masks env-var token assignments, GH / OpenAI / AWS keys, JWTs,
   HTTP basic auth, and PEM blobs.
 - **Allowlists with `expiresAt`** — time-bound exceptions per rule id.
-  `hardDeny: true` rules (the three builtins, and any plugin rule
-  marked as such) ignore allowlist suppression.
-
-Other tools (`Read`, `Write`, `Edit`, ...) are still passed through
-unchanged in v0.2; broader tool coverage and `core.self_protection`
-land in v0.3 ([`docs/design/roadmap.md`](docs/design/roadmap.md)).
+  `hardDeny: true` rules ignore allowlist suppression.
 
 > **Note on Windows:** the audit JSONL writer relies on POSIX
 > `O_APPEND` semantics for atomic concurrent appends. On Windows,
@@ -93,13 +115,29 @@ subcommand, ...).
 
 ## Use as a Claude Code PreToolUse hook
 
-Add an entry to `~/.claude/settings.json`:
+The simplest way is to let `ptuf init claude-code` write the entry for
+you (idempotent; safe to re-run after upgrades):
+
+```bash
+ptuf init claude-code             # writes ~/.claude/settings.json
+ptuf init claude-code --dry-run   # show the diff without touching the file
+```
+
+The resulting `~/.claude/settings.json` looks like:
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
-      { "command": "/absolute/path/to/ptuf hook claude-code pre-tool-use" }
+      {
+        "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/ptuf hook claude-code pre-tool-use"
+          }
+        ]
+      }
     ]
   }
 }
@@ -110,6 +148,9 @@ code blocks the tool call and the `hookSpecificOutput` JSON / stderr
 message is surfaced to both the agent and the user. The bare
 `/absolute/path/to/ptuf` form (without the subcommand) keeps working as a
 compatibility mode for older configurations.
+
+Run `ptuf doctor` afterwards to confirm the binary, repo scope, loaded
+plugins, and hook registration are all healthy.
 
 ## Configure
 
@@ -171,18 +212,26 @@ Run the full pipeline locally before pushing:
 ```bash
 make check       # fmt-check + clippy + test + doc + cargo-deny
 make coverage    # cargo-tarpaulin (>= 95%)
+make pbt         # property-based testing at PBT_CASES=10000 (override with PBT_CASES=N)
 ```
+
+`cargo test` runs every `proptest!` block at the default 256 cases as part of
+`make check`; `make pbt` re-runs the same suite at a higher case count for
+release-time deep checks. Shrunk counterexamples are persisted under
+`proptest-regressions/` and committed to git so the same seeds replay across
+machines.
 
 CI mirrors `make check` plus an MSRV check, an `actionlint` lint of the
 workflow itself, and a coverage gate.
 
 ## Design docs
 
-The intended scope reaches far beyond the current v0.1 milestone. Start
-with [`docs/design/overview.md`](docs/design/overview.md) for goals,
+The intended scope reaches beyond the current v0.3 milestone (multi-agent
+adapters, signed plugins, `dataflow.basic`, …). Start with
+[`docs/design/overview.md`](docs/design/overview.md) for goals,
 non-goals, and an index of the design notes (architecture, decision
 model, policy packs, config and plugins, CLI and hook integration, audit
-log, roadmap).
+log, testing, roadmap).
 
 ## License
 
