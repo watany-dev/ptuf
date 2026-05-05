@@ -501,6 +501,15 @@ fn build_codex_status(config_path: Option<&Path>, hooks_path: Option<&Path>) -> 
         Err(e) => return CodexState::InvalidConfig(e.to_string()),
     };
 
+    let hooks_enabled = config_doc["features"]
+        .as_table_like()
+        .and_then(|table| table.get("codex_hooks"))
+        .and_then(|item| item.as_bool())
+        == Some(true);
+    if !hooks_enabled {
+        return CodexState::HooksDisabled;
+    }
+
     let hooks_body = match fs::read_to_string(hooks_path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return CodexState::HooksMissing,
@@ -510,15 +519,6 @@ fn build_codex_status(config_path: Option<&Path>, hooks_path: Option<&Path>) -> 
         Ok(v) => v,
         Err(e) => return CodexState::InvalidHooks(e.to_string()),
     };
-
-    let hooks_enabled = config_doc["features"]
-        .as_table_like()
-        .and_then(|table| table.get("codex_hooks"))
-        .and_then(|item| item.as_bool())
-        == Some(true);
-    if !hooks_enabled {
-        return CodexState::HooksDisabled;
-    }
 
     let Some(arr) = hooks_value
         .pointer("/hooks/PreToolUse")
@@ -1077,6 +1077,19 @@ rules:
         let dir = workdir("codex-disabled");
         fs::write(dir.join("config.toml"), "[features]\ncodex_hooks = false\n").unwrap();
         fs::write(dir.join("hooks.json"), r#"{"hooks":{"PreToolUse":[]}}"#).unwrap();
+        let state = build_codex_status(
+            Some(&dir.join("config.toml")),
+            Some(&dir.join("hooks.json")),
+        );
+        assert!(matches!(state, CodexState::HooksDisabled));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_hooks_disabled_does_not_parse_hooks_file() {
+        let dir = workdir("codex-disabled-invalid-hooks");
+        fs::write(dir.join("config.toml"), "[features]\ncodex_hooks = false\n").unwrap();
+        fs::write(dir.join("hooks.json"), "{not json").unwrap();
         let state = build_codex_status(
             Some(&dir.join("config.toml")),
             Some(&dir.join("hooks.json")),

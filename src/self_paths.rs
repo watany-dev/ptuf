@@ -42,6 +42,7 @@ impl ProtectedKind {
 /// guardrail-bypass attempt.
 #[derive(Debug, Clone, Default)]
 pub struct ProtectedPaths {
+    pub repo_root: Option<PathBuf>,
     pub binary: Option<PathBuf>,
     pub configs: Vec<PathBuf>,
     pub plugins: Vec<PathBuf>,
@@ -150,6 +151,7 @@ impl ProtectedPaths {
         }
 
         Self {
+            repo_root: repo_root.map(Path::to_path_buf),
             binary: std::env::current_exe().ok(),
             configs,
             plugins: config.plugin_paths.clone(),
@@ -162,8 +164,25 @@ impl ProtectedPaths {
     /// Classify a `HookInput` against the protected set, returning the
     /// matched labels. Empty slice means "no self-protection match".
     pub fn classify_input(&self, input: &HookInput) -> Vec<ProtectedKind> {
+        let paths = crate::facts::path::extract_all(input);
+        self.classify_input_with_paths(input, &paths)
+    }
+
+    /// Variant used by the engine after it has already extracted path
+    /// facts, avoiding a second scan of large `apply_patch` payloads.
+    pub fn classify_input_with_paths(
+        &self,
+        input: &HookInput,
+        paths: &[crate::facts::path::FilePath],
+    ) -> Vec<ProtectedKind> {
         let mut out = Vec::new();
-        let candidates = candidate_targets(input);
+        let cwd = if self.repo_root.is_none() {
+            std::env::current_dir().ok()
+        } else {
+            None
+        };
+        let base_dir = self.repo_root.as_deref().or(cwd.as_deref());
+        let candidates = candidate_targets(input, paths, base_dir);
         for cand in &candidates {
             if let Some(kind) = self.match_path(cand)
                 && !out.contains(&kind)
@@ -214,20 +233,29 @@ fn path_matches(candidate: &Path, target: &Path) -> bool {
     if candidate == target {
         return true;
     }
-    if candidate.is_relative() && target.ends_with(candidate) {
-        return true;
-    }
     match (candidate.canonicalize(), target.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
 }
 
-fn candidate_targets(input: &HookInput) -> Vec<PathBuf> {
+fn candidate_targets(
+    input: &HookInput,
+    paths: &[crate::facts::path::FilePath],
+    base_dir: Option<&Path>,
+) -> Vec<PathBuf> {
     let mut out = Vec::new();
     // Edit / Write / Read all expose `file_path`.
-    for fp in crate::facts::path::extract_all(input) {
-        out.push(fp.absolute);
+    for fp in paths {
+        if fp.absolute.is_relative() {
+            if let Some(base) = base_dir {
+                out.push(base.join(&fp.absolute));
+            } else {
+                out.push(fp.absolute.clone());
+            }
+        } else {
+            out.push(fp.absolute.clone());
+        }
     }
     // Bash invocations carry destinations as positional args; collect
     // every positional that looks like a path. Don't try to interpret
@@ -252,7 +280,11 @@ fn candidate_targets(input: &HookInput) -> Vec<PathBuf> {
                 if a == head {
                     continue;
                 }
-                out.push(PathBuf::from(a));
+                out.push(crate::facts::path::resolve_with_env(
+                    a,
+                    base_dir,
+                    &crate::config::scope::SystemEnv,
+                ));
             }
         }
     }
@@ -382,6 +414,20 @@ mod tests {
         let labels = p.classify_input(&input);
         assert!(labels.contains(&ProtectedKind::CodexSettings));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn classify_does_not_match_bare_relative_name_by_suffix() {
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        let input = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Update File: settings.json\n*** End Patch\n"
+            }),
+        };
+        assert!(p.classify_input(&input).is_empty());
     }
 
     #[test]

@@ -232,18 +232,17 @@ fn append_hook(root: &mut Value, hooks_path: &Path, command: &str) -> Result<(),
 }
 
 fn ensure_hooks_enabled(doc: &mut DocumentMut) -> bool {
-    if !doc.as_table().contains_key("features") || !doc["features"].is_table() {
+    if !doc.as_table().contains_key("features") || doc["features"].as_table_like_mut().is_none() {
         doc["features"] = Item::Table(Table::new());
     }
-    let already_enabled = doc["features"]
-        .as_table_like()
-        .and_then(|table| table.get("codex_hooks"))
-        .and_then(|item| item.as_bool())
-        == Some(true);
+    let Some(features) = doc["features"].as_table_like_mut() else {
+        return false;
+    };
+    let already_enabled = features.get("codex_hooks").and_then(|item| item.as_bool()) == Some(true);
     if already_enabled {
         return false;
     }
-    doc["features"]["codex_hooks"] = value(true);
+    features.insert("codex_hooks", value(true));
     true
 }
 
@@ -453,6 +452,55 @@ mod tests {
         assert_eq!(outcome.status, InstallStatus::Installed);
         assert_eq!(before_hooks, read(&targets.hooks_path));
         assert!(read(&targets.config_path).contains("codex_hooks = true"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_preserves_inline_feature_table_entries() {
+        let dir = workdir("inline-features");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        fs::write(
+            &targets.hooks_path,
+            serde_json::to_string_pretty(&json!({
+                "hooks": {
+                    "PreToolUse": [{
+                        "matcher": DEFAULT_MATCHER,
+                        "hooks": [{
+                            "type": "command",
+                            "command": "/x/ptuf hook codex"
+                        }]
+                    }]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            &targets.config_path,
+            "features = { approval_policy = true, codex_hooks = false }\n",
+        )
+        .unwrap();
+
+        let outcome = install(&targets, "/x/ptuf", false).unwrap();
+
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        let doc = read(&targets.config_path).parse::<DocumentMut>().unwrap();
+        let features = doc["features"].as_table_like().unwrap();
+        assert_eq!(
+            features
+                .get("approval_policy")
+                .and_then(|item| item.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            features.get("codex_hooks").and_then(|item| item.as_bool()),
+            Some(true)
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
