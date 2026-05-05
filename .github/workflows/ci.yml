@@ -16,6 +16,7 @@ env:
 
 jobs:
   fmt:
+    name: Format check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -28,6 +29,7 @@ jobs:
         run: cargo fmt -- --check
 
   lint:
+    name: Clippy + doc warnings
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -43,6 +45,7 @@ jobs:
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
   test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -54,6 +57,7 @@ jobs:
         run: cargo test
 
   coverage:
+    name: Coverage (tarpaulin)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -74,6 +78,7 @@ jobs:
             -- --test-threads=1
 
   msrv:
+    name: MSRV check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -85,6 +90,7 @@ jobs:
         run: cargo check --all-targets
 
   actionlint:
+    name: actionlint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -96,6 +102,7 @@ jobs:
         run: ./actionlint -color
 
   zizmor:
+    name: zizmor
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -110,6 +117,7 @@ jobs:
           version: 1.24.1
 
   security:
+    name: cargo-deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

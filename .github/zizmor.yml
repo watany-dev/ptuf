@@ -1,0 +1,10 @@
+# zizmor の audits 設定。意図的に suppress している項目のみ列挙する。
+# https://docs.zizmor.sh/configuration/
+
+rules:
+  # dtolnay/rust-toolchain は SHA ピンで運用しており supply-chain 観点での
+  # 代替動機が乏しい。rustup スクリプト化は ergonomic 後退と回帰リスクが
+  # 見合わないため維持する。
+  superfluous-actions:
+    ignore:
+      - ci.yml
