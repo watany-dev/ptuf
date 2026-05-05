@@ -15,6 +15,7 @@ use crate::audit::{AuditSink, JsonlSink, NoopSink, redact_strict};
 use crate::config::{self, Allowlist, Config, ConfigError, Mode, PackOverride, RedactionMode};
 use crate::decision::{Decision, Severity, aggregate};
 use crate::facts;
+use crate::facts::project::ProjectFacts;
 use crate::hook_input::HookInput;
 use crate::plugin::{PluginError, PluginSet};
 use crate::rules::{self, ConfigRule};
@@ -34,6 +35,10 @@ pub struct Engine {
     /// Built once at constructor time so audit records do not pay a
     /// formatting cost per `decide` call.
     plugin_versions: Vec<String>,
+    /// Project-level facts (lock-file kinds, current branch, protected
+    /// flag) collected once at construction so per-decide evaluation
+    /// stays I/O-free.
+    project_facts: ProjectFacts,
 }
 
 /// Result of [`Engine::decide`].
@@ -105,6 +110,7 @@ impl Engine {
         let audit_sink = audit_sink_from_config(&config);
         let protected = ProtectedPaths::collect(repo_root, &config);
         let plugin_versions = compute_plugin_versions(&plugins);
+        let project_facts = facts::project::collect(repo_root, &config.protected_branches);
         Ok(Self {
             config,
             plugins,
@@ -113,6 +119,7 @@ impl Engine {
             protected,
             agent: "unknown",
             plugin_versions,
+            project_facts,
         })
     }
 
@@ -140,6 +147,7 @@ impl Engine {
         let audit_sink = audit_sink_from_config(&config);
         let protected = ProtectedPaths::collect(None, &config);
         let plugin_versions = compute_plugin_versions(&plugins);
+        let project_facts = facts::project::collect(None, &config.protected_branches);
         Ok(Self {
             config,
             plugins,
@@ -148,6 +156,7 @@ impl Engine {
             protected,
             agent: "unknown",
             plugin_versions,
+            project_facts,
         })
     }
 
@@ -157,6 +166,7 @@ impl Engine {
     pub(crate) fn with_components(config: Config, plugins: PluginSet) -> Self {
         let protected = ProtectedPaths::collect(None, &config);
         let plugin_versions = compute_plugin_versions(&plugins);
+        let project_facts = facts::project::collect(None, &config.protected_branches);
         Self {
             config,
             plugins,
@@ -165,6 +175,7 @@ impl Engine {
             protected,
             agent: "unknown",
             plugin_versions,
+            project_facts,
         }
     }
 
@@ -208,6 +219,7 @@ impl Engine {
     pub fn decide(&self, input: &HookInput) -> Outcome {
         let mut facts = facts::extract(input);
         facts.protected = self.protected.classify_input(input);
+        facts.project = self.project_facts.clone();
         let now = SystemTime::now();
         let mut allowlist_hits: Vec<&str> = Vec::new();
         let mut decisions: Vec<Decision> = Vec::new();

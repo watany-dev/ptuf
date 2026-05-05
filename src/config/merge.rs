@@ -51,6 +51,9 @@ fn apply(acc: &mut Config, layer: MergeLayer) {
     if let Some(r) = layer.audit_redaction {
         acc.audit.redaction = r;
     }
+    if let Some(branches) = layer.protected_branches {
+        acc.protected_branches = branches;
+    }
 }
 
 fn merge_pack_override(into: &mut PackOverride, from: PackOverride) {
@@ -74,6 +77,7 @@ mod tests {
     fn pack(enabled: bool) -> RawPack {
         RawPack {
             enabled: Some(enabled),
+            protected_branches: None,
         }
     }
 
@@ -83,7 +87,15 @@ mod tests {
         assert_eq!(cfg, Config::default());
         assert_eq!(cfg.mode, Mode::Enforce);
         assert!(cfg.fail_closed);
-        assert!(cfg.pack_overrides.is_empty());
+        // Builtin default disables `core.project_hygiene` (opt-in pack);
+        // anything beyond that comes from explicit YAML.
+        assert_eq!(cfg.pack_overrides.len(), 1);
+        assert_eq!(
+            cfg.pack_overrides
+                .get("core.project_hygiene")
+                .and_then(|o| o.enabled),
+            Some(false),
+        );
         assert!(cfg.allowlists.is_empty());
         assert!(cfg.audit.path.is_none());
     }
@@ -129,7 +141,8 @@ mod tests {
             ..raw()
         };
         let cfg = merge(vec![lower, higher]);
-        assert_eq!(cfg.pack_overrides.len(), 2);
+        // 2 explicit overrides + 1 built-in default for core.project_hygiene.
+        assert_eq!(cfg.pack_overrides.len(), 3);
         assert_eq!(
             cfg.pack_overrides
                 .get("core.network")

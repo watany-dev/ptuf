@@ -67,12 +67,14 @@ packs:
             "core.network".to_string(),
             crate::config::schema::RawPack {
                 enabled: Some(false),
+                protected_branches: None,
             },
         );
         expected.insert(
             "core.filesystem".to_string(),
             crate::config::schema::RawPack {
                 enabled: Some(true),
+                protected_branches: None,
             },
         );
         assert_eq!(raw.packs, expected);

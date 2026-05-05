@@ -53,7 +53,9 @@
 
 ### v0.4 — 多 adapter と運用
 
-- `core.project_hygiene`
+- `core.project_hygiene` v1 (実装済み): lock-mismatch (pnpm / uv) +
+  protected-branch destructive git。default は disabled (opt-in)。
+  generated-file 検出 / project-specific forbidden command は今後
 - `dataflow.basic` facts (同一 transcript 内の co-occur を超えた追跡)
 - MCP tool 対応 — fact extraction 完了 (`mcp__*` の generic
   `path` / `url` / `content` キー抽出)。専用 rule pack は今後

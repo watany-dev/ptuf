@@ -370,3 +370,97 @@ fn audit_jsonl_carries_agent_compat_for_compat_mode() {
     assert!(line.contains("\"agent\":\"compat\""), "line: {line}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn project_hygiene_denies_npm_install_when_pnpm_lock_present_and_pack_enabled() {
+    let dir =
+        std::env::temp_dir().join(format!("ptuf-hyg-pnpm-{}-{}", std::process::id(), line!()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+    std::fs::write(dir.join("pnpm-lock.yaml"), "").expect("write lockfile");
+    std::fs::write(
+        dir.join(".ptuf.yaml"),
+        "packs:\n  core.project_hygiene:\n    enabled: true\n",
+    )
+    .expect("write yaml");
+
+    let mut child = binary()
+        .args(["eval", "--tool", "Bash", "npm install lodash"])
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("core.project_hygiene.lock-mismatch-pnpm"),
+        "stderr was: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn project_hygiene_allows_npm_install_when_pack_disabled_by_default() {
+    // No `.ptuf.yaml` ⇒ pack stays at the default (disabled), so even
+    // with a pnpm-lock.yaml present the rule must not fire.
+    let dir = std::env::temp_dir().join(format!(
+        "ptuf-hyg-default-off-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+    std::fs::write(dir.join("pnpm-lock.yaml"), "").expect("write lockfile");
+
+    let mut child = binary()
+        .args(["eval", "--tool", "Bash", "npm install lodash"])
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(output.status.code(), Some(0));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn project_hygiene_denies_destructive_git_on_protected_branch() {
+    let dir = std::env::temp_dir().join(format!(
+        "ptuf-hyg-protected-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+    std::fs::write(dir.join(".git").join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+    std::fs::write(
+        dir.join(".ptuf.yaml"),
+        "packs:\n  core.project_hygiene:\n    enabled: true\n",
+    )
+    .expect("write yaml");
+
+    let mut child = binary()
+        .args(["eval", "--tool", "Bash", "git reset --hard HEAD~1"])
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("core.project_hygiene.protected-branch-destructive-git"),
+        "stderr was: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
