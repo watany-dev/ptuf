@@ -1,6 +1,6 @@
 [package]
 name = "ptuf"
-version = "0.4.0"
+version = "0.0.1"
 edition = "2024"
 rust-version = "1.93.0"
 license = "Apache-2.0"
@@ -32,3 +32,8 @@ proptest = { version = "1", default-features = false, features = ["std", "bit-se
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

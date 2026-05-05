@@ -14,7 +14,7 @@ stderr, and agent-specific `hookSpecificOutput` JSON.
 
 ## Status
 
-v0.4.0 includes:
+v0.0.1 ships:
 
 - Built-in packs for filesystem, network, secrets, git, self-protection, and
   opt-in project hygiene
@@ -34,14 +34,31 @@ v0.4.0 includes:
 
 ## Install
 
-Build from the current checkout:
+### Pre-built binaries (recommended)
+
+Linux / macOS:
 
 ```bash
-cargo build --release
-make build
+curl -LsSf https://github.com/watany-dev/ptuf/releases/latest/download/ptuf-installer.sh | sh
 ```
 
-Install the binary into Cargo's bin directory:
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/latest/download/ptuf-installer.ps1 | iex"
+```
+
+Or download an archive for your platform from
+[GitHub Releases](https://github.com/watany-dev/ptuf/releases) and place the
+`ptuf` binary on your `PATH`.
+
+### From crates.io
+
+```bash
+cargo install ptuf
+```
+
+### From source
 
 ```bash
 cargo install --path .
