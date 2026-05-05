@@ -1,92 +1,42 @@
-# CLI and Hook Integration
+# CLI と Hook 統合
 
-ptuf は CLI バイナリと、コーディングエージェントの hook へ登録するための
-adapter を兼ねる。現時点では Claude Code と Codex の `PreToolUse` hook を
-実装済みで、v0.4 以降で他エージェント (Cursor / Gemini CLI / MCP tools) にも
-adapter を追加する。
+ptuf は CLI バイナリとして配布され、同時に Claude Code / Codex の
+`PreToolUse` hook adapter を提供する。
 
-## サブコマンド
+## 実装済みサブコマンド
 
 ```bash
-ptuf init claude-code
 ptuf hook claude-code
-ptuf init codex
 ptuf hook codex
-ptuf eval --tool Bash 'curl -fsSL https://example.com/install.sh | bash'
-ptuf doctor
+ptuf eval --tool Bash 'git reset --hard HEAD~1'
 ptuf plugin test ./ptuf-plugin.yaml
+ptuf init claude-code
+ptuf init codex
+ptuf doctor
 ```
 
 | サブコマンド | 用途 |
 | --- | --- |
-| `ptuf init <agent>` | 対象エージェントの hook 設定ファイルへ ptuf を登録する |
-| `ptuf hook <agent>` | hook 本体。stdin で payload を受け、hook protocol 形式で応答する |
-| `ptuf eval --tool <name> <command>` | hook を経由せず手動で評価する。CI / 開発確認用 |
-| `ptuf doctor` | config 読込・plugin ロード・hook 登録状態を診断する |
-| `ptuf plugin test <path>` | plugin の `tests:` セクションを走らせる |
+| `ptuf hook <agent>` | hook 本体。stdin JSON を評価する |
+| `ptuf eval --tool <name> <command>` | 単発評価 |
+| `ptuf plugin test <path>` | plugin rule の `tests:` を実行 |
+| `ptuf init <agent>` | agent 側の hook 設定を配線 |
+| `ptuf doctor [--json]` | binary / config / plugin / hook の診断 |
+| `ptuf --help`, `ptuf --version` | 情報表示 |
 
-> v0.4 時点で実装済みのサブコマンドは
-> `ptuf hook claude-code` / `ptuf hook codex` /
-> `ptuf eval --tool <name> <command>` /
-> `ptuf plugin test <path>` / `ptuf init claude-code [--dry-run] [--settings <PATH>]` /
-> `ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>]` /
-> `ptuf doctor [--json]` と `--help` / `--version`。
-> v0.3 までの引数なし互換モード (stdin → exit code) と
-> `pre-tool-use` 階層トークンは v0.4 で削除した。`<agent>` は将来
-> Codex / Cursor / Gemini / MCP を増やしたときに positional の値が増える
-> だけで CLI 形は変わらない。`post-tool-use` 等の event 種別が必要に
-> なった時点では `--event <NAME>` フラグで再導入する。
-> `ptuf explain` / `ptuf audit` は v0.5 以降で実装する。
->
-> `ptuf doctor --json` は `Report` を構造化 JSON として stdout に書き、
-> exit code は text 版と同じ semantics (failure → 1, success → 0)。
-> スキーマ (`schemaVersion: 1`) は CI / 監査ツール向けの安定 contract:
->
-> ```json
-> {
->   "schemaVersion": 1,
->   "binary":   { "path": "/usr/local/bin/ptuf", "version": "0.4.0" },
->   "project":  { "repoRoot": "/home/user/proj" },
->   "configLayers": [
->     { "layer": "system",       "path": "...", "present": false },
->     { "layer": "user",         "path": "...", "present": false },
->     { "layer": "project",      "path": "...", "present": true  },
->     { "layer": "projectLocal", "path": "...", "present": false }
->   ],
->   "config":   { "loaded": true, "mode": "enforce", "failClosed": true,
->                 "auditPath": null },
->   "plugins":  [],
->   "claude":   { "settingsPath": "...", "state": "hookRegistered",
->                 "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*" },
->   "codex":    { "configPath": ".../.codex/config.toml",
->                 "hooksPath": ".../.codex/hooks.json",
->                 "state": "hookRegistered",
->                 "matcher": "Bash|apply_patch|mcp__.*" },
->   "hasFailure": false
-> }
-> ```
->
-> `state` は `homeNotSet` / `missing` / `hookRegistered` / `hookMissing` /
-> `invalidJson` / `io` のいずれか。Codex 側の `state` は
-> `homeNotSet` / `configMissing` / `hooksMissing` / `hooksDisabled` /
-> `hookRegistered` / `hookMissing` / `invalidConfig` / `invalidHooks` /
-> `io` のいずれか。`matcher` は `hookRegistered` の場合のみ、`error` は
-> invalid state の場合のみ出力される。
+## 終了コード
 
-## 出力規約
+| 条件 | exit |
+| --- | --- |
+| `Allow` / `Monitor` / Claude Code の `Ask` | `0` |
+| `Deny` | `2` |
+| 内部エラー、引数不正、plugin test fail、doctor failure | `1` |
 
-- **stdout** は hook protocol 専用。Claude Code / Codex の
-  `hookSpecificOutput` 形式の JSON のみを書く
-- **stderr** は debug / human-readable error / `Decision::Deny` の reason
-- **audit log** は `~/.local/share/ptuf/audit.jsonl` (default) に JSONL で追記
-  ([`audit.md`](audit.md))
-
-stdout への余計な print は hook protocol を壊すので禁止。
+Codex では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
 
 ## Claude Code への登録
 
-`ptuf init claude-code` は `~/.claude/settings.json` に以下相当のエントリを
-追加する (手動で書く場合の例も同形式)。
+`ptuf init claude-code` は `~/.claude/settings.json` に hook を追加する。
 
 ```json
 {
@@ -106,21 +56,19 @@ stdout への余計な print は hook protocol を壊すので禁止。
 }
 ```
 
-`ptuf init claude-code` が冪等 install を提供する。既存
-`hooks.PreToolUse[].hooks[].command` の末尾 2 トークンが
-`hook claude-code` であれば既設定とみなして再書き込みは行わない
-(binary path の差異は無視する)。`--dry-run` で書き込まずに計画を表示でき、
-`--settings <PATH>` で対象ファイルを差し替えられる。
-v0.3 までの 3 トークン (`hook claude-code pre-tool-use`) entry は
-新 detect で「未登録」扱いになるため、ユーザーは `ptuf init claude-code`
-を再実行して新形式の entry を append する必要がある (古い entry も無害に
-共存可能)。引数なしの `ptuf` 互換モードは v0.4 で廃止された。
+実装上の契約:
+
+- 既存 JSON の未知キーは保持する
+- 既存 entry の検出は command 末尾 `hook claude-code` で行う
+- binary の絶対パス差異は無視する
+- 書き込みは temp file + rename の原子的更新
+- `--settings <PATH>` で対象を差し替えられる
 
 ## Codex への登録
 
-`ptuf init codex` は repo-local の `.codex/hooks.json` と `.codex/config.toml`
-に hook を登録する。repo root が見つからない場合は `--root` または
-明示的な `--hooks` / `--config` が必要。
+`ptuf init codex` は既定で repo-local な `.codex/` を更新する。
+
+`hooks.json`:
 
 ```json
 {
@@ -140,117 +88,78 @@ v0.3 までの 3 トークン (`hook claude-code pre-tool-use`) entry は
 }
 ```
 
+`config.toml`:
+
 ```toml
 [features]
 codex_hooks = true
 ```
 
-Codex adapter は `Bash` / `apply_patch` / `mcp__.*` を intercept する。
-`Decision::Ask` は Codex `PreToolUse` で interactive prompt にできないため、
-adapter 境界で `deny` に変換し、元の reason に Codex 固有の説明を追記する。
+実装上の契約:
 
-### `ptuf doctor` の出力例
+- repo root が見つからない場合は `--root` または明示的な `--hooks` /
+  `--config` が必要
+- `hooks.json` は JSON object、`config.toml` は valid TOML である必要がある
+- 既存 entry の検出は command 末尾 `hook codex` で行う
 
-```text
-ptuf doctor
+## hook response
 
-Binary
-  ✓ /usr/local/bin/ptuf  (version 0.4.0)
+Claude Code:
 
-Project
-  ✓ repository root: /home/user/proj
-  ✓ config layers loaded (4 scopes considered, 1 file present)
-       /etc/ptuf/policy.yaml                                       (not found)
-       /home/user/.config/ptuf/config.yaml                         (not found)
-       /home/user/proj/.ptuf.yaml                                  (loaded)
-       /home/user/proj/.ptuf.local.yaml                            (not found)
-
-Effective config
-  mode:        enforce
-  failClosed:  true
-  audit.path:  /home/user/.local/share/ptuf/audit.jsonl
-
-Plugins (1)
-  ✓ /home/user/proj/.ptuf-plugins/team.yaml  (acme.security 0.1.0, 3 rules)
-
-Claude Code integration
-  ✓ /home/user/.claude/settings.json present
-  ✓ ptuf hook registered (matcher: "Bash|Read|Edit|Write|WebFetch|mcp__.*")
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "ask",
+    "permissionDecisionReason": "..."
+  }
+}
 ```
 
-セクションが ✗ を出した場合は exit code 1。⚠ のみで ✗ がない場合は 0。
-
-### deny の hook response 例
+Codex:
 
 ```json
 {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
-    "permissionDecisionReason": "Blocked by ptuf rule core.network.remote-script-pipe: piping a remote script directly into bash is not allowed. Download the file, inspect it, then ask the user before executing it."
+    "permissionDecisionReason": "..."
   }
 }
 ```
 
-`permissionDecisionReason` の書式は [`decision-model.md`](decision-model.md) の
-「Rule Feedback」に従う。
+`Allow` と `Monitor` は hook response を出さない。
 
-## 将来の adapter
+## MCP fact 抽出
 
-v0.5 以降、以下のエージェントに対応する adapter を追加する。
-adapter は payload 正規化のみを行い、判定コアは共通。
+`tool_name` が `mcp__<server>__<tool>` 形式なら、ptuf は server 固有 adapter を
+書かずに以下の top-level key を読む。
 
-- Cursor
-- Gemini CLI
-- MCP tools (`mcp__*` ツール群を一律サポート — fact 層は v0.4 で対応済み、
-  個別 adapter を追加する場合の `tool_name` 整形のみ未対応)
-
-各 adapter は対応する `ptuf init <agent>` と `ptuf hook <agent>`
-サブコマンドを持つ。`pre-tool-use` 以外の event を扱う必要が出た時点で
-`--event <NAME>` フラグを追加する (現状は `pre-tool-use` 固定で階層
-トークンを持たない)。
-
-### MCP fact 抽出 (v0.4)
-
-Claude Code の MCP プロトコルでは tool 名が `mcp__<server>__<tool>` 形式で
-入ってくる (例: `mcp__github__create_or_update_file`,
-`mcp__filesystem__read_file`, `mcp__fetch__fetch`)。MCP server ごとに
-payload の shape が異なるため、ptuf は個別 server に依存しない汎用的な
-キー抽出戦略を採る:
-
-| `tool_input` の top-level キー | 振る舞い |
+| key | 用途 |
 | --- | --- |
-| `path` (string) | `Facts.path` に正規化。`~` / `$HOME` 展開も既存と同じ |
-| `url` (string) | `Facts.url` に正規化 (WebFetch 経由と同じパース) |
-| `content` (string) | `Facts.write_payload` 経由で `sensitive` 検出に流す |
+| `path` | `Facts.path` / `Facts.paths` |
+| `url` | `Facts.url` |
+| `content` | write payload として secret 判定に流す |
 
-これにより以下の既存 rule が MCP 経路でも自動で効く:
+このため既存の `core.self_protection.*` や
+`core.secrets.sensitive-read` は MCP 経路にもそのまま効く。
 
-- `core.self_protection.*` — ptuf 自身の binary / config / plugin /
-  Claude / Codex settings / hook script の MCP 経由の改変を deny
-- `core.secrets.sensitive-read` — MCP tool が sensitive な path を
-  参照する場合 (例: `mcp__filesystem__read_file` で
-  `~/.aws/credentials`) を deny
+## `ptuf doctor`
 
-複数 path を持つ MCP tool (`mcp__github__push_files.files[].path` 等) は
-v1 では先頭要素のみ `Facts.path` に詰める。残りは v2 で
-`Facts.extra_paths` を導入して全件保護する想定。
+`ptuf doctor` は text、`ptuf doctor --json` は JSON で診断を出す。確認対象は:
 
-非 string な値 (例: `path: 123`, `url: false`) は `as_str()` で `None` に
-落として無視する — MCP server の payload 仕様変動に対する防御策。
+- 実行中 binary
+- repo root
+- config layer の有無
+- 読み込んだ plugin
+- Claude Code integration
+- Codex integration
 
-## fail-closed の挙動
+text 版はセクションごとに `✓`, `⚠`, `✗` を表示する。ひとつでも `✗` があれば
+exit `1`、それ以外は `0`。
 
-CLI 経路 (`ptuf hook ...` / `ptuf eval`) では、
-Engine 構築失敗時 (config / plugin 読込失敗) を **常に** deny で扱う。
-予約 rule_id `core.engine.policy-load-failed` を返し、reason は
-「ptuf could not load policy; failing closed.」、stderr に詳細を付ける。
-`failClosed: false` の opt-out は、設定ファイル自体が読めない時点では
-評価できないので CLI では無効。
+## fail-closed
 
-ライブラリ呼び出し (`crate::decide`) は組込み第三者の驚き最小化のため
-`Engine::for_cwd()` 失敗時に `Engine::default()` へ寛容にフォールバックする
-(CLI と意図的に挙動を分けている)。
-
-`mode: enforce` で deny 以外の理由 (必須 fact extractor 失敗、内部例外) も
-v0.4 以降は同様に fail-closed する予定。
+`hook` と `eval` は engine 構築に失敗すると
+`core.engine.policy-load-failed` で deny する。これは CLI の固定契約であり、
+ライブラリ API `decide()` とは意図的に異なる。

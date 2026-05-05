@@ -1,17 +1,17 @@
 # Audit Log
 
-ptuf は判定の証跡を JSONL (1 行 1 JSON) で残す。secret / token / key /
-credential らしき値は保存前に redact する。
+ptuf は判定結果を JSONL で記録できる。1 行が 1 レコードで、既定では strict
+redaction を通してから書き込む。
 
 ## デフォルトパス
 
-```
+```text
 ~/.local/share/ptuf/audit.jsonl
 ```
 
-`audit.path` で上書き可能 ([`config-and-plugins.md`](config-and-plugins.md))。
+`audit.enabled: false` で無効化でき、`audit.path` で上書きできる。
 
-## レコードスキーマ
+## スキーマ
 
 ```json
 {
@@ -30,60 +30,50 @@ credential らしき値は保存前に redact する。
 }
 ```
 
-| フィールド | 型 | 内容 |
+| フィールド | 型 | 説明 |
 | --- | --- | --- |
-| `schemaVersion` | u32 | レコード schema のバージョン。現状は常に `1`。前方互換性が崩れた場合のみ +1 する |
-| `timestamp` | RFC3339 string | UTC で記録 |
-| `event` | string | `PreToolUse` / `PostToolUse` 等 |
-| `tool` | string | `tool_name` |
+| `schemaVersion` | `u32` | 現在は常に `1` |
+| `timestamp` | RFC3339 string | UTC 時刻 |
+| `event` | string | 現在は常に `PreToolUse` |
+| `tool` | string | `HookInput.tool_name` |
 | `decision` | string | `allow` / `monitor` / `ask` / `deny` |
-| `ruleId` | string \| null | 一致した rule。`allow` decision では省略 |
+| `ruleId` | string \| null | `Allow` 以外で対応 rule がある場合 |
 | `severity` | string \| null | `info` / `low` / `medium` / `high` / `critical` |
-| `commandRedacted` | string | redaction 後の command 文字列 |
-| `projectRoot` | string \| null | 検出された repo root |
-| `mode` | string | その時点の `enforce` / `monitor` / `observe` |
-| `modeDemoted` | bool | `true` のとき `mode: monitor` / `observe` で `deny` が `monitor` に降格された (フィールドは `false` のとき省略) |
-| `agent` | string | 呼び出し経路。`claude-code` / `codex` (hook) / `cli` (`eval`) |
-| `pluginVersions` | string[] | ロード済み plugin の `name@version` 配列。空のときは省略 |
-| `allowlistId` | string \| null | allowlist で rule が抑制された結果として `Allow` になった場合に、最初に hit した allowlist の `id`。`Deny` / `Monitor` / `Ask` のときは常に省略。複数の allowlist エントリが同じ decision に効いていた場合は最初に hit した id だけが記録される (将来 v2 で配列化を検討) |
+| `commandRedacted` | string | redaction 後の command または `(tool=<name>)` |
+| `projectRoot` | string \| null | repo root が分かった場合 |
+| `mode` | string | `enforce` / `monitor` / `observe` |
+| `modeDemoted` | bool | deny が monitor に降格された場合のみ `true` で出力 |
+| `allowlistId` | string \| null | allowlist suppression で `Allow` になった場合のみ |
+| `agent` | string | `claude-code` / `codex` / `cli` / `unknown` |
+| `pluginVersions` | string[] | 読み込んだ plugin の `name@version`。空なら省略 |
 
-## 記録対象の制御
+## 記録条件
 
 ```yaml
 audit:
+  enabled: true
   includeAllowed: false
   includeDenied: true
   redaction: strict
 ```
 
-| キー | 既定 | 意味 |
-| --- | --- | --- |
-| `includeAllowed` | `false` | `allow` decision を記録するか |
-| `includeDenied` | `true` | `deny` decision を記録するか |
-| `redaction` | `strict` | redaction の積極度 |
-
-`monitor` / `ask` は常に記録される。
+- `Allow` は `includeAllowed: true` のときだけ記録
+- `Deny` は `includeDenied: true` のときだけ記録
+- `Monitor` と `Ask` は常に記録
 
 ## Redaction
 
-`redaction: strict` (default) では以下を `***` 等に置換する。
+`redaction: strict` では以下を伏せる。
 
-- 環境変数代入のうち、key 名に `TOKEN` / `KEY` / `SECRET` / `PASSWORD` /
-  `CREDENTIAL` / `PRIVATE` を含むものの value
-- 一般的な token 形式 (例: `ghp_...`, `sk-...`, AWS access key の `AKIA...`、
-  JWT の 3 セグメント)
-- HTTP basic auth 形式 (`https://user:pass@host/...` の `pass` 部分)
-- PEM ヘッダ (`-----BEGIN ... PRIVATE KEY-----`) を含む blob
+- `TOKEN`, `KEY`, `SECRET`, `PASSWORD` などを含む env assignment の値
+- `ghp_...`, `sk-...`, `AKIA...`, JWT などの代表的 token
+- URL 中の basic auth password
+- PEM blob
 
-`redaction: off` は明示的に選んだ場合のみ動作する。本番運用では使わない。
+`redaction: off` も実装されているが、意図的な opt-in 用である。
 
-## ローテーション
+## 運用メモ
 
-ファイルサイズや日付ベースのローテーションは ptuf 自体では行わず、OS の
-`logrotate` 等の外部ツールに任せる。stdout / stderr ではなくファイル書き込み
-なので tee やパイプを挟む必要は無い。
-
-## 閲覧
-
-`ptuf audit` で audit log を tail し、`--rule`, `--decision`, `--since` 等で
-フィルタする ([`cli-and-hooks.md`](cli-and-hooks.md))。
+- writer は JSONL を追記するだけで、ローテーションは行わない
+- Windows では POSIX `O_APPEND` と同等の原子性を保証しないため best-effort
+- 現時点で `ptuf audit` のような専用閲覧 CLI は実装していない

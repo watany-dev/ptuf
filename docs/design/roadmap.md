@@ -1,89 +1,65 @@
-# Roadmap and Design Principles
+# Roadmap と設計原則
 
-本書は ptuf の MVP マイルストーンと、全体を貫く設計原則をまとめる。
-個別仕様は他章を参照。
+本書は、どこまで実装済みで、どこから先が将来候補かを簡潔に整理する。
 
-## MVP スコープ
+## マイルストーン整理
 
 ### v0.1 — 最小ガードレール (実装済み)
 
-判定コアの拡張と、最も重要な 3 rule + `eval` 動作確認 CLI を提供する。
-
-- `ptuf hook claude-code` (v0.3 までは `pre-tool-use` 階層と引数なし互換
-  モードも提供。v0.4 で削除し本形式に統一)
-- `ptuf eval --tool Bash '<cmd>'`、`--help` / `--version`
-- structured JSON response (Claude Code 形式の `hookSpecificOutput`)
-- `Decision` 4 variants (`allow` / `monitor` / `ask` / `deny`) と
-  `aggregate` (`deny > ask > monitor > allow`)
+- `Decision` と `aggregate`
+- `ptuf hook claude-code`
+- `ptuf eval --tool <name> <command>`
 - `core.filesystem.destructive-rm`
 - `core.network.remote-script-pipe`
 - `core.secrets.sensitive-path-to-network`
 
-### v0.2 — Plugin と Audit (実装済み)
+### v0.2 — Config / Plugin / Audit (実装済み)
 
-- fact extraction 層 (`shell.argv` / `shell.pipeline`)。組み込み 3 rule も
-  すべて facts ベースに書き換え済み
-- YAML plugin loader (`apiVersion: ptuf.dev/v1, kind: Plugin`、`when:` DSL、
-  `requires:` 検証)
-- plugin 内 `tests:` の実行 (`ptuf plugin test <path>`)
-- config scope merge (`builtin → /etc/ptuf → ~/.config/ptuf → <repo>/.ptuf.yaml
-  → <repo>/.ptuf.local.yaml`)、`mode` / `failClosed` / `packs.*.enabled` /
-  `plugins` / `allowlists` / `audit.*` を扱う
-- audit JSONL 出力 (`AuditSink` trait、`NoopSink` / `MemorySink` / `JsonlSink`)
-- redaction (strict): env token 代入、GH / OpenAI / AWS / JWT トークン、
-  HTTP basic auth、PEM blob を `***` 置換
-- `hardDeny: true` rule は下位 scope の allowlist で覆せない。
-  `expiresAt` を過ぎた allowlist は自動失効
+- layered YAML config
+- YAML plugin loader
+- `ptuf plugin test <path>`
+- audit JSONL
+- `mode`, `failClosed`, allowlist
 
-### v0.3 — Tool 拡張と self-protection (実装済み)
+### v0.3 — ツール面の拡張 (実装済み)
 
-- `Read / Edit / Write / WebFetch` tool 対応 (HookInput accessor + tool 別
-  fact extraction `path` / `url` / `sensitive_path`)
-- `core.secrets.sensitive-read` (Read/Edit 経由の credential 読取を deny)
-- `core.self_protection` 5 rule (ptuf binary / config / plugins /
-  `.claude/settings*.json` / hook script)
-- `core.git` 7 rule (force-push / force-push-with-lease / reset --hard /
-  clean -fdx / branch -D / stash clear / remote set-url)
-- `ptuf init claude-code` (`~/.claude/settings.json` 冪等 install、
-  `--dry-run` / `--settings <PATH>` flag)
-- `ptuf doctor` (Binary / Project / Effective config / Plugins /
-  Claude integration の診断レポート、`--json` 構造化出力 `schemaVersion: 1`)
-- CLI 経路の fail-closed (`core.engine.policy-load-failed`)
-- plugin DSL 4 leaf 追加: `path.filePathPrefixAny` / `url.schemeAny` /
-  `url.hostAny` / `sensitive.pathKindAny`
+- `Read` / `Edit` / `Write` / `WebFetch`
+- `core.secrets.sensitive-read`
+- `core.git` 11 rule
+- `core.self_protection` 6 rule
+- `ptuf init claude-code`
+- `ptuf doctor`
 
-### v0.4 — 多 adapter と運用
+### v0.4 — adapter / project facts / MCP (実装済み)
 
-- `core.project_hygiene` v1 (実装済み): lock-mismatch (pnpm / uv) +
-  protected-branch destructive git。default は disabled (opt-in)。
-  generated-file 検出 / project-specific forbidden command は今後
-- `dataflow.basic` facts (同一 transcript 内の co-occur を超えた追跡)
-- MCP tool 対応 — fact extraction 完了 (`mcp__*` の generic
-  `path` / `url` / `content` キー抽出)。専用 rule pack は今後
-- org policy 配布 (`/etc/ptuf/policy.yaml`)
-- 署名 / pin 付き plugin
+- `ptuf hook codex`
+- `ptuf init codex`
+- MCP top-level `path` / `url` / `content` fact 抽出
+- `project` facts (lock file, branch, protected branch)
+- `core.project_hygiene` v1
+- audit schema v1 拡張 (`agent`, `pluginVersions`, `allowlistId`)
+
+## 今後の候補
+
+現時点でコードに入っていない候補:
+
+- Cursor / Gemini など追加 adapter
+- `dataflow.basic` の強化
+- signed / pinned plugin 配布
+- generated file など、project_hygiene の追加 rule
 - optional WASM plugin runtime
-- Codex / Cursor / Gemini CLI adapter
-- audit ログの schemaVersion / agent / pluginVersions / allowlistId 追加 (実装済み)
-
-各 milestone の rule と CLI が揃った時点でリリースタグを切る。
 
 ## 設計原則
 
-- **deterministic first** — LLM による曖昧判定を default にしない。決定性のある
-  facts ベースで判断する
-- **default strong, override explicit** — 強い default を提供し、緩めるには
-  明示的な allowlist / config を要求する
-- **deny reasons must be actionable** — 止めた理由と直し方を必ず返す
-  ([`decision-model.md`](decision-model.md) の Rule Feedback)
-- **plugin rules must be testable** — plugin に `tests:` セクションを必須化し、
-  `ptuf plugin test` で検証可能にする
-- **no arbitrary executable plugins by default** — 任意 executable の plugin は
-  default で許可しない。WASM 等は v0.4 以降の opt-in
-- **stdout must remain hook-protocol clean** — debug は stderr / audit log。
-  stdout は hook protocol 専用
-- **fail closed when policy cannot be loaded in enforce mode** — `enforce` +
-  `failClosed: true` が標準
-- **ptuf must protect its own config and hook registration** — prompt injection
-  で guardrail 自体を無効化されないようにする
-  ([`policy-packs.md`](policy-packs.md) の `core.self_protection`)
+- **deterministic first**  
+  文字列や facts に基づく決定的な判定を優先する
+- **default strong, override explicit**  
+  既定は強く、緩和は config / allowlist に明示させる
+- **stdout is protocol-only**  
+  hook response 以外を stdout に混ぜない
+- **fail closed in CLI paths**  
+  policy を読めなければ `hook` / `eval` は deny する
+- **self-protection is mandatory**  
+  guardrail 自体の無効化を block する
+- **plugin rules must be testable**  
+  `tests:` と `ptuf plugin test` を前提にする
