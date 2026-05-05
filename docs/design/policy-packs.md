@@ -104,15 +104,21 @@ v0.4 で `core.project_hygiene.protected-branch-destructive-git` がこれらの
 
 末尾 4 rule は「git の品質ゲートを意図的に skip する操作」を `deny` する
 (`hardDeny: false`, `overridable: true`)。CI hot-fix など正当な必要性がある場合は
-project / user の `allowlists` で expiry 付きに通す。scope は副作用 subcommand
-(`commit / push / merge / rebase / pull / tag / am / cherry-pick / revert / fetch`)
-に絞り、`git status -c core.hooksPath=/dev/null` のように副作用ない呼び出しは
-誤検出回避で見逃す。`-n` の解釈は subcommand 依存 — `git push -n` (= `--dry-run`)
-や `git tag -n` (= 行数指定) は無害なので発火しない。bash パーサが command
-substitution / 変数展開を解釈しない (`docs/design/architecture.md` §fact extraction
-準拠) ため、`` git -c `echo core.hooksPath=/dev/null` commit `` のような文字列構築
-での隠蔽、および `export HUSKY=0; git commit` のような別 segment での env 立ては
-MVP では検出不能 (既知の限界)。
+project / user の `allowlists` で expiry 付きに通す。`git status -c
+core.hooksPath=/dev/null` のように副作用ない呼び出しは誤検出回避で見逃す。
+scope は rule ごとに副作用 subcommand に絞っている:
+
+- `no-verify`: `commit / push / merge / rebase / pull / am / cherry-pick / revert / fetch`
+- `no-gpg-sign`: `commit / merge / rebase / cherry-pick / revert / tag / am / pull`
+- `config-override-bypass` / `env-bypass`: `commit / push / merge / rebase / tag /
+  am / cherry-pick / revert / pull`
+
+`-n` の解釈は subcommand 依存 — `git push -n` (= `--dry-run`) や `git tag -n`
+(= 行数指定) は無害なので発火しない。bash パーサが command substitution / 変数展開
+を解釈しない (`docs/design/architecture.md` §fact extraction 準拠) ため、
+`` git -c `echo core.hooksPath=/dev/null` commit `` のような文字列構築での隠蔽、
+および `export HUSKY=0; git commit` のような別 segment での env 立ては MVP では
+検出不能 (既知の限界)。
 
 ## `core.self_protection`
 

@@ -1,9 +1,9 @@
 //! `core.git` pack — guards against destructive git operations.
 //!
-//! Implements the 7 rules tabled in
-//! `docs/design/policy-packs.md:83-98`. Each rule shares the
-//! [`GitRule`] adapter so the [`crate::rules::ConfigRule`] trait is
-//! implemented exactly once.
+//! Implements the 11 rules tabled in `docs/design/policy-packs.md`
+//! (7 destructive-operation rules + 4 hook/signing bypass-blockers).
+//! Each rule shares the [`GitRule`] adapter so the
+//! [`crate::rules::ConfigRule`] trait is implemented exactly once.
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;

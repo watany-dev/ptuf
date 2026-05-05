@@ -24,9 +24,12 @@ CLI の exit code との対応は次の通り。
 
 v0.2 時点で `Decision` は 4 variants (`Allow`, `Monitor { rule_id }`,
 `Ask { rule_id, reason }`, `Deny { rule_id, reason }`) を実装済み。
-組み込み 3 rule (`core.filesystem.destructive-rm` /
+v0.1 の組み込み 3 rule (`core.filesystem.destructive-rm` /
 `core.network.remote-script-pipe` /
-`core.secrets.sensitive-path-to-network`) はすべて `deny` を返すが、
+`core.secrets.sensitive-path-to-network`) はすべて `deny` を返す
+(以降の milestone で `core.git` / `core.self_protection` /
+`core.secrets.sensitive-read` 等が追加され、現在の組み込み rule 数と
+decision 分布は [`policy-packs.md`](policy-packs.md) を参照)。
 `monitor` / `ask` は plugin の `defaultDecision` で利用できるほか、
 `mode: monitor` / `mode: observe` 設定下で `deny` が `monitor` に降格される
 ことでも観測される。
@@ -60,10 +63,12 @@ scope の順序とマージ規則は [`config-and-plugins.md`](config-and-plugin
 参照。
 
 v0.2 で `ConfigRule` trait に `severity()` / `default_decision()` /
-`overridable()` / `hard_deny()` の 4 属性を導入済み。組み込み 3 rule は
-`hard_deny: true` で固定されており、下位 scope の allowlist 経由で
-覆すことはできない。`expiresAt` を過ぎた allowlist は engine 評価時に
-自動失効する。
+`overridable()` / `hard_deny()` の 4 属性を導入済み。v0.1 の組み込み 3 rule
+は `hard_deny: true` で固定されており、下位 scope の allowlist 経由で
+覆すことはできない (v0.3 以降は `core.git.force-push` /
+`core.self_protection.*` / `core.secrets.sensitive-read` も hardDeny に
+含まれる — 現状の hardDeny 集合は [`policy-packs.md`](policy-packs.md) 参照)。
+`expiresAt` を過ぎた allowlist は engine 評価時に自動失効する。
 
 ## モード
 
