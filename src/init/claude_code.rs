@@ -25,7 +25,7 @@ pub const DEFAULT_MATCHER: &str = "Bash|Read|Edit|Write|WebFetch|mcp__.*";
 /// as a ptuf PreToolUse hook. We compare token-by-token instead of
 /// checking a string suffix so we don't depend on the on-disk
 /// binary name (e.g. test binaries are named `ptuf-<hash>`).
-const COMMAND_TAIL: &[&str] = &["hook", "claude-code", "pre-tool-use"];
+pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "claude-code", "pre-tool-use"];
 
 /// Default settings file path (`$HOME/.claude/settings.json`). Returns
 /// `None` when `$HOME` is unset; callers should map that to
@@ -100,31 +100,46 @@ fn read_settings(path: &Path) -> Result<Value, InitError> {
 }
 
 fn has_existing_hook(root: &Value) -> bool {
-    let Some(arr) = root.pointer("/hooks/PreToolUse").and_then(Value::as_array) else {
-        return false;
-    };
-    for entry in arr {
-        let Some(hooks) = entry.get("hooks").and_then(Value::as_array) else {
-            continue;
-        };
-        for hook in hooks {
-            if let Some(cmd) = hook.get("command").and_then(Value::as_str)
-                && command_invokes_ptuf_hook(cmd)
-            {
-                return true;
-            }
-        }
-    }
-    false
+    pre_tool_use_commands(root)
+        .iter()
+        .any(|cmd| command_invokes_ptuf_hook(cmd))
 }
 
-fn command_invokes_ptuf_hook(cmd: &str) -> bool {
+pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
     let tokens: Vec<&str> = cmd.split_whitespace().collect();
     let n = tokens.len();
     if n < COMMAND_TAIL.len() {
         return false;
     }
     tokens[n - COMMAND_TAIL.len()..] == *COMMAND_TAIL
+}
+
+pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
+    cmd.split_whitespace().next()
+}
+
+pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
+    let Some(arr) = root.pointer("/hooks/PreToolUse").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut commands = Vec::new();
+    for entry in arr {
+        commands.extend(entry_commands(entry));
+    }
+    commands
+}
+
+pub(crate) fn entry_commands(entry: &Value) -> Vec<String> {
+    let Some(hooks) = entry.get("hooks").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut commands = Vec::new();
+    for hook in hooks {
+        if let Some(cmd) = hook.get("command").and_then(Value::as_str) {
+            commands.push(cmd.to_string());
+        }
+    }
+    commands
 }
 
 fn append_hook(root: &mut Value, settings_path: &Path, command: &str) -> Result<(), InitError> {

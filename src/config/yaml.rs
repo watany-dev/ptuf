@@ -13,10 +13,21 @@ use super::schema::RawConfig;
 /// `path` is supplied only for error context; the parser itself does
 /// not touch the filesystem.
 pub fn parse_str(path: &Path, source: &str) -> Result<RawConfig, ConfigError> {
-    serde_yaml_ng::from_str::<RawConfig>(source).map_err(|e| ConfigError::Yaml {
+    let raw = serde_yaml_ng::from_str::<RawConfig>(source).map_err(|e| ConfigError::Yaml {
         path: path.to_path_buf(),
         message: e.to_string(),
-    })
+    })?;
+    for entry in &raw.allowlists {
+        if let Some(when) = &entry.when
+            && let Err(err) = crate::plugin::dsl::compile(when)
+        {
+            return Err(ConfigError::Yaml {
+                path: path.to_path_buf(),
+                message: format!("invalid allowlist `{}` when: {err}", entry.id),
+            });
+        }
+    }
+    Ok(raw)
 }
 
 /// Read the file at `path` and parse it into a [`RawConfig`].
@@ -98,6 +109,37 @@ allowlists:
         assert_eq!(entry.applies_to.rules, vec!["core.network.unknown-post"]);
         assert_eq!(entry.expires_at.as_deref(), Some("2026-06-01T00:00:00Z"));
         assert_eq!(entry.reason.as_deref(), Some("local dev"));
+    }
+
+    #[test]
+    fn parses_rule_overrides_and_audit_enabled() {
+        let yaml = r#"
+rules:
+  core.git.reset-hard:
+    decision: deny
+    severity: critical
+audit:
+  enabled: false
+"#;
+        let raw = parse_str(&p(), yaml).expect("parse");
+        assert_eq!(raw.audit.enabled, Some(false));
+        let overlay = raw.rules.get("core.git.reset-hard").expect("overlay");
+        assert_eq!(overlay.decision, Some(crate::decision::DecisionKind::Deny));
+        assert_eq!(overlay.severity, Some(crate::decision::Severity::Critical));
+    }
+
+    #[test]
+    fn rejects_invalid_allowlist_when_expression() {
+        let yaml = r#"
+allowlists:
+  - id: bad
+    appliesTo:
+      rules: [core.git.reset-hard]
+    when:
+      shell.argv: 42
+"#;
+        let err = parse_str(&p(), yaml).expect_err("invalid allowlist when");
+        assert!(matches!(err, ConfigError::Yaml { .. }));
     }
 
     #[test]

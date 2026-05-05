@@ -16,6 +16,9 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::decision::{DecisionKind, Severity};
+use crate::plugin::dsl::WhenNode;
+
 pub mod merge;
 pub mod repo;
 pub mod schema;
@@ -46,6 +49,10 @@ pub struct Config {
     /// Per-pack overrides keyed by pack name (`core.network`).
     /// A rule whose id starts with `<pack>.` inherits the pack toggle.
     pub pack_overrides: BTreeMap<String, PackOverride>,
+    /// Per-rule overrides keyed by exact rule id. These are applied by
+    /// the engine after a rule fires so `hardDeny` / `overridable`
+    /// metadata can be enforced against the concrete rule.
+    pub rule_overrides: BTreeMap<String, RuleOverride>,
     /// Time-bound exceptions; later commits gate them by `expires_at`.
     pub allowlists: Vec<Allowlist>,
     /// Filesystem paths of `apiVersion: ptuf.dev/v1, kind: Plugin`
@@ -76,6 +83,7 @@ impl Default for Config {
             mode: Mode::default(),
             fail_closed: true,
             pack_overrides,
+            rule_overrides: BTreeMap::new(),
             allowlists: Vec::new(),
             plugin_paths: Vec::new(),
             audit: AuditConfig::default(),
@@ -93,18 +101,29 @@ pub struct PackOverride {
     pub enabled: Option<bool>,
 }
 
+/// Per-rule overlay applied after a rule has matched.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuleOverride {
+    pub enabled: Option<bool>,
+    pub decision: Option<DecisionKind>,
+    pub severity: Option<Severity>,
+}
+
 /// Time-bound exception scoped to one or more rule ids.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Allowlist {
     pub id: String,
     pub rule_ids: Vec<String>,
+    pub when: Option<WhenNode>,
     pub expires_at: Option<String>,
     pub reason: Option<String>,
 }
 
-/// Audit-sink configuration. Absent path means audit is disabled.
+/// Audit-sink configuration. Enabled audit with an absent path writes
+/// to the documented default path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditConfig {
+    pub enabled: bool,
     pub path: Option<PathBuf>,
     /// Record allow decisions. Defaults to `false` to keep the audit
     /// volume manageable.
@@ -120,6 +139,7 @@ pub struct AuditConfig {
 impl Default for AuditConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             path: None,
             include_allowed: false,
             include_denied: true,
@@ -136,6 +156,21 @@ pub enum RedactionMode {
     /// Disabled — the user must opt in explicitly. Audit consumers
     /// should treat this as a self-inflicted risk.
     Off,
+}
+
+/// Documented default audit path (`$HOME/.local/share/ptuf/audit.jsonl`).
+pub fn default_audit_path() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".local/share/ptuf/audit.jsonl"))
+}
+
+/// Resolved audit path after applying defaulting and `enabled`.
+pub fn resolved_audit_path(config: &Config) -> Option<PathBuf> {
+    if !config.audit.enabled {
+        return None;
+    }
+    config.audit.path.clone().or_else(default_audit_path)
 }
 
 /// Errors raised while loading the layered policy.

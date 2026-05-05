@@ -2,7 +2,7 @@
 //! into a single [`Config`].
 //!
 //! Merge rules:
-//! * Scalars (`mode`, `fail_closed`, `audit.path`): later layers'
+//! * Scalars (`mode`, `fail_closed`, `audit.enabled`, `audit.path`): later layers'
 //!   `Some(_)` wins.
 //! * `pack_overrides`: union by pack name; for the same name the later
 //!   layer's [`PackOverride`] wins for any `Some(_)` field.
@@ -14,7 +14,7 @@
 //! and refuses `Disable` overrides for `hardDeny: true` rules.
 
 use super::schema::{MergeLayer, RawConfig};
-use super::{Config, PackOverride};
+use super::{Config, PackOverride, RuleOverride};
 
 /// Fold `layers` into a final [`Config`]. Layers are applied in the
 /// order they appear (so `layers[0]` is the lowest-priority scope).
@@ -37,8 +37,15 @@ fn apply(acc: &mut Config, layer: MergeLayer) {
         let entry = acc.pack_overrides.entry(pack).or_default();
         merge_pack_override(entry, overlay);
     }
+    for (rule, overlay) in layer.rule_overrides {
+        let entry = acc.rule_overrides.entry(rule).or_default();
+        merge_rule_override(entry, overlay);
+    }
     acc.allowlists.extend(layer.allowlists);
     acc.plugin_paths.extend(layer.plugin_paths);
+    if let Some(enabled) = layer.audit_enabled {
+        acc.audit.enabled = enabled;
+    }
     if let Some(path) = layer.audit_path {
         acc.audit.path = Some(path);
     }
@@ -59,6 +66,18 @@ fn apply(acc: &mut Config, layer: MergeLayer) {
 fn merge_pack_override(into: &mut PackOverride, from: PackOverride) {
     if from.enabled.is_some() {
         into.enabled = from.enabled;
+    }
+}
+
+fn merge_rule_override(into: &mut RuleOverride, from: RuleOverride) {
+    if from.enabled.is_some() {
+        into.enabled = from.enabled;
+    }
+    if from.decision.is_some() {
+        into.decision = from.decision;
+    }
+    if from.severity.is_some() {
+        into.severity = from.severity;
     }
 }
 
@@ -97,6 +116,7 @@ mod tests {
             Some(false),
         );
         assert!(cfg.allowlists.is_empty());
+        assert!(cfg.audit.enabled);
         assert!(cfg.audit.path.is_none());
     }
 
@@ -202,6 +222,7 @@ mod tests {
             applies_to: RawAllowlistApplies {
                 rules: vec!["a".into()],
             },
+            when: None,
             expires_at: None,
             reason: None,
         };
@@ -210,6 +231,7 @@ mod tests {
             applies_to: RawAllowlistApplies {
                 rules: vec!["b".into()],
             },
+            when: None,
             expires_at: Some("2099-01-01T00:00:00Z".into()),
             reason: Some("local override".into()),
         };
@@ -289,6 +311,7 @@ mod tests {
         use super::super::RedactionMode;
         let lower = RawConfig {
             audit: RawAudit {
+                enabled: Some(false),
                 include_allowed: Some(true),
                 include_denied: Some(false),
                 redaction: Some(RedactionMode::Strict),
@@ -298,6 +321,7 @@ mod tests {
         };
         let higher = RawConfig {
             audit: RawAudit {
+                enabled: Some(true),
                 include_allowed: Some(false),
                 include_denied: None,
                 redaction: Some(RedactionMode::Off),
@@ -306,9 +330,46 @@ mod tests {
             ..raw()
         };
         let cfg = merge(vec![lower, higher]);
+        assert!(cfg.audit.enabled);
         assert!(!cfg.audit.include_allowed);
         assert!(!cfg.audit.include_denied);
         assert!(matches!(cfg.audit.redaction, RedactionMode::Off));
+    }
+
+    #[test]
+    fn rule_overrides_merge_per_rule_id() {
+        #![allow(clippy::expect_used)]
+        use super::super::schema::RawRuleOverride;
+        let lower = RawConfig {
+            rules: BTreeMap::from([(
+                "core.git.reset-hard".into(),
+                RawRuleOverride {
+                    enabled: Some(true),
+                    decision: Some(crate::decision::DecisionKind::Ask),
+                    severity: None,
+                },
+            )]),
+            ..raw()
+        };
+        let higher = RawConfig {
+            rules: BTreeMap::from([(
+                "core.git.reset-hard".into(),
+                RawRuleOverride {
+                    enabled: None,
+                    decision: Some(crate::decision::DecisionKind::Deny),
+                    severity: Some(crate::decision::Severity::Critical),
+                },
+            )]),
+            ..raw()
+        };
+        let cfg = merge(vec![lower, higher]);
+        let overlay = cfg
+            .rule_overrides
+            .get("core.git.reset-hard")
+            .expect("overlay");
+        assert_eq!(overlay.enabled, Some(true));
+        assert_eq!(overlay.decision, Some(crate::decision::DecisionKind::Deny));
+        assert_eq!(overlay.severity, Some(crate::decision::Severity::Critical));
     }
 
     #[test]

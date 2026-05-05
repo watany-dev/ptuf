@@ -217,9 +217,7 @@ impl Report {
             ConfigStatus::Loaded(c) => {
                 writeln!(w, "  mode:        {}", mode_label(c.mode))?;
                 writeln!(w, "  failClosed:  {}", c.fail_closed)?;
-                let audit_path = c
-                    .audit
-                    .path
+                let audit_path = crate::config::resolved_audit_path(c)
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| "(disabled)".to_string());
@@ -342,31 +340,19 @@ fn build_claude_status(path: Option<&Path>) -> ClaudeState {
         return ClaudeState::HookMissing;
     };
     for entry in arr {
-        let Some(hooks) = entry.get("hooks").and_then(Value::as_array) else {
-            continue;
-        };
-        for hook in hooks {
-            if let Some(cmd) = hook.get("command").and_then(Value::as_str)
-                && command_invokes_ptuf_hook(cmd)
-            {
-                let matcher = entry
-                    .get("matcher")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                return ClaudeState::HookRegistered { matcher };
-            }
+        let commands = crate::init::claude_code::entry_commands(entry);
+        if commands
+            .iter()
+            .any(|cmd| crate::init::claude_code::command_invokes_ptuf_hook(cmd))
+        {
+            let matcher = entry
+                .get("matcher")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            return ClaudeState::HookRegistered { matcher };
         }
     }
     ClaudeState::HookMissing
-}
-
-fn command_invokes_ptuf_hook(cmd: &str) -> bool {
-    let tokens: Vec<&str> = cmd.split_whitespace().collect();
-    let n = tokens.len();
-    if n < 3 {
-        return false;
-    }
-    tokens[n - 3] == "hook" && tokens[n - 2] == "claude-code" && tokens[n - 1] == "pre-tool-use"
 }
 
 /// Production entry point: discover everything from the live process
@@ -503,7 +489,9 @@ impl Report {
                     loaded: true,
                     mode: mode_label(c.mode),
                     fail_closed: c.fail_closed,
-                    audit_path: c.audit.path.as_ref().map(|p| p.display().to_string()),
+                    audit_path: crate::config::resolved_audit_path(c)
+                        .as_ref()
+                        .map(|p| p.display().to_string()),
                 },
                 ConfigStatus::Failed(err) => JsonConfig::Failed {
                     loaded: false,
@@ -908,7 +896,12 @@ rules:
         assert_eq!(v["config"]["loaded"], true);
         assert_eq!(v["config"]["mode"], "monitor");
         assert_eq!(v["config"]["failClosed"], false);
-        assert!(v["config"]["auditPath"].is_null());
+        assert_eq!(
+            v["config"]["auditPath"],
+            crate::config::default_audit_path()
+                .map(|p| serde_json::Value::String(p.display().to_string()))
+                .unwrap_or(serde_json::Value::Null)
+        );
         assert_eq!(v["hasFailure"], false);
         let _ = fs::remove_dir_all(&dir);
     }
