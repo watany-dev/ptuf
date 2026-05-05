@@ -179,6 +179,13 @@ mod tests {
         assert_deny("rm -rfv /");
         assert_deny("rm -vrf /");
         assert_deny("rm --recursive --force /");
+        assert_deny("rm --force --recursive /");
+    }
+
+    #[test]
+    fn denies_separated_lowercase_short_flags() {
+        assert_deny("rm -r -f /");
+        assert_deny("rm -f -r /");
     }
 
     #[test]
@@ -189,6 +196,8 @@ mod tests {
         assert_deny("rm -f -R /");
         assert_deny("rm -Rfv /etc");
         assert_deny("rm -vRf /etc");
+        assert_deny("rm -fRv /");
+        assert_deny("rm -vfR /");
     }
 
     #[test]
@@ -197,6 +206,8 @@ mod tests {
         assert_deny("rm -r --force /");
         assert_deny("rm --force -r /");
         assert_deny("rm -R --force /usr");
+        assert_deny("rm -f --recursive /");
+        assert_deny("rm --force -R /");
     }
 
     #[test]
@@ -210,6 +221,8 @@ mod tests {
     fn denies_full_path_to_rm() {
         assert_deny("/bin/rm -rf /");
         assert_deny("/usr/bin/rm -rf /etc");
+        assert_deny("/bin/rm -Rf /");
+        assert_deny("/usr/bin/rm --recursive --force /");
     }
 
     #[test]
@@ -219,6 +232,8 @@ mod tests {
         assert_allow("rm -rf ./build");
         assert_allow("rm -rf $HOME/scratch/foo");
         assert_allow("rm -rf ~/projects/myrepo/target");
+        assert_allow("rm -Rf ./build");
+        assert_allow("rm --recursive --force ./build");
     }
 
     #[test]
