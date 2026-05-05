@@ -113,30 +113,11 @@ fn is_git(head: &str) -> bool {
 
 /// First non-flag argument after `git` — i.e. the subcommand
 /// (`push`, `reset`, `remote`, ...). `None` for `git --version`.
+///
+/// Skips git's value-taking global flags so that
+/// `git -c core.hooksPath=/dev/null commit` resolves to `commit`, not to
+/// the `-c`'s value.
 fn git_subcommand(argv: &Argv) -> Option<&str> {
-    if !is_git(&argv.head) {
-        return None;
-    }
-    argv.args
-        .iter()
-        .find(|a| !a.starts_with('-'))
-        .map(String::as_str)
-}
-
-fn args_after_subcommand<'a>(argv: &'a Argv, sub: &str) -> Vec<&'a str> {
-    let mut iter = argv.args.iter().map(String::as_str);
-    for a in iter.by_ref() {
-        if a == sub {
-            break;
-        }
-    }
-    iter.collect()
-}
-
-/// Like [`git_subcommand`] but skips git's value-taking global flags so that
-/// `git -c core.hooksPath=/dev/null commit` resolves to `commit`, not to the
-/// `-c`'s value. Used by the bypass-detection rules.
-fn git_subcommand_strict(argv: &Argv) -> Option<&str> {
     if !is_git(&argv.head) {
         return None;
     }
@@ -164,26 +145,37 @@ fn git_subcommand_strict(argv: &Argv) -> Option<&str> {
     None
 }
 
+fn args_after_subcommand<'a>(argv: &'a Argv, sub: &str) -> Vec<&'a str> {
+    let mut iter = argv.args.iter().map(String::as_str);
+    for a in iter.by_ref() {
+        if a == sub {
+            break;
+        }
+    }
+    iter.collect()
+}
+
 /// Gather the values of git's `-c key=val` / `--config key=val` /
 /// `--config=key=val` global options.
-fn collect_config_overrides(argv: &Argv) -> Vec<&str> {
-    let mut out = Vec::new();
+fn config_overrides<'a>(argv: &'a Argv) -> impl Iterator<Item = &'a str> + 'a {
     let mut iter = argv.args.iter();
-    while let Some(a) = iter.next() {
-        match a.as_str() {
-            "-c" | "--config" => {
-                if let Some(v) = iter.next() {
-                    out.push(v.as_str());
+    std::iter::from_fn(move || {
+        while let Some(a) = iter.next() {
+            match a.as_str() {
+                "-c" | "--config" => {
+                    if let Some(v) = iter.next() {
+                        return Some(v.as_str());
+                    }
                 }
-            }
-            s => {
-                if let Some(rest) = s.strip_prefix("--config=") {
-                    out.push(rest);
+                s => {
+                    if let Some(rest) = s.strip_prefix("--config=") {
+                        return Some(rest);
+                    }
                 }
             }
         }
-    }
-    out
+        None
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -194,17 +186,17 @@ enum BypassMatch {
 }
 
 fn is_falsy(v: &str) -> bool {
-    matches!(
-        v.trim().to_ascii_lowercase().as_str(),
-        "false" | "no" | "off" | "0" | ""
-    )
+    let v = v.trim();
+    ["false", "no", "off", "0", ""]
+        .iter()
+        .any(|t| v.eq_ignore_ascii_case(t))
 }
 
 fn is_truthy(v: &str) -> bool {
-    matches!(
-        v.trim().to_ascii_lowercase().as_str(),
-        "true" | "yes" | "on" | "1"
-    )
+    let v = v.trim();
+    ["true", "yes", "on", "1"]
+        .iter()
+        .any(|t| v.eq_ignore_ascii_case(t))
 }
 
 fn bypass_value_matches(mode: BypassMatch, value: &str) -> bool {
@@ -354,9 +346,8 @@ fn matches_remote_set_url(argv: &Argv) -> bool {
 }
 
 fn matches_no_verify(argv: &Argv) -> bool {
-    let sub = match git_subcommand_strict(argv) {
-        Some(s) => s,
-        None => return false,
+    let Some(sub) = git_subcommand(argv) else {
+        return false;
     };
     if !NO_VERIFY_SUBCOMMANDS.contains(&sub) {
         return false;
@@ -380,9 +371,8 @@ fn matches_no_verify(argv: &Argv) -> bool {
 }
 
 fn matches_no_gpg_sign(argv: &Argv) -> bool {
-    let sub = match git_subcommand_strict(argv) {
-        Some(s) => s,
-        None => return false,
+    let Some(sub) = git_subcommand(argv) else {
+        return false;
     };
     if !NO_GPG_SIGN_SUBCOMMANDS.contains(&sub) {
         return false;
@@ -392,21 +382,20 @@ fn matches_no_gpg_sign(argv: &Argv) -> bool {
 }
 
 fn matches_config_override_bypass(argv: &Argv) -> bool {
-    let sub = match git_subcommand_strict(argv) {
-        Some(s) => s,
-        None => return false,
+    let Some(sub) = git_subcommand(argv) else {
+        return false;
     };
     if !BYPASS_SCOPE_SUBCOMMANDS.contains(&sub) {
         return false;
     }
-    for raw in collect_config_overrides(argv) {
+    for raw in config_overrides(argv) {
         let Some(eq) = raw.find('=') else {
             continue;
         };
-        let key = raw[..eq].trim().to_ascii_lowercase();
+        let key = raw[..eq].trim();
         let value = &raw[eq + 1..];
         for (target_key, mode) in CONFIG_BYPASS_KEYS {
-            if key == *target_key && bypass_value_matches(*mode, value) {
+            if key.eq_ignore_ascii_case(target_key) && bypass_value_matches(*mode, value) {
                 return true;
             }
         }
@@ -415,20 +404,15 @@ fn matches_config_override_bypass(argv: &Argv) -> bool {
 }
 
 fn matches_env_bypass(argv: &Argv) -> bool {
-    if !is_git(&argv.head) {
+    let Some(sub) = git_subcommand(argv) else {
         return false;
-    }
-    let sub = match git_subcommand_strict(argv) {
-        Some(s) => s,
-        None => return false,
     };
     if !BYPASS_SCOPE_SUBCOMMANDS.contains(&sub) {
         return false;
     }
     for ea in &argv.env_assignments {
-        let key_upper = ea.key.to_ascii_uppercase();
         for (target, mode) in ENV_BYPASS_KEYS {
-            if key_upper == *target && bypass_value_matches(*mode, &ea.value) {
+            if ea.key.eq_ignore_ascii_case(target) && bypass_value_matches(*mode, &ea.value) {
                 return true;
             }
         }
