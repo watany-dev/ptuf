@@ -1,6 +1,5 @@
 //! `core.self_protection` pack — refuses any operation that targets ptuf's
-//! own binary, configuration, plugins, or the Claude Code hook
-//! settings.
+//! own binary, configuration, plugins, or agent hook settings.
 //!
 //! All five rules are `hard_deny: true` / `Severity::Critical` per
 //! `docs/design/policy-packs.md:100-113`. They share the [`SelfRule`]
@@ -103,14 +102,26 @@ const CLAUDE_SETTINGS: RuleSpec = RuleSpec {
     ],
 };
 
+const CODEX_SETTINGS: RuleSpec = RuleSpec {
+    id: "core.self_protection.codex-settings",
+    kind: ProtectedKind::CodexSettings,
+    problem: "The command modifies a Codex hook or config file. The hook registration and \
+         feature enablement live there, so this edit could disable or bypass ptuf in Codex.",
+    alternatives: &[
+        "Use `ptuf init codex` to manage the hook entry safely.",
+        "Have the user edit Codex settings outside an agent session.",
+        "If the change is unrelated to hooks, narrow the edit to a non-hook file.",
+    ],
+};
+
 const HOOK_SCRIPT: RuleSpec = RuleSpec {
     id: "core.self_protection.hook-script",
     kind: ProtectedKind::HookScript,
-    problem: "The command modifies a script registered as a Claude Code hook. Editing or chmod-ing \
-         a hook script can disable ptuf-style enforcement at the next tool use.",
+    problem: "The command modifies a script registered as a Claude Code or Codex hook. Editing or \
+         chmod-ing a hook script can disable ptuf-style enforcement at the next tool use.",
     alternatives: &[
         "Edit the hook script outside an agent session, after review.",
-        "Replace the hook entry with a different command via `ptuf init claude-code`.",
+        "Replace the hook entry with `ptuf init claude-code` or `ptuf init codex`.",
         "Verify the script change is not reachable from the registered hook path.",
     ],
 };
@@ -120,6 +131,9 @@ pub static CONFIG_RULE: SelfRule = SelfRule { spec: &CONFIG };
 pub static PLUGIN_RULE: SelfRule = SelfRule { spec: &PLUGIN };
 pub static CLAUDE_SETTINGS_RULE: SelfRule = SelfRule {
     spec: &CLAUDE_SETTINGS,
+};
+pub static CODEX_SETTINGS_RULE: SelfRule = SelfRule {
+    spec: &CODEX_SETTINGS,
 };
 pub static HOOK_SCRIPT_RULE: SelfRule = SelfRule { spec: &HOOK_SCRIPT };
 
@@ -180,7 +194,19 @@ mod tests {
             CLAUDE_SETTINGS_RULE.evaluate(&facts, &input),
             Some(Decision::Deny { .. })
         ));
+        assert!(CODEX_SETTINGS_RULE.evaluate(&facts, &input).is_none());
         assert!(HOOK_SCRIPT_RULE.evaluate(&facts, &input).is_none());
+    }
+
+    #[test]
+    fn codex_settings_rule_fires_only_for_codex_settings_label() {
+        let facts = facts_with(&[ProtectedKind::CodexSettings]);
+        let input = sample("Edit");
+        assert!(matches!(
+            CODEX_SETTINGS_RULE.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
+        assert!(CLAUDE_SETTINGS_RULE.evaluate(&facts, &input).is_none());
     }
 
     #[test]
@@ -203,6 +229,7 @@ mod tests {
             &CONFIG_RULE,
             &PLUGIN_RULE,
             &CLAUDE_SETTINGS_RULE,
+            &CODEX_SETTINGS_RULE,
             &HOOK_SCRIPT_RULE,
         ] {
             assert!(rule.evaluate(&facts, &input).is_none());
@@ -216,6 +243,7 @@ mod tests {
             &CONFIG_RULE,
             &PLUGIN_RULE,
             &CLAUDE_SETTINGS_RULE,
+            &CODEX_SETTINGS_RULE,
             &HOOK_SCRIPT_RULE,
         ] {
             assert!(rule.hard_deny(), "{} must be hard_deny", rule.id());
@@ -251,6 +279,7 @@ mod tests {
             CONFIG_RULE.id(),
             PLUGIN_RULE.id(),
             CLAUDE_SETTINGS_RULE.id(),
+            CODEX_SETTINGS_RULE.id(),
             HOOK_SCRIPT_RULE.id(),
         ] {
             assert!(id.starts_with("core.self_protection."), "id was {id}");
@@ -260,12 +289,13 @@ mod tests {
     use crate::testing::proptest::{protected_kind, richer_hook_input};
     use proptest::prelude::*;
 
-    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 5] {
+    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 6] {
         [
             (&BINARY_RULE, ProtectedKind::Binary),
             (&CONFIG_RULE, ProtectedKind::Config),
             (&PLUGIN_RULE, ProtectedKind::Plugin),
             (&CLAUDE_SETTINGS_RULE, ProtectedKind::ClaudeSettings),
+            (&CODEX_SETTINGS_RULE, ProtectedKind::CodexSettings),
             (&HOOK_SCRIPT_RULE, ProtectedKind::HookScript),
         ]
     }

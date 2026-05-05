@@ -1,10 +1,10 @@
 //! `ptuf init <agent>` — install ptuf as a `PreToolUse` hook in the
-//! target agent's settings file. v0.3 ships only the `claude-code`
-//! adapter (`docs/design/cli-and-hooks.md:48-74`).
+//! target agent's settings file(s).
 
 use std::path::PathBuf;
 
 pub mod claude_code;
+pub mod codex;
 
 /// Errors surfaced by every `init` adapter.
 #[derive(Debug)]
@@ -18,11 +18,16 @@ pub enum InitError {
     },
     /// Existing settings file is not valid JSON; refuse to overwrite.
     Json { path: PathBuf, message: String },
+    /// Existing config file is not valid TOML; refuse to overwrite.
+    Toml { path: PathBuf, message: String },
     /// Settings file is JSON but the path we expected to navigate
     /// (`hooks.PreToolUse[]`) is occupied by a value of the wrong type.
     Schema { path: PathBuf, message: String },
     /// `$HOME` is unset and no explicit `--settings` path was given.
     HomeNotSet,
+    /// No repository root could be discovered and the caller did not
+    /// provide enough explicit Codex target paths to proceed.
+    RepoRootNotFound,
 }
 
 impl std::fmt::Display for InitError {
@@ -35,6 +40,9 @@ impl std::fmt::Display for InitError {
             Self::Json { path, message } => {
                 write!(f, "invalid JSON in {}: {message}", path.display())
             }
+            Self::Toml { path, message } => {
+                write!(f, "invalid TOML in {}: {message}", path.display())
+            }
             Self::Schema { path, message } => {
                 write!(
                     f,
@@ -43,6 +51,10 @@ impl std::fmt::Display for InitError {
                 )
             }
             Self::HomeNotSet => write!(f, "$HOME is not set; pass --settings <PATH> explicitly"),
+            Self::RepoRootNotFound => write!(
+                f,
+                "could not discover a repository root; pass --root <PATH> or explicit --hooks/--config paths"
+            ),
         }
     }
 }
@@ -62,9 +74,16 @@ impl std::error::Error for InitError {
 #[derive(Debug, PartialEq, Eq)]
 pub struct InstallOutcome {
     pub status: InstallStatus,
-    pub settings_path: PathBuf,
+    pub agent: &'static str,
+    pub paths: Vec<InstallPath>,
     pub matcher: String,
     pub command: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct InstallPath {
+    pub label: &'static str,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -110,6 +129,16 @@ mod tests {
         assert!(
             format!(
                 "{}",
+                InitError::Toml {
+                    path: PathBuf::from("/p"),
+                    message: "bad".into()
+                }
+            )
+            .contains("invalid TOML")
+        );
+        assert!(
+            format!(
+                "{}",
                 InitError::Schema {
                     path: PathBuf::from("/p"),
                     message: "wrong type".into()
@@ -118,6 +147,7 @@ mod tests {
             .contains("unexpected settings shape")
         );
         assert!(format!("{}", InitError::HomeNotSet).contains("HOME"));
+        assert!(format!("{}", InitError::RepoRootNotFound).contains("repository root"));
     }
 
     #[test]

@@ -1,163 +1,107 @@
 # ptuf
 
-`ptuf` (PreToolUseFilter) is a generic guardrail layer for coding agents.
-It is invoked from a `PreToolUse` hook (e.g. Claude Code), reads the hook
-payload from stdin as JSON, evaluates it, and returns an Allow / Deny
-decision via exit code and stderr.
+`ptuf` (PreToolUseFilter) is a guardrail for coding agents. It runs from a
+`PreToolUse` hook, reads the tool request JSON from stdin, evaluates built-in
+rules plus optional YAML plugins, and returns the result through exit code,
+stderr, and agent-specific `hookSpecificOutput` JSON.
 
-- **Allow** — exit code `0`
-- **Deny** — exit code `2`, with a human-readable reason on stderr
+- `0` — allow, monitor, or ask
+- `2` — deny
+- `1` — internal error such as invalid JSON, bad CLI arguments, or policy load
+  failure
+
+`ptuf` currently ships first-class adapters for Claude Code and Codex.
 
 ## Status
 
-v0.4 — broader tool coverage (`Read` / `Edit` / `Write` / `WebFetch` in
-addition to `Bash`), built-in packs for git and self-protection, MCP
-fact extraction, and a streamlined CLI surface (`ptuf hook <agent>` /
-`ptuf init <agent>` / `ptuf eval` / `ptuf doctor` / `ptuf plugin test`).
-v0.3's bare-`ptuf` compatibility mode and the `pre-tool-use` hierarchy
-token were removed; agents are now selected exclusively by the
-positional `<agent>` argument.
+v0.4.0 includes:
 
-Built-in rules (always enabled, hard-deny unless noted):
-
-- `core.filesystem.destructive-rm` — `rm -rf /`, `rm -rf ~`, `rm -rf /etc`, …
-- `core.network.remote-script-pipe` — `curl ... | bash` and friends
-- `core.secrets.sensitive-path-to-network` — co-occurrence of a sensitive
-  path with a network sink in the same command
-- `core.secrets.sensitive-read` *(new in v0.3)* — `Read` / `Edit` of a
-  credentials file (SSH key, AWS / gcloud / kube config, dotenv, npmrc,
-  pypirc, tfstate, PEM blob, …)
-- `core.git.*` *(7 rules in v0.3 + 4 bypass-blockers, 11 rules total)* —
-  `force-push` (deny), `force-push-with-lease` / `reset --hard` /
-  `clean -fdx` / `branch -D` / `stash clear` / `remote set-url` (ask),
-  plus four hook/signing bypass-blockers: `no-verify` (`git commit
-  --no-verify`, `commit -n`, `push --no-verify`, …), `no-gpg-sign`,
-  `config-override-bypass` (`git -c core.hooksPath=/dev/null …`,
-  `-c commit.gpgsign=false …`), and `env-bypass` (`HUSKY=0 git commit …`,
-  `LEFTHOOK=0`, `SKIP=…`, `PRE_COMMIT_ALLOW_NO_CONFIG=1`) — all deny,
-  allowlistable
-- `core.self_protection.*` *(new in v0.3, 5 rules)* — modifications to the
-  ptuf binary, its config files, registered plugin paths, the Claude Code
-  `settings.json` file, or any hook-script referenced by it
-- `core.project_hygiene.*` *(new in v0.4, 3 rules, opt-in)* —
-  `lock-mismatch-pnpm` / `lock-mismatch-uv` block running the wrong
-  package manager when a competing lockfile is checked in;
-  `protected-branch-destructive-git` upgrades `core.git`'s `ask` rules
-  to `deny` while on `main` / `master` / `release/*`. Disabled by
-  default — enable with `packs.core.project_hygiene.enabled: true`.
-
-v0.4 features (additive on top of v0.3):
-
-- **MCP fact extraction** — `mcp__<server>__<tool>` calls are normalised
-  on the generic top-level `path` / `url` / `content` keys, so existing
-  rules (`core.self_protection.*`, `core.secrets.sensitive-read`,
-  `core.secrets.sensitive-path-to-network`) protect MCP-driven edits
-  without needing a per-server adapter.
-- **Audit log v1 schema** — records carry `schemaVersion: 1`, `agent`,
-  `pluginVersions`, and `allowlistId` (see above).
-- **Structured `ptuf doctor --json`** — stable `schemaVersion: 1`
-  envelope for CI / audit tooling.
-- **`core.project_hygiene` v1** *(opt-in)* — see the rule list above.
-- **Streamlined CLI surface** — `Compat` (bare `ptuf`) and the
-  `pre-tool-use` hierarchy token were removed; use
-  `ptuf hook claude-code` explicitly.
-
-v0.3 features (additive on top of v0.2):
-
-- **Tool-aware fact extraction** — `path` (`~`-expanded `file_path`),
-  `url` (scheme/host/port/path), `sensitive_path` (variant-tagged), and
-  `protected` (paths that ptuf must not let the agent touch).
-- **Plugin DSL leaves** — `path.filePathPrefixAny`, `url.schemeAny`,
-  `url.hostAny`, `sensitive.pathKindAny`. See
-  [`docs/examples/cloud-metadata.yaml`](docs/examples/cloud-metadata.yaml)
-  for an IMDS WebFetch deny sample.
-- **`ptuf init claude-code`** — idempotent install of the PreToolUse hook
-  entry into `~/.claude/settings.json` with `--dry-run` and
-  `--settings <PATH>` flags. Detection is token-based so a re-run with a
-  different binary path still recognises an existing entry.
-- **`ptuf doctor`** — diagnostic report covering the binary, project
-  scope, effective config, loaded plugins, and Claude Code integration.
-  Exit 0 when every section is ✓ or ⚠; exit 1 when any section reports ✗.
-  `--json` emits a stable `schemaVersion: 1` envelope (binary, config
-  layers, plugins, claude integration state, `hasFailure`) for CI /
-  audit tooling.
-- **Fail-closed CLI** — every CLI entry point (`ptuf hook ...` /
-  `ptuf eval`) deny-fails when the engine cannot load policy, surfacing
-  the reserved rule id `core.engine.policy-load-failed`.
-  Library-mode `crate::decide` still falls back to a default engine for
-  embedded callers.
-
-v0.2 features carried forward:
-
-- **YAML config scope merge** — `/etc/ptuf/policy.yaml` →
-  `~/.config/ptuf/config.yaml` → `<repo>/.ptuf.yaml` →
-  `<repo>/.ptuf.local.yaml`. Each scope can set `mode`, `failClosed`,
-  `packs.<id>.enabled`, `plugins`, `allowlists`, and `audit.*`.
-- **YAML plugins** — `apiVersion: ptuf.dev/v1, kind: Plugin` with a
-  `when:` DSL. `requires:` declarations validated at load time.
-- **`ptuf plugin test <path>`** — runs the plugin's `tests:` section
-  end-to-end and exits non-zero on regressions.
-- **Audit JSONL** — every decision is recorded to
-  `~/.local/share/ptuf/audit.jsonl` (overridable). Records carry
-  `schemaVersion: 1`, the calling `agent` (`claude-code` / `cli`),
-  loaded `pluginVersions` (`name@version` array), and the
-  `allowlistId` that suppressed a rule when the outcome was `Allow`.
-  Strict redaction masks env-var token assignments, GH / OpenAI / AWS
-  keys, JWTs, HTTP basic auth, and PEM blobs.
-- **Allowlists with `expiresAt`** — time-bound exceptions per rule id.
-  `hardDeny: true` rules ignore allowlist suppression.
-
-> **Note on Windows:** the audit JSONL writer relies on POSIX
-> `O_APPEND` semantics for atomic concurrent appends. On Windows,
-> ptuf still writes the file but interleaving across processes is
-> best-effort.
+- Built-in packs for filesystem, network, secrets, git, self-protection, and
+  opt-in project hygiene
+- Tool-aware fact extraction for `Bash`, `Read`, `Edit`, `Write`, `WebFetch`,
+  and generic `mcp__<server>__<tool>` payloads
+- Layered YAML config and YAML plugins with rule-local `tests:`
+- `ptuf init <agent>` for Claude Code and Codex hook installation
+- `ptuf doctor [--json]` for binary/config/plugin/hook diagnostics
+- Audit JSONL with `schemaVersion: 1`, `agent`, `pluginVersions`, and
+  `allowlistId`
 
 ## Requirements
 
-- Rust `1.93.0` or newer (MSRV is pinned in `Cargo.toml`)
-- `lld` linker for the default x86_64 Linux build profile
-- `cargo-deny` and `cargo-tarpaulin` for the full quality pipeline
+- Rust `1.93.0` or newer
+- `lld` for the default Linux build profile
+- `cargo-deny` and `cargo-tarpaulin` for the full local quality pipeline
 
-## Build
+## Install
+
+Build from the current checkout:
 
 ```bash
 cargo build --release
-# or, via the Makefile
 make build
 ```
 
-## Run
-
-`ptuf` exposes two invocation styles. Both share the same `decide()`
-core.
+Install the binary into Cargo's bin directory:
 
 ```bash
-# 1. Hook subcommand: stdin JSON -> exit code + `hookSpecificOutput`
-#    envelope on stdout (deny / ask only). The agent name is required
-#    so the same binary can serve future Codex / Cursor / Gemini
-#    adapters via `ptuf hook <agent>`.
-echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
-    | cargo run -q -- hook claude-code
-
-# 2. One-shot eval: handy for trying a rule from the shell.
-cargo run -q -- eval --tool Bash 'rm -rf /'
+cargo install --path .
 ```
 
-Exit codes are uniform across both: `0` for allow / monitor / ask,
-`2` for deny, `1` for an internal error (invalid JSON, missing
-subcommand, ...).
+## CLI
 
-## Use as a Claude Code PreToolUse hook
+```text
+ptuf hook <agent>
+ptuf eval --tool <name> <command>
+ptuf plugin test <path>
+ptuf init claude-code [--dry-run] [--settings <path>]
+ptuf init codex [--dry-run] [--root <path>] [--hooks <path>] [--config <path>]
+ptuf doctor [--json]
+ptuf --help
+ptuf --version
+```
 
-The simplest way is to let `ptuf init claude-code` write the entry for
-you (idempotent; safe to re-run after upgrades):
+`ptuf hook <agent>` is the hook entry point. `ptuf eval` is the manual,
+one-shot evaluator for shell use and debugging.
+
+## Hook Behavior
+
+The hook reads a payload such as:
+
+```json
+{
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "rm -rf /"
+  }
+}
+```
+
+Claude Code behavior:
+
+- `Allow` / `Monitor` — exit `0`, no hook JSON on stdout
+- `Ask` — exit `0`, `hookSpecificOutput.permissionDecision = "ask"`
+- `Deny` — exit `2`, `hookSpecificOutput.permissionDecision = "deny"`
+
+Codex behavior:
+
+- `Allow` / `Monitor` — exit `0`, no hook JSON on stdout
+- `Ask` is converted to `Deny` because Codex `PreToolUse` cannot prompt
+  interactively
+- `Deny` — exit `2`, `hookSpecificOutput.permissionDecision = "deny"`
+
+For both adapters, the human-readable reason is also written to stderr for
+`Ask` or `Deny`.
+
+## Claude Code
+
+The simplest path is:
 
 ```bash
-ptuf init claude-code             # writes ~/.claude/settings.json
-ptuf init claude-code --dry-run   # show the diff without touching the file
+ptuf init claude-code
+ptuf init claude-code --dry-run
 ```
 
-The resulting `~/.claude/settings.json` looks like:
+This writes or updates `~/.claude/settings.json` with a `PreToolUse` entry like:
 
 ```json
 {
@@ -177,100 +121,134 @@ The resulting `~/.claude/settings.json` looks like:
 }
 ```
 
-Claude Code pipes the tool-use request to `ptuf` as JSON; a non-zero exit
-code blocks the tool call and the `hookSpecificOutput` JSON / stderr
-message is surfaced to both the agent and the user.
+The installer is idempotent. It detects an existing ptuf entry by the command
+tail `hook claude-code`, regardless of the absolute binary path.
 
-> **Migrating from v0.3:** the legacy 3-token entry
-> (`ptuf hook claude-code pre-tool-use`) and the bare `ptuf`
-> compatibility mode were removed in v0.4. Re-run
-> `ptuf init claude-code` to append a fresh entry with the new
-> 2-token form; the old entry is detected as unrelated and can be
-> removed manually.
+## Codex
 
-Run `ptuf doctor` afterwards to confirm the binary, repo scope, loaded
-plugins, and hook registration are all healthy.
+The default install target is repo-local:
 
-## Configure
+```bash
+ptuf init codex
+ptuf init codex --dry-run
+ptuf init codex --root /path/to/repo
+ptuf init codex --hooks /tmp/hooks.json --config /tmp/config.toml
+```
 
-Drop a YAML file at `~/.config/ptuf/config.yaml` (or any of the four
-scope locations above) to control the engine:
+That writes:
+
+- `<repo>/.codex/hooks.json`
+- `<repo>/.codex/config.toml`
+
+with:
+
+- matcher: `Bash|apply_patch|mcp__.*`
+- command: `/absolute/path/to/ptuf hook codex`
+- `features.codex_hooks = true`
+
+## Configuration
+
+ptuf merges YAML config in this order:
+
+1. `/etc/ptuf/policy.yaml`
+2. `~/.config/ptuf/config.yaml`
+3. `<repo>/.ptuf.yaml`
+4. `<repo>/.ptuf.local.yaml`
+
+Example:
 
 ```yaml
 version: 1
 
-mode: enforce            # enforce | monitor | observe
+mode: enforce
 failClosed: true
 
 packs:
-  core.network:
+  core.project_hygiene:
     enabled: true
+    protectedBranches:
+      - main
+      - master
+      - release/*
+
+rules:
+  core.git.reset-hard:
+    decision: ask
 
 plugins:
-  - path: ~/.config/ptuf/plugins/no-curl.yaml
+  - path: ~/.config/ptuf/plugins/team.yaml
+    enabled: true
 
 allowlists:
-  - id: allow-localhost-curl
+  - id: allow-local-dev-webhook
     appliesTo:
       rules:
-        - pack.demo.no-curl
+        - acme.dev.local-post
+    when:
+      url.hostAny:
+        - localhost
+        - 127.0.0.1
     expiresAt: "2026-12-31T23:59:59Z"
-    reason: Local dev callbacks.
+    reason: Local development callback.
 
 audit:
   path: ~/.local/share/ptuf/audit.jsonl
   includeAllowed: false
   includeDenied: true
-  redaction: strict      # or "off" if you understand the risk
+  redaction: strict
 ```
 
-Validate a plugin and its bundled `tests:` section:
+## Plugins
+
+Plugin files use `apiVersion: ptuf.dev/v1` and `kind: Plugin`. Each rule can
+include `tests.deny` and `tests.allow`, which are executed with:
 
 ```bash
 ptuf plugin test ./ptuf-plugin.yaml
 ```
 
-## Embed as a library
+Plugin tests evaluate the plugin rule itself, not the full built-in engine.
+
+## Library Use
 
 ```rust
 use ptuf::{Decision, HookInput, decide};
 
 let input: HookInput = serde_json::from_str(payload)?;
 match decide(&input) {
-    Decision::Allow => { /* let it through */ }
-    Decision::Monitor { .. } => { /* allow but log */ }
-    Decision::Ask { reason, .. } => { /* prompt user */ }
-    Decision::Deny { reason, .. } => { /* surface reason */ }
+    Decision::Allow => {}
+    Decision::Monitor { .. } => {}
+    Decision::Ask { reason, .. } => {}
+    Decision::Deny { reason, .. } => {}
 }
 ```
 
+`decide()` is intentionally backward-compatible and lenient: it tries
+`Engine::for_cwd()` first and falls back to `Engine::default()` if policy or
+plugin loading fails. The CLI path is stricter and fails closed.
+
 ## Develop
 
-Run the full pipeline locally before pushing:
+Before pushing, run:
 
 ```bash
-make check       # fmt-check + clippy + test + doc + cargo-deny
-make coverage    # cargo-tarpaulin (>= 95%)
-make pbt         # property-based testing at PBT_CASES=10000 (override with PBT_CASES=N)
+make check
+make coverage
+make pbt
 ```
 
-`cargo test` runs every `proptest!` block at the default 256 cases as part of
-`make check`; `make pbt` re-runs the same suite at a higher case count for
-release-time deep checks. Shrunk counterexamples are persisted under
-`proptest-regressions/` and committed to git so the same seeds replay across
-machines.
+- `make check` runs the same five steps as CI:
+  `fmt-check`, `clippy`, `test`, `cargo doc`, and `cargo-deny`
+- `make coverage` runs `cargo tarpaulin` with a `95%` floor and excludes
+  `src/main.rs`
+- `make pbt` reruns the property-based test suite at
+  `PBT_CASES=10000` by default
 
-CI mirrors `make check` plus an MSRV check, an `actionlint` lint of the
-workflow itself, and a coverage gate.
+## Design Docs
 
-## Design docs
-
-The intended scope reaches beyond the current v0.4 milestone (multi-agent
-adapters, signed plugins, `dataflow.basic`, …). Start with
-[`docs/design/overview.md`](docs/design/overview.md) for goals,
-non-goals, and an index of the design notes (architecture, decision
-model, policy packs, config and plugins, CLI and hook integration, audit
-log, testing, roadmap).
+Start with [`docs/design/overview.md`](docs/design/overview.md). The design set
+covers architecture, decision semantics, built-in packs, config and plugins,
+CLI and hook integration, audit logging, testing, and roadmap notes.
 
 ## License
 

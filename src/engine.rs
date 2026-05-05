@@ -230,7 +230,9 @@ impl Engine {
     /// Evaluate a single hook payload.
     pub fn decide(&self, input: &HookInput) -> Outcome {
         let mut facts = facts::extract(input);
-        facts.protected = self.protected.classify_input(input);
+        facts.protected = self
+            .protected
+            .classify_input_with_paths(input, &facts.paths);
         facts.project = self.project_facts.clone();
         let now = SystemTime::now();
         let allowlist_ctx = AllowlistContext {
@@ -1504,10 +1506,12 @@ rules:
         // Inject a deterministic protected set rather than relying on
         // process state.
         engine.protected = ProtectedPaths {
+            repo_root: None,
             binary: None,
             configs: Vec::new(),
             plugins: vec![plugin_path.clone()],
             claude_settings: Vec::new(),
+            codex_settings: Vec::new(),
             hook_scripts: Vec::new(),
         };
         let input = HookInput {
