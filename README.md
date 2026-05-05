@@ -40,7 +40,7 @@ Built-in rules (always enabled, hard-deny unless noted):
   to `deny` while on `main` / `master` / `release/*`. Disabled by
   default — enable with `packs.core.project_hygiene.enabled: true`.
 
-v0.4 features merging in (still pre-release):
+v0.4 features (additive on top of v0.3):
 
 - **MCP fact extraction** — `mcp__<server>__<tool>` calls are normalised
   on the generic top-level `path` / `url` / `content` keys, so existing
@@ -52,6 +52,9 @@ v0.4 features merging in (still pre-release):
 - **Structured `ptuf doctor --json`** — stable `schemaVersion: 1`
   envelope for CI / audit tooling.
 - **`core.project_hygiene` v1** *(opt-in)* — see the rule list above.
+- **Streamlined CLI surface** — `Compat` (bare `ptuf`) and the
+  `pre-tool-use` hierarchy token were removed; use
+  `ptuf hook claude-code` explicitly.
 
 v0.3 features (additive on top of v0.2):
 
@@ -256,7 +259,7 @@ workflow itself, and a coverage gate.
 
 ## Design docs
 
-The intended scope reaches beyond the current v0.3 milestone (multi-agent
+The intended scope reaches beyond the current v0.4 milestone (multi-agent
 adapters, signed plugins, `dataflow.basic`, …). Start with
 [`docs/design/overview.md`](docs/design/overview.md) for goals,
 non-goals, and an index of the design notes (architecture, decision

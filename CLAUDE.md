@@ -51,7 +51,7 @@ Allow / Deny を exit code と stderr メッセージで返す CLI バイナリ 
   (`name@version` 配列) と `allowlistId` (allow に至った allowlist の id) を伝える
 - `src/init/` — `ptuf init <agent>`。v0.4 では `claude_code` adapter のみ
 - `src/doctor.rs` — `ptuf doctor` 診断レポート (`Report::gather` + `render`)
-- `src/cli.rs` — 引数 parse とサブコマンド実行 (`Hook { agent }` /
+- `src/cli.rs` — 引数 parse とサブコマンド実行 (`Hook` /
   `Eval` / `PluginTest` / `Init` / `Doctor` /
   `Help` / `Version`)。fail-closed は `build_engine_or_fail_closed`
 - `src/io_runner.rs` — stdin → `decide` → stdout / stderr / `ExitCode`

@@ -41,7 +41,7 @@ ptuf plugin test ./ptuf-plugin.yaml
 > ```json
 > {
 >   "schemaVersion": 1,
->   "binary":   { "path": "/usr/local/bin/ptuf", "version": "0.3.0" },
+>   "binary":   { "path": "/usr/local/bin/ptuf", "version": "0.4.0" },
 >   "project":  { "repoRoot": "/home/user/proj" },
 >   "configLayers": [
 >     { "layer": "system",       "path": "...", "present": false },
@@ -111,7 +111,7 @@ v0.3 までの 3 トークン (`hook claude-code pre-tool-use`) entry は
 ptuf doctor
 
 Binary
-  ✓ /usr/local/bin/ptuf  (version 0.3.0)
+  ✓ /usr/local/bin/ptuf  (version 0.4.0)
 
 Project
   ✓ repository root: /home/user/proj
