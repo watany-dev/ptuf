@@ -23,6 +23,15 @@
 - 新規ロジックは必ず `src/lib.rs` 配下に置く
 - `src/main.rs` は CLI shim のため coverage 集計から除外する
 
+## 技術原則
+
+- **Minimal Dependencies** — 追加クレートは必要性を吟味する
+- **Safety-First** — `#![forbid(unsafe_code)]`、`unwrap()` / `expect()` 禁止 (テスト除く)
+- **Test Coverage** — `cargo-tarpaulin` で 95% 以上を維持
+- **Supply Chain** — `cargo-deny` で advisories / licenses / bans / sources を監査
+
+詳細は `docs/design/architecture.md` を参照。
+
 ## 開発手法
 
 - **TDD** — failing test → 実装 → リファクタ
