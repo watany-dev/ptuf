@@ -1,0 +1,7 @@
+self-hosted-runner:
+  labels: []
+config-variables:
+paths:
+  ".github/workflows/release.yml":
+    ignore:
+      - 'shellcheck reported issue.*SC(2086|2129)'
