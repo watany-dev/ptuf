@@ -43,7 +43,7 @@ credential らしき値は保存前に redact する。
 | `projectRoot` | string \| null | 検出された repo root |
 | `mode` | string | その時点の `enforce` / `monitor` / `observe` |
 | `modeDemoted` | bool | `true` のとき `mode: monitor` / `observe` で `deny` が `monitor` に降格された (フィールドは `false` のとき省略) |
-| `agent` | string | 呼び出し経路。`claude-code` (hook) / `cli` (`eval`) / `compat` (引数なし stdin) |
+| `agent` | string | 呼び出し経路。`claude-code` (hook) / `cli` (`eval`) |
 | `pluginVersions` | string[] | ロード済み plugin の `name@version` 配列。空のときは省略 |
 | `allowlistId` | string \| null | allowlist で rule が抑制された結果として `Allow` になった場合に、最初に hit した allowlist の `id`。`Deny` / `Monitor` / `Ask` のときは常に省略。複数の allowlist エントリが同じ decision に効いていた場合は最初に hit した id だけが記録される (将来 v2 で配列化を検討) |
 

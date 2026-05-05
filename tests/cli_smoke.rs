@@ -80,7 +80,7 @@ fn eval_allows_safe_command_with_exit_zero() {
 #[test]
 fn hook_subcommand_emits_json_for_deny() {
     let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
-    let (code, stdout, stderr) = run(&["hook", "claude-code", "pre-tool-use"], payload);
+    let (code, stdout, stderr) = run(&["hook", "claude-code"], payload);
     assert_eq!(code, 2);
     assert!(stdout.contains("\"hookSpecificOutput\""));
     assert!(stdout.contains("\"hookEventName\":\"PreToolUse\""));
@@ -91,40 +91,23 @@ fn hook_subcommand_emits_json_for_deny() {
 #[test]
 fn hook_subcommand_allows_safe_payload_with_empty_streams() {
     let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
-    let (code, stdout, stderr) = run(&["hook", "claude-code", "pre-tool-use"], payload);
+    let (code, stdout, stderr) = run(&["hook", "claude-code"], payload);
     assert_eq!(code, 0);
     assert!(stdout.is_empty());
     assert!(stderr.is_empty());
 }
 
 #[test]
-fn compat_mode_handles_payload_without_args() {
-    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
-    let (code, stdout, stderr) = run(&[], payload);
-    assert_eq!(code, 2);
-    assert!(stdout.is_empty());
-    assert!(stderr.contains("Blocked by ptuf rule core.filesystem.destructive-rm."));
-}
-
-#[test]
-fn compat_mode_allows_safe_payload() {
-    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
-    let (code, stdout, stderr) = run(&[], payload);
-    assert_eq!(code, 0);
-    assert!(stdout.is_empty());
-    assert!(stderr.is_empty());
-}
-
-#[test]
-fn invalid_json_in_compat_mode_returns_one() {
-    let (code, _stdout, stderr) = run(&[], "not json");
+fn no_args_returns_one_with_missing_subcommand_error() {
+    let (code, stdout, stderr) = run(&[], "");
     assert_eq!(code, 1);
-    assert!(stderr.contains("invalid hook payload"));
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("missing value for subcommand"));
 }
 
 #[test]
 fn invalid_json_in_hook_subcommand_returns_one() {
-    let (code, _stdout, stderr) = run(&["hook", "claude-code", "pre-tool-use"], "not json");
+    let (code, _stdout, stderr) = run(&["hook", "claude-code"], "not json");
     assert_eq!(code, 1);
     assert!(stderr.contains("invalid hook payload"));
 }
@@ -158,7 +141,7 @@ fn eval_asks_git_reset_hard() {
 #[test]
 fn hook_denies_read_of_sensitive_path() {
     let payload = r#"{"tool_name":"Read","tool_input":{"file_path":"~/.ssh/id_rsa"}}"#;
-    let (code, stdout, stderr) = run(&["hook", "claude-code", "pre-tool-use"], payload);
+    let (code, stdout, stderr) = run(&["hook", "claude-code"], payload);
     assert_eq!(code, 2);
     assert!(stdout.contains("\"permissionDecision\":\"deny\""));
     assert!(stderr.contains("core.secrets.sensitive-read"));
@@ -263,7 +246,7 @@ fn audit_jsonl_carries_schema_version_and_agent_for_hook_subcommand() {
 
     let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
     let mut child = binary()
-        .args(["hook", "claude-code", "pre-tool-use"])
+        .args(["hook", "claude-code"])
         .current_dir(&dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -320,7 +303,7 @@ fn audit_jsonl_carries_agent_cli_for_eval_subcommand() {
 #[test]
 fn hook_denies_mcp_write_to_protected_claude_settings() {
     let payload = r#"{"tool_name":"mcp__github__create_or_update_file","tool_input":{"path":"~/.claude/settings.json","content":"{}"}}"#;
-    let (code, stdout, stderr) = run(&["hook", "claude-code", "pre-tool-use"], payload);
+    let (code, stdout, stderr) = run(&["hook", "claude-code"], payload);
     assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
     assert!(stderr.contains("core.self_protection.claude-settings"));
 }
@@ -329,46 +312,12 @@ fn hook_denies_mcp_write_to_protected_claude_settings() {
 fn hook_denies_mcp_filesystem_read_of_aws_credentials() {
     let payload =
         r#"{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"~/.aws/credentials"}}"#;
-    let (code, _stdout, stderr) = run(&["hook", "claude-code", "pre-tool-use"], payload);
+    let (code, _stdout, stderr) = run(&["hook", "claude-code"], payload);
     assert_eq!(code, 2);
     assert!(
         stderr.contains("core.secrets.sensitive-read"),
         "stderr was: {stderr}"
     );
-}
-
-#[test]
-fn audit_jsonl_carries_agent_compat_for_compat_mode() {
-    let dir = std::env::temp_dir().join(format!(
-        "ptuf-audit-compat-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
-    let audit_path = dir.join("audit.jsonl");
-    let yaml = format!("audit:\n  path: {}\n", audit_path.display());
-    std::fs::write(dir.join(".ptuf.yaml"), yaml).expect("write yaml");
-
-    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
-    let mut child = binary()
-        .current_dir(&dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn");
-    {
-        let mut sin = child.stdin.take().expect("stdin");
-        sin.write_all(payload.as_bytes()).expect("write stdin");
-    }
-    let output = child.wait_with_output().expect("wait");
-    assert_eq!(output.status.code(), Some(2));
-
-    let body = std::fs::read_to_string(&audit_path).expect("read audit");
-    let line = body.lines().next().expect("at least one line");
-    assert!(line.contains("\"agent\":\"compat\""), "line: {line}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

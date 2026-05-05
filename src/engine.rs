@@ -203,7 +203,7 @@ impl Engine {
     }
 
     /// Tag this engine with the adapter that produced the request
-    /// (`claude-code` / `cli` / `compat`). Surfaces in audit records
+    /// (`claude-code` / `cli`). Surfaces in audit records
     /// as the `agent` field. Defaults to `"unknown"`.
     pub fn with_agent(mut self, agent: &'static str) -> Self {
         self.agent = agent;

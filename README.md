@@ -10,10 +10,13 @@ decision via exit code and stderr.
 
 ## Status
 
-v0.3 — broader tool coverage (`Read` / `Edit` / `Write` / `WebFetch` in
-addition to `Bash`), built-in packs for git and self-protection, and
-two new CLI subcommands (`ptuf init claude-code`, `ptuf doctor`) on top
-of the v0.2 plugin / audit foundation.
+v0.4 — broader tool coverage (`Read` / `Edit` / `Write` / `WebFetch` in
+addition to `Bash`), built-in packs for git and self-protection, MCP
+fact extraction, and a streamlined CLI surface (`ptuf hook <agent>` /
+`ptuf init <agent>` / `ptuf eval` / `ptuf doctor` / `ptuf plugin test`).
+v0.3's bare-`ptuf` compatibility mode and the `pre-tool-use` hierarchy
+token were removed; agents are now selected exclusively by the
+positional `<agent>` argument.
 
 Built-in rules (always enabled, hard-deny unless noted):
 
@@ -43,7 +46,7 @@ Built-in rules (always enabled, hard-deny unless noted):
   to `deny` while on `main` / `master` / `release/*`. Disabled by
   default — enable with `packs.core.project_hygiene.enabled: true`.
 
-v0.4 features merging in (still pre-release):
+v0.4 features (additive on top of v0.3):
 
 - **MCP fact extraction** — `mcp__<server>__<tool>` calls are normalised
   on the generic top-level `path` / `url` / `content` keys, so existing
@@ -55,6 +58,9 @@ v0.4 features merging in (still pre-release):
 - **Structured `ptuf doctor --json`** — stable `schemaVersion: 1`
   envelope for CI / audit tooling.
 - **`core.project_hygiene` v1** *(opt-in)* — see the rule list above.
+- **Streamlined CLI surface** — `Compat` (bare `ptuf`) and the
+  `pre-tool-use` hierarchy token were removed; use
+  `ptuf hook claude-code` explicitly.
 
 v0.3 features (additive on top of v0.2):
 
@@ -75,9 +81,9 @@ v0.3 features (additive on top of v0.2):
   `--json` emits a stable `schemaVersion: 1` envelope (binary, config
   layers, plugins, claude integration state, `hasFailure`) for CI /
   audit tooling.
-- **Fail-closed CLI** — every CLI entry point (`ptuf` compat / `ptuf hook
-  ...` / `ptuf eval`) deny-fails when the engine cannot load policy,
-  surfacing the reserved rule id `core.engine.policy-load-failed`.
+- **Fail-closed CLI** — every CLI entry point (`ptuf hook ...` /
+  `ptuf eval`) deny-fails when the engine cannot load policy, surfacing
+  the reserved rule id `core.engine.policy-load-failed`.
   Library-mode `crate::decide` still falls back to a default engine for
   embedded callers.
 
@@ -93,8 +99,8 @@ v0.2 features carried forward:
   end-to-end and exits non-zero on regressions.
 - **Audit JSONL** — every decision is recorded to
   `~/.local/share/ptuf/audit.jsonl` (overridable). Records carry
-  `schemaVersion: 1`, the calling `agent` (`claude-code` / `cli` /
-  `compat`), loaded `pluginVersions` (`name@version` array), and the
+  `schemaVersion: 1`, the calling `agent` (`claude-code` / `cli`),
+  loaded `pluginVersions` (`name@version` array), and the
   `allowlistId` that suppressed a rule when the outcome was `Allow`.
   Strict redaction masks env-var token assignments, GH / OpenAI / AWS
   keys, JWTs, HTTP basic auth, and PEM blobs.
@@ -122,25 +128,23 @@ make build
 
 ## Run
 
-`ptuf` exposes three invocation styles. All of them share the same
-`decide()` core.
+`ptuf` exposes two invocation styles. Both share the same `decide()`
+core.
 
 ```bash
-# 1. Compatibility mode: stdin JSON -> exit code (0 allow / 2 deny)
-echo '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | cargo run -q
-echo "exit=$?"   # 0 = Allow
-
-# 2. Hook subcommand: same as above, but also writes a Claude-Code
-#    `hookSpecificOutput` JSON envelope to stdout on deny / ask.
+# 1. Hook subcommand: stdin JSON -> exit code + `hookSpecificOutput`
+#    envelope on stdout (deny / ask only). The agent name is required
+#    so the same binary can serve future Codex / Cursor / Gemini
+#    adapters via `ptuf hook <agent>`.
 echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
-    | cargo run -q -- hook claude-code pre-tool-use
+    | cargo run -q -- hook claude-code
 
-# 3. One-shot eval: handy for trying a rule from the shell.
+# 2. One-shot eval: handy for trying a rule from the shell.
 cargo run -q -- eval --tool Bash 'rm -rf /'
 ```
 
-Exit codes are uniform across all three: `0` for allow / monitor / ask,
-`2` for deny, `1` for an internal error (invalid JSON, unknown
+Exit codes are uniform across both: `0` for allow / monitor / ask,
+`2` for deny, `1` for an internal error (invalid JSON, missing
 subcommand, ...).
 
 ## Use as a Claude Code PreToolUse hook
@@ -164,7 +168,7 @@ The resulting `~/.claude/settings.json` looks like:
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/ptuf hook claude-code pre-tool-use"
+            "command": "/absolute/path/to/ptuf hook claude-code"
           }
         ]
       }
@@ -175,9 +179,14 @@ The resulting `~/.claude/settings.json` looks like:
 
 Claude Code pipes the tool-use request to `ptuf` as JSON; a non-zero exit
 code blocks the tool call and the `hookSpecificOutput` JSON / stderr
-message is surfaced to both the agent and the user. The bare
-`/absolute/path/to/ptuf` form (without the subcommand) keeps working as a
-compatibility mode for older configurations.
+message is surfaced to both the agent and the user.
+
+> **Migrating from v0.3:** the legacy 3-token entry
+> (`ptuf hook claude-code pre-tool-use`) and the bare `ptuf`
+> compatibility mode were removed in v0.4. Re-run
+> `ptuf init claude-code` to append a fresh entry with the new
+> 2-token form; the old entry is detected as unrelated and can be
+> removed manually.
 
 Run `ptuf doctor` afterwards to confirm the binary, repo scope, loaded
 plugins, and hook registration are all healthy.
@@ -256,7 +265,7 @@ workflow itself, and a coverage gate.
 
 ## Design docs
 
-The intended scope reaches beyond the current v0.3 milestone (multi-agent
+The intended scope reaches beyond the current v0.4 milestone (multi-agent
 adapters, signed plugins, `dataflow.basic`, …). Start with
 [`docs/design/overview.md`](docs/design/overview.md) for goals,
 non-goals, and an index of the design notes (architecture, decision

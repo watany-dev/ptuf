@@ -9,7 +9,8 @@
 
 判定コアの拡張と、最も重要な 3 rule + `eval` 動作確認 CLI を提供する。
 
-- `ptuf hook claude-code pre-tool-use` (引数なし互換モードも維持)
+- `ptuf hook claude-code` (v0.3 までは `pre-tool-use` 階層と引数なし互換
+  モードも提供。v0.4 で削除し本形式に統一)
 - `ptuf eval --tool Bash '<cmd>'`、`--help` / `--version`
 - structured JSON response (Claude Code 形式の `hookSpecificOutput`)
 - `Decision` 4 variants (`allow` / `monitor` / `ask` / `deny`) と

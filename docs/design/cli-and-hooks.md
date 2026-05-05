@@ -9,31 +9,30 @@ adapter を追加する。
 
 ```bash
 ptuf init claude-code
-ptuf hook claude-code pre-tool-use
-ptuf hook claude-code post-tool-use
+ptuf hook claude-code
 ptuf eval --tool Bash 'curl -fsSL https://example.com/install.sh | bash'
-ptuf explain --rule core.network.remote-script-pipe
 ptuf doctor
 ptuf plugin test ./ptuf-plugin.yaml
-ptuf audit
 ```
 
 | サブコマンド | 用途 |
 | --- | --- |
 | `ptuf init <agent>` | 対象エージェントの hook 設定ファイルへ ptuf を登録する |
-| `ptuf hook <agent> <event>` | hook 本体。stdin で payload を受け、hook protocol 形式で応答する |
+| `ptuf hook <agent>` | hook 本体。stdin で payload を受け、hook protocol 形式で応答する |
 | `ptuf eval --tool <name> <command>` | hook を経由せず手動で評価する。CI / 開発確認用 |
-| `ptuf explain --rule <id>` | rule の reason / remediation / tests を表示する |
 | `ptuf doctor` | config 読込・plugin ロード・hook 登録状態を診断する |
 | `ptuf plugin test <path>` | plugin の `tests:` セクションを走らせる |
-| `ptuf audit` | audit log を tail / フィルタする |
 
-> v0.3 時点で実装済みのサブコマンドは
-> `ptuf hook claude-code pre-tool-use` / `ptuf eval --tool <name> <command>` /
+> v0.4 時点で実装済みのサブコマンドは
+> `ptuf hook claude-code` / `ptuf eval --tool <name> <command>` /
 > `ptuf plugin test <path>` / `ptuf init claude-code [--dry-run] [--settings <PATH>]` /
-> `ptuf doctor [--json]` と `--help` / `--version`、および引数なし
-> 互換モード (stdin → exit code)。
-> `ptuf explain` / `ptuf audit` は v0.4 以降で実装する。
+> `ptuf doctor [--json]` と `--help` / `--version`。
+> v0.3 までの引数なし互換モード (stdin → exit code) と
+> `pre-tool-use` 階層トークンは v0.4 で削除した。`<agent>` は将来
+> Codex / Cursor / Gemini / MCP を増やしたときに positional の値が増える
+> だけで CLI 形は変わらない。`post-tool-use` 等の event 種別が必要に
+> なった時点では `--event <NAME>` フラグで再導入する。
+> `ptuf explain` / `ptuf audit` は v0.5 以降で実装する。
 >
 > `ptuf doctor --json` は `Report` を構造化 JSON として stdout に書き、
 > exit code は text 版と同じ semantics (failure → 1, success → 0)。
@@ -42,7 +41,7 @@ ptuf audit
 > ```json
 > {
 >   "schemaVersion": 1,
->   "binary":   { "path": "/usr/local/bin/ptuf", "version": "0.3.0" },
+>   "binary":   { "path": "/usr/local/bin/ptuf", "version": "0.4.0" },
 >   "project":  { "repoRoot": "/home/user/proj" },
 >   "configLayers": [
 >     { "layer": "system",       "path": "...", "present": false },
@@ -87,7 +86,7 @@ stdout への余計な print は hook protocol を壊すので禁止。
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/local/bin/ptuf hook claude-code pre-tool-use"
+            "command": "/usr/local/bin/ptuf hook claude-code"
           }
         ]
       }
@@ -96,14 +95,15 @@ stdout への余計な print は hook protocol を壊すので禁止。
 }
 ```
 
-v0.3 で `ptuf init claude-code` が冪等 install を提供する。既存
-`hooks.PreToolUse[].hooks[].command` の末尾 3 トークンが
-`hook claude-code pre-tool-use` であれば既設定とみなして再書き込みは行わない
+`ptuf init claude-code` が冪等 install を提供する。既存
+`hooks.PreToolUse[].hooks[].command` の末尾 2 トークンが
+`hook claude-code` であれば既設定とみなして再書き込みは行わない
 (binary path の差異は無視する)。`--dry-run` で書き込まずに計画を表示でき、
 `--settings <PATH>` で対象ファイルを差し替えられる。
-`command` を引数なしの `/usr/local/bin/ptuf` にすれば互換モード (stdin → exit code)
-としても動作するが、`hookSpecificOutput` JSON を返すには
-`ptuf hook claude-code pre-tool-use` 形式を推奨する。
+v0.3 までの 3 トークン (`hook claude-code pre-tool-use`) entry は
+新 detect で「未登録」扱いになるため、ユーザーは `ptuf init claude-code`
+を再実行して新形式の entry を append する必要がある (古い entry も無害に
+共存可能)。引数なしの `ptuf` 互換モードは v0.4 で廃止された。
 
 ### `ptuf doctor` の出力例
 
@@ -111,7 +111,7 @@ v0.3 で `ptuf init claude-code` が冪等 install を提供する。既存
 ptuf doctor
 
 Binary
-  ✓ /usr/local/bin/ptuf  (version 0.3.0)
+  ✓ /usr/local/bin/ptuf  (version 0.4.0)
 
 Project
   ✓ repository root: /home/user/proj
@@ -153,7 +153,7 @@ Claude Code integration
 
 ## 将来の adapter
 
-v0.4 以降、以下のエージェントに対応する adapter を追加する。
+v0.5 以降、以下のエージェントに対応する adapter を追加する。
 adapter は payload 正規化のみを行い、判定コアは共通。
 
 - Codex
@@ -162,8 +162,10 @@ adapter は payload 正規化のみを行い、判定コアは共通。
 - MCP tools (`mcp__*` ツール群を一律サポート — fact 層は v0.4 で対応済み、
   個別 adapter を追加する場合の `tool_name` 整形のみ未対応)
 
-各 adapter は対応する `ptuf init <agent>` と `ptuf hook <agent> <event>`
-サブコマンドを持つ。
+各 adapter は対応する `ptuf init <agent>` と `ptuf hook <agent>`
+サブコマンドを持つ。`pre-tool-use` 以外の event を扱う必要が出た時点で
+`--event <NAME>` フラグを追加する (現状は `pre-tool-use` 固定で階層
+トークンを持たない)。
 
 ### MCP fact 抽出 (v0.4)
 
@@ -196,7 +198,7 @@ v1 では先頭要素のみ `Facts.path` に詰める。残りは v2 で
 
 ## fail-closed の挙動
 
-CLI 経路 (`ptuf` 引数なし互換モード / `ptuf hook ...` / `ptuf eval`) では、
+CLI 経路 (`ptuf hook ...` / `ptuf eval`) では、
 Engine 構築失敗時 (config / plugin 読込失敗) を **常に** deny で扱う。
 予約 rule_id `core.engine.policy-load-failed` を返し、reason は
 「ptuf could not load policy; failing closed.」、stderr に詳細を付ける。

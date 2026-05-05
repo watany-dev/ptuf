@@ -25,7 +25,7 @@ pub const DEFAULT_MATCHER: &str = "Bash|Read|Edit|Write|WebFetch|mcp__.*";
 /// as a ptuf PreToolUse hook. We compare token-by-token instead of
 /// checking a string suffix so we don't depend on the on-disk
 /// binary name (e.g. test binaries are named `ptuf-<hash>`).
-pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "claude-code", "pre-tool-use"];
+pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "claude-code"];
 
 /// Default settings file path (`$HOME/.claude/settings.json`). Returns
 /// `None` when `$HOME` is unset; callers should map that to
@@ -51,7 +51,7 @@ pub fn install(
     ptuf_binary: &str,
     dry_run: bool,
 ) -> Result<InstallOutcome, InitError> {
-    let command = format!("{ptuf_binary} hook claude-code pre-tool-use");
+    let command = format!("{ptuf_binary} hook claude-code");
     let mut root = read_settings(settings_path)?;
 
     if has_existing_hook(&root) {
@@ -251,7 +251,7 @@ mod tests {
         let body = read(&path);
         assert!(body.contains("\"PreToolUse\""));
         assert!(body.contains(DEFAULT_MATCHER));
-        assert!(body.contains("/usr/local/bin/ptuf hook claude-code pre-tool-use"));
+        assert!(body.contains("/usr/local/bin/ptuf hook claude-code"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -265,7 +265,7 @@ mod tests {
                     {
                         "matcher": "Bash",
                         "hooks": [
-                            { "type": "command", "command": "/some/where/ptuf hook claude-code pre-tool-use" }
+                            { "type": "command", "command": "/some/where/ptuf hook claude-code" }
                         ]
                     }
                 ]
@@ -381,7 +381,7 @@ mod tests {
                     {
                         "matcher": "Bash",
                         "hooks": [
-                            { "type": "command", "command": "/x/ptuf hook claude-code pre-tool-use" }
+                            { "type": "command", "command": "/x/ptuf hook claude-code" }
                         ]
                     }
                 ]
@@ -462,7 +462,7 @@ mod tests {
                     {
                         "matcher": "Bash",
                         "hooks": [
-                            { "type": "command", "command": "/x/ptuf hook claude-code pre-tool-use   " }
+                            { "type": "command", "command": "/x/ptuf hook claude-code   " }
                         ]
                     }
                 ]

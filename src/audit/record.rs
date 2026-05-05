@@ -52,9 +52,8 @@ pub struct AuditRecord {
     /// wins (insertion order from the merged config).
     #[serde(rename = "allowlistId", skip_serializing_if = "Option::is_none")]
     pub allowlist_id: Option<String>,
-    /// Adapter that produced the decision (`claude-code` / `cli` /
-    /// `compat`). `unknown` for direct library callers that never
-    /// configured one.
+    /// Adapter that produced the decision (`claude-code` / `cli`).
+    /// `unknown` for direct library callers that never configured one.
     pub agent: &'static str,
     /// `name@version` for every loaded plugin in load order. Empty
     /// vec is omitted from the serialised form.
@@ -73,9 +72,9 @@ impl AuditRecord {
     /// outside this constructor lets tests inject untouched commands
     /// and check the writer/sink in isolation.
     ///
-    /// `agent` should be a stable adapter name (`claude-code` / `cli`
-    /// / `compat`); use `"unknown"` for embedded library callers that
-    /// have not configured one. `plugin_versions` is the engine's
+    /// `agent` should be a stable adapter name (`claude-code` / `cli`);
+    /// use `"unknown"` for embedded library callers that have not
+    /// configured one. `plugin_versions` is the engine's
     /// cached `name@version` list; an empty vec is omitted from JSON.
     /// `allowlist_id` should be `Some` only on `Allow` outcomes that
     /// were produced by a non-expired allowlist hit.
@@ -331,11 +330,11 @@ mod tests {
             None,
             "ls".into(),
             None,
-            "compat",
+            "claude-code",
             Vec::new(),
         );
         let json = serde_json::to_string(&r).unwrap();
-        assert!(json.contains("\"agent\":\"compat\""));
+        assert!(json.contains("\"agent\":\"claude-code\""));
     }
 
     #[test]

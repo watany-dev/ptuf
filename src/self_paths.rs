@@ -325,7 +325,7 @@ mod tests {
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "./hooks/guard.sh hook claude-code pre-tool-use" }
+          { "type": "command", "command": "./hooks/guard.sh hook claude-code" }
         ]
       }
     ]

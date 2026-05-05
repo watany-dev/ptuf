@@ -47,12 +47,12 @@ Allow / Deny を exit code と stderr メッセージで返す CLI バイナリ 
 - `src/engine.rs` — config / plugin / audit / `ProtectedPaths` を抱える Engine。
   `for_cwd` / `for_path_opt` / `with_config` / `with_components` / `with_agent`
 - `src/audit/` — JSONL 永続化。`AuditRecord` は `schemaVersion: 1` を含み、
-  `agent` (`claude-code` / `cli` / `compat`) と `pluginVersions`
+  `agent` (`claude-code` / `cli`) と `pluginVersions`
   (`name@version` 配列) と `allowlistId` (allow に至った allowlist の id) を伝える
-- `src/init/` — `ptuf init <agent>`。v0.3 では `claude_code` adapter のみ
+- `src/init/` — `ptuf init <agent>`。v0.4 では `claude_code` adapter のみ
 - `src/doctor.rs` — `ptuf doctor` 診断レポート (`Report::gather` + `render`)
-- `src/cli.rs` — 引数 parse とサブコマンド実行 (`Compat` /
-  `HookClaudeCodePreToolUse` / `Eval` / `PluginTest` / `Init` / `Doctor` /
+- `src/cli.rs` — 引数 parse とサブコマンド実行 (`Hook` /
+  `Eval` / `PluginTest` / `Init` / `Doctor` /
   `Help` / `Version`)。fail-closed は `build_engine_or_fail_closed`
 - `src/io_runner.rs` — stdin → `decide` → stdout / stderr / `ExitCode`
 - `src/main.rs` — argv / 各 stream を `io_runner::run` に渡す数行の shim

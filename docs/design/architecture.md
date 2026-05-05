@@ -127,13 +127,12 @@ JSONL audit log に出す ([`audit.md`](audit.md))。
 
 ### 出力
 
-`ptuf` の起動形態は 3 つあり、それぞれ stdout / stderr / exit code の組み合わせが
+`ptuf` の起動形態は 2 つあり、それぞれ stdout / stderr / exit code の組み合わせが
 異なる。判定そのもの (exit code 0/2) と内部エラー (exit code 1) を厳密に区別する。
 
 | 起動形態 | 例 | stdout | stderr | exit code |
 | --- | --- | --- | --- | --- |
-| 互換モード (引数なし) | `ptuf` | (空) | deny 時のみ reason | 0 / 2 |
-| `hook` サブコマンド | `ptuf hook claude-code pre-tool-use` | deny / ask 時に `hookSpecificOutput` JSON | reason | 0 / 2 |
+| `hook` サブコマンド | `ptuf hook claude-code` | deny / ask 時に `hookSpecificOutput` JSON | reason | 0 / 2 |
 | `eval` サブコマンド | `ptuf eval --tool Bash 'rm -rf /'` | 人間可読な判定結果 | deny 時のみ reason | 0 / 2 |
 
 | 内部エラー | stderr | exit code |
