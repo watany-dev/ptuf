@@ -95,6 +95,20 @@ jobs:
       - name: Run actionlint
         run: ./actionlint -color
 
+  zizmor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@b1d7e1fb5de872772f31590499237e7cce841e8e # v0.5.3
+        with:
+          inputs: ./.github/workflows/
+          persona: auditor
+          version: 1.24.1
+
   security:
     runs-on: ubuntu-latest
     steps:
