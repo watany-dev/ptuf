@@ -244,6 +244,17 @@ match decide(&input) {
 }
 ```
 
+## Development principles
+
+- **Minimal dependencies** — every new crate must justify its weight.
+- **Safety-first** — `#![forbid(unsafe_code)]`; no `unwrap()` / `expect()`
+  outside tests.
+- **Test coverage** — `cargo-tarpaulin` gate at 95%.
+- **Supply chain** — `cargo-deny` audits advisories, licenses, bans, sources.
+
+See [`docs/design/architecture.md`](docs/design/architecture.md) for the
+rationale and enforcement details.
+
 ## Develop
 
 Run the full pipeline locally before pushing:
