@@ -695,4 +695,116 @@ mod tests {
             Some(Decision::Deny { .. })
         ));
     }
+
+    use crate::testing::proptest::{arbitrary_command, bash_command, non_bash_hook_input};
+    use proptest::prelude::*;
+
+    fn all_git_rules() -> [&'static GitRule; 7] {
+        [
+            &FORCE_PUSH_RULE,
+            &FORCE_PUSH_WITH_LEASE_RULE,
+            &RESET_HARD_RULE,
+            &CLEAN_FDX_RULE,
+            &BRANCH_DELETE_FORCE_RULE,
+            &STASH_CLEAR_RULE,
+            &REMOTE_SET_URL_RULE,
+        ]
+    }
+
+    proptest! {
+        // None of the git rules ever fire on non-Bash tools, even when
+        // the non-Bash payload sneakily carries a git-shaped command.
+        #[test]
+        fn pbt_git_rules_ignore_non_bash(input in non_bash_hook_input()) {
+            let facts = crate::facts::extract(&input);
+            for rule in all_git_rules() {
+                prop_assert!(rule.evaluate(&facts, &input).is_none());
+            }
+        }
+
+        // Adversarial: arbitrary bash strings must not panic any of the
+        // matchers. The bash-facts layer already feeds `unwrap_sudo`.
+        #[test]
+        fn pbt_git_rules_never_panic_on_arbitrary_bash(cmd in arbitrary_command()) {
+            let input = bash(&cmd);
+            let facts = crate::facts::extract(&input);
+            for rule in all_git_rules() {
+                let _ = rule.evaluate(&facts, &input);
+            }
+        }
+
+        // When a rule fires on a structured bash command, the resulting
+        // decision's rule_id must exactly equal the static spec id, and
+        // the decision shape must match `default_decision()`.
+        #[test]
+        fn pbt_git_rule_decision_shape_matches_spec(cmd in bash_command()) {
+            let input = bash(&cmd);
+            let facts = crate::facts::extract(&input);
+            for rule in all_git_rules() {
+                if let Some(d) = rule.evaluate(&facts, &input) {
+                    prop_assert_eq!(d.rule_id(), Some(rule.spec.id));
+                    let kind_matches = matches!(
+                        (&d, rule.spec.decision_kind),
+                        (Decision::Deny { .. }, DecisionKind::Deny)
+                            | (Decision::Ask { .. }, DecisionKind::Ask)
+                            | (Decision::Monitor { .. }, DecisionKind::Monitor)
+                    );
+                    prop_assert!(kind_matches, "decision shape mismatch: {d:?}");
+                }
+            }
+        }
+
+        // A bash command that has no `git` head anywhere can never fire
+        // any of the git rules (the matchers all gate on
+        // `is_git(head)`).
+        #[test]
+        fn pbt_no_git_head_no_fire(
+            head in "[a-z][a-z0-9]{0,5}",
+            args in proptest::collection::vec("[a-zA-Z0-9_./-]{1,8}", 0..3),
+        ) {
+            prop_assume!(!GIT_HEADS.contains(&head.as_str()) && head != "sudo");
+            let cmd = if args.is_empty() {
+                head
+            } else {
+                format!("{} {}", head, args.join(" "))
+            };
+            let input = bash(&cmd);
+            let facts = crate::facts::extract(&input);
+            for rule in all_git_rules() {
+                prop_assert!(rule.evaluate(&facts, &input).is_none());
+            }
+        }
+
+        // Force-push fires when `--force` appears, regardless of any
+        // non-flag positional ref-spec arguments after it.
+        #[test]
+        fn pbt_force_push_fires_for_bare_force(
+            extra in proptest::collection::vec("[a-zA-Z0-9_./]{1,8}", 0..3),
+        ) {
+            let cmd = format!("git push --force {}", extra.join(" "));
+            let input = bash(&cmd);
+            let facts = crate::facts::extract(&input);
+            let force = FORCE_PUSH_RULE.evaluate(&facts, &input);
+            let lease = FORCE_PUSH_WITH_LEASE_RULE.evaluate(&facts, &input);
+            prop_assert!(force.is_some());
+            prop_assert!(lease.is_none());
+        }
+
+        // Lease alone ⇒ lease fires, FORCE_PUSH does not — provided the
+        // remaining arguments are non-flag positionals (a short-flag
+        // cluster containing `f`, e.g. `-af`, legitimately counts as
+        // `-f`/force).
+        #[test]
+        fn pbt_lease_alone_only_lease_fires(
+            extra in proptest::collection::vec("[a-zA-Z0-9_./]{1,8}", 0..3),
+        ) {
+            let cmd = format!("git push --force-with-lease {}", extra.join(" "));
+            let input = bash(&cmd);
+            let facts = crate::facts::extract(&input);
+            let force = FORCE_PUSH_RULE.evaluate(&facts, &input);
+            let lease = FORCE_PUSH_WITH_LEASE_RULE.evaluate(&facts, &input);
+            prop_assert!(force.is_none());
+            prop_assert!(lease.is_some());
+        }
+    }
 }

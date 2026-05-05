@@ -280,5 +280,104 @@ mod tests {
             }
             prop_assert_eq!(redact_strict(&s), s);
         }
+
+        // Basic-auth password is replaced with `***`; the username is
+        // preserved unchanged. Schemes and hosts are kept intact too.
+        #[test]
+        fn pbt_basic_auth_redaction_keeps_user(
+            scheme in "(https?|ssh|ftp)",
+            user in "[a-zA-Z][a-zA-Z0-9._-]{0,12}",
+            pass in "[A-Za-z0-9!#$%^*]{1,20}",
+            host in "[a-z][a-z0-9.-]{0,12}\\.com",
+        ) {
+            let s = format!("{scheme}://{user}:{pass}@{host}/path");
+            let out = redact_strict(&s);
+            let user_mask = format!("{user}:***@");
+            let scheme_prefix = format!("{scheme}://");
+            prop_assert!(out.contains(&user_mask));
+            prop_assert!(out.contains(&scheme_prefix));
+            prop_assert!(out.contains(host.as_str()));
+            // Password leakage: ensure the literal pass token is gone.
+            // We can't simply check absence (pass might be a substring of
+            // user/host), but we can require the new form contains the
+            // mask between user/host.
+            prop_assert!(out.contains(":***@"));
+        }
+
+        // PEM blob redaction always drops the body between BEGIN / END
+        // markers when both are present.
+        #[test]
+        fn pbt_pem_blob_redaction_replaces_block(
+            label in "(?:RSA |EC |DSA |OPENSSH |)",
+            body in "[A-Za-z0-9/+= \\n]{16,80}",
+        ) {
+            let blob = format!(
+                "-----BEGIN {label}PRIVATE KEY-----\n{body}\n-----END {label}PRIVATE KEY-----"
+            );
+            let s = format!("echo '{blob}' && true");
+            let out = redact_strict(&s);
+            prop_assert!(out.contains("***"));
+            // The embedded body must be gone. body is at least 16 chars
+            // and made of base64-friendly classes, so substring presence
+            // means it leaked.
+            prop_assert!(!out.contains(&body), "leaked body in {out:?}");
+        }
+
+        // Output never contains the literal `***` placeholder more than
+        // once per redacted token (idempotence corollary). We check that
+        // running redact_strict on a redacted output does not introduce
+        // additional placeholders.
+        #[test]
+        fn pbt_idempotent_does_not_grow_placeholders(s in "[ -~]{0,80}") {
+            let once = redact_strict(&s);
+            let twice = redact_strict(&once);
+            let count_once = once.matches(PLACEHOLDER).count();
+            let count_twice = twice.matches(PLACEHOLDER).count();
+            prop_assert_eq!(count_once, count_twice);
+        }
+
+        // Redaction never expands the input by more than a bounded
+        // factor: each match shrinks to "***", so length must stay
+        // ≤ original length + (matches × len("***"))-ish. We assert a
+        // simpler upper bound: the output is no longer than the input
+        // plus the longest expansion we can think of (3× input).
+        #[test]
+        fn pbt_redaction_does_not_explode_length(s in "[ -~]{0,200}") {
+            let out = redact_strict(&s);
+            prop_assert!(out.len() <= s.len() * 3 + 16);
+        }
+
+        // Multi-token stuffing: combining several detectable patterns in
+        // one string redacts every one of them.
+        // The JWT detector anchors on `\b`, so the last segment must end
+        // in a word character (not `-`); we constrain the suffix
+        // accordingly.
+        #[test]
+        fn pbt_multi_token_stuffing(
+            ghp in "ghp_[A-Za-z0-9]{12,20}",
+            akia in "AKIA[A-Z0-9]{16}",
+            jwt_a in "[A-Za-z0-9_-]{4,8}",
+            jwt_b in "[A-Za-z0-9_-]{4,8}",
+            jwt_c in "[A-Za-z0-9_-]{3,7}[A-Za-z0-9_]",
+        ) {
+            let jwt = format!("eyJ{jwt_a}.{jwt_b}.{jwt_c}");
+            let s = format!("X={ghp} Y={akia} Z={jwt}");
+            let out = redact_strict(&s);
+            prop_assert!(!out.contains(&ghp));
+            prop_assert!(!out.contains(&akia));
+            prop_assert!(!out.contains(&jwt));
+        }
+
+        // Length is preserved or reduced: the placeholder is shorter
+        // than each minimum-length token detector, so redaction either
+        // shrinks the string or leaves it unchanged.
+        #[test]
+        fn pbt_redaction_of_known_tokens_shrinks_or_equals(
+            ghp in "ghp_[A-Za-z0-9]{12,30}",
+        ) {
+            let s = format!("echo {ghp}");
+            let out = redact_strict(&s);
+            prop_assert!(out.len() <= s.len());
+        }
     }
 }

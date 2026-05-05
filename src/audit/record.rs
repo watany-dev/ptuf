@@ -346,4 +346,139 @@ mod tests {
         assert_eq!(severity_label(Severity::High), "high");
         assert_eq!(severity_label(Severity::Critical), "critical");
     }
+
+    use crate::testing::proptest::{decision, mode, richer_hook_input, severity};
+    use proptest::option;
+    use proptest::prelude::*;
+
+    proptest! {
+        // build() must complete without panicking on every combination of
+        // Decision / Mode / Severity / HookInput shape we generate.
+        #[test]
+        fn pbt_build_never_panics(
+            decision in decision(),
+            mode in mode(),
+            mode_demoted in any::<bool>(),
+            input in richer_hook_input(),
+            severity in option::of(severity()),
+            cmd in "[ -~]{0,40}",
+        ) {
+            let _ = AuditRecord::build(
+                UNIX_EPOCH,
+                &decision,
+                mode,
+                mode_demoted,
+                &input,
+                None,
+                severity,
+                cmd,
+                None,
+                "unknown",
+                Vec::new(),
+            );
+        }
+
+        // The decision-label string is exactly one of the four documented
+        // tags and matches the variant that produced it.
+        #[test]
+        fn pbt_decision_label_is_stable_and_exhaustive(d in decision()) {
+            let label = decision_label(&d);
+            prop_assert!(matches!(label, "allow" | "monitor" | "ask" | "deny"));
+            let expected = match d {
+                Decision::Allow => "allow",
+                Decision::Monitor { .. } => "monitor",
+                Decision::Ask { .. } => "ask",
+                Decision::Deny { .. } => "deny",
+            };
+            prop_assert_eq!(label, expected);
+        }
+
+        // Mode label round-trips through the lowercase tag.
+        #[test]
+        fn pbt_mode_label_is_lowercase_tag(m in mode()) {
+            let label = mode_label(m);
+            prop_assert!(matches!(label, "enforce" | "monitor" | "observe"));
+            let expected = match m {
+                Mode::Enforce => "enforce",
+                Mode::Monitor => "monitor",
+                Mode::Observe => "observe",
+            };
+            prop_assert_eq!(label, expected);
+        }
+
+        // Severity label round-trips through the lowercase tag.
+        #[test]
+        fn pbt_severity_label_is_lowercase_tag(s in severity()) {
+            let label = severity_label(s);
+            prop_assert!(matches!(label, "info" | "low" | "medium" | "high" | "critical"));
+        }
+
+        // The constructed record always carries the decision label of
+        // the supplied decision and the tool name of the supplied input.
+        #[test]
+        fn pbt_record_mirrors_inputs(
+            decision in decision(),
+            mode in mode(),
+            mode_demoted in any::<bool>(),
+            input in richer_hook_input(),
+            severity in option::of(severity()),
+            cmd in "[ -~]{0,40}",
+        ) {
+            let r = AuditRecord::build(
+                UNIX_EPOCH,
+                &decision,
+                mode,
+                mode_demoted,
+                &input,
+                None,
+                severity,
+                cmd.clone(),
+                None,
+                "unknown",
+                Vec::new(),
+            );
+            prop_assert_eq!(r.decision, decision_label(&decision));
+            prop_assert_eq!(r.mode, mode_label(mode));
+            prop_assert_eq!(&r.tool, &input.tool_name);
+            prop_assert_eq!(r.command_redacted, cmd);
+            prop_assert_eq!(r.event, "PreToolUse");
+            prop_assert_eq!(r.mode_demoted, mode_demoted);
+            // rule_id round-trips: only Allow has None.
+            match decision {
+                Decision::Allow => prop_assert!(r.rule_id.is_none()),
+                _ => prop_assert!(r.rule_id.is_some()),
+            }
+        }
+
+        // Serialising the record yields valid JSON containing the
+        // documented top-level keys.
+        #[test]
+        fn pbt_record_serialises_to_object(
+            decision in decision(),
+            mode in mode(),
+            mode_demoted in any::<bool>(),
+            input in richer_hook_input(),
+            severity in option::of(severity()),
+            cmd in "[ -~]{0,40}",
+        ) {
+            let r = AuditRecord::build(
+                UNIX_EPOCH,
+                &decision,
+                mode,
+                mode_demoted,
+                &input,
+                None,
+                severity,
+                cmd,
+                None,
+                "unknown",
+                Vec::new(),
+            );
+            let v = serde_json::to_value(&r).expect("serialise");
+            let obj = v.as_object().expect("top-level object");
+            for k in ["timestamp", "event", "tool", "decision", "commandRedacted", "mode"] {
+                prop_assert!(obj.contains_key(k), "missing key {k}");
+            }
+        }
+    }
 }
