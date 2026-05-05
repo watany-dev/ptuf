@@ -15,6 +15,7 @@ use crate::audit::{AuditSink, JsonlSink, NoopSink, redact_strict};
 use crate::config::{self, Allowlist, Config, ConfigError, Mode, PackOverride, RedactionMode};
 use crate::decision::{Decision, Severity, aggregate};
 use crate::facts;
+use crate::facts::project::ProjectFacts;
 use crate::hook_input::HookInput;
 use crate::plugin::{PluginError, PluginSet};
 use crate::rules::{self, ConfigRule};
@@ -27,6 +28,17 @@ pub struct Engine {
     audit_sink: Box<dyn AuditSink>,
     repo_root: Option<PathBuf>,
     protected: ProtectedPaths,
+    /// Adapter that constructed this engine — surfaced in audit
+    /// records as the `agent` field. Defaults to `"unknown"`.
+    agent: &'static str,
+    /// Cached `name@version` for every loaded plugin in load order.
+    /// Built once at constructor time so audit records do not pay a
+    /// formatting cost per `decide` call.
+    plugin_versions: Vec<String>,
+    /// Project-level facts (lock-file kinds, current branch, protected
+    /// flag) collected once at construction so per-decide evaluation
+    /// stays I/O-free.
+    project_facts: ProjectFacts,
 }
 
 /// Result of [`Engine::decide`].
@@ -41,6 +53,11 @@ pub struct Outcome {
     /// `true` when the pre-demotion decision was a `Deny` but `mode`
     /// turned it into a `Monitor`. Audit consumers surface this.
     pub mode_demoted: bool,
+    /// Allowlist `id` whose suppression caused the outcome to be
+    /// `Allow` instead of a deny / ask / monitor. Only populated on
+    /// `Allow` decisions; always `None` otherwise. When multiple
+    /// allowlists hit, the first one wins.
+    pub allowlist_id: Option<String>,
 }
 
 /// Errors raised while building an engine.
@@ -92,12 +109,17 @@ impl Engine {
         plugins.load_paths(&config.plugin_paths)?;
         let audit_sink = audit_sink_from_config(&config);
         let protected = ProtectedPaths::collect(repo_root, &config);
+        let plugin_versions = compute_plugin_versions(&plugins);
+        let project_facts = facts::project::collect(repo_root, &config.protected_branches);
         Ok(Self {
             config,
             plugins,
             audit_sink,
             repo_root: repo_root.map(Path::to_path_buf),
             protected,
+            agent: "unknown",
+            plugin_versions,
+            project_facts,
         })
     }
 
@@ -124,12 +146,17 @@ impl Engine {
         plugins.load_paths(&config.plugin_paths)?;
         let audit_sink = audit_sink_from_config(&config);
         let protected = ProtectedPaths::collect(None, &config);
+        let plugin_versions = compute_plugin_versions(&plugins);
+        let project_facts = facts::project::collect(None, &config.protected_branches);
         Ok(Self {
             config,
             plugins,
             audit_sink,
             repo_root: None,
             protected,
+            agent: "unknown",
+            plugin_versions,
+            project_facts,
         })
     }
 
@@ -138,12 +165,17 @@ impl Engine {
     /// through the YAML loader.
     pub(crate) fn with_components(config: Config, plugins: PluginSet) -> Self {
         let protected = ProtectedPaths::collect(None, &config);
+        let plugin_versions = compute_plugin_versions(&plugins);
+        let project_facts = facts::project::collect(None, &config.protected_branches);
         Self {
             config,
             plugins,
             audit_sink: Box::new(NoopSink),
             repo_root: None,
             protected,
+            agent: "unknown",
+            plugin_versions,
+            project_facts,
         }
     }
 
@@ -165,6 +197,14 @@ impl Engine {
         self
     }
 
+    /// Tag this engine with the adapter that produced the request
+    /// (`claude-code` / `cli` / `compat`). Surfaces in audit records
+    /// as the `agent` field. Defaults to `"unknown"`.
+    pub fn with_agent(mut self, agent: &'static str) -> Self {
+        self.agent = agent;
+        self
+    }
+
     /// Read-only view of the merged configuration.
     pub fn config(&self) -> &Config {
         &self.config
@@ -179,27 +219,49 @@ impl Engine {
     pub fn decide(&self, input: &HookInput) -> Outcome {
         let mut facts = facts::extract(input);
         facts.protected = self.protected.classify_input(input);
+        facts.project = self.project_facts.clone();
         let now = SystemTime::now();
-        let builtin = rules::iter()
-            .filter(|rule| !is_pack_disabled(*rule, &self.config))
-            .filter(|rule| !is_allowlisted(*rule, &self.config, now))
-            .filter_map(|rule| rule.evaluate(&facts, input));
-        let from_plugins = self
-            .plugins
-            .rules()
-            .map(|r| r as &(dyn ConfigRule + Sync))
-            .filter(|rule| !is_pack_disabled(*rule, &self.config))
-            .filter(|rule| !is_allowlisted(*rule, &self.config, now))
-            .filter_map(|rule| rule.evaluate(&facts, input));
-        let decisions: Vec<Decision> = builtin.chain(from_plugins).collect();
+        let mut allowlist_hits: Vec<&str> = Vec::new();
+        let mut decisions: Vec<Decision> = Vec::new();
+        for rule in rules::iter() {
+            if is_pack_disabled(rule, &self.config) {
+                continue;
+            }
+            if let Some(id) = allowlist_hit_for(rule, &self.config, now) {
+                allowlist_hits.push(id);
+                continue;
+            }
+            if let Some(d) = rule.evaluate(&facts, input) {
+                decisions.push(d);
+            }
+        }
+        for plugin_rule in self.plugins.rules() {
+            let rule = plugin_rule as &(dyn ConfigRule + Sync);
+            if is_pack_disabled(rule, &self.config) {
+                continue;
+            }
+            if let Some(id) = allowlist_hit_for(rule, &self.config, now) {
+                allowlist_hits.push(id);
+                continue;
+            }
+            if let Some(d) = rule.evaluate(&facts, input) {
+                decisions.push(d);
+            }
+        }
         let raw = aggregate(decisions);
         let demoted_decision = demote_for_mode(raw.clone(), self.config.mode);
         let mode_demoted = matches!(raw, Decision::Deny { .. })
             && matches!(demoted_decision, Decision::Monitor { .. });
+        let allowlist_id = if matches!(demoted_decision, Decision::Allow) {
+            allowlist_hits.first().map(|id| (*id).to_string())
+        } else {
+            None
+        };
         let outcome = Outcome {
             decision: demoted_decision,
             mode: self.config.mode,
             mode_demoted,
+            allowlist_id,
         };
         self.record_audit(input, &outcome);
         outcome
@@ -246,9 +308,23 @@ impl Engine {
             self.repo_root.as_deref(),
             severity,
             command_redacted,
+            outcome.allowlist_id.clone(),
+            self.agent,
+            self.plugin_versions.clone(),
         );
         let _ = self.audit_sink.record(&record);
     }
+}
+
+/// Format the loaded plugin set as a stable `name@version` list. Used
+/// once per engine constructor and cached on the [`Engine`] so audit
+/// records do not pay a formatting cost per `decide` call.
+fn compute_plugin_versions(plugins: &PluginSet) -> Vec<String> {
+    plugins
+        .plugins
+        .iter()
+        .map(|p| format!("{}@{}", p.name, p.version))
+        .collect()
 }
 
 fn audit_sink_from_config(config: &Config) -> Box<dyn AuditSink> {
@@ -287,18 +363,24 @@ fn is_pack_disabled(rule: &(dyn ConfigRule + Sync), config: &Config) -> bool {
         .any(|(pack, overlay)| pack_disabled(overlay) && rule_matches_pack(id, pack))
 }
 
-/// Whether the rule should be skipped because a non-expired allowlist
-/// entry covers it. `hardDeny` rules ignore allowlist entries entirely
-/// (`docs/design/config-and-plugins.md:89`).
-fn is_allowlisted(rule: &(dyn ConfigRule + Sync), config: &Config, now: SystemTime) -> bool {
+/// First non-expired allowlist entry that covers the rule, returned
+/// by id. `hardDeny` rules ignore allowlist entries entirely
+/// (`docs/design/config-and-plugins.md:89`). Returns `None` when no
+/// allowlist entry applies.
+fn allowlist_hit_for<'a>(
+    rule: &(dyn ConfigRule + Sync),
+    config: &'a Config,
+    now: SystemTime,
+) -> Option<&'a str> {
     if rule.hard_deny() {
-        return false;
+        return None;
     }
     let id = rule.id();
     config
         .allowlists
         .iter()
-        .any(|entry| allowlist_covers(entry, id, now))
+        .find(|entry| allowlist_covers(entry, id, now))
+        .map(|entry| entry.id.as_str())
 }
 
 fn allowlist_covers(entry: &Allowlist, rule_id: &str, now: SystemTime) -> bool {
@@ -830,6 +912,164 @@ rules:
         let engine = Engine::with_config(cfg).expect("with_config never aborts on audit open");
         let outcome = engine.decide(&bash("ls"));
         assert_eq!(outcome.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn audit_record_carries_agent_set_via_with_agent_builder() {
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = Config::default();
+        cfg.audit.include_denied = true;
+        let engine = engine_with(cfg)
+            .with_audit_sink(Box::new(SharedMemorySink(captured.clone())))
+            .with_agent("claude-code");
+        let _ = engine.decide(&bash("rm -rf /"));
+        let recs = captured.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].agent, "claude-code");
+        assert_eq!(recs[0].schema_version, 1);
+    }
+
+    #[test]
+    fn audit_record_carries_default_unknown_agent_when_unset() {
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = Config::default();
+        cfg.audit.include_denied = true;
+        let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("rm -rf /"));
+        let recs = captured.records();
+        assert_eq!(recs[0].agent, "unknown");
+    }
+
+    #[test]
+    fn audit_record_carries_plugin_versions_for_loaded_plugins() {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+  version: 1.2.3
+rules:
+  - id: pack.demo.allow-only
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Bash
+      shell.argv:
+        headAny: [curl]
+    reason: nope
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = Config::default();
+        cfg.audit.include_allowed = true;
+        let engine = Engine::with_components(cfg, set)
+            .with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("ls"));
+        let recs = captured.records();
+        assert_eq!(recs[0].plugin_versions, vec!["pack.demo@1.2.3".to_string()]);
+    }
+
+    #[test]
+    fn outcome_allowlist_id_set_when_allow_came_from_allowlist() {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "approved-curl".into(),
+            rule_ids: vec!["pack.demo.no-curl".into()],
+            expires_at: Some("2099-01-01T00:00:00Z".into()),
+            reason: None,
+        });
+        let engine = Engine::with_components(cfg, set);
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert_eq!(outcome.decision, Decision::Allow);
+        assert_eq!(outcome.allowlist_id.as_deref(), Some("approved-curl"));
+    }
+
+    #[test]
+    fn outcome_allowlist_id_none_when_no_rule_was_suppressed() {
+        let outcome = Engine::default().decide(&bash("ls"));
+        assert!(outcome.allowlist_id.is_none());
+    }
+
+    #[test]
+    fn outcome_allowlist_id_none_when_decision_is_deny() {
+        // hardDeny rules ignore allowlists entirely; even with a
+        // matching allowlist entry the outcome stays deny and
+        // allowlist_id stays None.
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "ignore-fs".into(),
+            rule_ids: vec!["core.filesystem.destructive-rm".into()],
+            expires_at: Some("2099-01-01T00:00:00Z".into()),
+            reason: None,
+        });
+        let outcome = engine_with(cfg).decide(&bash("rm -rf /"));
+        assert!(matches!(outcome.decision, Decision::Deny { .. }));
+        assert!(outcome.allowlist_id.is_none());
+    }
+
+    #[test]
+    fn audit_record_carries_allowlist_id_when_allow_came_from_allowlist() {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.audit.include_allowed = true;
+        cfg.allowlists.push(Allowlist {
+            id: "approved-curl".into(),
+            rule_ids: vec!["pack.demo.no-curl".into()],
+            expires_at: None,
+            reason: None,
+        });
+        let captured = Arc::new(MemorySink::new());
+        let engine = Engine::with_components(cfg, set)
+            .with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("curl https://example.com"));
+        let recs = captured.records();
+        assert_eq!(recs[0].decision, "allow");
+        assert_eq!(recs[0].allowlist_id.as_deref(), Some("approved-curl"));
     }
 
     #[test]

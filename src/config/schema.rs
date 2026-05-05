@@ -41,6 +41,10 @@ impl RawConfig {
     /// forms differ only in nesting; this conversion is purely a
     /// rename.
     pub(super) fn into_merge_layer(self) -> MergeLayer {
+        let protected_branches = self
+            .packs
+            .get("core.project_hygiene")
+            .and_then(|p| p.protected_branches.clone());
         MergeLayer {
             mode: self.mode,
             fail_closed: self.fail_closed,
@@ -60,16 +64,23 @@ impl RawConfig {
             audit_include_allowed: self.audit.include_allowed,
             audit_include_denied: self.audit.include_denied,
             audit_redaction: self.audit.redaction,
+            protected_branches,
         }
     }
 }
 
 /// Per-pack toggle parsed from `packs: { <name>: { enabled: ... } }`.
+///
+/// `protected_branches` is consumed only by `core.project_hygiene`;
+/// other packs ignore it. Keeping it on the shared `RawPack` keeps the
+/// YAML schema flat (one entry per pack) without a per-pack subtype.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RawPack {
     #[serde(default)]
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub protected_branches: Option<Vec<String>>,
 }
 
 /// Reference to a plugin YAML on disk. `enabled: false` keeps the
@@ -142,6 +153,7 @@ pub(super) struct MergeLayer {
     pub audit_include_allowed: Option<bool>,
     pub audit_include_denied: Option<bool>,
     pub audit_redaction: Option<RedactionMode>,
+    pub protected_branches: Option<Vec<String>>,
 }
 
 impl<'de> Deserialize<'de> for RedactionMode {

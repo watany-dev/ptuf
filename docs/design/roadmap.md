@@ -46,21 +46,24 @@
 - `ptuf init claude-code` (`~/.claude/settings.json` 冪等 install、
   `--dry-run` / `--settings <PATH>` flag)
 - `ptuf doctor` (Binary / Project / Effective config / Plugins /
-  Claude integration の診断レポート、`--json` は v0.4)
+  Claude integration の診断レポート、`--json` 構造化出力 `schemaVersion: 1`)
 - CLI 経路の fail-closed (`core.engine.policy-load-failed`)
 - plugin DSL 4 leaf 追加: `path.filePathPrefixAny` / `url.schemeAny` /
   `url.hostAny` / `sensitive.pathKindAny`
 
 ### v0.4 — 多 adapter と運用
 
-- `core.project_hygiene`
+- `core.project_hygiene` v1 (実装済み): lock-mismatch (pnpm / uv) +
+  protected-branch destructive git。default は disabled (opt-in)。
+  generated-file 検出 / project-specific forbidden command は今後
 - `dataflow.basic` facts (同一 transcript 内の co-occur を超えた追跡)
-- MCP tool 対応
+- MCP tool 対応 — fact extraction 完了 (`mcp__*` の generic
+  `path` / `url` / `content` キー抽出)。専用 rule pack は今後
 - org policy 配布 (`/etc/ptuf/policy.yaml`)
 - 署名 / pin 付き plugin
 - optional WASM plugin runtime
 - Codex / Cursor / Gemini CLI adapter
-- `ptuf doctor --json` 出力
+- audit ログの schemaVersion / agent / pluginVersions / allowlistId 追加 (実装済み)
 
 各 milestone の rule と CLI が揃った時点でリリースタグを切る。
 

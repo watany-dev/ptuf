@@ -95,7 +95,8 @@ private key らしきファイル (PEM ヘッダ等で判別)
 | `core.git.remote-set-url` | ask | false | medium |
 
 protected branch (`main`, `master`, `release/*` 等、project facts で定義) では
-これらをさらに 1 段強める運用を v0.4 以降で予定。
+v0.4 で `core.project_hygiene.protected-branch-destructive-git` がこれらの
+`ask` を `deny` に昇格させる (本書下部の `core.project_hygiene` を参照)。
 
 ## `core.self_protection`
 
@@ -122,12 +123,28 @@ prompt injection 等で agent が guardrail 自体を無効化することを防
 
 ## `core.project_hygiene`
 
-プロジェクト規約と整合しない操作を止める。default は optional。
+プロジェクト規約と整合しない操作を止める。default は **disabled**。
+opt-in するには `packs.core.project_hygiene.enabled: true` を設定する
+([`config-and-plugins.md`](config-and-plugins.md))。
 
-**例:**
+### v1 実装済み rule (v0.4)
 
-- `pnpm-lock.yaml` がある repo で `npm install` / `yarn install` を止める
-- `uv.lock` がある repo で直接 `pip install` を止める
+| Rule id | Decision | hardDeny | severity | 止めるもの |
+| --- | --- | --- | --- | --- |
+| `core.project_hygiene.lock-mismatch-pnpm` | deny | false | high | `pnpm-lock.yaml` がある repo で `npm install` / `npm ci` / `yarn install` / `yarn add` |
+| `core.project_hygiene.lock-mismatch-uv` | deny | false | high | `uv.lock` がある repo で `pip install` (素の `pip`、`uv pip install` は対象外) |
+| `core.project_hygiene.protected-branch-destructive-git` | deny | false | high | protected branch (`main` / `master` / `release/*` 既定) 上で `git reset --hard` / `git clean -fdx` / `git branch -D` / `git stash clear`。`core.git` が ask する操作を deny に昇格 |
+
+`protected-branch-destructive-git` は `aggregate` の
+`deny > ask > monitor > allow` 規則により、protected branch で同じ操作に
+対する `core.git.reset-hard` 等の ask を上書きして deny を返す。
+非 protected branch では `core.git` の ask が通常通り出る。
+
+protected branch 一覧は `packs.core.project_hygiene.protectedBranches` で
+project / user 単位に上書きできる。default は `["main", "master", "release/*"]`。
+パターンは末尾 `*` のみ glob として扱われる minimal matcher。
+
+### v1 で扱わないもの (v2 以降)
+
 - generated file の直接編集を止める (project facts で `generated: true` のもの)
-- protected branch で destructive git 操作を止める
 - project-specific forbidden command を止める (config で列挙)

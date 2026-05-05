@@ -5,6 +5,7 @@ use crate::{Decision, HookInput};
 pub mod destructive_rm;
 pub mod git;
 pub mod patterns;
+pub mod project_hygiene;
 pub mod remote_pipe;
 pub mod self_protection;
 pub mod sensitive_net;
@@ -57,6 +58,9 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &self_protection::CLAUDE_SETTINGS_RULE,
     &self_protection::HOOK_SCRIPT_RULE,
     &sensitive_read::SensitiveRead,
+    &project_hygiene::LockMismatchPnpm,
+    &project_hygiene::LockMismatchUv,
+    &project_hygiene::ProtectedBranchDestructiveGit,
 ];
 
 /// Run every built-in rule against `facts` + `input` and collect
@@ -131,6 +135,13 @@ mod tests {
             assert!(ids.contains(&self_id), "missing rule_id {self_id}");
         }
         assert!(ids.contains(&"core.secrets.sensitive-read"));
+        for hyg_id in [
+            "core.project_hygiene.lock-mismatch-pnpm",
+            "core.project_hygiene.lock-mismatch-uv",
+            "core.project_hygiene.protected-branch-destructive-git",
+        ] {
+            assert!(ids.contains(&hyg_id), "missing rule_id {hyg_id}");
+        }
     }
 
     #[test]

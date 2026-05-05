@@ -158,6 +158,9 @@ mod tests {
             None,
             Some(Severity::Critical),
             "rm -rf /".into(),
+            None,
+            "claude-code",
+            Vec::new(),
         )
     }
 

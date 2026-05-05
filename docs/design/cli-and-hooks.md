@@ -33,8 +33,35 @@ ptuf audit
 > `ptuf plugin test <path>` / `ptuf init claude-code [--dry-run] [--settings <PATH>]` /
 > `ptuf doctor [--json]` と `--help` / `--version`、および引数なし
 > 互換モード (stdin → exit code)。
-> `ptuf doctor --json` (現状は warning を出して text にフォールバック) /
 > `ptuf explain` / `ptuf audit` は v0.4 以降で実装する。
+>
+> `ptuf doctor --json` は `Report` を構造化 JSON として stdout に書き、
+> exit code は text 版と同じ semantics (failure → 1, success → 0)。
+> スキーマ (`schemaVersion: 1`) は CI / 監査ツール向けの安定 contract:
+>
+> ```json
+> {
+>   "schemaVersion": 1,
+>   "binary":   { "path": "/usr/local/bin/ptuf", "version": "0.3.0" },
+>   "project":  { "repoRoot": "/home/user/proj" },
+>   "configLayers": [
+>     { "layer": "system",       "path": "...", "present": false },
+>     { "layer": "user",         "path": "...", "present": false },
+>     { "layer": "project",      "path": "...", "present": true  },
+>     { "layer": "projectLocal", "path": "...", "present": false }
+>   ],
+>   "config":   { "loaded": true, "mode": "enforce", "failClosed": true,
+>                 "auditPath": null },
+>   "plugins":  [],
+>   "claude":   { "settingsPath": "...", "state": "hookRegistered",
+>                 "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*" },
+>   "hasFailure": false
+> }
+> ```
+>
+> `state` は `homeNotSet` / `missing` / `hookRegistered` / `hookMissing` /
+> `invalidJson` / `io` のいずれか。`matcher` は `hookRegistered` の場合のみ、
+> `error` は `invalidJson` / `io` の場合のみ出力される。
 
 ## 出力規約
 
@@ -132,10 +159,40 @@ adapter は payload 正規化のみを行い、判定コアは共通。
 - Codex
 - Cursor
 - Gemini CLI
-- MCP tools (`mcp__*` ツール群を一律サポート)
+- MCP tools (`mcp__*` ツール群を一律サポート — fact 層は v0.4 で対応済み、
+  個別 adapter を追加する場合の `tool_name` 整形のみ未対応)
 
 各 adapter は対応する `ptuf init <agent>` と `ptuf hook <agent> <event>`
 サブコマンドを持つ。
+
+### MCP fact 抽出 (v0.4)
+
+Claude Code の MCP プロトコルでは tool 名が `mcp__<server>__<tool>` 形式で
+入ってくる (例: `mcp__github__create_or_update_file`,
+`mcp__filesystem__read_file`, `mcp__fetch__fetch`)。MCP server ごとに
+payload の shape が異なるため、ptuf は個別 server に依存しない汎用的な
+キー抽出戦略を採る:
+
+| `tool_input` の top-level キー | 振る舞い |
+| --- | --- |
+| `path` (string) | `Facts.path` に正規化。`~` / `$HOME` 展開も既存と同じ |
+| `url` (string) | `Facts.url` に正規化 (WebFetch 経由と同じパース) |
+| `content` (string) | `Facts.write_payload` 経由で `sensitive` 検出に流す |
+
+これにより以下の既存 rule が MCP 経路でも自動で効く:
+
+- `core.self_protection.*` — ptuf 自身の binary / config / plugin /
+  Claude settings / hook script の MCP 経由の改変を deny
+- `core.secrets.sensitive-read` — MCP tool が sensitive な path を
+  参照する場合 (例: `mcp__filesystem__read_file` で
+  `~/.aws/credentials`) を deny
+
+複数 path を持つ MCP tool (`mcp__github__push_files.files[].path` 等) は
+v1 では先頭要素のみ `Facts.path` に詰める。残りは v2 で
+`Facts.extra_paths` を導入して全件保護する想定。
+
+非 string な値 (例: `path: 123`, `url: false`) は `as_str()` で `None` に
+落として無視する — MCP server の payload 仕様変動に対する防御策。
 
 ## fail-closed の挙動
 

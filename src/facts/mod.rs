@@ -16,6 +16,7 @@
 use crate::HookInput;
 
 pub mod path;
+pub mod project;
 pub mod sensitive;
 pub mod shell;
 pub mod url;
@@ -44,6 +45,10 @@ pub struct Facts {
     /// Self-protection match labels populated by the engine layer; pure
     /// `extract` leaves this empty.
     pub protected: Vec<crate::self_paths::ProtectedKind>,
+    /// Project-level facts (lock files, current branch, protected
+    /// branch flag) populated by the engine layer; pure `extract`
+    /// leaves this default-empty.
+    pub project: project::ProjectFacts,
 }
 
 /// Build a [`Facts`] view of a hook input. Pure function with no I/O
@@ -59,6 +64,7 @@ pub fn extract(input: &HookInput) -> Facts {
         url,
         sensitive,
         protected: Vec::new(),
+        project: project::ProjectFacts::default(),
     }
 }
 

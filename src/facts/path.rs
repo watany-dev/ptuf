@@ -15,17 +15,10 @@ pub enum PathTool {
     Read,
     Edit,
     Write,
-}
-
-impl PathTool {
-    fn from_tool_name(name: &str) -> Option<Self> {
-        match name {
-            "Read" => Some(Self::Read),
-            "Edit" => Some(Self::Edit),
-            "Write" => Some(Self::Write),
-            _ => None,
-        }
-    }
+    /// Any `mcp__<server>__<tool>` call that exposed a top-level
+    /// `path` string. Treated like a write-capable tool by self-protection
+    /// rules so MCP-driven edits cannot bypass the file allowlist.
+    Mcp,
 }
 
 /// File-path fact derived from a `Read`/`Edit`/`Write` payload.
@@ -42,9 +35,19 @@ pub struct FilePath {
 /// Build a [`FilePath`] using the supplied env lookup. The `facts::extract`
 /// default path uses [`SystemEnv`]; tests inject a `MapEnv` to verify
 /// `~` expansion deterministically.
+///
+/// MCP tool calls (`mcp__<server>__<tool>`) are normalised on the
+/// generic top-level `path` key — see `docs/design/cli-and-hooks.md`
+/// for the rationale and known caveats around payload-shape variation.
 pub fn extract_with_env(input: &HookInput, env: &dyn EnvLookup) -> Option<FilePath> {
-    let tool = PathTool::from_tool_name(&input.tool_name)?;
-    let raw = input.tool_input.get("file_path")?.as_str()?.to_string();
+    let (tool, key) = match input.tool_name.as_str() {
+        "Read" => (PathTool::Read, "file_path"),
+        "Edit" => (PathTool::Edit, "file_path"),
+        "Write" => (PathTool::Write, "file_path"),
+        _ if input.is_mcp_tool() => (PathTool::Mcp, "path"),
+        _ => return None,
+    };
+    let raw = input.tool_input.get(key)?.as_str()?.to_string();
     let absolute = expand_home(&raw, env);
     Some(FilePath {
         tool,
@@ -206,6 +209,45 @@ mod tests {
         assert_eq!(fp.raw, "/tmp/sample");
     }
 
+    #[test]
+    fn extract_mcp_tool_uses_top_level_path_key() {
+        let i = HookInput {
+            tool_name: "mcp__github__create_or_update_file".into(),
+            tool_input: serde_json::json!({"path": ".claude/settings.json"}),
+        };
+        let fp = extract_with_env(&i, &MapEnv::with_home("/h")).expect("path");
+        assert_eq!(fp.tool, PathTool::Mcp);
+        assert_eq!(fp.raw, ".claude/settings.json");
+    }
+
+    #[test]
+    fn extract_mcp_tool_returns_none_when_path_missing() {
+        let i = HookInput {
+            tool_name: "mcp__filesystem__write_file".into(),
+            tool_input: serde_json::json!({"content": "hi"}),
+        };
+        assert!(extract_with_env(&i, &MapEnv::with_home("/h")).is_none());
+    }
+
+    #[test]
+    fn extract_mcp_tool_returns_none_when_path_is_not_string() {
+        let i = HookInput {
+            tool_name: "mcp__filesystem__write_file".into(),
+            tool_input: serde_json::json!({"path": 7}),
+        };
+        assert!(extract_with_env(&i, &MapEnv::with_home("/h")).is_none());
+    }
+
+    #[test]
+    fn extract_mcp_tool_expands_home_in_raw_path() {
+        let i = HookInput {
+            tool_name: "mcp__filesystem__read_file".into(),
+            tool_input: serde_json::json!({"path": "~/.aws/credentials"}),
+        };
+        let fp = extract_with_env(&i, &MapEnv::with_home("/home/me")).expect("path");
+        assert_eq!(fp.absolute, PathBuf::from("/home/me/.aws/credentials"));
+    }
+
     use crate::testing::proptest::{file_path, richer_hook_input};
     use proptest::prelude::*;
 
@@ -217,8 +259,10 @@ mod tests {
             let _ = extract(&i);
         }
 
-        // Tools other than Read/Edit/Write always yield None, even with
-        // a file_path field present.
+        // Tools other than Read/Edit/Write/MCP always yield None, even with
+        // a file_path field present. The regex `[A-Z][A-Za-z]{0,8}` only
+        // produces uppercase-leading names, so `mcp__*` is excluded by
+        // construction and we don't need an extra prop_assume for it.
         #[test]
         fn pbt_non_path_tool_yields_none(
             tool in "[A-Z][A-Za-z]{0,8}",

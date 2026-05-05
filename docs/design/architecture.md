@@ -74,8 +74,10 @@ raw な Bash 文字列を直接 regex で判定するのではなく、構造化
 | `url` (scheme / host / port / path) | v0.3 で実装済み |
 | `sensitive_path` (`SshDir` / `AwsDir` / `GcloudDir` / `KubeDir` / `DockerDir` / `PrivateKey` / `Dotenv` / `Npmrc` / `Pypirc` / `Tfstate` / `PemBlob`) | v0.3 で実装済み |
 | `protected` (Engine が決定する self_protection マッチ) | v0.3 で実装済み |
+| MCP fact 抽出 (`mcp__*` の汎用 `path` / `url` / `content` キー) | v0.4 で実装済み ([`cli-and-hooks.md`](cli-and-hooks.md#mcp-fact-抽出-v04)) |
 | `dataflow.basic` (sensitive → network、同一コマンド co-occur を超えた追跡) | v0.4 以降 |
-| project / git facts (lockfile / branch / remote) | v0.4 以降 |
+| project facts (lockfile 種別 / 現在 branch / protected branch flag) | v0.4 で実装済み (engine 構築時に 1 回 collect、per-decide で参照) |
+| git facts (working tree / remote URL) | v0.4 以降 |
 
 組み込み rule のうち以下は facts ベース:
 
@@ -83,6 +85,8 @@ raw な Bash 文字列を直接 regex で判定するのではなく、構造化
   `core.network.remote-script-pipe` /
   `core.secrets.sensitive-path-to-network`
 - v0.3 で追加: `core.secrets.sensitive-read` / `core.git.*` / `core.self_protection.*`
+- v0.4 で追加: `core.project_hygiene.*` (lock-mismatch-pnpm /
+  lock-mismatch-uv / protected-branch-destructive-git)
 
 YAML plugin の `when:` DSL も同じ facts に対して書ける。raw shell regex への
 直接アクセスは plugin 側からは不可視。

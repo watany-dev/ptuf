@@ -49,7 +49,7 @@ pub(crate) fn run_compat_code<R: Read, W: Write>(mut stdin: R, stderr: &mut W) -
         }
     };
 
-    let decision = match cli::build_engine_or_fail_closed(stderr) {
+    let decision = match cli::build_engine_or_fail_closed(stderr, "compat") {
         Ok(engine) => engine.decide(&input).decision,
         Err(deny) => deny,
     };

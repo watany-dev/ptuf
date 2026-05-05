@@ -19,14 +19,22 @@ pub(crate) const POLICY_LOAD_FAILED_RULE: &str = "core.engine.policy-load-failed
 /// Production CLI entry points (compat / `hook ...` / `eval`) all go
 /// through this helper. The `crate::decide` shim is intentionally
 /// lenient (`Engine::default` fallback) for embedded library use.
-pub(crate) fn build_engine_or_fail_closed<W: Write>(stderr: &mut W) -> Result<Engine, Decision> {
-    Engine::for_cwd().map_err(|err| {
-        let _ = writeln!(stderr, "ptuf: could not load policy: {err}");
-        Decision::Deny {
-            rule_id: POLICY_LOAD_FAILED_RULE.into(),
-            reason: "ptuf could not load policy; failing closed.".into(),
-        }
-    })
+///
+/// `agent` is the adapter name surfaced in audit records — typically
+/// `"compat"`, `"claude-code"`, or `"cli"`.
+pub(crate) fn build_engine_or_fail_closed<W: Write>(
+    stderr: &mut W,
+    agent: &'static str,
+) -> Result<Engine, Decision> {
+    Engine::for_cwd()
+        .map(|engine| engine.with_agent(agent))
+        .map_err(|err| {
+            let _ = writeln!(stderr, "ptuf: could not load policy: {err}");
+            Decision::Deny {
+                rule_id: POLICY_LOAD_FAILED_RULE.into(),
+                reason: "ptuf could not load policy; failing closed.".into(),
+            }
+        })
 }
 
 /// Parsed CLI invocation. The bare-arguments form is preserved for hook
@@ -262,7 +270,7 @@ fn run_hook<R: Read, W1: Write, W2: Write>(mut stdin: R, stdout: &mut W1, stderr
             return 1;
         }
     };
-    let decision = match build_engine_or_fail_closed(stderr) {
+    let decision = match build_engine_or_fail_closed(stderr, "claude-code") {
         Ok(engine) => engine.decide(&input).decision,
         Err(deny) => deny,
     };
@@ -279,7 +287,7 @@ fn run_eval<W1: Write, W2: Write>(
         tool_name: tool.to_string(),
         tool_input: serde_json::json!({ "command": command }),
     };
-    let decision = match build_engine_or_fail_closed(stderr) {
+    let decision = match build_engine_or_fail_closed(stderr, "cli") {
         Ok(engine) => engine.decide(&input).decision,
         Err(deny) => deny,
     };
@@ -353,13 +361,12 @@ fn run_init<W1: Write, W2: Write>(
 }
 
 fn run_doctor<W1: Write, W2: Write>(json: bool, stdout: &mut W1, stderr: &mut W2) -> u8 {
-    if json {
-        let _ = writeln!(
-            stderr,
-            "ptuf: --json output is not yet implemented (planned for v0.4); falling back to text"
-        );
-    }
-    match crate::doctor::render_doctor(stdout) {
+    let result = if json {
+        crate::doctor::render_doctor_json(stdout)
+    } else {
+        crate::doctor::render_doctor(stdout)
+    };
+    match result {
         Ok(failure) => {
             if failure {
                 1
@@ -1029,10 +1036,20 @@ rules:
     }
 
     #[test]
-    fn run_doctor_with_json_flag_warns_and_falls_back_to_text() {
-        let (_code, out, err) = run_with(&["doctor", "--json"], "");
-        assert!(out.contains("ptuf doctor"));
-        assert!(err.contains("--json output is not yet implemented"));
+    fn run_doctor_with_json_flag_emits_structured_json() {
+        let (code, out, _err) = run_with(&["doctor", "--json"], "");
+        assert!(
+            code == 0 || code == 1,
+            "doctor --json must return 0 or 1, got {code}"
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&out).expect("doctor --json output must be valid JSON");
+        assert_eq!(value["schemaVersion"], 1);
+        assert!(value["binary"]["version"].is_string());
+        assert!(value["configLayers"].is_array());
+        assert!(value["plugins"].is_array());
+        assert!(value["claude"]["state"].is_string());
+        assert!(value["hasFailure"].is_boolean());
     }
 
     #[test]

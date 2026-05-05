@@ -44,7 +44,12 @@ packs:
   core.self_protection:
     enabled: true
   core.project_hygiene:
-    enabled: false
+    enabled: true                # default: false (opt-in)
+    protectedBranches:           # default: [main, master, release/*]
+      - main
+      - master
+      - release/*
+      - prod/*
 
 plugins:
   - path: ~/.config/ptuf/plugins/project-package-manager.yaml

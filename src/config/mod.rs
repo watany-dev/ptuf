@@ -53,17 +53,33 @@ pub struct Config {
     /// listed first; the engine loads them in order.
     pub plugin_paths: Vec<PathBuf>,
     pub audit: AuditConfig,
+    /// Branch names / glob patterns considered "protected" by
+    /// `core.project_hygiene`. Default: `main`, `master`, `release/*`.
+    /// A higher scope's value replaces lower scopes wholesale rather
+    /// than merging, so projects can override the default cleanly.
+    pub protected_branches: Vec<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
+        let mut pack_overrides: BTreeMap<String, PackOverride> = BTreeMap::new();
+        // core.project_hygiene is opt-in: lock-mismatch / protected
+        // branch denials would derail dev flows for projects that have
+        // not opted into them.
+        pack_overrides.insert(
+            "core.project_hygiene".to_string(),
+            PackOverride {
+                enabled: Some(false),
+            },
+        );
         Self {
             mode: Mode::default(),
             fail_closed: true,
-            pack_overrides: BTreeMap::new(),
+            pack_overrides,
             allowlists: Vec::new(),
             plugin_paths: Vec::new(),
             audit: AuditConfig::default(),
+            protected_branches: vec!["main".into(), "master".into(), "release/*".into()],
         }
     }
 }

@@ -32,17 +32,23 @@ Allow / Deny を exit code と stderr メッセージで返す CLI バイナリ 
   `aggregate` を公開し、内部モジュールへ委譲する
 - `src/decision.rs` — `Decision` (4 variants) と `severity` / `aggregate`
 - `src/hook_input.rs` — `HookInput` と `bash_command()` / `file_path()` /
-  `web_fetch_url()` / `write_payload()` accessor
+  `web_fetch_url()` / `write_payload()` accessor。`mcp__<server>__<tool>`
+  形式の MCP tool は `path` / `url` / `content` の汎用キーを認識する
 - `src/hook_output.rs` — Claude Code `hookSpecificOutput` envelope
 - `src/reason.rs` — `reason::build` (deny / ask の Rule Feedback 整形)
 - `src/rules/` — `ConfigRule` trait、組み込み rule (filesystem / network /
-  secrets / git / self_protection / sensitive_read)、共有 `LazyLock<Regex>` 群
-- `src/facts/` — fact extraction (`shell` / `path` / `url` / `sensitive`)。
-  `protected` は `Engine::decide` 時に注入
+  secrets / git / self_protection / sensitive_read / project_hygiene)、
+  共有 `LazyLock<Regex>` 群。built-in rule は計 19 個
+- `src/facts/` — fact extraction (`shell` / `path` / `url` / `sensitive` /
+  `project`)。`protected` と `project` は `Engine::decide` 時に注入。
+  `project_facts` は engine 構築時に 1 回 collect し、per-decide では I/O しない
 - `src/self_paths.rs` — `ProtectedPaths` (binary / configs / plugins /
   claude_settings / hook_scripts) の収集と分類
 - `src/engine.rs` — config / plugin / audit / `ProtectedPaths` を抱える Engine。
-  `for_cwd` / `for_path_opt` / `with_config` / `with_components`
+  `for_cwd` / `for_path_opt` / `with_config` / `with_components` / `with_agent`
+- `src/audit/` — JSONL 永続化。`AuditRecord` は `schemaVersion: 1` を含み、
+  `agent` (`claude-code` / `cli` / `compat`) と `pluginVersions`
+  (`name@version` 配列) と `allowlistId` (allow に至った allowlist の id) を伝える
 - `src/init/` — `ptuf init <agent>`。v0.3 では `claude_code` adapter のみ
 - `src/doctor.rs` — `ptuf doctor` 診断レポート (`Report::gather` + `render`)
 - `src/cli.rs` — 引数 parse とサブコマンド実行 (`Compat` /
