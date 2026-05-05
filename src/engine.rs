@@ -1522,4 +1522,287 @@ rules:
             other => panic!("expected deny from self_protection, got {other:?}"),
         }
     }
+
+    /// Helper: build a one-rule plugin set with a `tool: Bash` matcher
+    /// so engine tests can exercise rule_overrides paths against an
+    /// overridable (non-hard-deny) rule.
+    fn plugin_set_with_bash_deny() -> PluginSet {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        set
+    }
+
+    #[test]
+    fn rule_override_with_enabled_false_suppresses_overridable_plugin_rule() {
+        // overlay { enabled: Some(false) } with no decision must drop
+        // the rule's contribution entirely → engine.rs:408-409.
+        let mut cfg = Config::default();
+        cfg.rule_overrides.insert(
+            "pack.demo.no-curl".into(),
+            crate::config::RuleOverride {
+                enabled: Some(false),
+                decision: None,
+                severity: None,
+            },
+        );
+        let engine = Engine::with_components(cfg, plugin_set_with_bash_deny());
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert_eq!(outcome.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn rule_override_without_decision_leaves_decision_unchanged() {
+        // overlay { enabled: Some(true), decision: None } must hit the
+        // "decision is None" arm and leave the original deny in place
+        // → engine.rs:411-412.
+        let mut cfg = Config::default();
+        cfg.rule_overrides.insert(
+            "pack.demo.no-curl".into(),
+            crate::config::RuleOverride {
+                enabled: Some(true),
+                decision: None,
+                severity: None,
+            },
+        );
+        let engine = Engine::with_components(cfg, plugin_set_with_bash_deny());
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert!(
+            matches!(outcome.decision, Decision::Deny { .. }),
+            "expected Deny, got {:?}",
+            outcome.decision
+        );
+    }
+
+    #[test]
+    fn rule_override_changes_overridable_deny_to_monitor() {
+        // overlay { decision: Monitor } against an overridable plugin
+        // rule must produce a Decision::Monitor with the same rule_id
+        // → engine.rs:417, 436-444 (decision_with_kind Monitor arm).
+        let mut cfg = Config::default();
+        cfg.rule_overrides.insert(
+            "pack.demo.no-curl".into(),
+            crate::config::RuleOverride {
+                enabled: None,
+                decision: Some(DecisionKind::Monitor),
+                severity: None,
+            },
+        );
+        let engine = Engine::with_components(cfg, plugin_set_with_bash_deny());
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        match outcome.decision {
+            Decision::Monitor { rule_id } => {
+                assert_eq!(rule_id, "pack.demo.no-curl");
+            }
+            other => panic!("expected Monitor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rule_override_changes_overridable_deny_to_ask() {
+        let mut cfg = Config::default();
+        cfg.rule_overrides.insert(
+            "pack.demo.no-curl".into(),
+            crate::config::RuleOverride {
+                enabled: None,
+                decision: Some(DecisionKind::Ask),
+                severity: None,
+            },
+        );
+        let engine = Engine::with_components(cfg, plugin_set_with_bash_deny());
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        match outcome.decision {
+            Decision::Ask { rule_id, reason } => {
+                assert_eq!(rule_id, "pack.demo.no-curl");
+                assert!(reason.contains("nope"));
+            }
+            other => panic!("expected Ask, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rule_override_changes_overridable_deny_to_allow() {
+        // Hits the DecisionKind::Allow arm of decision_with_kind.
+        let mut cfg = Config::default();
+        cfg.rule_overrides.insert(
+            "pack.demo.no-curl".into(),
+            crate::config::RuleOverride {
+                enabled: None,
+                decision: Some(DecisionKind::Allow),
+                severity: None,
+            },
+        );
+        let engine = Engine::with_components(cfg, plugin_set_with_bash_deny());
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert_eq!(outcome.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn rule_override_attempts_to_weaken_hard_deny_are_blocked() {
+        // Hard-deny rules must ignore overlay attempts to weaken them.
+        // `core.filesystem.destructive-rm` is hard_deny; trying to demote
+        // it to Monitor must not change the outcome (stays Deny). Hits
+        // override_allowed false branch → engine.rs:414-415, 420-424.
+        let mut cfg = Config::default();
+        cfg.rule_overrides.insert(
+            "core.filesystem.destructive-rm".into(),
+            crate::config::RuleOverride {
+                enabled: None,
+                decision: Some(DecisionKind::Monitor),
+                severity: None,
+            },
+        );
+        let outcome = engine_with(cfg).decide(&bash("rm -rf /"));
+        assert!(
+            matches!(outcome.decision, Decision::Deny { .. }),
+            "hard_deny must ignore weakening overlay, got {:?}",
+            outcome.decision
+        );
+    }
+
+    #[test]
+    fn rule_override_strengthens_overridable_to_higher_kind_via_rank_check() {
+        // For an overridable rule, override_allowed always returns true,
+        // so any kind change is honoured. This complements the
+        // hard-deny test above and pins the `decision_rank` ordering.
+        let mut cfg = Config::default();
+        // Plugin defaultDecision is deny; promote to Ask (lower rank).
+        // The override is allowed because the rule is overridable.
+        cfg.rule_overrides.insert(
+            "pack.demo.no-curl".into(),
+            crate::config::RuleOverride {
+                enabled: None,
+                decision: Some(DecisionKind::Ask),
+                severity: None,
+            },
+        );
+        let engine = Engine::with_components(cfg, plugin_set_with_bash_deny());
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert!(matches!(outcome.decision, Decision::Ask { .. }));
+    }
+
+    #[test]
+    fn rule_override_severity_propagates_to_audit_record() {
+        // overlay { severity: High } on an overridable rule must surface
+        // in the audit record → engine.rs:454-456 (effective_severity
+        // overlay match arm).
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = Config::default();
+        cfg.audit.include_denied = true;
+        cfg.rule_overrides.insert(
+            "pack.demo.no-curl".into(),
+            crate::config::RuleOverride {
+                enabled: None,
+                decision: None,
+                severity: Some(Severity::High),
+            },
+        );
+        let engine = Engine::with_components(cfg, plugin_set_with_bash_deny())
+            .with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("curl https://example.com"));
+        let recs = captured.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].severity, Some("high"));
+    }
+
+    #[test]
+    fn rule_override_severity_is_ignored_for_hard_deny_rule() {
+        // For a hard_deny rule the severity overlay must NOT replace
+        // the rule's own severity (engine.rs:454-456 fallthrough arm).
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = Config::default();
+        cfg.audit.include_denied = true;
+        cfg.rule_overrides.insert(
+            "core.filesystem.destructive-rm".into(),
+            crate::config::RuleOverride {
+                enabled: None,
+                decision: None,
+                severity: Some(Severity::Low),
+            },
+        );
+        let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("rm -rf /"));
+        let recs = captured.records();
+        assert_eq!(recs.len(), 1);
+        // Built-in destructive-rm rule advertises Critical; the overlay
+        // is ignored because the rule is hard_deny.
+        assert_eq!(recs[0].severity, Some("critical"));
+    }
+
+    #[test]
+    fn engine_with_disabled_audit_uses_noop_sink_and_no_warning() {
+        // config.audit.enabled = false short-circuits to NoopSink with
+        // no warning → engine.rs:357.
+        let mut cfg = Config::default();
+        cfg.audit.enabled = false;
+        cfg.audit.include_denied = true;
+        let engine = Engine::with_config(cfg).expect("with_config");
+        assert!(engine.audit_warning().is_none());
+        // Even include_denied = true cannot produce records when the
+        // sink is the NoopSink — exercising the early-return branch.
+        let _ = engine.decide(&bash("rm -rf /"));
+    }
+
+    #[test]
+    fn rule_override_changes_overridable_to_deny_keeps_default_reason() {
+        // Promoting an overridable plugin Ask/Monitor rule to Deny
+        // exercises the Deny arm of decision_with_kind (lines 446).
+        // Build a plugin whose defaultDecision is Ask, then overlay it
+        // to Deny.
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.ask-curl
+    severity: medium
+    defaultDecision: ask
+    when:
+      tool: Bash
+    reason: confirm
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.rule_overrides.insert(
+            "pack.demo.ask-curl".into(),
+            crate::config::RuleOverride {
+                enabled: None,
+                decision: Some(DecisionKind::Deny),
+                severity: None,
+            },
+        );
+        let engine = Engine::with_components(cfg, set);
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        match outcome.decision {
+            Decision::Deny { rule_id, reason } => {
+                assert_eq!(rule_id, "pack.demo.ask-curl");
+                assert!(reason.contains("confirm"));
+            }
+            other => panic!("expected Deny, got {other:?}"),
+        }
+    }
 }
