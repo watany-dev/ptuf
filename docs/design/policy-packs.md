@@ -123,7 +123,7 @@ scope は rule ごとに副作用 subcommand に絞っている:
 ## `core.self_protection`
 
 prompt injection 等で agent が guardrail 自体を無効化することを防ぐ
-(v0.3 で 5 rule とも実装済み、すべて `hardDeny: true` / `severity: critical`)。
+(v0.3 で 6 rule とも実装済み、すべて `hardDeny: true` / `severity: critical`)。
 
 | Rule id | 止めるもの |
 | --- | --- |
@@ -131,7 +131,8 @@ prompt injection 等で agent が guardrail 自体を無効化することを防
 | `core.self_protection.config` | `.ptuf.yaml` / `.ptuf.local.yaml` / `~/.config/ptuf/config.yaml` / `/etc/ptuf/policy.yaml` |
 | `core.self_protection.plugin` | config で参照されている plugin YAML |
 | `core.self_protection.claude-settings` | `.claude/settings.json` / `.claude/settings.local.json` / `~/.claude/settings.json` |
-| `core.self_protection.hook-script` | `~/.claude/settings.json` の `command` で参照される実行可能ファイル |
+| `core.self_protection.codex-settings` | `<repo>/.codex/config.toml` / `<repo>/.codex/hooks.json` / `~/.codex/config.toml` / `~/.codex/hooks.json` |
+| `core.self_protection.hook-script` | Claude Code または Codex の hook `command` で参照される実行可能ファイル |
 
 これらの rule は `hardDeny: true` のため下位 scope の allowlist で解除できない
 ([`decision-model.md`](decision-model.md))。

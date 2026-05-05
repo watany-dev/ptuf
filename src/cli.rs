@@ -13,6 +13,39 @@ use crate::plugin::runner as plugin_runner;
 /// (`docs/design/cli-and-hooks.md:104-114`).
 pub(crate) const POLICY_LOAD_FAILED_RULE: &str = "core.engine.policy-load-failed";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookAgent {
+    ClaudeCode,
+    Codex,
+}
+
+impl HookAgent {
+    fn audit_name(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ClaudeInitOptions {
+    pub settings_path: Option<PathBuf>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct CodexInitOptions {
+    pub root: Option<PathBuf>,
+    pub hooks_path: Option<PathBuf>,
+    pub config_path: Option<PathBuf>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum InitOptions {
+    ClaudeCode(ClaudeInitOptions),
+    Codex(CodexInitOptions),
+}
+
 /// Build the engine for the CWD-derived project scope, or surface a
 /// reserved deny so the CLI can render a fail-closed response.
 ///
@@ -47,21 +80,16 @@ pub(crate) fn build_engine_or_fail_closed<W: Write>(
 /// rejected as a usage error so callers must always pick a subcommand.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
-    /// `ptuf hook <agent>` — read JSON payload from stdin and emit a
-    /// `hookSpecificOutput` response on stdout. v0.4 supports
-    /// `agent = "claude-code"`; future agents will plug in here.
-    Hook,
+    /// `ptuf hook <agent>` — read JSON payload from stdin and emit an
+    /// agent-specific `hookSpecificOutput` response on stdout.
+    HookPreToolUse { agent: HookAgent },
     /// `ptuf eval --tool <name> <command>` — manual evaluation.
     Eval { tool: String, command: String },
     /// `ptuf plugin test <path>` — run plugin assertions.
     PluginTest { path: PathBuf },
     /// `ptuf init <agent> [--dry-run] [--settings <PATH>]` — install the
     /// PreToolUse hook entry.
-    Init {
-        agent: String,
-        dry_run: bool,
-        settings_path: Option<PathBuf>,
-    },
+    Init { dry_run: bool, options: InitOptions },
     /// `ptuf doctor [--json]` — print a diagnostic report.
     Doctor { json: bool },
     /// `--help` / `-h`.
@@ -125,6 +153,17 @@ where
     I: Iterator<Item = &'a String>,
 {
     let agent = iter.next().ok_or(ParseError::MissingValue("agent"))?;
+    match agent.as_str() {
+        "claude-code" => parse_init_claude(iter),
+        "codex" => parse_init_codex(iter),
+        _ => Err(ParseError::UnknownAgent(agent.clone())),
+    }
+}
+
+fn parse_init_claude<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
     let mut dry_run = false;
     let mut settings_path: Option<PathBuf> = None;
     while let Some(arg) = iter.next() {
@@ -141,9 +180,53 @@ where
         }
     }
     Ok(Command::Init {
-        agent: agent.clone(),
         dry_run,
-        settings_path,
+        options: InitOptions::ClaudeCode(ClaudeInitOptions { settings_path }),
+    })
+}
+
+fn parse_init_codex<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let mut dry_run = false;
+    let mut root: Option<PathBuf> = None;
+    let mut hooks_path: Option<PathBuf> = None;
+    let mut config_path: Option<PathBuf> = None;
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--dry-run" => dry_run = true,
+            "--root" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--root"))?;
+                root = Some(PathBuf::from(value));
+            }
+            "--hooks" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--hooks"))?;
+                hooks_path = Some(PathBuf::from(value));
+            }
+            "--config" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--config"))?;
+                config_path = Some(PathBuf::from(value));
+            }
+            other if other.starts_with("--root=") => {
+                root = Some(PathBuf::from(other.trim_start_matches("--root=")));
+            }
+            other if other.starts_with("--hooks=") => {
+                hooks_path = Some(PathBuf::from(other.trim_start_matches("--hooks=")));
+            }
+            other if other.starts_with("--config=") => {
+                config_path = Some(PathBuf::from(other.trim_start_matches("--config=")));
+            }
+            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
+        }
+    }
+    Ok(Command::Init {
+        dry_run,
+        options: InitOptions::Codex(CodexInitOptions {
+            root,
+            hooks_path,
+            config_path,
+        }),
     })
 }
 
@@ -152,13 +235,15 @@ where
     I: Iterator<Item = &'a String>,
 {
     let agent = iter.next().ok_or(ParseError::MissingValue("agent"))?;
-    if agent != "claude-code" {
-        return Err(ParseError::UnknownAgent(agent.clone()));
-    }
+    let agent = match agent.as_str() {
+        "claude-code" => HookAgent::ClaudeCode,
+        "codex" => HookAgent::Codex,
+        _ => return Err(ParseError::UnknownAgent(agent.clone())),
+    };
     if let Some(extra) = iter.next() {
         return Err(ParseError::UnexpectedArgument(extra.clone()));
     }
-    Ok(Command::Hook)
+    Ok(Command::HookPreToolUse { agent })
 }
 
 fn parse_eval<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -210,11 +295,15 @@ const HELP: &str = "ptuf — PreToolUseFilter, a guardrail for coding agents
 
 USAGE:
     ptuf hook <AGENT>                            (run as the agent's PreToolUse hook;
-                                                  AGENT = claude-code)
+                                                  AGENT = claude-code | codex)
     ptuf eval --tool <NAME> <COMMAND>            (evaluate a single tool call)
     ptuf plugin test <PATH>                      (run a plugin's deny/allow tests)
-    ptuf init <AGENT> [--dry-run]                (register hook in the agent's
-                      [--settings <PATH>]        settings file; AGENT = claude-code)
+    ptuf init claude-code [--dry-run]            (register hook in
+                          [--settings <PATH>]    ~/.claude/settings.json)
+    ptuf init codex [--dry-run]                  (register repo-local Codex hook in
+                    [--root <PATH>]              <repo>/.codex/{hooks.json,config.toml})
+                    [--hooks <PATH>]
+                    [--config <PATH>]
     ptuf doctor [--json]                         (print a diagnostic report)
     ptuf --help | --version
 
@@ -233,14 +322,10 @@ pub fn run<R: Read, W1: Write, W2: Write>(
     stderr: &mut W2,
 ) -> u8 {
     match command {
-        Command::Hook => run_hook(stdin, stdout, stderr),
+        Command::HookPreToolUse { agent } => run_hook(agent, stdin, stdout, stderr),
         Command::Eval { tool, command } => run_eval(&tool, &command, stdout, stderr),
         Command::PluginTest { path } => run_plugin_test(&path, stdout, stderr),
-        Command::Init {
-            agent,
-            dry_run,
-            settings_path,
-        } => run_init(&agent, dry_run, settings_path.as_deref(), stdout, stderr),
+        Command::Init { dry_run, options } => run_init(options, dry_run, stdout, stderr),
         Command::Doctor { json } => run_doctor(json, stdout, stderr),
         Command::Help => {
             let _ = writeln!(stdout, "{HELP}");
@@ -253,7 +338,12 @@ pub fn run<R: Read, W1: Write, W2: Write>(
     }
 }
 
-fn run_hook<R: Read, W1: Write, W2: Write>(mut stdin: R, stdout: &mut W1, stderr: &mut W2) -> u8 {
+fn run_hook<R: Read, W1: Write, W2: Write>(
+    agent: HookAgent,
+    mut stdin: R,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8 {
     let mut buf = String::new();
     if stdin.read_to_string(&mut buf).is_err() {
         let _ = writeln!(stderr, "ptuf: failed to read stdin");
@@ -266,11 +356,11 @@ fn run_hook<R: Read, W1: Write, W2: Write>(mut stdin: R, stdout: &mut W1, stderr
             return 1;
         }
     };
-    let decision = match build_engine_or_fail_closed(stderr, "claude-code") {
+    let decision = match build_engine_or_fail_closed(stderr, agent.audit_name()) {
         Ok(engine) => engine.decide(&input).decision,
         Err(deny) => deny,
     };
-    emit_decision(&decision, stdout, stderr)
+    emit_decision(agent, &decision, stdout, stderr)
 }
 
 fn run_eval<W1: Write, W2: Write>(
@@ -294,7 +384,7 @@ fn run_eval<W1: Write, W2: Write>(
     if let Some(reason) = decision.reason() {
         let _ = writeln!(stderr, "{reason}");
     }
-    decision_exit_code(&decision)
+    decision_exit_code(HookAgent::ClaudeCode, &decision)
 }
 
 fn run_plugin_test<W1: Write, W2: Write>(
@@ -318,36 +408,16 @@ fn run_plugin_test<W1: Write, W2: Write>(
 }
 
 fn run_init<W1: Write, W2: Write>(
-    agent: &str,
+    options: InitOptions,
     dry_run: bool,
-    settings_path: Option<&std::path::Path>,
     stdout: &mut W1,
     stderr: &mut W2,
 ) -> u8 {
-    if agent != "claude-code" {
-        let _ = writeln!(
-            stderr,
-            "ptuf: unknown agent: {agent} (only claude-code is supported)"
-        );
-        return 1;
-    }
-
-    let resolved_path = match settings_path {
-        Some(p) => p.to_path_buf(),
-        None => match init::claude_code::default_settings_path() {
-            Some(p) => p,
-            None => {
-                let _ = writeln!(
-                    stderr,
-                    "ptuf: $HOME is not set; pass --settings <PATH> explicitly"
-                );
-                return 1;
-            }
-        },
+    let outcome = match options {
+        InitOptions::ClaudeCode(options) => run_init_claude(&options, dry_run),
+        InitOptions::Codex(options) => run_init_codex(&options, dry_run),
     };
-    let binary = init::claude_code::detect_binary();
-
-    match init::claude_code::install(&resolved_path, &binary, dry_run) {
+    match outcome {
         Ok(outcome) => {
             render_install_outcome(&outcome, dry_run, stdout);
             0
@@ -380,25 +450,63 @@ fn run_doctor<W1: Write, W2: Write>(json: bool, stdout: &mut W1, stderr: &mut W2
     }
 }
 
+fn run_init_claude(
+    options: &ClaudeInitOptions,
+    dry_run: bool,
+) -> Result<init::InstallOutcome, init::InitError> {
+    let resolved_path = match options.settings_path.as_deref() {
+        Some(path) => path.to_path_buf(),
+        None => init::claude_code::default_settings_path().ok_or(init::InitError::HomeNotSet)?,
+    };
+    let binary = init::claude_code::detect_binary();
+    init::claude_code::install(&resolved_path, &binary, dry_run)
+}
+
+fn run_init_codex(
+    options: &CodexInitOptions,
+    dry_run: bool,
+) -> Result<init::InstallOutcome, init::InitError> {
+    let cwd = std::env::current_dir().ok();
+    let targets = init::codex::resolve_paths(
+        cwd.as_deref(),
+        options.root.as_deref(),
+        options.hooks_path.as_deref(),
+        options.config_path.as_deref(),
+    )?;
+    let binary = init::codex::detect_binary();
+    init::codex::install(&targets, &binary, dry_run)
+}
+
 fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: bool, stdout: &mut W) {
-    let path = outcome.settings_path.display();
+    let path_summary = outcome
+        .paths
+        .iter()
+        .map(|p| format!("{}={}", p.label, p.path.display()))
+        .collect::<Vec<_>>()
+        .join(", ");
     match outcome.status {
         init::InstallStatus::AlreadyPresent => {
             let suffix = if dry_run { " (dry-run)" } else { "" };
             let _ = writeln!(
                 stdout,
-                "ptuf init claude-code{suffix}: {path} already contains a ptuf hook entry; nothing to do."
+                "ptuf init {}{suffix}: {path_summary} already contains a ptuf hook entry; nothing to do.",
+                outcome.agent
             );
         }
         init::InstallStatus::Installed => {
-            let _ = writeln!(stdout, "ptuf init claude-code: registered hook in {path}");
+            let _ = writeln!(
+                stdout,
+                "ptuf init {}: registered hook in {path_summary}",
+                outcome.agent
+            );
             let _ = writeln!(stdout, "  matcher: {}", outcome.matcher);
             let _ = writeln!(stdout, "  command: {}", outcome.command);
         }
         init::InstallStatus::WouldInstall => {
             let _ = writeln!(
                 stdout,
-                "ptuf init claude-code (dry-run): would register hook in {path}"
+                "ptuf init {} (dry-run): would register hook in {path_summary}",
+                outcome.agent
             );
             let _ = writeln!(stdout, "  matcher: {}", outcome.matcher);
             let _ = writeln!(stdout, "  command: {}", outcome.command);
@@ -408,11 +516,13 @@ fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: boo
 }
 
 fn emit_decision<W1: Write, W2: Write>(
+    agent: HookAgent,
     decision: &Decision,
     stdout: &mut W1,
     stderr: &mut W2,
 ) -> u8 {
-    if let Some(response) = hook_output::from_decision(decision) {
+    let adapted = adapt_hook_decision(agent, decision);
+    if let Some(response) = render_hook_response(agent, &adapted) {
         match serde_json::to_string(&response) {
             Ok(body) => {
                 let _ = writeln!(stdout, "{body}");
@@ -423,10 +533,10 @@ fn emit_decision<W1: Write, W2: Write>(
             }
         }
     }
-    if let Some(reason) = decision.reason() {
+    if let Some(reason) = adapted.reason() {
         let _ = writeln!(stderr, "{reason}");
     }
-    decision_exit_code(decision)
+    decision_exit_code(agent, &adapted)
 }
 
 fn decision_label(decision: &Decision) -> &'static str {
@@ -438,9 +548,30 @@ fn decision_label(decision: &Decision) -> &'static str {
     }
 }
 
-fn decision_exit_code(decision: &Decision) -> u8 {
-    match decision {
-        Decision::Deny { .. } => 2,
+fn render_hook_response(
+    agent: HookAgent,
+    decision: &Decision,
+) -> Option<hook_output::HookResponse> {
+    match agent {
+        HookAgent::ClaudeCode => hook_output::claude_code::from_decision(decision),
+        HookAgent::Codex => hook_output::codex::from_decision(decision),
+    }
+}
+
+fn adapt_hook_decision(agent: HookAgent, decision: &Decision) -> Decision {
+    match (agent, decision) {
+        (HookAgent::Codex, Decision::Ask { rule_id, reason }) => Decision::Deny {
+            rule_id: rule_id.clone(),
+            reason: hook_output::codex::deny_reason_for_ask(reason),
+        },
+        _ => decision.clone(),
+    }
+}
+
+fn decision_exit_code(agent: HookAgent, decision: &Decision) -> u8 {
+    match (agent, decision) {
+        (_, Decision::Deny { .. }) => 2,
+        (HookAgent::Codex, Decision::Ask { .. }) => 2,
         _ => 0,
     }
 }
@@ -474,13 +605,25 @@ mod tests {
     #[test]
     fn parses_hook_subcommand() {
         let cmd = parse(&s(&["hook", "claude-code"])).unwrap();
-        assert_eq!(cmd, Command::Hook);
+        assert_eq!(
+            cmd,
+            Command::HookPreToolUse {
+                agent: HookAgent::ClaudeCode
+            }
+        );
+        let codex = parse(&s(&["hook", "codex"])).unwrap();
+        assert_eq!(
+            codex,
+            Command::HookPreToolUse {
+                agent: HookAgent::Codex
+            }
+        );
     }
 
     #[test]
     fn rejects_unknown_hook_agent() {
         assert!(matches!(
-            parse(&s(&["hook", "codex"])),
+            parse(&s(&["hook", "other"])),
             Err(ParseError::UnknownAgent(_))
         ));
     }
@@ -594,9 +737,10 @@ mod tests {
         assert_eq!(
             cmd,
             Command::Init {
-                agent: "claude-code".into(),
                 dry_run: false,
-                settings_path: None,
+                options: InitOptions::ClaudeCode(ClaudeInitOptions {
+                    settings_path: None,
+                }),
             }
         );
     }
@@ -614,9 +758,10 @@ mod tests {
         assert_eq!(
             cmd,
             Command::Init {
-                agent: "claude-code".into(),
                 dry_run: true,
-                settings_path: Some(PathBuf::from("/tmp/x.json")),
+                options: InitOptions::ClaudeCode(ClaudeInitOptions {
+                    settings_path: Some(PathBuf::from("/tmp/x.json")),
+                }),
             }
         );
     }
@@ -627,9 +772,36 @@ mod tests {
         assert_eq!(
             cmd,
             Command::Init {
-                agent: "claude-code".into(),
                 dry_run: false,
-                settings_path: Some(PathBuf::from("/tmp/x.json")),
+                options: InitOptions::ClaudeCode(ClaudeInitOptions {
+                    settings_path: Some(PathBuf::from("/tmp/x.json")),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_codex_init_flags() {
+        let cmd = parse(&s(&[
+            "init",
+            "codex",
+            "--dry-run",
+            "--root",
+            "/repo",
+            "--hooks=/tmp/hooks.json",
+            "--config",
+            "/tmp/config.toml",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: true,
+                options: InitOptions::Codex(CodexInitOptions {
+                    root: Some(PathBuf::from("/repo")),
+                    hooks_path: Some(PathBuf::from("/tmp/hooks.json")),
+                    config_path: Some(PathBuf::from("/tmp/config.toml")),
+                }),
             }
         );
     }
@@ -648,6 +820,10 @@ mod tests {
             parse(&s(&["init", "claude-code", "--bogus"])),
             Err(ParseError::UnexpectedArgument(_))
         ));
+        assert!(matches!(
+            parse(&s(&["init", "codex", "--settings=/tmp/x.json"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
     }
 
     #[test]
@@ -655,6 +831,10 @@ mod tests {
         assert!(matches!(
             parse(&s(&["init", "claude-code", "--settings"])),
             Err(ParseError::MissingValue("--settings"))
+        ));
+        assert!(matches!(
+            parse(&s(&["init", "codex", "--hooks"])),
+            Err(ParseError::MissingValue("--hooks"))
         ));
     }
 
@@ -805,7 +985,7 @@ mod tests {
         };
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = emit_decision(&decision, &mut out, &mut err);
+        let code = emit_decision(HookAgent::ClaudeCode, &decision, &mut out, &mut err);
         assert_eq!(code, 0);
         let out_s = String::from_utf8_lossy(&out);
         assert!(out_s.contains("\"permissionDecision\":\"ask\""));
@@ -909,21 +1089,32 @@ rules:
     }
 
     #[test]
-    fn run_init_unknown_agent_returns_one() {
+    fn run_init_codex_dry_run_writes_outcome_summary() {
+        let dir = std::env::temp_dir().join(format!("ptuf-cli-init-codex-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks_path = dir.join("hooks.json");
+        let config_path = dir.join("config.toml");
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
             Command::Init {
-                agent: "codex".into(),
                 dry_run: true,
-                settings_path: Some(PathBuf::from("/tmp/should-not-be-touched.json")),
+                options: InitOptions::Codex(CodexInitOptions {
+                    root: None,
+                    hooks_path: Some(hooks_path.clone()),
+                    config_path: Some(config_path.clone()),
+                }),
             },
             b"" as &[u8],
             &mut out,
             &mut err,
         );
-        assert_eq!(code, 1);
-        assert!(String::from_utf8_lossy(&err).contains("unknown agent"));
+        assert_eq!(code, 0);
+        assert!(String::from_utf8_lossy(&out).contains("would register hook"));
+        assert!(!hooks_path.exists());
+        assert!(!config_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -936,9 +1127,10 @@ rules:
         let mut err = Vec::new();
         let code = run(
             Command::Init {
-                agent: "claude-code".into(),
                 dry_run: true,
-                settings_path: Some(path.clone()),
+                options: InitOptions::ClaudeCode(ClaudeInitOptions {
+                    settings_path: Some(path.clone()),
+                }),
             },
             b"" as &[u8],
             &mut out,
@@ -963,9 +1155,10 @@ rules:
         let mut err1 = Vec::new();
         let code1 = run(
             Command::Init {
-                agent: "claude-code".into(),
                 dry_run: false,
-                settings_path: Some(path.clone()),
+                options: InitOptions::ClaudeCode(ClaudeInitOptions {
+                    settings_path: Some(path.clone()),
+                }),
             },
             b"" as &[u8],
             &mut out1,
@@ -979,9 +1172,10 @@ rules:
         let mut err2 = Vec::new();
         let code2 = run(
             Command::Init {
-                agent: "claude-code".into(),
                 dry_run: false,
-                settings_path: Some(path.clone()),
+                options: InitOptions::ClaudeCode(ClaudeInitOptions {
+                    settings_path: Some(path.clone()),
+                }),
             },
             b"" as &[u8],
             &mut out2,
@@ -1008,9 +1202,10 @@ rules:
         let mut err = Vec::new();
         let code = run(
             Command::Init {
-                agent: "claude-code".into(),
                 dry_run: false,
-                settings_path: Some(path.clone()),
+                options: InitOptions::ClaudeCode(ClaudeInitOptions {
+                    settings_path: Some(path.clone()),
+                }),
             },
             b"" as &[u8],
             &mut out,
@@ -1046,6 +1241,7 @@ rules:
         assert!(value["configLayers"].is_array());
         assert!(value["plugins"].is_array());
         assert!(value["claude"]["state"].is_string());
+        assert!(value["codex"]["state"].is_string());
         assert!(value["hasFailure"].is_boolean());
     }
 
@@ -1092,7 +1288,14 @@ rules:
     fn run_hook_returns_one_when_stdin_read_fails() {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = run(Command::Hook, FailingReader, &mut out, &mut err);
+        let code = run(
+            Command::HookPreToolUse {
+                agent: HookAgent::ClaudeCode,
+            },
+            FailingReader,
+            &mut out,
+            &mut err,
+        );
         assert_eq!(code, 1);
         assert!(out.is_empty());
         assert!(String::from_utf8_lossy(&err).contains("failed to read stdin"));

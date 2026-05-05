@@ -14,11 +14,16 @@ ptuf は v0.4 まで実装済み (MCP fact 抽出 / audit log v1 schema /
 `decide()` は組み込みパック
 (`core.filesystem.destructive-rm` / `core.network.remote-script-pipe` /
 `core.secrets.sensitive-path-to-network` / `core.secrets.sensitive-read` /
-`core.git.*` 7 件 / `core.self_protection.*` 5 件 / `core.project_hygiene.*`
+`core.git.*` 7 件 / `core.self_protection.*` 6 件 / `core.project_hygiene.*`
 3 件 (default disabled, opt-in)) と YAML plugin の rule を順に評価し、
 `Decision` を集約する。CLI は
 `ptuf hook claude-code` / `ptuf eval --tool <name> <command>` /
-`ptuf plugin test <path>` / `ptuf init claude-code [--dry-run] [--settings <PATH>]` /
+`ptuf eval --tool <name> <command>` / `ptuf plugin test <path>` /
+`ptuf init claude-code [--dry-run] [--settings <PATH>]` /
+`ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>]` /
+`ptuf hook codex` / `ptuf plugin test <path>` /
+`ptuf init claude-code [--dry-run] [--settings <PATH>]` /
+`ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>]` /
 `ptuf doctor [--json]` に加え `--help` / `--version` を提供する。
 本書群は v0.4 以降で到達すべき設計を含み、現実装と将来像が混在する。
 各章は「今あるもの」と「これから入るもの」を可能な限り区別して記述する。
@@ -26,11 +31,11 @@ roadmap は [`roadmap.md`](roadmap.md) を参照。
 
 ## 目的
 
-コーディングエージェント (Claude Code 等) が外部ツールを呼び出す直前に介在し、
-危険な CLI 操作・情報漏洩・プロジェクト規約違反を deterministic に判定する
-汎用ガードレール層を提供する。最初の主対象は Claude Code の `PreToolUse` hook
-とし、将来は Codex / Cursor / Gemini CLI / MCP tools にも adapter で対応できる
-構造を取る。
+コーディングエージェント (Claude Code / Codex 等) が外部ツールを呼び出す直前に
+介在し、危険な CLI 操作・情報漏洩・プロジェクト規約違反を deterministic に
+判定する汎用ガードレール層を提供する。現時点では Claude Code と Codex の
+`PreToolUse` hook を first-class adapter とし、将来は Cursor / Gemini CLI /
+MCP tools にも adapter で対応できる構造を取る。
 
 ## Goals
 
@@ -79,7 +84,7 @@ roadmap は [`roadmap.md`](roadmap.md) を参照。
 | [`decision-model.md`](decision-model.md) | 4 種類 (allow / monitor / ask / deny) の semantics、優先順位、`hardDeny` / `overridable` |
 | [`policy-packs.md`](policy-packs.md) | built-in 6 packs (network / secrets / filesystem / git / self_protection / project_hygiene) |
 | [`config-and-plugins.md`](config-and-plugins.md) | 設定スコープのマージ、YAML plugin 形式、plugin tests、allowlists |
-| [`cli-and-hooks.md`](cli-and-hooks.md) | `ptuf` サブコマンド一覧、Claude Code 統合、将来の adapter 戦略 |
+| [`cli-and-hooks.md`](cli-and-hooks.md) | `ptuf` サブコマンド一覧、Claude Code / Codex 統合、将来の adapter 戦略 |
 | [`audit.md`](audit.md) | JSONL 監査ログのスキーマと redaction 規約 |
 | [`testing.md`](testing.md) | example-based テストと Property-Based Testing (PBT) の役割分担 |
 | [`roadmap.md`](roadmap.md) | MVP v0.1〜v0.4 のスコープと設計原則 |

@@ -15,6 +15,7 @@ pub enum PathTool {
     Read,
     Edit,
     Write,
+    ApplyPatch,
     /// Any `mcp__<server>__<tool>` call that exposed a top-level
     /// `path` string. Treated like a write-capable tool by self-protection
     /// rules so MCP-driven edits cannot bypass the file allowlist.
@@ -68,6 +69,15 @@ pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<FileP
                 .collect();
             (tool, values)
         }
+        "apply_patch" => {
+            let values = input
+                .tool_input
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .map(collect_apply_patch_paths)
+                .unwrap_or_default();
+            (PathTool::ApplyPatch, values)
+        }
         _ if input.is_mcp_tool() => (PathTool::Mcp, collect_mcp_paths(&input.tool_input)),
         _ => return Vec::new(),
     };
@@ -75,7 +85,7 @@ pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<FileP
         .into_iter()
         .map(|raw| FilePath {
             tool,
-            absolute: expand_home(&raw, env),
+            absolute: resolve_with_env(&raw, None, env),
             raw,
         })
         .collect()
@@ -110,6 +120,27 @@ fn collect_mcp_paths(value: &serde_json::Value) -> Vec<String> {
     if let Some(paths) = value.get("paths").and_then(serde_json::Value::as_array) {
         for item in paths {
             push_string(Some(item), &mut out);
+        }
+    }
+    out
+}
+
+fn collect_apply_patch_paths(command: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in command.lines() {
+        for prefix in [
+            "*** Add File: ",
+            "*** Update File: ",
+            "*** Delete File: ",
+            "*** Move to: ",
+        ] {
+            if let Some(path) = line.strip_prefix(prefix) {
+                let trimmed = path.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_string());
+                }
+                break;
+            }
         }
     }
     out
@@ -314,6 +345,37 @@ mod tests {
             tool_input: serde_json::json!({"path": 7}),
         };
         assert!(extract_with_env(&i, &MapEnv::with_home("/h")).is_none());
+    }
+
+    #[test]
+    fn extract_apply_patch_collects_add_update_delete_and_move_paths() {
+        let i = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "\
+            *** Begin Patch\n\
+            *** Add File: new.txt\n\
+            *** Update File: old.txt\n\
+            *** Move to: renamed.txt\n\
+            *** Delete File: gone.txt\n\
+            *** End Patch\n"
+            }),
+        };
+        let paths = extract_all_with_env(&i, &MapEnv::with_home("/h"));
+        let raws: Vec<_> = paths.iter().map(|p| p.raw.as_str()).collect();
+        assert_eq!(raws, vec!["new.txt", "old.txt", "renamed.txt", "gone.txt"]);
+        assert!(paths.iter().all(|p| p.tool == PathTool::ApplyPatch));
+    }
+
+    #[test]
+    fn extract_apply_patch_ignores_malformed_lines() {
+        let i = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Update File:\n*** Move to: \n*** End Patch\n"
+            }),
+        };
+        assert!(extract_all_with_env(&i, &MapEnv::with_home("/h")).is_empty());
     }
 
     #[test]

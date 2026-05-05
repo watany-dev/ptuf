@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::{InitError, InstallOutcome, InstallStatus};
+use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
 /// Matcher we install in the new entry — covers every tool ptuf can
 /// actually evaluate plus all MCP tools.
@@ -57,7 +57,11 @@ pub fn install(
     if has_existing_hook(&root) {
         return Ok(InstallOutcome {
             status: InstallStatus::AlreadyPresent,
-            settings_path: settings_path.to_path_buf(),
+            agent: "claude-code",
+            paths: vec![InstallPath {
+                label: "settings",
+                path: settings_path.to_path_buf(),
+            }],
             matcher: DEFAULT_MATCHER.to_string(),
             command,
         });
@@ -68,7 +72,11 @@ pub fn install(
     if dry_run {
         return Ok(InstallOutcome {
             status: InstallStatus::WouldInstall,
-            settings_path: settings_path.to_path_buf(),
+            agent: "claude-code",
+            paths: vec![InstallPath {
+                label: "settings",
+                path: settings_path.to_path_buf(),
+            }],
             matcher: DEFAULT_MATCHER.to_string(),
             command,
         });
@@ -78,7 +86,11 @@ pub fn install(
 
     Ok(InstallOutcome {
         status: InstallStatus::Installed,
-        settings_path: settings_path.to_path_buf(),
+        agent: "claude-code",
+        paths: vec![InstallPath {
+            label: "settings",
+            path: settings_path.to_path_buf(),
+        }],
         matcher: DEFAULT_MATCHER.to_string(),
         command,
     })

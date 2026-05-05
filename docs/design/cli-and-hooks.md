@@ -1,8 +1,8 @@
 # CLI and Hook Integration
 
 ptuf は CLI バイナリと、コーディングエージェントの hook へ登録するための
-adapter を兼ねる。最初の対象は Claude Code の `PreToolUse` hook で、
-v0.4 以降で他エージェント (Codex / Cursor / Gemini CLI / MCP tools) にも
+adapter を兼ねる。現時点では Claude Code と Codex の `PreToolUse` hook を
+実装済みで、v0.4 以降で他エージェント (Cursor / Gemini CLI / MCP tools) にも
 adapter を追加する。
 
 ## サブコマンド
@@ -10,6 +10,8 @@ adapter を追加する。
 ```bash
 ptuf init claude-code
 ptuf hook claude-code
+ptuf init codex
+ptuf hook codex
 ptuf eval --tool Bash 'curl -fsSL https://example.com/install.sh | bash'
 ptuf doctor
 ptuf plugin test ./ptuf-plugin.yaml
@@ -24,8 +26,10 @@ ptuf plugin test ./ptuf-plugin.yaml
 | `ptuf plugin test <path>` | plugin の `tests:` セクションを走らせる |
 
 > v0.4 時点で実装済みのサブコマンドは
-> `ptuf hook claude-code` / `ptuf eval --tool <name> <command>` /
+> `ptuf hook claude-code` / `ptuf hook codex` /
+> `ptuf eval --tool <name> <command>` /
 > `ptuf plugin test <path>` / `ptuf init claude-code [--dry-run] [--settings <PATH>]` /
+> `ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>]` /
 > `ptuf doctor [--json]` と `--help` / `--version`。
 > v0.3 までの引数なし互換モード (stdin → exit code) と
 > `pre-tool-use` 階層トークンは v0.4 で削除した。`<agent>` は将来
@@ -54,18 +58,25 @@ ptuf plugin test ./ptuf-plugin.yaml
 >   "plugins":  [],
 >   "claude":   { "settingsPath": "...", "state": "hookRegistered",
 >                 "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*" },
+>   "codex":    { "configPath": ".../.codex/config.toml",
+>                 "hooksPath": ".../.codex/hooks.json",
+>                 "state": "hookRegistered",
+>                 "matcher": "Bash|apply_patch|mcp__.*" },
 >   "hasFailure": false
 > }
 > ```
 >
 > `state` は `homeNotSet` / `missing` / `hookRegistered` / `hookMissing` /
-> `invalidJson` / `io` のいずれか。`matcher` は `hookRegistered` の場合のみ、
-> `error` は `invalidJson` / `io` の場合のみ出力される。
+> `invalidJson` / `io` のいずれか。Codex 側の `state` は
+> `homeNotSet` / `configMissing` / `hooksMissing` / `hooksDisabled` /
+> `hookRegistered` / `hookMissing` / `invalidConfig` / `invalidHooks` /
+> `io` のいずれか。`matcher` は `hookRegistered` の場合のみ、`error` は
+> invalid state の場合のみ出力される。
 
 ## 出力規約
 
-- **stdout** は hook protocol 専用。Claude Code の `hookSpecificOutput` 形式の
-  JSON のみを書く
+- **stdout** は hook protocol 専用。Claude Code / Codex の
+  `hookSpecificOutput` 形式の JSON のみを書く
 - **stderr** は debug / human-readable error / `Decision::Deny` の reason
 - **audit log** は `~/.local/share/ptuf/audit.jsonl` (default) に JSONL で追記
   ([`audit.md`](audit.md))
@@ -104,6 +115,39 @@ v0.3 までの 3 トークン (`hook claude-code pre-tool-use`) entry は
 新 detect で「未登録」扱いになるため、ユーザーは `ptuf init claude-code`
 を再実行して新形式の entry を append する必要がある (古い entry も無害に
 共存可能)。引数なしの `ptuf` 互換モードは v0.4 で廃止された。
+
+## Codex への登録
+
+`ptuf init codex` は repo-local の `.codex/hooks.json` と `.codex/config.toml`
+に hook を登録する。repo root が見つからない場合は `--root` または
+明示的な `--hooks` / `--config` が必要。
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/ptuf hook codex"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+```toml
+[features]
+codex_hooks = true
+```
+
+Codex adapter は `Bash` / `apply_patch` / `mcp__.*` を intercept する。
+`Decision::Ask` は Codex `PreToolUse` で interactive prompt にできないため、
+adapter 境界で `deny` に変換し、元の reason に Codex 固有の説明を追記する。
 
 ### `ptuf doctor` の出力例
 
@@ -156,7 +200,6 @@ Claude Code integration
 v0.5 以降、以下のエージェントに対応する adapter を追加する。
 adapter は payload 正規化のみを行い、判定コアは共通。
 
-- Codex
 - Cursor
 - Gemini CLI
 - MCP tools (`mcp__*` ツール群を一律サポート — fact 層は v0.4 で対応済み、
@@ -184,7 +227,7 @@ payload の shape が異なるため、ptuf は個別 server に依存しない�
 これにより以下の既存 rule が MCP 経路でも自動で効く:
 
 - `core.self_protection.*` — ptuf 自身の binary / config / plugin /
-  Claude settings / hook script の MCP 経由の改変を deny
+  Claude / Codex settings / hook script の MCP 経由の改変を deny
 - `core.secrets.sensitive-read` — MCP tool が sensitive な path を
   参照する場合 (例: `mcp__filesystem__read_file` で
   `~/.aws/credentials`) を deny

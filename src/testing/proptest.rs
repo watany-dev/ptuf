@@ -251,13 +251,14 @@ pub fn mode() -> impl Strategy<Value = Mode> {
     ]
 }
 
-/// All five [`ProtectedKind`] variants drawn uniformly.
+/// All six [`ProtectedKind`] variants drawn uniformly.
 pub fn protected_kind() -> impl Strategy<Value = ProtectedKind> {
     prop_oneof![
         Just(ProtectedKind::Binary),
         Just(ProtectedKind::Config),
         Just(ProtectedKind::Plugin),
         Just(ProtectedKind::ClaudeSettings),
+        Just(ProtectedKind::CodexSettings),
         Just(ProtectedKind::HookScript),
     ]
 }

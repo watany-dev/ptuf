@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use crate::config::scope::Layout;
 use crate::config::{self, Config, ConfigError};
-use crate::init::claude_code;
+use crate::init::{claude_code, codex};
 use crate::plugin::{self, PluginError};
 
 /// Schema version for `doctor --json` output. Bumped only on
@@ -35,6 +35,7 @@ pub struct Report {
     pub config: ConfigStatus,
     pub plugins: Vec<PluginStatus>,
     pub claude: ClaudeStatus,
+    pub codex: CodexStatus,
 }
 
 /// Information about the running binary.
@@ -75,6 +76,18 @@ pub struct ClaudeStatus {
     pub state: ClaudeState,
 }
 
+/// Codex integration check.
+pub struct CodexStatus {
+    pub config_path: Option<PathBuf>,
+    pub hooks_path: Option<PathBuf>,
+    pub state: CodexState,
+}
+
+pub struct CodexPaths {
+    pub config_path: Option<PathBuf>,
+    pub hooks_path: Option<PathBuf>,
+}
+
 pub enum ClaudeState {
     /// `$HOME` is unset, so we never tried to read any path.
     HomeNotSet,
@@ -90,6 +103,18 @@ pub enum ClaudeState {
     Io(String),
 }
 
+pub enum CodexState {
+    HomeNotSet,
+    ConfigMissing,
+    HooksMissing,
+    HooksDisabled,
+    HookRegistered { matcher: Option<String> },
+    HookMissing,
+    InvalidConfig(String),
+    InvalidHooks(String),
+    Io(String),
+}
+
 impl Report {
     /// Build a report from already-resolved inputs.
     ///
@@ -101,6 +126,32 @@ impl Report {
         repo_root: Option<PathBuf>,
         layout: Layout,
         claude_settings_path: Option<PathBuf>,
+    ) -> Self {
+        let codex_paths = repo_root.as_ref().map_or(
+            CodexPaths {
+                config_path: None,
+                hooks_path: None,
+            },
+            |root| CodexPaths {
+                config_path: Some(root.join(".codex/config.toml")),
+                hooks_path: Some(root.join(".codex/hooks.json")),
+            },
+        );
+        Self::gather_with_codex(
+            binary_path,
+            repo_root,
+            layout,
+            claude_settings_path,
+            codex_paths,
+        )
+    }
+
+    pub fn gather_with_codex(
+        binary_path: Option<PathBuf>,
+        repo_root: Option<PathBuf>,
+        layout: Layout,
+        claude_settings_path: Option<PathBuf>,
+        codex_paths: CodexPaths,
     ) -> Self {
         let config_status = match config::load_with_layout(layout.clone()) {
             Ok(c) => ConfigStatus::Loaded(c),
@@ -114,6 +165,10 @@ impl Report {
         let plugins = plugin_paths.into_iter().map(plugin_status_for).collect();
 
         let claude = build_claude_status(claude_settings_path.as_deref());
+        let codex = build_codex_status(
+            codex_paths.config_path.as_deref(),
+            codex_paths.hooks_path.as_deref(),
+        );
 
         Self {
             binary: BinaryInfo {
@@ -127,6 +182,11 @@ impl Report {
             claude: ClaudeStatus {
                 settings_path: claude_settings_path,
                 state: claude,
+            },
+            codex: CodexStatus {
+                config_path: codex_paths.config_path,
+                hooks_path: codex_paths.hooks_path,
+                state: codex,
             },
         }
     }
@@ -146,6 +206,9 @@ impl Report {
         matches!(
             self.claude.state,
             ClaudeState::InvalidJson(_) | ClaudeState::Io(_)
+        ) || matches!(
+            self.codex.state,
+            CodexState::InvalidConfig(_) | CodexState::InvalidHooks(_) | CodexState::Io(_)
         )
     }
 
@@ -160,6 +223,7 @@ impl Report {
         self.render_effective_config(w)?;
         self.render_plugins(w)?;
         self.render_claude(w)?;
+        self.render_codex(w)?;
         Ok(())
     }
 
@@ -298,6 +362,73 @@ impl Report {
         }
         Ok(())
     }
+
+    fn render_codex<W: Write>(&self, w: &mut W) -> std::io::Result<()> {
+        writeln!(w)?;
+        writeln!(w, "Codex integration")?;
+        match (
+            &self.codex.config_path,
+            &self.codex.hooks_path,
+            &self.codex.state,
+        ) {
+            (_, _, CodexState::HomeNotSet) => {
+                writeln!(
+                    w,
+                    "  ⚠ $HOME not set and no repository root detected; cannot locate Codex hook files"
+                )?;
+            }
+            (Some(config_path), _, CodexState::ConfigMissing) => {
+                writeln!(
+                    w,
+                    "  ⚠ {} not present (run `ptuf init codex`)",
+                    config_path.display()
+                )?;
+            }
+            (_, Some(hooks_path), CodexState::HooksMissing) => {
+                writeln!(
+                    w,
+                    "  ⚠ {} not present (run `ptuf init codex`)",
+                    hooks_path.display()
+                )?;
+            }
+            (Some(config_path), Some(hooks_path), CodexState::HooksDisabled) => {
+                writeln!(w, "  ✓ {} present", config_path.display())?;
+                writeln!(w, "  ✓ {} present", hooks_path.display())?;
+                writeln!(
+                    w,
+                    "  ⚠ features.codex_hooks is disabled (run `ptuf init codex`)"
+                )?;
+            }
+            (Some(config_path), Some(hooks_path), CodexState::HookRegistered { matcher }) => {
+                writeln!(w, "  ✓ {} present", config_path.display())?;
+                writeln!(w, "  ✓ {} present", hooks_path.display())?;
+                let matcher = matcher
+                    .as_deref()
+                    .map(|m| format!(" (matcher: {m:?})"))
+                    .unwrap_or_default();
+                writeln!(w, "  ✓ ptuf hook registered{matcher}")?;
+            }
+            (Some(config_path), Some(hooks_path), CodexState::HookMissing) => {
+                writeln!(w, "  ✓ {} present", config_path.display())?;
+                writeln!(w, "  ✓ {} present", hooks_path.display())?;
+                writeln!(w, "  ⚠ no ptuf hook registered (run `ptuf init codex`)")?;
+            }
+            (Some(config_path), _, CodexState::InvalidConfig(msg)) => {
+                writeln!(w, "  ✗ {} invalid TOML: {msg}", config_path.display())?;
+            }
+            (_, Some(hooks_path), CodexState::InvalidHooks(msg)) => {
+                writeln!(w, "  ✗ {} invalid JSON: {msg}", hooks_path.display())?;
+            }
+            (Some(config_path), _, CodexState::Io(msg)) => {
+                writeln!(w, "  ✗ {} unreadable: {msg}", config_path.display())?;
+            }
+            (_, Some(hooks_path), CodexState::Io(msg)) => {
+                writeln!(w, "  ✗ {} unreadable: {msg}", hooks_path.display())?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 fn mode_label(mode: config::Mode) -> &'static str {
@@ -355,6 +486,62 @@ fn build_claude_status(path: Option<&Path>) -> ClaudeState {
     ClaudeState::HookMissing
 }
 
+fn build_codex_status(config_path: Option<&Path>, hooks_path: Option<&Path>) -> CodexState {
+    let (Some(config_path), Some(hooks_path)) = (config_path, hooks_path) else {
+        return CodexState::HomeNotSet;
+    };
+
+    let config_body = match fs::read_to_string(config_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return CodexState::ConfigMissing,
+        Err(e) => return CodexState::Io(e.to_string()),
+    };
+    let config_doc = match config_body.parse::<toml_edit::DocumentMut>() {
+        Ok(doc) => doc,
+        Err(e) => return CodexState::InvalidConfig(e.to_string()),
+    };
+
+    let hooks_body = match fs::read_to_string(hooks_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return CodexState::HooksMissing,
+        Err(e) => return CodexState::Io(e.to_string()),
+    };
+    let hooks_value: Value = match serde_json::from_str(&hooks_body) {
+        Ok(v) => v,
+        Err(e) => return CodexState::InvalidHooks(e.to_string()),
+    };
+
+    let hooks_enabled = config_doc["features"]
+        .as_table_like()
+        .and_then(|table| table.get("codex_hooks"))
+        .and_then(|item| item.as_bool())
+        == Some(true);
+    if !hooks_enabled {
+        return CodexState::HooksDisabled;
+    }
+
+    let Some(arr) = hooks_value
+        .pointer("/hooks/PreToolUse")
+        .and_then(Value::as_array)
+    else {
+        return CodexState::HookMissing;
+    };
+    for entry in arr {
+        let commands = crate::init::codex::entry_commands(entry);
+        if commands
+            .iter()
+            .any(|cmd| crate::init::codex::command_invokes_ptuf_hook(cmd))
+        {
+            let matcher = entry
+                .get("matcher")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            return CodexState::HookRegistered { matcher };
+        }
+    }
+    CodexState::HookMissing
+}
+
 /// Production entry point: discover everything from the live process
 /// environment and write the rendered report to `stdout`.
 pub fn render_doctor<W: Write>(stdout: &mut W) -> std::io::Result<bool> {
@@ -379,7 +566,24 @@ fn gather_live_report() -> Report {
     let repo_root = cwd.as_deref().and_then(crate::config::repo::discover);
     let layout = config::scope::default_layout(repo_root.as_deref());
     let claude_settings_path = claude_code::default_settings_path();
-    Report::gather(binary_path, repo_root, layout, claude_settings_path)
+    let codex_paths = if let Some(root) = repo_root.as_ref() {
+        CodexPaths {
+            config_path: Some(root.join(".codex/config.toml")),
+            hooks_path: Some(root.join(".codex/hooks.json")),
+        }
+    } else {
+        CodexPaths {
+            config_path: codex::default_home_config_path(),
+            hooks_path: codex::default_home_hooks_path(),
+        }
+    };
+    Report::gather_with_codex(
+        binary_path,
+        repo_root,
+        layout,
+        claude_settings_path,
+        codex_paths,
+    )
 }
 
 /// Shadow types whose only job is to give the doctor report a stable
@@ -396,6 +600,7 @@ pub struct JsonReport {
     pub config: JsonConfig,
     pub plugins: Vec<JsonPlugin>,
     pub claude: JsonClaude,
+    pub codex: JsonCodex,
     #[serde(rename = "hasFailure")]
     pub has_failure: bool,
 }
@@ -465,6 +670,19 @@ pub struct JsonClaude {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct JsonCodex {
+    #[serde(rename = "configPath")]
+    pub config_path: Option<String>,
+    #[serde(rename = "hooksPath")]
+    pub hooks_path: Option<String>,
+    pub state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 impl Report {
     /// Build the JSON projection of this report. Pure transformation;
     /// no I/O, no environment lookups.
@@ -522,6 +740,7 @@ impl Report {
                 })
                 .collect(),
             claude: build_json_claude(&self.claude),
+            codex: build_json_codex(&self.codex),
             has_failure,
         }
     }
@@ -562,6 +781,29 @@ fn build_json_claude(status: &ClaudeStatus) -> JsonClaude {
     };
     JsonClaude {
         settings_path,
+        state,
+        matcher,
+        error,
+    }
+}
+
+fn build_json_codex(status: &CodexStatus) -> JsonCodex {
+    let config_path = status.config_path.as_ref().map(|p| p.display().to_string());
+    let hooks_path = status.hooks_path.as_ref().map(|p| p.display().to_string());
+    let (state, matcher, error) = match &status.state {
+        CodexState::HomeNotSet => ("homeNotSet", None, None),
+        CodexState::ConfigMissing => ("configMissing", None, None),
+        CodexState::HooksMissing => ("hooksMissing", None, None),
+        CodexState::HooksDisabled => ("hooksDisabled", None, None),
+        CodexState::HookRegistered { matcher } => ("hookRegistered", matcher.clone(), None),
+        CodexState::HookMissing => ("hookMissing", None, None),
+        CodexState::InvalidConfig(msg) => ("invalidConfig", None, Some(msg.clone())),
+        CodexState::InvalidHooks(msg) => ("invalidHooks", None, Some(msg.clone())),
+        CodexState::Io(msg) => ("io", None, Some(msg.clone())),
+    };
+    JsonCodex {
+        config_path,
+        hooks_path,
         state,
         matcher,
         error,
@@ -621,6 +863,7 @@ mod tests {
         assert!(s.contains("mode:"));
         assert!(s.contains("Plugins"));
         assert!(s.contains("Claude Code integration"));
+        assert!(s.contains("Codex integration"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -799,6 +1042,125 @@ rules:
     }
 
     #[test]
+    fn codex_home_not_set_warns() {
+        assert!(matches!(
+            build_codex_status(None, None),
+            CodexState::HomeNotSet
+        ));
+    }
+
+    #[test]
+    fn codex_config_missing_state_is_detected() {
+        let dir = workdir("codex-config-missing");
+        let state = build_codex_status(
+            Some(&dir.join("config.toml")),
+            Some(&dir.join("hooks.json")),
+        );
+        assert!(matches!(state, CodexState::ConfigMissing));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_hooks_missing_state_is_detected() {
+        let dir = workdir("codex-hooks-missing");
+        fs::write(dir.join("config.toml"), "[features]\ncodex_hooks = true\n").unwrap();
+        let state = build_codex_status(
+            Some(&dir.join("config.toml")),
+            Some(&dir.join("hooks.json")),
+        );
+        assert!(matches!(state, CodexState::HooksMissing));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_hooks_disabled_state_is_detected() {
+        let dir = workdir("codex-disabled");
+        fs::write(dir.join("config.toml"), "[features]\ncodex_hooks = false\n").unwrap();
+        fs::write(dir.join("hooks.json"), r#"{"hooks":{"PreToolUse":[]}}"#).unwrap();
+        let state = build_codex_status(
+            Some(&dir.join("config.toml")),
+            Some(&dir.join("hooks.json")),
+        );
+        assert!(matches!(state, CodexState::HooksDisabled));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_hook_registered_state_is_detected_with_matcher() {
+        let dir = workdir("codex-hook-registered");
+        fs::write(dir.join("config.toml"), "[features]\ncodex_hooks = true\n").unwrap();
+        fs::write(
+            dir.join("hooks.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash|apply_patch|mcp__.*","hooks":[{"type":"command","command":"ptuf hook codex"}]}]}}"#,
+        )
+        .unwrap();
+        let state = build_codex_status(
+            Some(&dir.join("config.toml")),
+            Some(&dir.join("hooks.json")),
+        );
+        assert!(matches!(
+            state,
+            CodexState::HookRegistered { matcher: Some(ref matcher) }
+                if matcher == "Bash|apply_patch|mcp__.*"
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_hook_missing_state_is_detected() {
+        let dir = workdir("codex-hook-missing");
+        fs::write(dir.join("config.toml"), "[features]\ncodex_hooks = true\n").unwrap();
+        fs::write(
+            dir.join("hooks.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"other hook"}]}]}}"#,
+        )
+        .unwrap();
+        let state = build_codex_status(
+            Some(&dir.join("config.toml")),
+            Some(&dir.join("hooks.json")),
+        );
+        assert!(matches!(state, CodexState::HookMissing));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_invalid_config_state_is_failure() {
+        let dir = workdir("codex-invalid-config");
+        fs::write(dir.join("config.toml"), "[features\ncodex_hooks = true").unwrap();
+        let state = build_codex_status(
+            Some(&dir.join("config.toml")),
+            Some(&dir.join("hooks.json")),
+        );
+        assert!(matches!(state, CodexState::InvalidConfig(_)));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_invalid_hooks_state_is_failure() {
+        let dir = workdir("codex-invalid-hooks");
+        fs::write(dir.join("config.toml"), "[features]\ncodex_hooks = true\n").unwrap();
+        fs::write(dir.join("hooks.json"), "{not json").unwrap();
+        let state = build_codex_status(
+            Some(&dir.join("config.toml")),
+            Some(&dir.join("hooks.json")),
+        );
+        assert!(matches!(state, CodexState::InvalidHooks(_)));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_io_state_is_failure() {
+        let dir = workdir("codex-io");
+        fs::create_dir_all(dir.join("config.toml")).unwrap();
+        let state = build_codex_status(
+            Some(&dir.join("config.toml")),
+            Some(&dir.join("hooks.json")),
+        );
+        assert!(matches!(state, CodexState::Io(_)));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn render_doctor_writes_report_for_live_environment() {
         let mut buf = Vec::new();
         let _failure = render_doctor(&mut buf).unwrap();
@@ -836,6 +1198,7 @@ rules:
         let report = Report::gather(None, None, Layout::default(), None);
         let v = to_json_value(&report);
         assert_eq!(v["schemaVersion"], 1);
+        assert!(v["codex"]["state"].is_string());
     }
 
     #[test]
@@ -1049,6 +1412,69 @@ rules:
         let v = to_json_value(&report);
         assert_eq!(v["claude"]["state"], "invalidJson");
         assert!(v["claude"]["error"].is_string());
+        assert_eq!(v["hasFailure"], true);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn json_codex_state_home_not_set_omits_optional_fields() {
+        let report = Report::gather(None, None, Layout::default(), None);
+        let v = to_json_value(&report);
+        assert_eq!(v["codex"]["state"], "homeNotSet");
+        assert!(v["codex"]["configPath"].is_null());
+        assert!(v["codex"]["hooksPath"].is_null());
+        assert!(v["codex"].get("matcher").is_none());
+        assert!(v["codex"].get("error").is_none());
+    }
+
+    #[test]
+    fn json_codex_state_hook_registered_includes_matcher() {
+        let dir = workdir("json-codex-good");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::write(&config_path, "[features]\ncodex_hooks = true\n").unwrap();
+        fs::write(
+            &hooks_path,
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash|apply_patch|mcp__.*","hooks":[{"type":"command","command":"ptuf hook codex"}]}]}}"#,
+        )
+        .unwrap();
+        let report = Report::gather_with_codex(
+            None,
+            None,
+            Layout::default(),
+            None,
+            CodexPaths {
+                config_path: Some(config_path.clone()),
+                hooks_path: Some(hooks_path.clone()),
+            },
+        );
+        let v = to_json_value(&report);
+        assert_eq!(v["codex"]["state"], "hookRegistered");
+        assert_eq!(v["codex"]["configPath"], config_path.display().to_string());
+        assert_eq!(v["codex"]["hooksPath"], hooks_path.display().to_string());
+        assert_eq!(v["codex"]["matcher"], "Bash|apply_patch|mcp__.*");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn json_codex_state_invalid_config_carries_error() {
+        let dir = workdir("json-codex-bad");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::write(&config_path, "[features\ncodex_hooks = true").unwrap();
+        let report = Report::gather_with_codex(
+            None,
+            None,
+            Layout::default(),
+            None,
+            CodexPaths {
+                config_path: Some(config_path),
+                hooks_path: Some(hooks_path),
+            },
+        );
+        let v = to_json_value(&report);
+        assert_eq!(v["codex"]["state"], "invalidConfig");
+        assert!(v["codex"]["error"].is_string());
         assert_eq!(v["hasFailure"], true);
         let _ = fs::remove_dir_all(&dir);
     }

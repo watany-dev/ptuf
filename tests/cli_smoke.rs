@@ -98,6 +98,25 @@ fn hook_subcommand_allows_safe_payload_with_empty_streams() {
 }
 
 #[test]
+fn codex_hook_allows_safe_payload_with_empty_streams() {
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+    let (code, stdout, stderr) = run(&["hook", "codex"], payload);
+    assert_eq!(code, 0);
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn codex_hook_maps_ask_to_deny() {
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD~3"}}"#;
+    let (code, stdout, stderr) = run(&["hook", "codex"], payload);
+    assert_eq!(code, 2);
+    assert!(stdout.contains("\"permissionDecision\":\"deny\""));
+    assert!(stdout.contains("Codex PreToolUse cannot prompt interactively"));
+    assert!(stderr.contains("Codex PreToolUse cannot prompt interactively"));
+}
+
+#[test]
 fn no_args_returns_one_with_missing_subcommand_error() {
     let (code, stdout, stderr) = run(&[], "");
     assert_eq!(code, 1);
@@ -157,6 +176,7 @@ fn doctor_prints_each_section() {
     assert!(stdout.contains("Effective config"));
     assert!(stdout.contains("Plugins"));
     assert!(stdout.contains("Claude Code integration"));
+    assert!(stdout.contains("Codex integration"));
 }
 
 #[test]
@@ -185,6 +205,37 @@ fn init_claude_code_dry_run_is_idempotent() {
     );
     assert_eq!(code2, 0);
     assert!(stdout2.contains("would register hook"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn init_codex_dry_run_targets_repo_local_files() {
+    let dir = std::env::temp_dir().join(format!(
+        "ptuf-init-codex-smoke-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+
+    let mut child = binary()
+        .args(["init", "codex", "--dry-run"])
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("wait");
+    let code = output.status.code().expect("exit");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(code, 0, "stdout: {stdout}");
+    assert!(stdout.contains(".codex/hooks.json"));
+    assert!(stdout.contains(".codex/config.toml"));
+    assert!(!dir.join(".codex/hooks.json").exists());
+    assert!(!dir.join(".codex/config.toml").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -265,6 +316,46 @@ fn audit_jsonl_carries_schema_version_and_agent_for_hook_subcommand() {
     assert!(line.contains("\"schemaVersion\":1"), "line: {line}");
     assert!(line.contains("\"agent\":\"claude-code\""), "line: {line}");
     assert!(line.contains("\"decision\":\"deny\""), "line: {line}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn audit_jsonl_carries_codex_agent_for_hook_subcommand() {
+    let dir = std::env::temp_dir().join(format!(
+        "ptuf-audit-codex-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+    let audit_path = dir.join("audit.jsonl");
+    let yaml = format!(
+        "audit:\n  path: {}\n  includeAllowed: true\n",
+        audit_path.display()
+    );
+    std::fs::write(dir.join(".ptuf.yaml"), yaml).expect("write yaml");
+
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD~3"}}"#;
+    let mut child = binary()
+        .args(["hook", "codex"])
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut sin = child.stdin.take().expect("stdin");
+        sin.write_all(payload.as_bytes()).expect("write stdin");
+    }
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(output.status.code(), Some(2));
+
+    let body = std::fs::read_to_string(&audit_path).expect("read audit");
+    let line = body.lines().next().expect("at least one line");
+    assert!(line.contains("\"schemaVersion\":1"), "line: {line}");
+    assert!(line.contains("\"agent\":\"codex\""), "line: {line}");
+    assert!(line.contains("\"decision\":\"ask\""), "line: {line}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -1,7 +1,7 @@
 # ptuf
 
 `ptuf` (PreToolUseFilter) is a generic guardrail layer for coding agents.
-It is invoked from a `PreToolUse` hook (e.g. Claude Code), reads the hook
+It is invoked from a `PreToolUse` hook (e.g. Claude Code or Codex), reads the hook
 payload from stdin as JSON, evaluates it, and returns an Allow / Deny
 decision via exit code and stderr.
 
@@ -37,8 +37,8 @@ Built-in rules (always enabled, hard-deny unless noted):
   `LEFTHOOK=0`, `SKIP=…`, `PRE_COMMIT_ALLOW_NO_CONFIG=1`) — all deny,
   allowlistable
 - `core.self_protection.*` *(new in v0.3, 5 rules)* — modifications to the
-  ptuf binary, its config files, registered plugin paths, the Claude Code
-  `settings.json` file, or any hook-script referenced by it
+  ptuf binary, its config files, registered plugin paths, Claude Code
+  settings, Codex hook/config files, or any hook-script referenced by them
 - `core.project_hygiene.*` *(new in v0.4, 3 rules, opt-in)* —
   `lock-mismatch-pnpm` / `lock-mismatch-uv` block running the wrong
   package manager when a competing lockfile is checked in;
@@ -71,19 +71,22 @@ v0.3 features (additive on top of v0.2):
   `url.hostAny`, `sensitive.pathKindAny`. See
   [`docs/examples/cloud-metadata.yaml`](docs/examples/cloud-metadata.yaml)
   for an IMDS WebFetch deny sample.
-- **`ptuf init claude-code`** — idempotent install of the PreToolUse hook
-  entry into `~/.claude/settings.json` with `--dry-run` and
-  `--settings <PATH>` flags. Detection is token-based so a re-run with a
-  different binary path still recognises an existing entry.
+- **`ptuf init <agent>`** — idempotent install of the PreToolUse hook for
+  `claude-code` or `codex`. Claude writes `~/.claude/settings.json`;
+  Codex writes repo-local `.codex/hooks.json` and `.codex/config.toml`
+  by default, with `--root`, `--hooks`, `--config`, and `--dry-run`
+  flags. Detection is token-based so a re-run with a different binary
+  path still recognises an existing entry.
 - **`ptuf doctor`** — diagnostic report covering the binary, project
-  scope, effective config, loaded plugins, and Claude Code integration.
+  scope, effective config, loaded plugins, and both Claude Code and
+  Codex integration.
   Exit 0 when every section is ✓ or ⚠; exit 1 when any section reports ✗.
   `--json` emits a stable `schemaVersion: 1` envelope (binary, config
-  layers, plugins, claude integration state, `hasFailure`) for CI /
-  audit tooling.
-- **Fail-closed CLI** — every CLI entry point (`ptuf hook ...` /
-  `ptuf eval`) deny-fails when the engine cannot load policy, surfacing
-  the reserved rule id `core.engine.policy-load-failed`.
+  layers, plugins, claude/codex integration state, `hasFailure`) for
+  CI / audit tooling.
+- **Fail-closed CLI** — every CLI entry point (`ptuf hook ...` / `ptuf eval`)
+  deny-fails when the engine cannot load policy,
+  surfacing the reserved rule id `core.engine.policy-load-failed`.
   Library-mode `crate::decide` still falls back to a default engine for
   embedded callers.
 
@@ -99,7 +102,7 @@ v0.2 features carried forward:
   end-to-end and exits non-zero on regressions.
 - **Audit JSONL** — every decision is recorded to
   `~/.local/share/ptuf/audit.jsonl` (overridable). Records carry
-  `schemaVersion: 1`, the calling `agent` (`claude-code` / `cli`),
+  `schemaVersion: 1`, the calling `agent` (`claude-code` / `codex` / `cli`),
   loaded `pluginVersions` (`name@version` array), and the
   `allowlistId` that suppressed a rule when the outcome was `Allow`.
   Strict redaction masks env-var token assignments, GH / OpenAI / AWS
@@ -140,12 +143,19 @@ echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
     | cargo run -q -- hook claude-code
 
 # 2. One-shot eval: handy for trying a rule from the shell.
+echo '{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD~3"}}' \
+    | cargo run -q -- hook codex
+
+# 3. One-shot eval: handy for trying a rule from the shell.
 cargo run -q -- eval --tool Bash 'rm -rf /'
 ```
 
-Exit codes are uniform across both: `0` for allow / monitor / ask,
-`2` for deny, `1` for an internal error (invalid JSON, missing
-subcommand, ...).
+Exit codes are uniform for `eval` and for the Claude adapter: `0` for
+allow / monitor / ask, `2` for deny, `1` for an internal error
+(invalid JSON, unknown subcommand, ...). Codex `PreToolUse` cannot
+enforce `ask`, so `ptuf hook codex` maps `Decision::Ask` to a blocked
+request (`deny` + exit `2`) with the original rule reason plus a
+Codex-specific note.
 
 ## Use as a Claude Code PreToolUse hook
 
@@ -190,6 +200,28 @@ message is surfaced to both the agent and the user.
 
 Run `ptuf doctor` afterwards to confirm the binary, repo scope, loaded
 plugins, and hook registration are all healthy.
+
+## Use as a Codex PreToolUse hook
+
+`ptuf init codex` writes repo-local Codex hook files by default so a
+repository can opt in without silently changing the user's global Codex
+behavior:
+
+```bash
+ptuf init codex                       # writes <repo>/.codex/{hooks.json,config.toml}
+ptuf init codex --dry-run            # show the plan without touching the files
+ptuf init codex --root /path/to/repo
+ptuf init codex --hooks /tmp/hooks.json --config /tmp/config.toml
+```
+
+The generated matcher is `Bash|apply_patch|mcp__.*`, the hook command is
+`/absolute/path/to/ptuf hook codex`, and
+`[features].codex_hooks = true` is set in `.codex/config.toml`.
+
+Codex `PreToolUse` currently intercepts Bash, `apply_patch`, and MCP
+tools, but not `WebSearch` and not every shell execution path. Codex
+also fails open on hook-level `"ask"`, so ptuf deliberately converts
+`Decision::Ask` into a deny for that adapter.
 
 ## Configure
 

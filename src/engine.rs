@@ -1508,6 +1508,7 @@ rules:
             configs: Vec::new(),
             plugins: vec![plugin_path.clone()],
             claude_settings: Vec::new(),
+            codex_settings: Vec::new(),
             hook_scripts: Vec::new(),
         };
         let input = HookInput {

@@ -21,6 +21,7 @@ pub enum ProtectedKind {
     Config,
     Plugin,
     ClaudeSettings,
+    CodexSettings,
     HookScript,
 }
 
@@ -31,6 +32,7 @@ impl ProtectedKind {
             Self::Config => "config",
             Self::Plugin => "plugin",
             Self::ClaudeSettings => "claude_settings",
+            Self::CodexSettings => "codex_settings",
             Self::HookScript => "hook_script",
         }
     }
@@ -44,6 +46,7 @@ pub struct ProtectedPaths {
     pub configs: Vec<PathBuf>,
     pub plugins: Vec<PathBuf>,
     pub claude_settings: Vec<PathBuf>,
+    pub codex_settings: Vec<PathBuf>,
     pub hook_scripts: Vec<PathBuf>,
 }
 
@@ -78,6 +81,19 @@ impl ProtectedPaths {
         claude_settings.sort();
         claude_settings.dedup();
 
+        let mut codex_settings: Vec<PathBuf> = Vec::new();
+        if let Some(root) = repo_root {
+            codex_settings.push(root.join(".codex/config.toml"));
+            codex_settings.push(root.join(".codex/hooks.json"));
+        }
+        if let Some(home_os) = env.var_os("HOME") {
+            let home = PathBuf::from(home_os);
+            codex_settings.push(home.join(".codex/config.toml"));
+            codex_settings.push(home.join(".codex/hooks.json"));
+        }
+        codex_settings.sort();
+        codex_settings.dedup();
+
         let mut hook_scripts = Vec::new();
         for settings_path in &claude_settings {
             let body = match fs::read_to_string(settings_path) {
@@ -104,12 +120,41 @@ impl ProtectedPaths {
                 }
             }
         }
+        for hooks_path in codex_settings.iter().filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "hooks.json")
+        }) {
+            let body = match fs::read_to_string(hooks_path) {
+                Ok(s) => s,
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Err(_) => continue,
+            };
+            let parsed: Value = match serde_json::from_str(&body) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            for command in crate::init::codex::pre_tool_use_commands(&parsed) {
+                let Some(executable) = crate::init::codex::command_executable(&command) else {
+                    continue;
+                };
+                let normalized = crate::facts::path::resolve_with_env(
+                    executable,
+                    repo_root.or_else(|| hooks_path.parent()),
+                    env,
+                );
+                if !hook_scripts.contains(&normalized) {
+                    hook_scripts.push(normalized);
+                }
+            }
+        }
 
         Self {
             binary: std::env::current_exe().ok(),
             configs,
             plugins: config.plugin_paths.clone(),
             claude_settings,
+            codex_settings,
             hook_scripts,
         }
     }
@@ -148,6 +193,13 @@ impl ProtectedPaths {
         {
             return Some(ProtectedKind::ClaudeSettings);
         }
+        if self
+            .codex_settings
+            .iter()
+            .any(|p| path_matches(candidate, p))
+        {
+            return Some(ProtectedKind::CodexSettings);
+        }
         if self.hook_scripts.iter().any(|p| path_matches(candidate, p)) {
             return Some(ProtectedKind::HookScript);
         }
@@ -160,6 +212,9 @@ impl ProtectedPaths {
 /// raw byte comparison so missing files still match.
 fn path_matches(candidate: &Path, target: &Path) -> bool {
     if candidate == target {
+        return true;
+    }
+    if candidate.is_relative() && target.ends_with(candidate) {
         return true;
     }
     match (candidate.canonicalize(), target.canonicalize()) {
@@ -213,6 +268,8 @@ pub fn discover_repo(start: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::*;
     use std::collections::HashMap;
     use std::ffi::OsString;
@@ -242,6 +299,7 @@ mod tests {
             ProtectedKind::Config,
             ProtectedKind::Plugin,
             ProtectedKind::ClaudeSettings,
+            ProtectedKind::CodexSettings,
             ProtectedKind::HookScript,
         ] {
             assert!(!k.as_str().is_empty());
@@ -262,6 +320,16 @@ mod tests {
             p.claude_settings
                 .iter()
                 .any(|q| q == &PathBuf::from("/h/.claude/settings.json"))
+        );
+        assert!(
+            p.codex_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/repo/.codex/config.toml"))
+        );
+        assert!(
+            p.codex_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/h/.codex/hooks.json"))
         );
     }
 
@@ -290,6 +358,30 @@ mod tests {
         };
         let labels = p.classify_input(&input);
         assert!(labels.contains(&ProtectedKind::Plugin));
+    }
+
+    #[test]
+    fn classify_matches_apply_patch_edit_of_repo_local_codex_settings() {
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-codex-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".codex")).expect("mkdir");
+        std::fs::write(dir.join(".codex/config.toml"), "").expect("touch");
+        let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
+        let input = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Update File: .codex/config.toml\n*** End Patch\n"
+            }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(labels.contains(&ProtectedKind::CodexSettings));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -326,6 +418,44 @@ mod tests {
         "matcher": "Bash",
         "hooks": [
           { "type": "command", "command": "./hooks/guard.sh hook claude-code" }
+        ]
+      }
+    ]
+  }
+}"#,
+        )
+        .expect("write settings");
+        let home_string = home.to_string_lossy().into_owned();
+        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        assert!(
+            p.hook_scripts
+                .iter()
+                .any(|path| path == &PathBuf::from("/repo/./hooks/guard.sh"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_extracts_hook_scripts_from_codex_hooks_json() {
+        #![allow(clippy::expect_used)]
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-codex-hooks-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join(".codex")).expect("mkdir");
+        std::fs::write(
+            home.join(".codex/hooks.json"),
+            r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch|mcp__.*",
+        "hooks": [
+          { "type": "command", "command": "./hooks/guard.sh hook codex" }
         ]
       }
     ]
@@ -392,6 +522,7 @@ mod tests {
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
         assert!(p.claude_settings.is_empty());
+        assert!(p.codex_settings.is_empty());
     }
 
     use crate::testing::proptest::{protected_kind, richer_hook_input};

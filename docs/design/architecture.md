@@ -20,7 +20,7 @@ stdin JSON
   ↓
 adapter
   - claude-code         (v0.1)
-  - codex               (v0.4 以降)
+  - codex               (v0.3)
   - cursor              (v0.4 以降)
   - gemini              (v0.4 以降)
   ↓
@@ -50,9 +50,12 @@ hook response + audit log
 
 ### adapter
 
-エージェントごとの hook ペイロード形状の差異を吸収し、内部の normalized event
-に変換する。最初は Claude Code の `PreToolUse` のみ対応 (`HookInput` 構造体)。
-他エージェントは [`roadmap.md`](roadmap.md) の v0.4 で追加する。
+エージェントごとの hook ペイロード形状と response 契約の差異を吸収し、内部の
+normalized event (`HookInput`) に変換する。現状は Claude Code と Codex の
+`PreToolUse` を実装済みで、どちらも stdin JSON を同じ `HookInput` に
+正規化する一方、stdout に返す hook response と `Decision::Ask` の扱いは
+adapter ごとに分岐する。Claude Code は `ask` をそのまま返し、Codex は
+`PreToolUse` が interactive ask を扱えないため `ask -> deny` へ変換する。
 
 ### fact extraction
 
@@ -133,6 +136,7 @@ JSONL audit log に出す ([`audit.md`](audit.md))。
 | 起動形態 | 例 | stdout | stderr | exit code |
 | --- | --- | --- | --- | --- |
 | `hook` サブコマンド | `ptuf hook claude-code` | deny / ask 時に `hookSpecificOutput` JSON | reason | 0 / 2 |
+| `hook` サブコマンド | `ptuf hook codex` | deny 時に `hookSpecificOutput` JSON (`ask -> deny`) | reason | 0 / 2 |
 | `eval` サブコマンド | `ptuf eval --tool Bash 'rm -rf /'` | 人間可読な判定結果 | deny 時のみ reason | 0 / 2 |
 
 | 内部エラー | stderr | exit code |
