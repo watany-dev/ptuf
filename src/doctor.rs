@@ -773,7 +773,7 @@ rules:
                   {
                     "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*",
                     "hooks": [
-                      { "type": "command", "command": "/usr/local/bin/ptuf hook claude-code pre-tool-use" }
+                      { "type": "command", "command": "/usr/local/bin/ptuf hook claude-code" }
                     ]
                   }
                 ]
@@ -1015,7 +1015,7 @@ rules:
         let path = dir.join("settings.json");
         fs::write(
             &path,
-            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash|Read|Edit|Write|WebFetch|mcp__.*","hooks":[{"type":"command","command":"ptuf hook claude-code pre-tool-use"}]}]}}"#,
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash|Read|Edit|Write|WebFetch|mcp__.*","hooks":[{"type":"command","command":"ptuf hook claude-code"}]}]}}"#,
         )
         .unwrap();
         let report = Report::gather(None, None, Layout::default(), Some(path));

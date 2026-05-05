@@ -14,8 +14,8 @@ ptuf は v0.3 まで実装済みで、v0.4 機能 (MCP fact 抽出 / audit log v
 `core.secrets.sensitive-path-to-network` / `core.secrets.sensitive-read` /
 `core.git.*` 7 件 / `core.self_protection.*` 5 件 / `core.project_hygiene.*`
 3 件 (default disabled, opt-in)) と YAML plugin の rule を順に評価し、
-`Decision` を集約する。CLI は引数なし互換モード /
-`ptuf hook claude-code pre-tool-use` / `ptuf eval --tool <name> <command>` /
+`Decision` を集約する。CLI は
+`ptuf hook claude-code` / `ptuf eval --tool <name> <command>` /
 `ptuf plugin test <path>` / `ptuf init claude-code [--dry-run] [--settings <PATH>]` /
 `ptuf doctor [--json]` に加え `--help` / `--version` を提供する。
 本書群は v0.3 以降で到達すべき設計を含み、現実装と将来像が混在する。

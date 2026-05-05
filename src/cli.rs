@@ -16,12 +16,12 @@ pub(crate) const POLICY_LOAD_FAILED_RULE: &str = "core.engine.policy-load-failed
 /// Build the engine for the CWD-derived project scope, or surface a
 /// reserved deny so the CLI can render a fail-closed response.
 ///
-/// Production CLI entry points (compat / `hook ...` / `eval`) all go
-/// through this helper. The `crate::decide` shim is intentionally
-/// lenient (`Engine::default` fallback) for embedded library use.
+/// Production CLI entry points (`hook ...` / `eval`) all go through
+/// this helper. The `crate::decide` shim is intentionally lenient
+/// (`Engine::default` fallback) for embedded library use.
 ///
-/// `agent` is the adapter name surfaced in audit records — typically
-/// `"compat"`, `"claude-code"`, or `"cli"`.
+/// `agent` is the adapter name surfaced in audit records — `"claude-code"`
+/// for hook entry, `"cli"` for eval.
 pub(crate) fn build_engine_or_fail_closed<W: Write>(
     stderr: &mut W,
     agent: &'static str,
@@ -43,15 +43,14 @@ pub(crate) fn build_engine_or_fail_closed<W: Write>(
         })
 }
 
-/// Parsed CLI invocation. The bare-arguments form is preserved for hook
-/// compatibility with the bootstrap (`echo ... | ptuf`) usage.
+/// Parsed CLI invocation. The bare invocation (no arguments) is
+/// rejected as a usage error so callers must always pick a subcommand.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
-    /// No arguments — read JSON payload from stdin (bootstrap behaviour).
-    Compat,
-    /// `ptuf hook claude-code pre-tool-use` — read JSON payload from stdin
-    /// and emit a `hookSpecificOutput` response on stdout.
-    HookClaudeCodePreToolUse,
+    /// `ptuf hook <agent>` — read JSON payload from stdin and emit a
+    /// `hookSpecificOutput` response on stdout. v0.4 supports
+    /// `agent = "claude-code"`; future agents will plug in here.
+    Hook { agent: String },
     /// `ptuf eval --tool <name> <command>` — manual evaluation.
     Eval { tool: String, command: String },
     /// `ptuf plugin test <path>` — run plugin assertions.
@@ -75,7 +74,6 @@ pub enum Command {
 pub enum ParseError {
     UnknownCommand(String),
     UnknownAgent(String),
-    UnknownEvent(String),
     MissingValue(&'static str),
     UnexpectedArgument(String),
 }
@@ -85,7 +83,6 @@ impl std::fmt::Display for ParseError {
         match self {
             Self::UnknownCommand(c) => write!(f, "unknown command: {c}"),
             Self::UnknownAgent(a) => write!(f, "unknown agent: {a}"),
-            Self::UnknownEvent(e) => write!(f, "unknown event: {e}"),
             Self::MissingValue(name) => write!(f, "missing value for {name}"),
             Self::UnexpectedArgument(a) => write!(f, "unexpected argument: {a}"),
         }
@@ -95,9 +92,7 @@ impl std::fmt::Display for ParseError {
 /// Parse argv (excluding the program name) into a [`Command`].
 pub fn parse(args: &[String]) -> Result<Command, ParseError> {
     let mut iter = args.iter();
-    let Some(first) = iter.next() else {
-        return Ok(Command::Compat);
-    };
+    let first = iter.next().ok_or(ParseError::MissingValue("subcommand"))?;
 
     match first.as_str() {
         "-h" | "--help" => Ok(Command::Help),
@@ -160,14 +155,12 @@ where
     if agent != "claude-code" {
         return Err(ParseError::UnknownAgent(agent.clone()));
     }
-    let event = iter.next().ok_or(ParseError::MissingValue("event"))?;
-    if event != "pre-tool-use" {
-        return Err(ParseError::UnknownEvent(event.clone()));
-    }
     if let Some(extra) = iter.next() {
         return Err(ParseError::UnexpectedArgument(extra.clone()));
     }
-    Ok(Command::HookClaudeCodePreToolUse)
+    Ok(Command::Hook {
+        agent: agent.clone(),
+    })
 }
 
 fn parse_eval<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -218,12 +211,12 @@ where
 const HELP: &str = "ptuf — PreToolUseFilter, a guardrail for coding agents
 
 USAGE:
-    ptuf                                         (compat: read JSON from stdin)
-    ptuf hook claude-code pre-tool-use           (Claude Code PreToolUse hook)
+    ptuf hook <AGENT>                            (run as the agent's PreToolUse hook;
+                                                  AGENT = claude-code)
     ptuf eval --tool <NAME> <COMMAND>            (evaluate a single tool call)
     ptuf plugin test <PATH>                      (run a plugin's deny/allow tests)
-    ptuf init claude-code [--dry-run]            (register PreToolUse hook in
-                          [--settings <PATH>]    ~/.claude/settings.json)
+    ptuf init <AGENT> [--dry-run]                (register hook in the agent's
+                      [--settings <PATH>]        settings file; AGENT = claude-code)
     ptuf doctor [--json]                         (print a diagnostic report)
     ptuf --help | --version
 
@@ -242,8 +235,7 @@ pub fn run<R: Read, W1: Write, W2: Write>(
     stderr: &mut W2,
 ) -> u8 {
     match command {
-        Command::Compat => crate::io_runner::run_compat_code(stdin, stderr),
-        Command::HookClaudeCodePreToolUse => run_hook(stdin, stdout, stderr),
+        Command::Hook { agent } => run_hook(&agent, stdin, stdout, stderr),
         Command::Eval { tool, command } => run_eval(&tool, &command, stdout, stderr),
         Command::PluginTest { path } => run_plugin_test(&path, stdout, stderr),
         Command::Init {
@@ -263,7 +255,23 @@ pub fn run<R: Read, W1: Write, W2: Write>(
     }
 }
 
-fn run_hook<R: Read, W1: Write, W2: Write>(mut stdin: R, stdout: &mut W1, stderr: &mut W2) -> u8 {
+fn run_hook<R: Read, W1: Write, W2: Write>(
+    agent: &str,
+    mut stdin: R,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8 {
+    // parse_hook already validated the agent string, so this match is
+    // exhaustive in practice; the explicit check keeps the audit-tag
+    // lookup honest if a future caller bypasses parse().
+    let agent_tag: &'static str = match agent {
+        "claude-code" => "claude-code",
+        other => {
+            let _ = writeln!(stderr, "ptuf: unknown agent: {other}");
+            return 1;
+        }
+    };
+
     let mut buf = String::new();
     if stdin.read_to_string(&mut buf).is_err() {
         let _ = writeln!(stderr, "ptuf: failed to read stdin");
@@ -276,7 +284,7 @@ fn run_hook<R: Read, W1: Write, W2: Write>(mut stdin: R, stdout: &mut W1, stderr
             return 1;
         }
     };
-    let decision = match build_engine_or_fail_closed(stderr, "claude-code") {
+    let decision = match build_engine_or_fail_closed(stderr, agent_tag) {
         Ok(engine) => engine.decide(&input).decision,
         Err(deny) => deny,
     };
@@ -335,7 +343,10 @@ fn run_init<W1: Write, W2: Write>(
     stderr: &mut W2,
 ) -> u8 {
     if agent != "claude-code" {
-        let _ = writeln!(stderr, "ptuf: unknown agent: {agent}");
+        let _ = writeln!(
+            stderr,
+            "ptuf: unknown agent: {agent} (only claude-code is supported)"
+        );
         return 1;
     }
 
@@ -463,8 +474,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_compat_when_no_args() {
-        assert_eq!(parse(&[]).unwrap(), Command::Compat);
+    fn rejects_no_args_with_missing_subcommand_error() {
+        assert!(matches!(
+            parse(&[]),
+            Err(ParseError::MissingValue("subcommand"))
+        ));
     }
 
     #[test]
@@ -477,27 +491,36 @@ mod tests {
 
     #[test]
     fn parses_hook_subcommand() {
-        let cmd = parse(&s(&["hook", "claude-code", "pre-tool-use"])).unwrap();
-        assert_eq!(cmd, Command::HookClaudeCodePreToolUse);
+        let cmd = parse(&s(&["hook", "claude-code"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Hook {
+                agent: "claude-code".into()
+            }
+        );
     }
 
     #[test]
-    fn rejects_unknown_agent_or_event() {
+    fn rejects_unknown_hook_agent() {
         assert!(matches!(
-            parse(&s(&["hook", "codex", "pre-tool-use"])),
+            parse(&s(&["hook", "codex"])),
             Err(ParseError::UnknownAgent(_))
-        ));
-        assert!(matches!(
-            parse(&s(&["hook", "claude-code", "post-tool-use"])),
-            Err(ParseError::UnknownEvent(_))
         ));
     }
 
     #[test]
     fn rejects_extra_args_after_hook() {
         assert!(matches!(
-            parse(&s(&["hook", "claude-code", "pre-tool-use", "extra"])),
+            parse(&s(&["hook", "claude-code", "pre-tool-use"])),
             Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn hook_requires_agent() {
+        assert!(matches!(
+            parse(&s(&["hook"])),
+            Err(ParseError::MissingValue("agent"))
         ));
     }
 
@@ -710,7 +733,7 @@ mod tests {
     #[test]
     fn hook_emits_json_for_deny() {
         let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
-        let (code, out, err) = run_with(&["hook", "claude-code", "pre-tool-use"], payload);
+        let (code, out, err) = run_with(&["hook", "claude-code"], payload);
         assert_eq!(code, 2);
         assert!(out.contains("\"hookSpecificOutput\""));
         assert!(out.contains("\"permissionDecision\":\"deny\""));
@@ -720,7 +743,7 @@ mod tests {
     #[test]
     fn hook_returns_zero_and_no_stdout_for_allow() {
         let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
-        let (code, out, err) = run_with(&["hook", "claude-code", "pre-tool-use"], payload);
+        let (code, out, err) = run_with(&["hook", "claude-code"], payload);
         assert_eq!(code, 0);
         assert!(out.is_empty());
         assert!(err.is_empty());
@@ -728,7 +751,7 @@ mod tests {
 
     #[test]
     fn hook_returns_one_for_invalid_json() {
-        let (code, out, err) = run_with(&["hook", "claude-code", "pre-tool-use"], "not json");
+        let (code, out, err) = run_with(&["hook", "claude-code"], "not json");
         assert_eq!(code, 1);
         assert!(out.is_empty());
         assert!(err.contains("invalid hook payload"));
@@ -751,12 +774,15 @@ mod tests {
     }
 
     #[test]
-    fn run_dispatches_compat_branch() {
-        let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
-        let (code, out, err) = run_with(&[], payload);
-        assert_eq!(code, 2);
-        assert!(out.is_empty());
-        assert!(err.contains("Blocked by ptuf rule"));
+    fn run_with_no_args_returns_one_with_usage_error() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let exit = crate::io_runner::run::<_, _, _, &str>(&[], b"" as &[u8], &mut out, &mut err);
+        // ExitCode does not expose its byte directly, so just ensure
+        // the stderr surface tells the user to pick a subcommand.
+        let _ = exit;
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("missing value for subcommand"), "{err_s}");
     }
 
     #[test]
@@ -1062,7 +1088,6 @@ rules:
     fn parse_error_display() {
         assert!(format!("{}", ParseError::UnknownCommand("x".into())).contains("unknown command"));
         assert!(format!("{}", ParseError::UnknownAgent("x".into())).contains("unknown agent"));
-        assert!(format!("{}", ParseError::UnknownEvent("x".into())).contains("unknown event"));
         assert!(format!("{}", ParseError::MissingValue("x")).contains("missing value"));
         assert!(format!("{}", ParseError::UnexpectedArgument("x".into())).contains("unexpected"));
     }
@@ -1103,7 +1128,9 @@ rules:
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
-            Command::HookClaudeCodePreToolUse,
+            Command::Hook {
+                agent: "claude-code".into(),
+            },
             FailingReader,
             &mut out,
             &mut err,
@@ -1111,6 +1138,24 @@ rules:
         assert_eq!(code, 1);
         assert!(out.is_empty());
         assert!(String::from_utf8_lossy(&err).contains("failed to read stdin"));
+    }
+
+    #[test]
+    fn run_hook_returns_one_for_unknown_agent() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        // Bypasses parse() — exercises the defensive arm in run_hook.
+        let code = run(
+            Command::Hook {
+                agent: "codex".into(),
+            },
+            b"{}" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 1);
+        assert!(out.is_empty());
+        assert!(String::from_utf8_lossy(&err).contains("unknown agent: codex"));
     }
 
     #[test]
