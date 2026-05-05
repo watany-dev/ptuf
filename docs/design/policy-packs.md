@@ -95,7 +95,8 @@ private key らしきファイル (PEM ヘッダ等で判別)
 | `core.git.remote-set-url` | ask | false | medium |
 
 protected branch (`main`, `master`, `release/*` 等、project facts で定義) では
-これらをさらに 1 段強める運用を v0.4 以降で予定。
+v0.4 で `core.project_hygiene.protected-branch-destructive-git` がこれらの
+`ask` を `deny` に昇格させる (本書下部の `core.project_hygiene` を参照)。
 
 ## `core.self_protection`
 

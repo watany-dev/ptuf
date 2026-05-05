@@ -7,11 +7,14 @@
 
 ## 現状と本書群の射程
 
-ptuf は v0.3 まで実装済み。`decide()` は組み込みパック
+ptuf は v0.3 まで実装済みで、v0.4 機能 (MCP fact 抽出 / audit log v1 schema /
+`ptuf doctor --json` / `core.project_hygiene` v1) が merge 済みでリリース待ち。
+`decide()` は組み込みパック
 (`core.filesystem.destructive-rm` / `core.network.remote-script-pipe` /
 `core.secrets.sensitive-path-to-network` / `core.secrets.sensitive-read` /
-`core.git.*` 7 件 / `core.self_protection.*` 5 件) と YAML plugin の rule を
-順に評価し、`Decision` を集約する。CLI は引数なし互換モード /
+`core.git.*` 7 件 / `core.self_protection.*` 5 件 / `core.project_hygiene.*`
+3 件 (default disabled, opt-in)) と YAML plugin の rule を順に評価し、
+`Decision` を集約する。CLI は引数なし互換モード /
 `ptuf hook claude-code pre-tool-use` / `ptuf eval --tool <name> <command>` /
 `ptuf plugin test <path>` / `ptuf init claude-code [--dry-run] [--settings <PATH>]` /
 `ptuf doctor [--json]` に加え `--help` / `--version` を提供する。

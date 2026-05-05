@@ -30,6 +30,25 @@ Built-in rules (always enabled, hard-deny unless noted):
 - `core.self_protection.*` *(new in v0.3, 5 rules)* — modifications to the
   ptuf binary, its config files, registered plugin paths, the Claude Code
   `settings.json` file, or any hook-script referenced by it
+- `core.project_hygiene.*` *(new in v0.4, 3 rules, opt-in)* —
+  `lock-mismatch-pnpm` / `lock-mismatch-uv` block running the wrong
+  package manager when a competing lockfile is checked in;
+  `protected-branch-destructive-git` upgrades `core.git`'s `ask` rules
+  to `deny` while on `main` / `master` / `release/*`. Disabled by
+  default — enable with `packs.core.project_hygiene.enabled: true`.
+
+v0.4 features merging in (still pre-release):
+
+- **MCP fact extraction** — `mcp__<server>__<tool>` calls are normalised
+  on the generic top-level `path` / `url` / `content` keys, so existing
+  rules (`core.self_protection.*`, `core.secrets.sensitive-read`,
+  `core.secrets.sensitive-path-to-network`) protect MCP-driven edits
+  without needing a per-server adapter.
+- **Audit log v1 schema** — records carry `schemaVersion: 1`, `agent`,
+  `pluginVersions`, and `allowlistId` (see above).
+- **Structured `ptuf doctor --json`** — stable `schemaVersion: 1`
+  envelope for CI / audit tooling.
+- **`core.project_hygiene` v1** *(opt-in)* — see the rule list above.
 
 v0.3 features (additive on top of v0.2):
 
@@ -47,7 +66,9 @@ v0.3 features (additive on top of v0.2):
 - **`ptuf doctor`** — diagnostic report covering the binary, project
   scope, effective config, loaded plugins, and Claude Code integration.
   Exit 0 when every section is ✓ or ⚠; exit 1 when any section reports ✗.
-  `--json` is parsed but currently falls back to text (planned for v0.4).
+  `--json` emits a stable `schemaVersion: 1` envelope (binary, config
+  layers, plugins, claude integration state, `hasFailure`) for CI /
+  audit tooling.
 - **Fail-closed CLI** — every CLI entry point (`ptuf` compat / `ptuf hook
   ...` / `ptuf eval`) deny-fails when the engine cannot load policy,
   surfacing the reserved rule id `core.engine.policy-load-failed`.
@@ -65,9 +86,12 @@ v0.2 features carried forward:
 - **`ptuf plugin test <path>`** — runs the plugin's `tests:` section
   end-to-end and exits non-zero on regressions.
 - **Audit JSONL** — every decision is recorded to
-  `~/.local/share/ptuf/audit.jsonl` (overridable). Strict redaction
-  masks env-var token assignments, GH / OpenAI / AWS keys, JWTs,
-  HTTP basic auth, and PEM blobs.
+  `~/.local/share/ptuf/audit.jsonl` (overridable). Records carry
+  `schemaVersion: 1`, the calling `agent` (`claude-code` / `cli` /
+  `compat`), loaded `pluginVersions` (`name@version` array), and the
+  `allowlistId` that suppressed a rule when the outcome was `Allow`.
+  Strict redaction masks env-var token assignments, GH / OpenAI / AWS
+  keys, JWTs, HTTP basic auth, and PEM blobs.
 - **Allowlists with `expiresAt`** — time-bound exceptions per rule id.
   `hardDeny: true` rules ignore allowlist suppression.
 
