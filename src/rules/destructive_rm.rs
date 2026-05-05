@@ -167,10 +167,41 @@ mod tests {
 
     #[test]
     fn denies_rm_rf_system_paths() {
-        for path in ["/etc", "/usr", "/var", "/bin", "/boot", "/sbin"] {
+        for path in [
+            "/etc", "/usr", "/var", "/bin", "/boot", "/lib", "/lib32", "/lib64", "/sbin", "/opt",
+            "/root", "/sys", "/proc",
+        ] {
             assert_deny(&format!("rm -rf {path}"));
             assert_deny(&format!("rm -rf {path}/something"));
         }
+    }
+
+    #[test]
+    fn allows_lookalike_system_paths() {
+        // Each target shares a prefix with a SYSTEM_ROOTS entry but is
+        // not itself a member or a `{root}/` subpath. The rule uses
+        // `arg.starts_with(format!("{root}/"))` for the prefix branch,
+        // so dropping the trailing `/` would falsely match these.
+        assert_allow("rm -rf /etcd");
+        assert_allow("rm -rf /var2");
+        assert_allow("rm -rf /usr-local");
+        assert_allow("rm -rf /root2");
+        assert_allow("rm -rf /procfs");
+        assert_allow("rm -rf /tmp");
+        assert_allow("rm -rf /home/user/projects");
+    }
+
+    #[test]
+    fn denies_when_one_of_multiple_targets_is_destructive() {
+        assert_deny("rm -rf ./safe /etc");
+        assert_deny("rm -rf /etc ./safe");
+        assert_deny("rm -rf ./a ./b /usr ./c");
+    }
+
+    #[test]
+    fn denies_home_targets_with_trailing_slash() {
+        assert_deny("rm -rf $HOME/");
+        assert_deny("rm -rf ${HOME}/");
     }
 
     #[test]
@@ -215,6 +246,8 @@ mod tests {
         assert_deny("echo go && rm -rf /");
         assert_deny("ls; rm -rf /etc");
         assert_deny("true || rm -rf /");
+        assert_deny("cat foo | rm -rf /");
+        assert_deny("rm -rf /etc | tee log");
     }
 
     #[test]
@@ -312,6 +345,44 @@ mod tests {
             };
             let input = bash(&cmd);
             prop_assert!(evaluate_for(&input).is_none());
+        }
+
+        // Positive space: any cartesian product of (rm head × recursive
+        // form × force form × destructive target × flag order) must
+        // produce a Deny. Guards against future helper refactors that
+        // silently lose coverage on a corner of the matrix.
+        #[test]
+        fn pbt_all_destructive_combinations_deny(
+            head_idx in 0usize..3,
+            rec_idx in 0usize..3,
+            force_idx in 0usize..2,
+            target in prop_oneof![
+                Just("/"),
+                Just("/*"),
+                Just("~"),
+                Just("~/"),
+                Just("$HOME"),
+                Just("/etc"),
+                Just("/usr/local-fake/junk"),
+                Just("/proc/sys"),
+                Just("/sbin"),
+            ],
+            rec_first in any::<bool>(),
+        ) {
+            let head = ["rm", "/bin/rm", "/usr/bin/rm"][head_idx];
+            let rec = ["-r", "-R", "--recursive"][rec_idx];
+            let force = ["-f", "--force"][force_idx];
+            let cmd = if rec_first {
+                format!("{head} {rec} {force} {target}")
+            } else {
+                format!("{head} {force} {rec} {target}")
+            };
+            let input = bash(&cmd);
+            let result = evaluate_for(&input);
+            prop_assert!(
+                matches!(&result, Some(Decision::Deny { rule_id, .. }) if rule_id == RULE_ID),
+                "expected deny for {cmd:?}, got {result:?}",
+            );
         }
     }
 }
