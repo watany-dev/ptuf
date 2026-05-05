@@ -82,7 +82,7 @@ private key らしきファイル (PEM ヘッダ等で判別)
 
 ## `core.git`
 
-危険な git 操作の default decision を以下に固定する (v0.3 で 7 rule とも実装済み)。
+危険な git 操作の default decision を以下に固定する (v0.3 で 7 rule、追加 4 rule で計 11 rule)。
 
 | Rule id | Decision | hardDeny | severity |
 | --- | --- | --- | --- |
@@ -93,10 +93,26 @@ private key らしきファイル (PEM ヘッダ等で判別)
 | `core.git.branch-delete-force` | ask | false | high |
 | `core.git.stash-clear` | ask | false | medium |
 | `core.git.remote-set-url` | ask | false | medium |
+| `core.git.no-verify` | deny | false | high |
+| `core.git.no-gpg-sign` | deny | false | medium |
+| `core.git.config-override-bypass` | deny | false | high |
+| `core.git.env-bypass` | deny | false | high |
 
 protected branch (`main`, `master`, `release/*` 等、project facts で定義) では
 v0.4 で `core.project_hygiene.protected-branch-destructive-git` がこれらの
 `ask` を `deny` に昇格させる (本書下部の `core.project_hygiene` を参照)。
+
+末尾 4 rule は「git の品質ゲートを意図的に skip する操作」を `deny` する
+(`hardDeny: false`, `overridable: true`)。CI hot-fix など正当な必要性がある場合は
+project / user の `allowlists` で expiry 付きに通す。scope は副作用 subcommand
+(`commit / push / merge / rebase / pull / tag / am / cherry-pick / revert / fetch`)
+に絞り、`git status -c core.hooksPath=/dev/null` のように副作用ない呼び出しは
+誤検出回避で見逃す。`-n` の解釈は subcommand 依存 — `git push -n` (= `--dry-run`)
+や `git tag -n` (= 行数指定) は無害なので発火しない。bash パーサが command
+substitution / 変数展開を解釈しない (`docs/design/architecture.md` §fact extraction
+準拠) ため、`` git -c `echo core.hooksPath=/dev/null` commit `` のような文字列構築
+での隠蔽、および `export HUSKY=0; git commit` のような別 segment での env 立ては
+MVP では検出不能 (既知の限界)。
 
 ## `core.self_protection`
 

@@ -52,6 +52,10 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &git::BRANCH_DELETE_FORCE_RULE,
     &git::STASH_CLEAR_RULE,
     &git::REMOTE_SET_URL_RULE,
+    &git::NO_VERIFY_RULE,
+    &git::NO_GPG_SIGN_RULE,
+    &git::CONFIG_OVERRIDE_BYPASS_RULE,
+    &git::ENV_BYPASS_RULE,
     &self_protection::BINARY_RULE,
     &self_protection::CONFIG_RULE,
     &self_protection::PLUGIN_RULE,
@@ -122,6 +126,10 @@ mod tests {
             "core.git.branch-delete-force",
             "core.git.stash-clear",
             "core.git.remote-set-url",
+            "core.git.no-verify",
+            "core.git.no-gpg-sign",
+            "core.git.config-override-bypass",
+            "core.git.env-bypass",
         ] {
             assert!(ids.contains(&git_id), "missing rule_id {git_id}");
         }
