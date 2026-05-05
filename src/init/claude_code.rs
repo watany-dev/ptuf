@@ -475,6 +475,37 @@ mod tests {
     }
 
     #[test]
+    fn entry_commands_returns_empty_when_hooks_key_is_missing() {
+        // The `Some(hooks) = entry.get("hooks").and_then(as_array) else
+        // { return Vec::new(); }` early-return arm is otherwise only
+        // reachable through full settings parsing.
+        let entry = json!({ "matcher": "Bash" });
+        assert!(entry_commands(&entry).is_empty());
+    }
+
+    #[test]
+    fn entry_commands_returns_empty_when_hooks_is_not_an_array() {
+        let entry = json!({ "matcher": "Bash", "hooks": "not-an-array" });
+        assert!(entry_commands(&entry).is_empty());
+    }
+
+    #[test]
+    fn command_executable_returns_first_token_or_none() {
+        assert_eq!(command_executable("/x/ptuf hook"), Some("/x/ptuf"));
+        assert_eq!(command_executable(""), None);
+    }
+
+    #[test]
+    fn read_settings_reports_io_error_when_path_is_a_directory() {
+        // Reading a directory as a file produces an IoError that is
+        // not NotFound — exercises the Err arm of read_settings.
+        let dir = workdir("read-dir-as-file");
+        let err = install(&dir, "/x/ptuf", false).unwrap_err();
+        assert!(matches!(err, InitError::Io { .. }));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn install_preserves_unknown_keys_in_settings() {
         let dir = workdir("preserve-keys");
         let path = dir.join("settings.json");
