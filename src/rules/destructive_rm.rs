@@ -73,15 +73,30 @@ fn is_rm_head(head: &str) -> bool {
 
 fn has_recursive_force_flag(argv: &Argv) -> bool {
     let flags: Vec<&str> = argv.flags().collect();
-    if flags.contains(&"--recursive") && flags.contains(&"--force") {
-        return true;
-    }
+    has_recursive(&flags) && has_force(&flags)
+}
+
+fn has_recursive(flags: &[&str]) -> bool {
     flags.iter().any(|flag| {
+        if *flag == "--recursive" {
+            return true;
+        }
         if flag.starts_with("--") {
             return false;
         }
-        let body = &flag[1..];
-        body.contains('r') && body.contains('f')
+        flag[1..].chars().any(|c| c == 'r' || c == 'R')
+    })
+}
+
+fn has_force(flags: &[&str]) -> bool {
+    flags.iter().any(|flag| {
+        if *flag == "--force" {
+            return true;
+        }
+        if flag.starts_with("--") {
+            return false;
+        }
+        flag[1..].contains('f')
     })
 }
 
@@ -167,6 +182,24 @@ mod tests {
     }
 
     #[test]
+    fn denies_uppercase_recursive_flag() {
+        assert_deny("rm -Rf /");
+        assert_deny("rm -fR /");
+        assert_deny("rm -R -f /");
+        assert_deny("rm -f -R /");
+        assert_deny("rm -Rfv /etc");
+        assert_deny("rm -vRf /etc");
+    }
+
+    #[test]
+    fn denies_mixed_long_and_short_flags() {
+        assert_deny("rm --recursive -f /");
+        assert_deny("rm -r --force /");
+        assert_deny("rm --force -r /");
+        assert_deny("rm -R --force /usr");
+    }
+
+    #[test]
     fn denies_in_pipeline_or_compound() {
         assert_deny("echo go && rm -rf /");
         assert_deny("ls; rm -rf /etc");
@@ -186,6 +219,16 @@ mod tests {
         assert_allow("rm -rf ./build");
         assert_allow("rm -rf $HOME/scratch/foo");
         assert_allow("rm -rf ~/projects/myrepo/target");
+    }
+
+    #[test]
+    fn allows_when_only_one_of_recursive_or_force_is_set() {
+        // System target alone is not enough — needs BOTH recursive and force.
+        assert_allow("rm -R /etc");
+        assert_allow("rm -r /etc");
+        assert_allow("rm --recursive /etc");
+        assert_allow("rm -f /etc/passwd");
+        assert_allow("rm --force /etc/passwd");
     }
 
     #[test]
