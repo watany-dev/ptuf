@@ -23,6 +23,9 @@ session_id=$(echo "$input" | jq -r '.session_id // "default"')
 transcript=$(echo "$input" | jq -r '.transcript_path // ""')
 marker="${TMPDIR:-/tmp}/ptuf-task-done-$session_id"
 
+# 編集系 tool_use 名のリスト。SKILL.md の手順で「編集」と扱うものと揃える。
+edit_tools_re='"name":"(Edit|Write|MultiEdit|NotebookEdit)"'
+
 # マーカー存在 = task-done 実行済 → 許可。次の user turn で再ブロックする
 # ためにマーカーを削除する。
 if [ -f "$marker" ]; then
@@ -30,20 +33,21 @@ if [ -f "$marker" ]; then
   exit 0
 fi
 
-# Q&A ターン heuristic: 直近の user turn 以降に編集系 tool_use が無ければ skip。
+# Q&A ターン heuristic: transcript を tac で逆順に流し、最後の user turn
+# と編集系 tool_use のうち先に現れた方を `grep -m1` で検出する。
+# 編集系が先 (= 元の順序では user turn の後) → block。
+# user turn が先 (= 編集系が無かった) → skip。
 # transcript が読めない / 空なら安全側に倒して block する。
-edits_happened=true
+should_block=true
 if [ -n "$transcript" ] && [ -r "$transcript" ]; then
-  last_user_line=$(grep -n '"type":"user"' "$transcript" 2>/dev/null | tail -1 | cut -d: -f1 || true)
-  if [ -n "$last_user_line" ]; then
-    if ! tail -n +"$((last_user_line + 1))" "$transcript" \
-        | grep -qE '"name":"(Edit|Write|MultiEdit|NotebookEdit)"'; then
-      edits_happened=false
-    fi
-  fi
+  first_match=$(tac "$transcript" 2>/dev/null \
+    | grep -m1 -E "(\"type\":\"user\"|$edit_tools_re)" || true)
+  case "$first_match" in
+    *'"type":"user"'*) should_block=false ;;
+  esac
 fi
 
-if [ "$edits_happened" = "false" ]; then
+if [ "$should_block" = false ]; then
   exit 0
 fi
 
