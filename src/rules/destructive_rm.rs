@@ -142,6 +142,14 @@ mod tests {
     }
 
     #[test]
+    fn trait_metadata_is_stable() {
+        let r = DestructiveRm;
+        assert_eq!(r.id(), RULE_ID);
+        assert_eq!(r.severity(), Severity::Critical);
+        assert!(r.hard_deny());
+    }
+
+    #[test]
     fn denies_rm_rf_root() {
         assert_deny("rm -rf /");
     }
