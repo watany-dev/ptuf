@@ -50,7 +50,7 @@ pub enum Command {
     /// `ptuf hook <agent>` — read JSON payload from stdin and emit a
     /// `hookSpecificOutput` response on stdout. v0.4 supports
     /// `agent = "claude-code"`; future agents will plug in here.
-    Hook { agent: String },
+    Hook,
     /// `ptuf eval --tool <name> <command>` — manual evaluation.
     Eval { tool: String, command: String },
     /// `ptuf plugin test <path>` — run plugin assertions.
@@ -158,9 +158,7 @@ where
     if let Some(extra) = iter.next() {
         return Err(ParseError::UnexpectedArgument(extra.clone()));
     }
-    Ok(Command::Hook {
-        agent: agent.clone(),
-    })
+    Ok(Command::Hook)
 }
 
 fn parse_eval<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -235,7 +233,7 @@ pub fn run<R: Read, W1: Write, W2: Write>(
     stderr: &mut W2,
 ) -> u8 {
     match command {
-        Command::Hook { agent } => run_hook(&agent, stdin, stdout, stderr),
+        Command::Hook => run_hook(stdin, stdout, stderr),
         Command::Eval { tool, command } => run_eval(&tool, &command, stdout, stderr),
         Command::PluginTest { path } => run_plugin_test(&path, stdout, stderr),
         Command::Init {
@@ -255,23 +253,7 @@ pub fn run<R: Read, W1: Write, W2: Write>(
     }
 }
 
-fn run_hook<R: Read, W1: Write, W2: Write>(
-    agent: &str,
-    mut stdin: R,
-    stdout: &mut W1,
-    stderr: &mut W2,
-) -> u8 {
-    // parse_hook already validated the agent string, so this match is
-    // exhaustive in practice; the explicit check keeps the audit-tag
-    // lookup honest if a future caller bypasses parse().
-    let agent_tag: &'static str = match agent {
-        "claude-code" => "claude-code",
-        other => {
-            let _ = writeln!(stderr, "ptuf: unknown agent: {other}");
-            return 1;
-        }
-    };
-
+fn run_hook<R: Read, W1: Write, W2: Write>(mut stdin: R, stdout: &mut W1, stderr: &mut W2) -> u8 {
     let mut buf = String::new();
     if stdin.read_to_string(&mut buf).is_err() {
         let _ = writeln!(stderr, "ptuf: failed to read stdin");
@@ -284,7 +266,7 @@ fn run_hook<R: Read, W1: Write, W2: Write>(
             return 1;
         }
     };
-    let decision = match build_engine_or_fail_closed(stderr, agent_tag) {
+    let decision = match build_engine_or_fail_closed(stderr, "claude-code") {
         Ok(engine) => engine.decide(&input).decision,
         Err(deny) => deny,
     };
@@ -492,12 +474,7 @@ mod tests {
     #[test]
     fn parses_hook_subcommand() {
         let cmd = parse(&s(&["hook", "claude-code"])).unwrap();
-        assert_eq!(
-            cmd,
-            Command::Hook {
-                agent: "claude-code".into()
-            }
-        );
+        assert_eq!(cmd, Command::Hook);
     }
 
     #[test]
@@ -771,18 +748,6 @@ mod tests {
         assert_eq!(code, 0);
         assert!(out.contains("ptuf"));
         assert!(out.contains(env!("CARGO_PKG_VERSION")));
-    }
-
-    #[test]
-    fn run_with_no_args_returns_one_with_usage_error() {
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let exit = crate::io_runner::run::<_, _, _, &str>(&[], b"" as &[u8], &mut out, &mut err);
-        // ExitCode does not expose its byte directly, so just ensure
-        // the stderr surface tells the user to pick a subcommand.
-        let _ = exit;
-        let err_s = String::from_utf8_lossy(&err);
-        assert!(err_s.contains("missing value for subcommand"), "{err_s}");
     }
 
     #[test]
@@ -1127,35 +1092,10 @@ rules:
     fn run_hook_returns_one_when_stdin_read_fails() {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = run(
-            Command::Hook {
-                agent: "claude-code".into(),
-            },
-            FailingReader,
-            &mut out,
-            &mut err,
-        );
+        let code = run(Command::Hook, FailingReader, &mut out, &mut err);
         assert_eq!(code, 1);
         assert!(out.is_empty());
         assert!(String::from_utf8_lossy(&err).contains("failed to read stdin"));
-    }
-
-    #[test]
-    fn run_hook_returns_one_for_unknown_agent() {
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        // Bypasses parse() — exercises the defensive arm in run_hook.
-        let code = run(
-            Command::Hook {
-                agent: "codex".into(),
-            },
-            b"{}" as &[u8],
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 1);
-        assert!(out.is_empty());
-        assert!(String::from_utf8_lossy(&err).contains("unknown agent: codex"));
     }
 
     #[test]

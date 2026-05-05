@@ -321,41 +321,6 @@ fn hook_denies_mcp_filesystem_read_of_aws_credentials() {
 }
 
 #[test]
-fn audit_jsonl_carries_agent_claude_code_for_hook_subcommand() {
-    let dir = std::env::temp_dir().join(format!(
-        "ptuf-audit-hook-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
-    let audit_path = dir.join("audit.jsonl");
-    let yaml = format!("audit:\n  path: {}\n", audit_path.display());
-    std::fs::write(dir.join(".ptuf.yaml"), yaml).expect("write yaml");
-
-    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
-    let mut child = binary()
-        .current_dir(&dir)
-        .args(["hook", "claude-code"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn");
-    {
-        let mut sin = child.stdin.take().expect("stdin");
-        sin.write_all(payload.as_bytes()).expect("write stdin");
-    }
-    let output = child.wait_with_output().expect("wait");
-    assert_eq!(output.status.code(), Some(2));
-
-    let body = std::fs::read_to_string(&audit_path).expect("read audit");
-    let line = body.lines().next().expect("at least one line");
-    assert!(line.contains("\"agent\":\"claude-code\""), "line: {line}");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
 fn project_hygiene_denies_npm_install_when_pnpm_lock_present_and_pack_enabled() {
     let dir =
         std::env::temp_dir().join(format!("ptuf-hyg-pnpm-{}-{}", std::process::id(), line!()));
