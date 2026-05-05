@@ -223,7 +223,6 @@ mod tests {
 
     #[test]
     fn allows_when_only_one_of_recursive_or_force_is_set() {
-        // System target alone is not enough — needs BOTH recursive and force.
         assert_allow("rm -R /etc");
         assert_allow("rm -r /etc");
         assert_allow("rm --recursive /etc");
