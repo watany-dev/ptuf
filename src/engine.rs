@@ -13,7 +13,7 @@ use crate::audit::record::AuditRecord;
 use crate::audit::time::parse_rfc3339_to_secs;
 use crate::audit::{AuditSink, JsonlSink, NoopSink, redact_strict};
 use crate::config::{self, Allowlist, Config, ConfigError, Mode, PackOverride, RedactionMode};
-use crate::decision::{Decision, Severity, aggregate};
+use crate::decision::{Decision, DecisionKind, Severity, aggregate};
 use crate::facts;
 use crate::facts::project::ProjectFacts;
 use crate::hook_input::HookInput;
@@ -26,6 +26,7 @@ pub struct Engine {
     config: Config,
     plugins: PluginSet,
     audit_sink: Box<dyn AuditSink>,
+    audit_warning: Option<String>,
     repo_root: Option<PathBuf>,
     protected: ProtectedPaths,
     /// Adapter that constructed this engine — surfaced in audit
@@ -107,7 +108,7 @@ impl Engine {
         let config = config::load_for(repo_root)?;
         let mut plugins = PluginSet::new();
         plugins.load_paths(&config.plugin_paths)?;
-        let audit_sink = audit_sink_from_config(&config);
+        let (audit_sink, audit_warning) = audit_sink_from_config(&config);
         let protected = ProtectedPaths::collect(repo_root, &config);
         let plugin_versions = compute_plugin_versions(&plugins);
         let project_facts = facts::project::collect(repo_root, &config.protected_branches);
@@ -115,6 +116,7 @@ impl Engine {
             config,
             plugins,
             audit_sink,
+            audit_warning,
             repo_root: repo_root.map(Path::to_path_buf),
             protected,
             agent: "unknown",
@@ -144,7 +146,7 @@ impl Engine {
     pub fn with_config(config: Config) -> Result<Self, EngineError> {
         let mut plugins = PluginSet::new();
         plugins.load_paths(&config.plugin_paths)?;
-        let audit_sink = audit_sink_from_config(&config);
+        let (audit_sink, audit_warning) = audit_sink_from_config(&config);
         let protected = ProtectedPaths::collect(None, &config);
         let plugin_versions = compute_plugin_versions(&plugins);
         let project_facts = facts::project::collect(None, &config.protected_branches);
@@ -152,6 +154,7 @@ impl Engine {
             config,
             plugins,
             audit_sink,
+            audit_warning,
             repo_root: None,
             protected,
             agent: "unknown",
@@ -171,6 +174,7 @@ impl Engine {
             config,
             plugins,
             audit_sink: Box::new(NoopSink),
+            audit_warning: None,
             repo_root: None,
             protected,
             agent: "unknown",
@@ -186,6 +190,7 @@ impl Engine {
     /// [`AuditSink`]) afterwards.
     pub fn with_audit_sink(mut self, sink: Box<dyn AuditSink>) -> Self {
         self.audit_sink = sink;
+        self.audit_warning = None;
         self
     }
 
@@ -215,24 +220,39 @@ impl Engine {
         &self.plugins
     }
 
+    /// Warning captured while initialising the audit sink, if any.
+    /// CLI callers surface this on stderr; library callers can ignore
+    /// it and keep best-effort audit semantics.
+    pub fn audit_warning(&self) -> Option<&str> {
+        self.audit_warning.as_deref()
+    }
+
     /// Evaluate a single hook payload.
     pub fn decide(&self, input: &HookInput) -> Outcome {
         let mut facts = facts::extract(input);
         facts.protected = self.protected.classify_input(input);
         facts.project = self.project_facts.clone();
         let now = SystemTime::now();
+        let allowlist_ctx = AllowlistContext {
+            facts: &facts,
+            input,
+            config: &self.config,
+            now,
+        };
         let mut allowlist_hits: Vec<&str> = Vec::new();
         let mut decisions: Vec<Decision> = Vec::new();
         for rule in rules::iter() {
             if is_pack_disabled(rule, &self.config) {
                 continue;
             }
-            if let Some(id) = allowlist_hit_for(rule, &self.config, now) {
-                allowlist_hits.push(id);
-                continue;
-            }
-            if let Some(d) = rule.evaluate(&facts, input) {
-                decisions.push(d);
+            if let Some(d) = rule.evaluate(&facts, input)
+                && let Some(d) = apply_rule_override(rule, d, &self.config)
+            {
+                if let Some(id) = allowlist_hit_for(rule, &d, &allowlist_ctx) {
+                    allowlist_hits.push(id);
+                } else {
+                    decisions.push(d);
+                }
             }
         }
         for plugin_rule in self.plugins.rules() {
@@ -240,12 +260,14 @@ impl Engine {
             if is_pack_disabled(rule, &self.config) {
                 continue;
             }
-            if let Some(id) = allowlist_hit_for(rule, &self.config, now) {
-                allowlist_hits.push(id);
-                continue;
-            }
-            if let Some(d) = rule.evaluate(&facts, input) {
-                decisions.push(d);
+            if let Some(d) = rule.evaluate(&facts, input)
+                && let Some(d) = apply_rule_override(rule, d, &self.config)
+            {
+                if let Some(id) = allowlist_hit_for(rule, &d, &allowlist_ctx) {
+                    allowlist_hits.push(id);
+                } else {
+                    decisions.push(d);
+                }
             }
         }
         let raw = aggregate(decisions);
@@ -272,12 +294,15 @@ impl Engine {
     fn severity_for(&self, rule_id: &str) -> Option<Severity> {
         for r in rules::iter() {
             if r.id() == rule_id {
-                return Some(r.severity());
+                return Some(effective_severity(r, &self.config));
             }
         }
         for r in self.plugins.rules() {
             if (r as &(dyn ConfigRule + Sync)).id() == rule_id {
-                return Some(r.severity());
+                return Some(effective_severity(
+                    r as &(dyn ConfigRule + Sync),
+                    &self.config,
+                ));
             }
         }
         None
@@ -327,13 +352,22 @@ fn compute_plugin_versions(plugins: &PluginSet) -> Vec<String> {
         .collect()
 }
 
-fn audit_sink_from_config(config: &Config) -> Box<dyn AuditSink> {
-    match &config.audit.path {
-        Some(p) => match JsonlSink::open(p) {
-            Ok(s) => Box::new(s),
-            Err(_) => Box::new(NoopSink),
-        },
-        None => Box::new(NoopSink),
+fn audit_sink_from_config(config: &Config) -> (Box<dyn AuditSink>, Option<String>) {
+    if !config.audit.enabled {
+        return (Box::new(NoopSink), None);
+    }
+    let Some(path) = config::resolved_audit_path(config) else {
+        return (
+            Box::new(NoopSink),
+            Some("ptuf: audit is enabled but $HOME is not set; audit disabled".into()),
+        );
+    };
+    match JsonlSink::open(&path) {
+        Ok(s) => (Box::new(s), None),
+        Err(err) => (
+            Box::new(NoopSink),
+            Some(format!("ptuf: {err}; audit disabled")),
+        ),
     }
 }
 
@@ -363,40 +397,118 @@ fn is_pack_disabled(rule: &(dyn ConfigRule + Sync), config: &Config) -> bool {
         .any(|(pack, overlay)| pack_disabled(overlay) && rule_matches_pack(id, pack))
 }
 
+fn apply_rule_override(
+    rule: &(dyn ConfigRule + Sync),
+    decision: Decision,
+    config: &Config,
+) -> Option<Decision> {
+    let Some(overlay) = config.rule_overrides.get(rule.id()) else {
+        return Some(decision);
+    };
+    if overlay.enabled == Some(false) && rule.overridable() && !rule.hard_deny() {
+        return None;
+    }
+    let Some(kind) = overlay.decision else {
+        return Some(decision);
+    };
+    if !override_allowed(rule, decision.kind(), kind) {
+        return Some(decision);
+    }
+    Some(decision_with_kind(decision, kind))
+}
+
+fn override_allowed(rule: &(dyn ConfigRule + Sync), from: DecisionKind, to: DecisionKind) -> bool {
+    if rule.overridable() && !rule.hard_deny() {
+        return true;
+    }
+    decision_rank(to) >= decision_rank(from)
+}
+
+fn decision_rank(kind: DecisionKind) -> u8 {
+    match kind {
+        DecisionKind::Allow => 0,
+        DecisionKind::Monitor => 1,
+        DecisionKind::Ask => 2,
+        DecisionKind::Deny => 3,
+    }
+}
+
+fn decision_with_kind(decision: Decision, kind: DecisionKind) -> Decision {
+    let rule_id = decision.rule_id().unwrap_or("").to_string();
+    let reason = decision
+        .reason()
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Blocked by ptuf rule {rule_id}."));
+    match kind {
+        DecisionKind::Allow => Decision::Allow,
+        DecisionKind::Monitor => Decision::Monitor { rule_id },
+        DecisionKind::Ask => Decision::Ask { rule_id, reason },
+        DecisionKind::Deny => Decision::Deny { rule_id, reason },
+    }
+}
+
+fn effective_severity(rule: &(dyn ConfigRule + Sync), config: &Config) -> Severity {
+    let Some(overlay) = config.rule_overrides.get(rule.id()) else {
+        return rule.severity();
+    };
+    match overlay.severity {
+        Some(severity) if rule.overridable() && !rule.hard_deny() => severity,
+        _ => rule.severity(),
+    }
+}
+
+struct AllowlistContext<'a> {
+    facts: &'a facts::Facts,
+    input: &'a HookInput,
+    config: &'a Config,
+    now: SystemTime,
+}
+
 /// First non-expired allowlist entry that covers the rule, returned
 /// by id. `hardDeny` rules ignore allowlist entries entirely
 /// (`docs/design/config-and-plugins.md:89`). Returns `None` when no
 /// allowlist entry applies.
 fn allowlist_hit_for<'a>(
     rule: &(dyn ConfigRule + Sync),
-    config: &'a Config,
-    now: SystemTime,
+    decision: &Decision,
+    ctx: &'a AllowlistContext<'_>,
 ) -> Option<&'a str> {
     if rule.hard_deny() {
         return None;
     }
+    if matches!(decision, Decision::Allow) {
+        return None;
+    }
     let id = rule.id();
-    config
+    ctx.config
         .allowlists
         .iter()
-        .find(|entry| allowlist_covers(entry, id, now))
+        .find(|entry| allowlist_covers(entry, id, ctx))
         .map(|entry| entry.id.as_str())
 }
 
-fn allowlist_covers(entry: &Allowlist, rule_id: &str, now: SystemTime) -> bool {
+fn allowlist_covers(entry: &Allowlist, rule_id: &str, ctx: &AllowlistContext<'_>) -> bool {
     if !entry.rule_ids.iter().any(|r| r == rule_id) {
         return false;
     }
-    match &entry.expires_at {
+    let not_expired = match &entry.expires_at {
         None => true,
         Some(s) => match parse_rfc3339_to_secs(s) {
-            Some(expiry) => now
+            Some(expiry) => ctx
+                .now
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() < expiry)
                 .unwrap_or(true),
             None => false,
         },
+    };
+    if !not_expired {
+        return false;
     }
+    entry
+        .when
+        .as_ref()
+        .is_none_or(|when| crate::plugin::dsl::evaluate(when, ctx.facts, ctx.input))
 }
 
 fn pack_disabled(overlay: &PackOverride) -> bool {
@@ -669,6 +781,7 @@ rules:
         cfg.allowlists.push(Allowlist {
             id: "ignore-fs".into(),
             rule_ids: vec!["core.filesystem.destructive-rm".into()],
+            when: None,
             expires_at: Some("2099-01-01T00:00:00Z".into()),
             reason: None,
         });
@@ -702,6 +815,7 @@ rules:
         cfg.allowlists.push(Allowlist {
             id: "ignore-curl".into(),
             rule_ids: vec!["pack.demo.no-curl".into()],
+            when: None,
             expires_at: Some("2099-01-01T00:00:00Z".into()),
             reason: None,
         });
@@ -736,6 +850,7 @@ rules:
         cfg.allowlists.push(Allowlist {
             id: "expired".into(),
             rule_ids: vec!["pack.demo.no-curl".into()],
+            when: None,
             expires_at: Some("2000-01-01T00:00:00Z".into()),
             reason: None,
         });
@@ -770,12 +885,51 @@ rules:
         cfg.allowlists.push(Allowlist {
             id: "forever".into(),
             rule_ids: vec!["pack.demo.no-curl".into()],
+            when: None,
             expires_at: None,
             reason: None,
         });
         let engine = Engine::with_components(cfg, set);
         let outcome = engine.decide(&bash("curl https://example.com"));
         assert_eq!(outcome.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn allowlist_when_must_match_to_suppress() {
+        #![allow(clippy::expect_used)]
+        use crate::plugin::load_str;
+        use serde_yaml_ng::Value as YamlValue;
+        use std::path::Path;
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let when: YamlValue =
+            serde_yaml_ng::from_str("shell.argv:\n  headAny: [wget]\n").expect("parse when");
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "wget-only".into(),
+            rule_ids: vec!["pack.demo.no-curl".into()],
+            when: Some(crate::plugin::dsl::compile(&when).expect("compile when")),
+            expires_at: None,
+            reason: None,
+        });
+        let engine = Engine::with_components(cfg, set);
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert!(matches!(outcome.decision, Decision::Deny { .. }));
     }
 
     #[test]
@@ -804,6 +958,7 @@ rules:
         cfg.allowlists.push(Allowlist {
             id: "garbage".into(),
             rule_ids: vec!["pack.demo.no-curl".into()],
+            when: None,
             expires_at: Some("not-a-timestamp".into()),
             reason: None,
         });
@@ -838,6 +993,7 @@ rules:
         cfg.allowlists.push(Allowlist {
             id: "unrelated".into(),
             rule_ids: vec!["some.other.rule".into()],
+            when: None,
             expires_at: None,
             reason: None,
         });
@@ -910,6 +1066,7 @@ rules:
         let mut cfg = Config::default();
         cfg.audit.path = Some(PathBuf::from("/proc/this-cannot-be-created/audit.jsonl"));
         let engine = Engine::with_config(cfg).expect("with_config never aborts on audit open");
+        assert!(engine.audit_warning().is_some());
         let outcome = engine.decide(&bash("ls"));
         assert_eq!(outcome.decision, Decision::Allow);
     }
@@ -1001,6 +1158,7 @@ rules:
         cfg.allowlists.push(Allowlist {
             id: "approved-curl".into(),
             rule_ids: vec!["pack.demo.no-curl".into()],
+            when: None,
             expires_at: Some("2099-01-01T00:00:00Z".into()),
             reason: None,
         });
@@ -1025,6 +1183,7 @@ rules:
         cfg.allowlists.push(Allowlist {
             id: "ignore-fs".into(),
             rule_ids: vec!["core.filesystem.destructive-rm".into()],
+            when: None,
             expires_at: Some("2099-01-01T00:00:00Z".into()),
             reason: None,
         });
@@ -1060,6 +1219,7 @@ rules:
         cfg.allowlists.push(Allowlist {
             id: "approved-curl".into(),
             rule_ids: vec!["pack.demo.no-curl".into()],
+            when: None,
             expires_at: None,
             reason: None,
         });
@@ -1199,6 +1359,7 @@ rules:
             cfg.allowlists.push(Allowlist {
                 id: "pbt-test".into(),
                 rule_ids: vec!["core.git.force-push-with-lease".into()],
+                when: None,
                 expires_at: None,
                 reason: None,
             });
@@ -1236,6 +1397,7 @@ rules:
             cfg.allowlists.push(Allowlist {
                 id: "pbt-test".into(),
                 rule_ids: vec!["core.filesystem.destructive-rm".into()],
+                when: None,
                 expires_at: None,
                 reason: None,
             });
@@ -1252,6 +1414,7 @@ rules:
             cfg.allowlists.push(Allowlist {
                 id: "pbt-test".into(),
                 rule_ids: vec!["core.git.force-push-with-lease".into()],
+                when: None,
                 expires_at: Some("2000-01-01T00:00:00Z".into()),
                 reason: None,
             });

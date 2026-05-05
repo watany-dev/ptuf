@@ -6,10 +6,12 @@
 //! `core.self_protection.*` rules live in `crate::rules::self_protection`.
 
 use std::path::{Path, PathBuf};
+use std::{fs, io::ErrorKind};
 
 use crate::config::scope::{EnvLookup, SystemEnv, layout_for};
 use crate::config::{Config, repo};
 use crate::hook_input::HookInput;
+use serde_json::Value;
 
 /// Categories of protected target. Paired with a path on every
 /// [`crate::facts::Facts::protected`] entry so rules can produce specific reasons.
@@ -76,12 +78,39 @@ impl ProtectedPaths {
         claude_settings.sort();
         claude_settings.dedup();
 
+        let mut hook_scripts = Vec::new();
+        for settings_path in &claude_settings {
+            let body = match fs::read_to_string(settings_path) {
+                Ok(s) => s,
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Err(_) => continue,
+            };
+            let parsed: Value = match serde_json::from_str(&body) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            for command in crate::init::claude_code::pre_tool_use_commands(&parsed) {
+                let Some(executable) = crate::init::claude_code::command_executable(&command)
+                else {
+                    continue;
+                };
+                let normalized = crate::facts::path::resolve_with_env(
+                    executable,
+                    repo_root.or_else(|| settings_path.parent()),
+                    env,
+                );
+                if !hook_scripts.contains(&normalized) {
+                    hook_scripts.push(normalized);
+                }
+            }
+        }
+
         Self {
             binary: std::env::current_exe().ok(),
             configs,
             plugins: config.plugin_paths.clone(),
             claude_settings,
-            hook_scripts: Vec::new(),
+            hook_scripts,
         }
     }
 
@@ -142,7 +171,7 @@ fn path_matches(candidate: &Path, target: &Path) -> bool {
 fn candidate_targets(input: &HookInput) -> Vec<PathBuf> {
     let mut out = Vec::new();
     // Edit / Write / Read all expose `file_path`.
-    if let Some(fp) = crate::facts::path::extract(input) {
+    for fp in crate::facts::path::extract_all(input) {
         out.push(fp.absolute);
     }
     // Bash invocations carry destinations as positional args; collect
@@ -276,6 +305,60 @@ mod tests {
         };
         let labels = p.classify_input(&input);
         assert!(labels.contains(&ProtectedKind::ClaudeSettings));
+    }
+
+    #[test]
+    fn collect_extracts_hook_scripts_from_claude_settings() {
+        #![allow(clippy::expect_used)]
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join(".claude")).expect("mkdir");
+        std::fs::write(
+            home.join(".claude/settings.json"),
+            r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "./hooks/guard.sh hook claude-code pre-tool-use" }
+        ]
+      }
+    ]
+  }
+}"#,
+        )
+        .expect("write settings");
+        let home_string = home.to_string_lossy().into_owned();
+        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        assert!(
+            p.hook_scripts
+                .iter()
+                .any(|path| path == &PathBuf::from("/repo/./hooks/guard.sh"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn classify_matches_nested_mcp_path_on_hook_script() {
+        let p = ProtectedPaths {
+            hook_scripts: vec![PathBuf::from("/repo/hooks/guard.sh")],
+            ..ProtectedPaths::default()
+        };
+        let input = HookInput {
+            tool_name: "mcp__github__push_files".into(),
+            tool_input: serde_json::json!({
+                "files": [{"path": "/repo/hooks/guard.sh"}]
+            }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(labels.contains(&ProtectedKind::HookScript));
     }
 
     #[test]

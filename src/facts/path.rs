@@ -4,7 +4,7 @@
 //! can inject a hermetic `HOME` (and the production path delegates to
 //! [`crate::config::scope::SystemEnv`]).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::scope::{EnvLookup, SystemEnv};
 use crate::hook_input::HookInput;
@@ -32,33 +32,93 @@ pub struct FilePath {
     pub absolute: PathBuf,
 }
 
-/// Build a [`FilePath`] using the supplied env lookup. The `facts::extract`
-/// default path uses [`SystemEnv`]; tests inject a `MapEnv` to verify
-/// `~` expansion deterministically.
-///
-/// MCP tool calls (`mcp__<server>__<tool>`) are normalised on the
-/// generic top-level `path` key — see `docs/design/cli-and-hooks.md`
-/// for the rationale and known caveats around payload-shape variation.
-pub fn extract_with_env(input: &HookInput, env: &dyn EnvLookup) -> Option<FilePath> {
-    let (tool, key) = match input.tool_name.as_str() {
-        "Read" => (PathTool::Read, "file_path"),
-        "Edit" => (PathTool::Edit, "file_path"),
-        "Write" => (PathTool::Write, "file_path"),
-        _ if input.is_mcp_tool() => (PathTool::Mcp, "path"),
-        _ => return None,
-    };
-    let raw = input.tool_input.get(key)?.as_str()?.to_string();
-    let absolute = expand_home(&raw, env);
-    Some(FilePath {
-        tool,
-        raw,
-        absolute,
-    })
+/// Expand `~` / `$HOME` forms and, when requested, resolve a relative
+/// path against `base_dir`.
+pub(crate) fn resolve_with_env(raw: &str, base_dir: Option<&Path>, env: &dyn EnvLookup) -> PathBuf {
+    let expanded = expand_home(raw, env);
+    if expanded.is_relative()
+        && let Some(base) = base_dir
+    {
+        return base.join(expanded);
+    }
+    expanded
 }
 
-/// Convenience: extract using the production environment.
+/// Build all visible [`FilePath`]s using the supplied env lookup. The
+/// `facts::extract` default path uses [`SystemEnv`]; tests inject a
+/// `MapEnv` to verify `~` expansion deterministically.
+///
+/// MCP tool calls (`mcp__<server>__<tool>`) are normalised on generic
+/// path carriers, including `path`, `paths[]`, `files[].path`, and
+/// `items[].path`.
+pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<FilePath> {
+    let (tool, values): (PathTool, Vec<String>) = match input.tool_name.as_str() {
+        "Read" | "Edit" | "Write" => {
+            let tool = match input.tool_name.as_str() {
+                "Read" => PathTool::Read,
+                "Edit" => PathTool::Edit,
+                _ => PathTool::Write,
+            };
+            let values = input
+                .tool_input
+                .get("file_path")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .into_iter()
+                .collect();
+            (tool, values)
+        }
+        _ if input.is_mcp_tool() => (PathTool::Mcp, collect_mcp_paths(&input.tool_input)),
+        _ => return Vec::new(),
+    };
+    values
+        .into_iter()
+        .map(|raw| FilePath {
+            tool,
+            absolute: expand_home(&raw, env),
+            raw,
+        })
+        .collect()
+}
+
+/// Compatibility helper: extract the first visible path with the supplied env.
+pub fn extract_with_env(input: &HookInput, env: &dyn EnvLookup) -> Option<FilePath> {
+    extract_all_with_env(input, env).into_iter().next()
+}
+
+/// Convenience: extract the first visible path using the production
+/// environment.
 pub fn extract(input: &HookInput) -> Option<FilePath> {
-    extract_with_env(input, &SystemEnv)
+    extract_all_with_env(input, &SystemEnv).into_iter().next()
+}
+
+/// Convenience: extract every visible path using the production environment.
+pub fn extract_all(input: &HookInput) -> Vec<FilePath> {
+    extract_all_with_env(input, &SystemEnv)
+}
+
+fn collect_mcp_paths(value: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    push_string(value.get("path"), &mut out);
+    for key in ["files", "items"] {
+        if let Some(items) = value.get(key).and_then(serde_json::Value::as_array) {
+            for item in items {
+                push_string(item.get("path"), &mut out);
+            }
+        }
+    }
+    if let Some(paths) = value.get("paths").and_then(serde_json::Value::as_array) {
+        for item in paths {
+            push_string(Some(item), &mut out);
+        }
+    }
+    out
+}
+
+fn push_string(value: Option<&serde_json::Value>, out: &mut Vec<String>) {
+    if let Some(raw) = value.and_then(serde_json::Value::as_str) {
+        out.push(raw.to_string());
+    }
 }
 
 fn expand_home(raw: &str, env: &dyn EnvLookup) -> PathBuf {
@@ -218,6 +278,24 @@ mod tests {
         let fp = extract_with_env(&i, &MapEnv::with_home("/h")).expect("path");
         assert_eq!(fp.tool, PathTool::Mcp);
         assert_eq!(fp.raw, ".claude/settings.json");
+    }
+
+    #[test]
+    fn extract_all_collects_nested_mcp_paths() {
+        let i = HookInput {
+            tool_name: "mcp__github__push_files".into(),
+            tool_input: serde_json::json!({
+                "files": [{"path": "~/.claude/settings.json"}, {"path": "/tmp/a"}],
+                "items": [{"path": "/tmp/b"}],
+                "paths": ["/tmp/c"]
+            }),
+        };
+        let paths = extract_all_with_env(&i, &MapEnv::with_home("/h"));
+        let raws: Vec<_> = paths.iter().map(|p| p.raw.as_str()).collect();
+        assert_eq!(
+            raws,
+            vec!["~/.claude/settings.json", "/tmp/a", "/tmp/b", "/tmp/c"]
+        );
     }
 
     #[test]

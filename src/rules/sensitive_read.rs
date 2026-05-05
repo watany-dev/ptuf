@@ -38,7 +38,7 @@ impl ConfigRule for SensitiveRead {
 
     fn evaluate(&self, facts: &Facts, input: &HookInput) -> Option<Decision> {
         let is_read_like = matches!(input.tool_name.as_str(), "Read" | "Edit")
-            || (input.is_mcp_tool() && facts.path.is_some());
+            || (input.is_mcp_tool() && !facts.paths.is_empty());
         if !is_read_like {
             return None;
         }

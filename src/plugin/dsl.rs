@@ -277,12 +277,23 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
             }),
         },
         WhenNode::PathFilePathPrefixAny(prefixes) => match facts.path.as_ref() {
-            None => false,
+            None => facts.paths.iter().any(|path| {
+                let abs = path.absolute.to_string_lossy();
+                prefixes
+                    .iter()
+                    .any(|p| path.raw.starts_with(p) || abs.starts_with(p))
+            }),
             Some(path) => {
                 let abs = path.absolute.to_string_lossy();
                 prefixes
                     .iter()
                     .any(|p| path.raw.starts_with(p) || abs.starts_with(p))
+                    || facts.paths.iter().any(|path| {
+                        let abs = path.absolute.to_string_lossy();
+                        prefixes
+                            .iter()
+                            .any(|p| path.raw.starts_with(p) || abs.starts_with(p))
+                    })
             }
         },
         WhenNode::UrlSchemeAny(schemes) => facts

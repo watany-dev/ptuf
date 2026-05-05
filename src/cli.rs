@@ -27,7 +27,13 @@ pub(crate) fn build_engine_or_fail_closed<W: Write>(
     agent: &'static str,
 ) -> Result<Engine, Decision> {
     Engine::for_cwd()
-        .map(|engine| engine.with_agent(agent))
+        .map(|engine| {
+            let engine = engine.with_agent(agent);
+            if let Some(warning) = engine.audit_warning() {
+                let _ = writeln!(stderr, "{warning}");
+            }
+            engine
+        })
         .map_err(|err| {
             let _ = writeln!(stderr, "ptuf: could not load policy: {err}");
             Decision::Deny {

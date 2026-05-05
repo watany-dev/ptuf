@@ -35,6 +35,8 @@ pub struct Facts {
     /// `file_path` extracted from `Read`/`Edit`/`Write` payloads, with
     /// `~` / `$HOME` expansion attempted via the production env.
     pub path: Option<path::FilePath>,
+    /// All extracted paths, including MCP multi-file payloads.
+    pub paths: Vec<path::FilePath>,
     /// Parsed URL from a `WebFetch` payload.
     pub url: Option<url::Url>,
     /// Sensitive tokens detected across the payload's strings (Bash
@@ -55,12 +57,14 @@ pub struct Facts {
 /// other than the production env lookup used for `~` expansion.
 pub fn extract(input: &HookInput) -> Facts {
     let bash = input.bash_command().map(shell::parse);
-    let path = path::extract(input);
+    let paths = path::extract_all(input);
+    let path = paths.first().cloned();
     let url = input.web_fetch_url().and_then(url::parse);
-    let sensitive = collect_sensitive(input, bash.as_ref(), path.as_ref(), url.as_ref());
+    let sensitive = collect_sensitive(input, bash.as_ref(), &paths, url.as_ref());
     Facts {
         bash,
         path,
+        paths,
         url,
         sensitive,
         protected: Vec::new(),
@@ -71,7 +75,7 @@ pub fn extract(input: &HookInput) -> Facts {
 fn collect_sensitive(
     input: &HookInput,
     bash: Option<&shell::Bash>,
-    path: Option<&path::FilePath>,
+    paths: &[path::FilePath],
     url: Option<&url::Url>,
 ) -> Vec<sensitive::SensitivePath> {
     let mut out: Vec<sensitive::SensitivePath> = Vec::new();
@@ -89,7 +93,7 @@ fn collect_sensitive(
         }
     }
 
-    if let Some(p) = path {
+    for p in paths {
         push_all(&p.raw);
     }
 
@@ -117,6 +121,7 @@ mod tests {
         let f = extract(&sample("Bash"));
         assert!(f.bash.is_none() || f.bash.as_ref().is_some_and(|b| b.segments.is_empty()));
         assert!(f.path.is_none());
+        assert!(f.paths.is_empty());
         assert!(f.url.is_none());
         assert!(f.sensitive.is_empty());
         assert!(f.protected.is_empty());
@@ -135,6 +140,7 @@ mod tests {
         };
         let f = extract(&i);
         assert!(f.path.is_some());
+        assert_eq!(f.paths.len(), 1);
         assert_eq!(f.path.as_ref().unwrap().raw, "/tmp/x");
     }
 

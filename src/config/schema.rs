@@ -10,8 +10,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 
-use super::{Allowlist, Mode, PackOverride, RedactionMode};
+use super::{Allowlist, Mode, PackOverride, RedactionMode, RuleOverride};
 
 /// Single-scope view of the user's policy. All scalars are optional;
 /// missing fields defer to the layer below.
@@ -27,6 +28,8 @@ pub struct RawConfig {
     pub fail_closed: Option<bool>,
     #[serde(default)]
     pub packs: BTreeMap<String, RawPack>,
+    #[serde(default)]
+    pub rules: BTreeMap<String, RawRuleOverride>,
     #[serde(default)]
     pub allowlists: Vec<RawAllowlist>,
     #[serde(default)]
@@ -53,6 +56,7 @@ impl RawConfig {
                 .into_iter()
                 .map(|(k, v)| (k, PackOverride { enabled: v.enabled }))
                 .collect(),
+            rule_overrides: self.rules.into_iter().map(|(k, v)| (k, v.into())).collect(),
             allowlists: self.allowlists.into_iter().map(Into::into).collect(),
             plugin_paths: self
                 .plugins
@@ -61,6 +65,7 @@ impl RawConfig {
                 .map(|p| p.path)
                 .collect(),
             audit_path: self.audit.path,
+            audit_enabled: self.audit.enabled,
             audit_include_allowed: self.audit.include_allowed,
             audit_include_denied: self.audit.include_denied,
             audit_redaction: self.audit.redaction,
@@ -83,6 +88,28 @@ pub struct RawPack {
     pub protected_branches: Option<Vec<String>>,
 }
 
+/// Per-rule override parsed from `rules: { <rule-id>: { ... } }`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RawRuleOverride {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub decision: Option<crate::decision::DecisionKind>,
+    #[serde(default)]
+    pub severity: Option<crate::decision::Severity>,
+}
+
+impl From<RawRuleOverride> for RuleOverride {
+    fn from(value: RawRuleOverride) -> Self {
+        RuleOverride {
+            enabled: value.enabled,
+            decision: value.decision,
+            severity: value.severity,
+        }
+    }
+}
+
 /// Reference to a plugin YAML on disk. `enabled: false` keeps the
 /// reference around (handy for project-local overrides) but skips the
 /// load.
@@ -98,6 +125,8 @@ pub struct RawPluginRef {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RawAudit {
+    #[serde(default)]
+    pub enabled: Option<bool>,
     #[serde(default)]
     pub path: Option<PathBuf>,
     #[serde(default)]
@@ -117,6 +146,8 @@ pub struct RawAllowlist {
     #[serde(default)]
     pub applies_to: RawAllowlistApplies,
     #[serde(default)]
+    pub when: Option<Value>,
+    #[serde(default)]
     pub expires_at: Option<String>,
     #[serde(default)]
     pub reason: Option<String>,
@@ -134,6 +165,10 @@ impl From<RawAllowlist> for Allowlist {
         Allowlist {
             id: value.id,
             rule_ids: value.applies_to.rules,
+            when: value
+                .when
+                .as_ref()
+                .and_then(|v| crate::plugin::dsl::compile(v).ok()),
             expires_at: value.expires_at,
             reason: value.reason,
         }
@@ -147,8 +182,10 @@ pub(super) struct MergeLayer {
     pub mode: Option<Mode>,
     pub fail_closed: Option<bool>,
     pub pack_overrides: BTreeMap<String, PackOverride>,
+    pub rule_overrides: BTreeMap<String, RuleOverride>,
     pub allowlists: Vec<Allowlist>,
     pub plugin_paths: Vec<PathBuf>,
+    pub audit_enabled: Option<bool>,
     pub audit_path: Option<PathBuf>,
     pub audit_include_allowed: Option<bool>,
     pub audit_include_denied: Option<bool>,
@@ -234,6 +271,7 @@ mod tests {
             applies_to: RawAllowlistApplies {
                 rules: vec!["r1".into(), "r2".into()],
             },
+            when: None,
             expires_at: Some("2099-01-01T00:00:00Z".into()),
             reason: Some("ok".into()),
         };
@@ -242,6 +280,22 @@ mod tests {
         assert_eq!(a.rule_ids, vec!["r1".to_string(), "r2".to_string()]);
         assert_eq!(a.expires_at.as_deref(), Some("2099-01-01T00:00:00Z"));
         assert_eq!(a.reason.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn raw_rule_override_into_runtime_overlay_passes_fields_through() {
+        let raw = RawRuleOverride {
+            enabled: Some(false),
+            decision: Some(crate::decision::DecisionKind::Monitor),
+            severity: Some(crate::decision::Severity::Low),
+        };
+        let overlay: RuleOverride = raw.into();
+        assert_eq!(overlay.enabled, Some(false));
+        assert_eq!(
+            overlay.decision,
+            Some(crate::decision::DecisionKind::Monitor)
+        );
+        assert_eq!(overlay.severity, Some(crate::decision::Severity::Low));
     }
 
     #[test]
