@@ -44,13 +44,16 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - セパレータをシングルクォートで囲んだ文字列は単一 segment になる
 - `flags()` と `positional()` は `args` の互いに素な分割
 
-### 組み込み 3 rule
+### 組み込み rule (全件)
 
-- 非 Bash tool ⇒ `evaluate()` は常に `None`
-- 任意のコマンド文字列で panic しない
-- `Some(d)` を返す場合、`d` は必ず `Decision::Deny { rule_id == self.id(), .. }`
-- 否定空間 (rm 系を含まない / fetcher を含まない / 機密パスを含まない コマンド) は
-  対応するルールが `None` を返す
+`src/rules/mod.rs` の `RULES` slice に登録された全 rule に対して、以下の
+不変条件を proptest で検証する。
+
+- 自分の対象でない tool (例: Bash 系 rule に Read tool) ⇒ `evaluate()` は `None`
+- 任意のコマンド文字列 / 引数で panic しない
+- `Some(d)` を返す場合、`d.rule_id() == self.id()` かつ
+  `d` の variant は `default_decision()` と整合
+- 否定空間 (該当パターンを含まない入力) は `None` を返す
 
 ### `audit::redact_strict`
 

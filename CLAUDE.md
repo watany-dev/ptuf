@@ -38,7 +38,7 @@ Allow / Deny を exit code と stderr メッセージで返す CLI バイナリ 
 - `src/reason.rs` — `reason::build` (deny / ask の Rule Feedback 整形)
 - `src/rules/` — `ConfigRule` trait、組み込み rule (filesystem / network /
   secrets / git / self_protection / sensitive_read / project_hygiene)、
-  共有 `LazyLock<Regex>` 群。built-in rule は計 19 個
+  共有 `LazyLock<Regex>` 群。built-in rule は計 23 個
 - `src/facts/` — fact extraction (`shell` / `path` / `url` / `sensitive` /
   `project`)。`protected` と `project` は `Engine::decide` 時に注入。
   `project_facts` は engine 構築時に 1 回 collect し、per-decide では I/O しない

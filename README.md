@@ -24,9 +24,15 @@ Built-in rules (always enabled, hard-deny unless noted):
 - `core.secrets.sensitive-read` *(new in v0.3)* — `Read` / `Edit` of a
   credentials file (SSH key, AWS / gcloud / kube config, dotenv, npmrc,
   pypirc, tfstate, PEM blob, …)
-- `core.git.*` *(new in v0.3, 7 rules)* — `force-push` (deny),
-  `force-push-with-lease` / `reset --hard` / `clean -fdx` /
-  `branch -D` / `stash clear` / `remote set-url` (ask)
+- `core.git.*` *(7 rules in v0.3 + 4 bypass-blockers, 11 rules total)* —
+  `force-push` (deny), `force-push-with-lease` / `reset --hard` /
+  `clean -fdx` / `branch -D` / `stash clear` / `remote set-url` (ask),
+  plus four hook/signing bypass-blockers: `no-verify` (`git commit
+  --no-verify`, `commit -n`, `push --no-verify`, …), `no-gpg-sign`,
+  `config-override-bypass` (`git -c core.hooksPath=/dev/null …`,
+  `-c commit.gpgsign=false …`), and `env-bypass` (`HUSKY=0 git commit …`,
+  `LEFTHOOK=0`, `SKIP=…`, `PRE_COMMIT_ALLOW_NO_CONFIG=1`) — all deny,
+  allowlistable
 - `core.self_protection.*` *(new in v0.3, 5 rules)* — modifications to the
   ptuf binary, its config files, registered plugin paths, the Claude Code
   `settings.json` file, or any hook-script referenced by it
