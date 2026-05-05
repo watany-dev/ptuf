@@ -73,15 +73,30 @@ fn is_rm_head(head: &str) -> bool {
 
 fn has_recursive_force_flag(argv: &Argv) -> bool {
     let flags: Vec<&str> = argv.flags().collect();
-    if flags.contains(&"--recursive") && flags.contains(&"--force") {
-        return true;
-    }
+    has_recursive(&flags) && has_force(&flags)
+}
+
+fn has_recursive(flags: &[&str]) -> bool {
     flags.iter().any(|flag| {
+        if *flag == "--recursive" {
+            return true;
+        }
         if flag.starts_with("--") {
             return false;
         }
-        let body = &flag[1..];
-        body.contains('r') && body.contains('f')
+        flag[1..].chars().any(|c| c == 'r' || c == 'R')
+    })
+}
+
+fn has_force(flags: &[&str]) -> bool {
+    flags.iter().any(|flag| {
+        if *flag == "--force" {
+            return true;
+        }
+        if flag.starts_with("--") {
+            return false;
+        }
+        flag[1..].contains('f')
     })
 }
 
@@ -127,6 +142,14 @@ mod tests {
     }
 
     #[test]
+    fn trait_metadata_is_stable() {
+        let r = DestructiveRm;
+        assert_eq!(r.id(), RULE_ID);
+        assert_eq!(r.severity(), Severity::Critical);
+        assert!(r.hard_deny());
+    }
+
+    #[test]
     fn denies_rm_rf_root() {
         assert_deny("rm -rf /");
     }
@@ -152,10 +175,41 @@ mod tests {
 
     #[test]
     fn denies_rm_rf_system_paths() {
-        for path in ["/etc", "/usr", "/var", "/bin", "/boot", "/sbin"] {
+        for path in [
+            "/etc", "/usr", "/var", "/bin", "/boot", "/lib", "/lib32", "/lib64", "/sbin", "/opt",
+            "/root", "/sys", "/proc",
+        ] {
             assert_deny(&format!("rm -rf {path}"));
             assert_deny(&format!("rm -rf {path}/something"));
         }
+    }
+
+    #[test]
+    fn allows_lookalike_system_paths() {
+        // Each target shares a prefix with a SYSTEM_ROOTS entry but is
+        // not itself a member or a `{root}/` subpath. The rule uses
+        // `arg.starts_with(format!("{root}/"))` for the prefix branch,
+        // so dropping the trailing `/` would falsely match these.
+        assert_allow("rm -rf /etcd");
+        assert_allow("rm -rf /var2");
+        assert_allow("rm -rf /usr-local");
+        assert_allow("rm -rf /root2");
+        assert_allow("rm -rf /procfs");
+        assert_allow("rm -rf /tmp");
+        assert_allow("rm -rf /home/user/projects");
+    }
+
+    #[test]
+    fn denies_when_one_of_multiple_targets_is_destructive() {
+        assert_deny("rm -rf ./safe /etc");
+        assert_deny("rm -rf /etc ./safe");
+        assert_deny("rm -rf ./a ./b /usr ./c");
+    }
+
+    #[test]
+    fn denies_home_targets_with_trailing_slash() {
+        assert_deny("rm -rf $HOME/");
+        assert_deny("rm -rf ${HOME}/");
     }
 
     #[test]
@@ -164,6 +218,35 @@ mod tests {
         assert_deny("rm -rfv /");
         assert_deny("rm -vrf /");
         assert_deny("rm --recursive --force /");
+        assert_deny("rm --force --recursive /");
+    }
+
+    #[test]
+    fn denies_separated_lowercase_short_flags() {
+        assert_deny("rm -r -f /");
+        assert_deny("rm -f -r /");
+    }
+
+    #[test]
+    fn denies_uppercase_recursive_flag() {
+        assert_deny("rm -Rf /");
+        assert_deny("rm -fR /");
+        assert_deny("rm -R -f /");
+        assert_deny("rm -f -R /");
+        assert_deny("rm -Rfv /etc");
+        assert_deny("rm -vRf /etc");
+        assert_deny("rm -fRv /");
+        assert_deny("rm -vfR /");
+    }
+
+    #[test]
+    fn denies_mixed_long_and_short_flags() {
+        assert_deny("rm --recursive -f /");
+        assert_deny("rm -r --force /");
+        assert_deny("rm --force -r /");
+        assert_deny("rm -R --force /usr");
+        assert_deny("rm -f --recursive /");
+        assert_deny("rm --force -R /");
     }
 
     #[test]
@@ -171,12 +254,16 @@ mod tests {
         assert_deny("echo go && rm -rf /");
         assert_deny("ls; rm -rf /etc");
         assert_deny("true || rm -rf /");
+        assert_deny("cat foo | rm -rf /");
+        assert_deny("rm -rf /etc | tee log");
     }
 
     #[test]
     fn denies_full_path_to_rm() {
         assert_deny("/bin/rm -rf /");
         assert_deny("/usr/bin/rm -rf /etc");
+        assert_deny("/bin/rm -Rf /");
+        assert_deny("/usr/bin/rm --recursive --force /");
     }
 
     #[test]
@@ -186,6 +273,17 @@ mod tests {
         assert_allow("rm -rf ./build");
         assert_allow("rm -rf $HOME/scratch/foo");
         assert_allow("rm -rf ~/projects/myrepo/target");
+        assert_allow("rm -Rf ./build");
+        assert_allow("rm --recursive --force ./build");
+    }
+
+    #[test]
+    fn allows_when_only_one_of_recursive_or_force_is_set() {
+        assert_allow("rm -R /etc");
+        assert_allow("rm -r /etc");
+        assert_allow("rm --recursive /etc");
+        assert_allow("rm -f /etc/passwd");
+        assert_allow("rm --force /etc/passwd");
     }
 
     #[test]
@@ -255,6 +353,44 @@ mod tests {
             };
             let input = bash(&cmd);
             prop_assert!(evaluate_for(&input).is_none());
+        }
+
+        // Positive space: any cartesian product of (rm head × recursive
+        // form × force form × destructive target × flag order) must
+        // produce a Deny. Guards against future helper refactors that
+        // silently lose coverage on a corner of the matrix.
+        #[test]
+        fn pbt_all_destructive_combinations_deny(
+            head_idx in 0usize..3,
+            rec_idx in 0usize..3,
+            force_idx in 0usize..2,
+            target in prop_oneof![
+                Just("/"),
+                Just("/*"),
+                Just("~"),
+                Just("~/"),
+                Just("$HOME"),
+                Just("/etc"),
+                Just("/usr/local-fake/junk"),
+                Just("/proc/sys"),
+                Just("/sbin"),
+            ],
+            rec_first in any::<bool>(),
+        ) {
+            let head = ["rm", "/bin/rm", "/usr/bin/rm"][head_idx];
+            let rec = ["-r", "-R", "--recursive"][rec_idx];
+            let force = ["-f", "--force"][force_idx];
+            let cmd = if rec_first {
+                format!("{head} {rec} {force} {target}")
+            } else {
+                format!("{head} {force} {rec} {target}")
+            };
+            let input = bash(&cmd);
+            let result = evaluate_for(&input);
+            prop_assert!(
+                matches!(&result, Some(Decision::Deny { rule_id, .. }) if rule_id == RULE_ID),
+                "expected deny for {cmd:?}, got {result:?}",
+            );
         }
     }
 }
