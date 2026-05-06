@@ -79,7 +79,11 @@ pub(crate) fn synthetic_deny_check() -> CheckOutcome {
         tool_input: json!({ "command": "rm -rf /" }),
     };
     let engine = Engine::with_components(Config::default(), PluginSet::new());
-    match engine.decide(&input).decision {
+    classify_synthetic_deny(engine.decide(&input).decision)
+}
+
+fn classify_synthetic_deny(decision: Decision) -> CheckOutcome {
+    match decision {
         Decision::Deny { rule_id, .. } if rule_id == SYNTHETIC_DENY_RULE => {
             CheckOutcome::Passed { rule_id }
         }
@@ -108,13 +112,18 @@ pub(crate) fn fail_closed_check() -> CheckOutcome {
     // failure before opening the sink, but disable it explicitly for
     // future-proofing.
     config.audit.enabled = false;
-    match Engine::with_config(config) {
-        Err(_) => CheckOutcome::Passed {
+    classify_fail_closed(Engine::with_config(config).is_err())
+}
+
+fn classify_fail_closed(load_failed: bool) -> CheckOutcome {
+    if load_failed {
+        CheckOutcome::Passed {
             rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
-        },
-        Ok(_) => CheckOutcome::Failed {
+        }
+    } else {
+        CheckOutcome::Failed {
             detail: "engine built successfully despite a missing plugin path".to_string(),
-        },
+        }
     }
 }
 
@@ -376,5 +385,68 @@ mod tests {
         let value = render_json(&outcome, &report, false);
         assert_eq!(value["installed"], false);
         assert_eq!(value["alreadyPresent"], true);
+    }
+
+    #[test]
+    fn classify_synthetic_deny_passes_for_canonical_rule() {
+        let outcome = classify_synthetic_deny(Decision::Deny {
+            rule_id: SYNTHETIC_DENY_RULE.into(),
+            reason: "x".into(),
+        });
+        assert_eq!(
+            outcome,
+            CheckOutcome::Passed {
+                rule_id: SYNTHETIC_DENY_RULE.into(),
+            }
+        );
+    }
+
+    #[test]
+    fn classify_synthetic_deny_fails_when_rule_id_differs() {
+        let outcome = classify_synthetic_deny(Decision::Deny {
+            rule_id: "core.other".into(),
+            reason: "x".into(),
+        });
+        match outcome {
+            CheckOutcome::Failed { detail } => {
+                assert!(detail.contains("unexpected rule_id=core.other"), "{detail}");
+                assert!(detail.contains(SYNTHETIC_DENY_RULE), "{detail}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_synthetic_deny_fails_for_non_deny_decision() {
+        let outcome = classify_synthetic_deny(Decision::Allow);
+        match outcome {
+            CheckOutcome::Failed { detail } => {
+                assert!(detail.contains("Allow"), "{detail}");
+                assert!(detail.contains(SYNTHETIC_DENY_RULE), "{detail}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_fail_closed_passes_when_engine_load_failed() {
+        let outcome = classify_fail_closed(true);
+        assert_eq!(
+            outcome,
+            CheckOutcome::Passed {
+                rule_id: POLICY_LOAD_FAILED_RULE.into(),
+            }
+        );
+    }
+
+    #[test]
+    fn classify_fail_closed_fails_when_engine_loaded_successfully() {
+        let outcome = classify_fail_closed(false);
+        match outcome {
+            CheckOutcome::Failed { detail } => {
+                assert!(detail.contains("missing plugin path"), "{detail}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
     }
 }

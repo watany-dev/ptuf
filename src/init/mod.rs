@@ -331,4 +331,78 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn write_atomically_returns_io_error_when_parent_is_a_regular_file() {
+        // Wedge `create_dir_all` into failure by giving the target a
+        // parent that is itself a regular file.
+        let dir = workdir("atomic-parent-is-file");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, b"i am a file").expect("write blocker");
+        let target = blocker.join("nested").join("file.json");
+
+        let err = write_atomically(&target, b"hello").expect_err("must fail");
+        match err {
+            InitError::Io { source, .. } => {
+                // Some platforms surface NotADirectory, others NotFound; both are fine.
+                let kind = source.kind();
+                assert!(
+                    kind == ErrorKind::NotADirectory
+                        || kind == ErrorKind::AlreadyExists
+                        || kind == ErrorKind::NotFound
+                        || kind == ErrorKind::Other,
+                    "unexpected error kind: {kind:?}",
+                );
+            }
+            other => panic!("expected Io error, got {other:?}"),
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn restore_propagates_first_error_when_atomic_write_fails() {
+        // Snapshot says the file existed (Some(...)), but the real
+        // filesystem now has a regular file where the parent directory
+        // should be — the restore can't write through it.
+        let dir = workdir("restore-error");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, b"blocker").expect("write blocker");
+        let bad_path = blocker.join("nested").join("settings.json");
+        let good_path = dir.join("good.json");
+        fs::write(&good_path, b"polluted").expect("write good");
+
+        let snaps = vec![
+            PathSnapshot {
+                path: bad_path.clone(),
+                previous: Some(b"original".to_vec()),
+            },
+            PathSnapshot {
+                path: good_path.clone(),
+                previous: Some(b"good-original".to_vec()),
+            },
+        ];
+        let err = restore(&snaps).expect_err("must surface error");
+        assert!(matches!(err, InitError::Io { .. }));
+        // Second snapshot is restored even though the first failed.
+        assert_eq!(fs::read(&good_path).unwrap(), b"good-original");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sibling_temp_path_falls_back_when_path_has_no_parent() {
+        // Bare filename: no parent and a usable file_name; we must get
+        // a path back (in the cwd) with the snapshot suffix appended.
+        let p = Path::new("just-a-name.json");
+        let tmp = sibling_temp_path(p);
+        let s = tmp.to_string_lossy();
+        assert!(s.starts_with("just-a-name.json"), "got {s}");
+        assert!(s.contains(".ptuf-snap."), "got {s}");
+        assert!(
+            tmp.parent()
+                .map(|p| p.as_os_str().is_empty())
+                .unwrap_or(true)
+        );
+    }
 }

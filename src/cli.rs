@@ -604,25 +604,16 @@ where
 {
     let resolved_path = match resolve_claude_settings_path(options) {
         Ok(p) => p,
-        Err(err) => {
-            let _ = writeln!(stderr, "ptuf: init failed: {err}");
-            return 1;
-        }
+        Err(err) => return fail_init(stderr, err),
     };
     let snaps = match init::capture(&[resolved_path.as_path()]) {
         Ok(s) => s,
-        Err(err) => {
-            let _ = writeln!(stderr, "ptuf: init failed: {err}");
-            return 1;
-        }
+        Err(err) => return fail_init(stderr, err),
     };
     let binary = init::claude_code::detect_binary();
     let outcome = match init::claude_code::install(&resolved_path, &binary, false) {
         Ok(o) => o,
-        Err(err) => {
-            let _ = writeln!(stderr, "ptuf: init failed: {err}");
-            return 1;
-        }
+        Err(err) => return fail_init(stderr, err),
     };
     finish_verify(
         VerifyContext {
@@ -655,26 +646,17 @@ where
         options.config_path.as_deref(),
     ) {
         Ok(t) => t,
-        Err(err) => {
-            let _ = writeln!(stderr, "ptuf: init failed: {err}");
-            return 1;
-        }
+        Err(err) => return fail_init(stderr, err),
     };
     let snaps = match init::capture(&[targets.hooks_path.as_path(), targets.config_path.as_path()])
     {
         Ok(s) => s,
-        Err(err) => {
-            let _ = writeln!(stderr, "ptuf: init failed: {err}");
-            return 1;
-        }
+        Err(err) => return fail_init(stderr, err),
     };
     let binary = init::codex::detect_binary();
     let outcome = match init::codex::install(&targets, &binary, false) {
         Ok(o) => o,
-        Err(err) => {
-            let _ = writeln!(stderr, "ptuf: init failed: {err}");
-            return 1;
-        }
+        Err(err) => return fail_init(stderr, err),
     };
     finish_verify(
         VerifyContext {
@@ -686,6 +668,11 @@ where
         stdout,
         stderr,
     )
+}
+
+fn fail_init<W: Write>(stderr: &mut W, err: impl std::fmt::Display) -> u8 {
+    let _ = writeln!(stderr, "ptuf: init failed: {err}");
+    1
 }
 
 struct VerifyContext<'a> {
@@ -1632,6 +1619,505 @@ rules:
             std::fs::read(&path).unwrap(),
             snapshot,
             "AlreadyPresent file content must be untouched after a verify failure",
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn passing_report() -> init::verify::VerifyReport {
+        init::verify::VerifyReport {
+            synthetic_deny: init::verify::CheckOutcome::Passed {
+                rule_id: "core.filesystem.destructive-rm".into(),
+            },
+            fail_closed: init::verify::CheckOutcome::Passed {
+                rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
+            },
+            warnings: Vec::new(),
+        }
+    }
+
+    fn failing_report() -> init::verify::VerifyReport {
+        init::verify::VerifyReport {
+            synthetic_deny: init::verify::CheckOutcome::Failed {
+                detail: "synthetic deny did not fire".into(),
+            },
+            fail_closed: init::verify::CheckOutcome::Passed {
+                rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
+            },
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn run_init_claude_verify_emits_json_when_requested() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-init-claude-json-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let options = ClaudeInitOptions {
+            settings_path: Some(path.clone()),
+            verify: true,
+            json: true,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_claude_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        let value: serde_json::Value =
+            serde_json::from_str(&stdout).expect("JSON branch must emit valid JSON");
+        assert_eq!(value["installed"], true);
+        assert_eq!(value["rolledBack"], false);
+        assert_eq!(value["verify"]["syntheticDeny"]["status"], "passed");
+        assert!(
+            !stdout.contains("Verify:"),
+            "JSON mode must not emit text section: {stdout}",
+        );
+        assert!(path.exists(), "JSON happy path must keep settings file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_codex_verify_passes_when_checks_succeed() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-init-codex-verify-ok-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks_path = dir.join("hooks.json");
+        let config_path = dir.join("config.toml");
+        let options = CodexInitOptions {
+            root: None,
+            hooks_path: Some(hooks_path.clone()),
+            config_path: Some(config_path.clone()),
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_codex_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("registered hook"), "stdout: {stdout}");
+        assert!(stdout.contains("Verify:"), "stdout: {stdout}");
+        assert!(
+            stdout.contains("Synthetic deny test: passed"),
+            "stdout: {stdout}",
+        );
+        assert!(hooks_path.exists());
+        assert!(config_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_codex_verify_rolls_back_both_paths_when_check_fails() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-init-codex-verify-rollback-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks_path = dir.join("hooks.json");
+        let config_path = dir.join("config.toml");
+        let options = CodexInitOptions {
+            root: None,
+            hooks_path: Some(hooks_path.clone()),
+            config_path: Some(config_path.clone()),
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_codex_verify(&options, failing_report, &mut out, &mut err);
+        assert_eq!(code, 1);
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("FAILED"), "stdout: {stdout}");
+        // Multi-snapshot rollback emits one line per restored path.
+        let rollback_lines = stdout.matches("rolled back changes to").count();
+        assert!(rollback_lines >= 2, "stdout: {stdout}");
+        assert!(
+            stdout.contains("verification failed; aborting"),
+            "stdout: {stdout}",
+        );
+        assert!(
+            !hooks_path.exists(),
+            "rollback must remove freshly-created hooks file"
+        );
+        assert!(
+            !config_path.exists(),
+            "rollback must remove freshly-created config file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_name_returns_codex_string() {
+        assert_eq!(HookAgent::Codex.audit_name(), "codex");
+        assert_eq!(HookAgent::ClaudeCode.audit_name(), "claude-code");
+    }
+
+    #[test]
+    fn parses_init_unknown_agent_surfaces_unknown_agent_error() {
+        let err = parse(&s(&["init", "gemini"])).unwrap_err();
+        assert!(matches!(err, ParseError::UnknownAgent(ref a) if a == "gemini"));
+    }
+
+    #[test]
+    fn parses_codex_init_alternative_flag_forms() {
+        // Complementary to parses_codex_init_flags: covers --hooks <value>
+        // (separate), --root=<value>, and --config=<value>.
+        let cmd = parse(&s(&[
+            "init",
+            "codex",
+            "--hooks",
+            "/tmp/hooks.json",
+            "--root=/repo",
+            "--config=/tmp/config.toml",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Codex(CodexInitOptions {
+                    root: Some(PathBuf::from("/repo")),
+                    hooks_path: Some(PathBuf::from("/tmp/hooks.json")),
+                    config_path: Some(PathBuf::from("/tmp/config.toml")),
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_eval_rejects_extra_positional_after_command() {
+        let err = parse(&s(&["eval", "--tool", "Bash", "first", "second"])).unwrap_err();
+        assert!(matches!(err, ParseError::UnexpectedArgument(ref a) if a == "second"));
+    }
+
+    #[test]
+    fn run_help_writes_help_text() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(Command::Help, b"" as &[u8], &mut out, &mut err);
+        assert_eq!(code, 0);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn run_version_writes_version_string() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(Command::Version, b"" as &[u8], &mut out, &mut err);
+        assert_eq!(code, 0);
+        assert!(String::from_utf8_lossy(&out).starts_with("ptuf "));
+    }
+
+    #[test]
+    fn adapt_hook_decision_codex_converts_ask_to_deny() {
+        let d = adapt_hook_decision(
+            HookAgent::Codex,
+            &Decision::Ask {
+                rule_id: "x".into(),
+                reason: "y".into(),
+            },
+        );
+        match d {
+            Decision::Deny { rule_id, .. } => assert_eq!(rule_id, "x"),
+            other => panic!("expected Deny, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn adapt_hook_decision_claude_passes_ask_through_unchanged() {
+        let original = Decision::Ask {
+            rule_id: "x".into(),
+            reason: "y".into(),
+        };
+        let adapted = adapt_hook_decision(HookAgent::ClaudeCode, &original);
+        assert_eq!(adapted, original);
+    }
+
+    #[test]
+    fn decision_exit_code_codex_ask_returns_two() {
+        let d = Decision::Ask {
+            rule_id: "x".into(),
+            reason: "y".into(),
+        };
+        assert_eq!(decision_exit_code(HookAgent::Codex, &d), 2);
+        assert_eq!(decision_exit_code(HookAgent::ClaudeCode, &d), 0);
+    }
+
+    #[test]
+    fn decision_label_covers_every_decision_variant() {
+        assert_eq!(decision_label(&Decision::Allow), "allow");
+        assert_eq!(
+            decision_label(&Decision::Monitor {
+                rule_id: "x".into(),
+            }),
+            "monitor"
+        );
+        assert_eq!(
+            decision_label(&Decision::Ask {
+                rule_id: "x".into(),
+                reason: "y".into(),
+            }),
+            "ask"
+        );
+        assert_eq!(
+            decision_label(&Decision::Deny {
+                rule_id: "x".into(),
+                reason: "y".into(),
+            }),
+            "deny"
+        );
+    }
+
+    fn fail_closed_cwd(tag: &str) -> (PathBuf, FailClosedGuard) {
+        let dir = std::env::temp_dir().join(format!("ptuf-cli-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(
+            dir.join(".ptuf.yaml"),
+            "plugins:\n  - path: ./does-not-exist.yaml\n",
+        )
+        .unwrap();
+        let original = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(&dir).expect("set_current_dir");
+        (dir, FailClosedGuard(original))
+    }
+
+    struct FailClosedGuard(PathBuf);
+    impl Drop for FailClosedGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    #[test]
+    fn run_hook_fails_closed_when_policy_load_fails() {
+        let (dir, _guard) = fail_closed_cwd("hook-failclosed");
+        let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::HookPreToolUse {
+                agent: HookAgent::ClaudeCode,
+            },
+            payload.as_bytes(),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 2, "fail-closed must exit 2");
+        let stderr = String::from_utf8_lossy(&err);
+        assert!(stderr.contains("could not load policy"), "stderr: {stderr}");
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(
+            stdout.contains("\"permissionDecision\":\"deny\""),
+            "stdout must show deny: {stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_eval_fails_closed_when_policy_load_fails() {
+        let (dir, _guard) = fail_closed_cwd("eval-failclosed");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Eval {
+                tool: "Bash".into(),
+                command: "ls".into(),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 2, "fail-closed must exit 2");
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("Decision: deny"), "stdout: {stdout}");
+        assert!(stdout.contains(POLICY_LOAD_FAILED_RULE), "stdout: {stdout}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_engine_or_fail_closed_returns_deny_when_policy_invalid() {
+        let (dir, _guard) = fail_closed_cwd("failclosed");
+        let mut err = Vec::new();
+        let result = build_engine_or_fail_closed(&mut err, "claude-code");
+        let deny = result.err().expect("expected fail-closed Deny");
+        match deny {
+            Decision::Deny { rule_id, .. } => assert_eq!(rule_id, POLICY_LOAD_FAILED_RULE),
+            other => panic!("expected Deny, got {other:?}"),
+        }
+        assert!(
+            String::from_utf8_lossy(&err).contains("could not load policy"),
+            "stderr did not include reason: {}",
+            String::from_utf8_lossy(&err)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_dispatches_to_claude_verify_when_verify_flag_set() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-run-claude-verify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::ClaudeCode(ClaudeInitOptions {
+                    settings_path: Some(path.clone()),
+                    verify: true,
+                    json: false,
+                }),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(
+            stdout.contains("Synthetic deny test: passed"),
+            "stdout: {stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_dispatches_to_codex_verify_when_verify_flag_set() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-run-codex-verify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks = dir.join("hooks.json");
+        let cfg = dir.join("config.toml");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Codex(CodexInitOptions {
+                    root: None,
+                    hooks_path: Some(hooks.clone()),
+                    config_path: Some(cfg.clone()),
+                    verify: true,
+                    json: false,
+                }),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(
+            stdout.contains("Synthetic deny test: passed"),
+            "stdout: {stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_claude_verify_reports_error_when_settings_path_is_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-claude-verify-baddir-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let options = ClaudeInitOptions {
+            settings_path: Some(dir.clone()),
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_claude_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 1, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&err).contains("init failed"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_codex_verify_reports_error_when_hooks_path_is_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-codex-verify-baddir-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Hooks path is a directory: the snapshot capture (or read_hooks)
+        // must surface an Io error before verify executes.
+        let bad_hooks = dir.join("hooks-as-dir");
+        std::fs::create_dir_all(&bad_hooks).unwrap();
+        let options = CodexInitOptions {
+            root: None,
+            hooks_path: Some(bad_hooks),
+            config_path: Some(dir.join("config.toml")),
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_codex_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 1, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&err).contains("init failed"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn finish_verify_logs_rollback_failure_when_restore_errors() {
+        // Wedge restore into failure: snapshot says the file existed,
+        // but the parent directory we'd have to write through is itself
+        // a regular file.
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-finish-verify-rollback-err-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, b"i am a file").unwrap();
+        let bad_path = blocker.join("nested").join("settings.json");
+
+        let snaps = vec![init::PathSnapshot {
+            path: bad_path,
+            previous: Some(b"original".to_vec()),
+        }];
+        let outcome = init::InstallOutcome {
+            status: init::InstallStatus::Installed,
+            agent: "claude-code",
+            paths: vec![init::InstallPath {
+                label: "settings",
+                path: dir.join("settings.json"),
+            }],
+            matcher: "Bash".into(),
+            command: "ptuf hook claude-code".into(),
+        };
+        let ctx = VerifyContext {
+            outcome: &outcome,
+            snaps: &snaps,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = finish_verify(ctx, failing_report, &mut out, &mut err);
+        assert_eq!(code, 1);
+        let stderr = String::from_utf8_lossy(&err);
+        assert!(stderr.contains("rollback failed"), "stderr: {stderr}");
+        let stdout = String::from_utf8_lossy(&out);
+        // Rollback failed, so the "rolled back changes to" line is NOT emitted.
+        assert!(
+            !stdout.contains("rolled back changes to"),
+            "stdout: {stdout}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
