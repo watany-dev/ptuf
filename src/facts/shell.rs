@@ -338,7 +338,7 @@ fn parse_argv(words: Vec<String>) -> Argv {
     Argv {
         env_assignments,
         head,
-        args: words.into_iter().collect(),
+        args: words.into(),
     }
 }
 
