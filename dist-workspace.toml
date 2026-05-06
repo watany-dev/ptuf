@@ -17,6 +17,12 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# `release.yml` is hand-patched (SHA-pinned actions, scoped permissions,
+# template-injection fixes, concurrency block) to satisfy zizmor auditor
+# findings. Tell cargo-dist to skip the regeneration check on the CI file.
+# Re-run `dist init` and re-apply the hardening patches when bumping
+# cargo-dist-version.
+allow-dirty = ["ci"]
 
 # Linux build profile uses `lld` (see .cargo/config.toml). Install it on the
 # CI runner so x86_64-unknown-linux-gnu builds succeed.
