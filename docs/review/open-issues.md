@@ -2,7 +2,7 @@
 
 `docs/review/archive/2026-05-05/{redesign,design-debt}.md` のレビューから、
 **現時点 (`v0.0.1` HEAD) でも未解決の指摘のみ** を抜粋して整理する。
-解決済みの 5 件 (D1 / D2 / D3 / D6 / D7) は
+解決済みの 6 件 (D1 / D2 / D3 / D6 / D7 / §3.2) は
 [archive/2026-05-05/README.md](archive/2026-05-05/README.md) を参照。
 
 各項目には次を付ける:
@@ -15,8 +15,6 @@
 
 | 出典 | 内容 | コード参照 | 優先度 |
 | --- | --- | --- | --- |
-| §3.1 | `matches_clean_fdx` の長フラグ判定がデッドコード。`long_flags` は `--` 始まりに絞っているのに `has_long_d` / `has_long_x` が短フラグ (`-d` / `-x`) を探すため常に false。`git clean -f -d -x` の空白区切り形式を見逃す | `src/rules/git.rs:303-306` | P0 |
-| §3.2 | `unwrap_sudo` が `-u <user>` の値を head と誤認する。`sudo -u root git push --force` で全 git rule を bypass 可能 | `src/rules/git.rs:94-106` | P0 |
 | §3.3 | `read_word` のクオート意味論が ad hoc。backtick 中身を pessimistic に扱うか、内部コマンドとして再パースするか方針未確定 | `src/facts/shell.rs` | P1 |
 | §3.5 | `lone_ampersand_does_not_loop` テストはパーサ無限ループ修正の痕跡。`read_word` が必ず最低 1 byte 進む不変条件を `debug_assert!` 等で明示すべき | `src/facts/shell.rs:460-470` | P2 |
 
@@ -76,7 +74,6 @@ shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/archite
 
 | 出典 | 内容 | コード参照 | 優先度 |
 | --- | --- | --- | --- |
-| §5.2 | `stdin.read_to_string` に上限なし。GB 単位の入力でも全部メモリへ。`take(MAX_BYTES)` で上限を入れる | `src/cli.rs:348` | P1 |
 | §5.3 | audit JSONL の `write_all` ループで PIPE_BUF (Linux 4096) を超える行が分割書き込みになる。複数 process 同時 audit で行が混ざる。`flock` か `writev` 1 syscall に倒す | `src/audit/writer.rs:55-61` | P1 |
 | §5.5 | redaction が新形式 token を未対応 (`github_pat_*`, `xox[abp]-*`, `sk_live_*`, GCP service account JSON)。「キーワード周辺の値を redact」の 2 段アプローチに切り替えると将来の漏洩源を広く塞げる | `src/audit/redaction.rs:38-60` | P1 |
 | §5.1 | 自前 CLI parser が 1352 行に成長 (レビュー時 1141 行)。clap derive で 1/3〜1/4 に減る。`--json` のような中途半端な未実装フラグを `#[arg(skip)]` で明示できる | `src/cli.rs` | P2 |

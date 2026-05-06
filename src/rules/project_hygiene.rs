@@ -22,7 +22,7 @@
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
 use crate::facts::project::LockKind;
-use crate::facts::shell::Argv;
+use crate::facts::shell::{Argv, unwrap_sudo};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -240,20 +240,34 @@ fn invokes_destructive_git(argv: &Argv) -> bool {
 }
 
 fn has_clean_fdx(rest: &[&str]) -> bool {
-    let long_flags: Vec<&&str> = rest.iter().filter(|a| a.starts_with("--")).collect();
-    let has_long_force = long_flags.iter().any(|a| ***a == *"--force");
-    let has_long_d = long_flags.iter().any(|a| ***a == *"-d");
-    let has_long_x = long_flags.iter().any(|a| ***a == *"-x" || ***a == *"-X");
-    if has_long_force && has_long_d && has_long_x {
-        return true;
-    }
-    rest.iter().any(|a| {
-        if !a.starts_with('-') || a.starts_with("--") {
-            return false;
+    let mut has_force = false;
+    let mut has_dir = false;
+    let mut has_ignored = false;
+    let mut has_dry_run = false;
+
+    for arg in rest {
+        if *arg == "--force" {
+            has_force = true;
+            continue;
         }
-        let body = &a[1..];
-        body.contains('f') && body.contains('d') && (body.contains('x') || body.contains('X'))
-    })
+        if arg.starts_with("--") {
+            continue;
+        }
+        let Some(body) = arg.strip_prefix('-') else {
+            continue;
+        };
+        for flag in body.chars() {
+            if flag == 'e' {
+                break;
+            }
+            has_force |= flag == 'f';
+            has_dir |= flag == 'd';
+            has_ignored |= flag == 'x' || flag == 'X';
+            has_dry_run |= flag == 'n';
+        }
+    }
+
+    has_force && has_dir && has_ignored && !has_dry_run
 }
 
 fn is_install_subcommand(argv: &Argv, accepted: &[&str]) -> bool {
@@ -268,20 +282,6 @@ fn first_positional(argv: &Argv) -> Option<&str> {
         .iter()
         .find(|a| !a.starts_with('-'))
         .map(String::as_str)
-}
-
-fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
-    if argv.head != "sudo" {
-        return None;
-    }
-    let mut iter = argv.args.iter().skip_while(|a| a.starts_with('-'));
-    let head = iter.next()?.to_string();
-    let rest: Vec<String> = iter.cloned().collect();
-    Some(Argv {
-        env_assignments: Vec::new(),
-        head,
-        args: rest,
-    })
 }
 
 #[cfg(test)]
@@ -443,8 +443,38 @@ mod tests {
     }
 
     #[test]
+    fn protected_git_denies_reset_hard_via_sudo_user_option() {
+        let input = bash("sudo -u root git reset --hard HEAD~1");
+        let facts = facts_with_project(&input, protected_branch());
+        assert!(matches!(
+            ProtectedBranchDestructiveGit.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
+    }
+
+    #[test]
     fn protected_git_denies_clean_fdx_on_protected_branch() {
         let input = bash("git clean -fdx");
+        let facts = facts_with_project(&input, protected_branch());
+        assert!(matches!(
+            ProtectedBranchDestructiveGit.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
+    }
+
+    #[test]
+    fn protected_git_denies_split_clean_fdx_on_protected_branch() {
+        let input = bash("git clean -f -d -x");
+        let facts = facts_with_project(&input, protected_branch());
+        assert!(matches!(
+            ProtectedBranchDestructiveGit.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
+    }
+
+    #[test]
+    fn protected_git_denies_clean_fdx_with_exclude_pattern_containing_n() {
+        let input = bash("git clean -fdx -enode_modules");
         let facts = facts_with_project(&input, protected_branch());
         assert!(matches!(
             ProtectedBranchDestructiveGit.evaluate(&facts, &input),

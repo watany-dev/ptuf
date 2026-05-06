@@ -61,6 +61,12 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 | `core.git.env-bypass` | deny | false | high |
 
 末尾 4 rule は hook / signing / fsck bypass を block するためのもの。
+`sudo` 経由の git 実行も同じ matcher に通す。`sudo -u root git ...` や
+`sudo --user=root git ...` のような value-taking sudo option は、option 値を
+command head と誤認しないように unwrap してから評価する。
+`core.git.clean-fdx` は `git clean -fdx` だけでなく、`git clean -f -d -x` や
+`git clean --force -d -x` のように分割された flag も検出する。`-n` dry-run は
+発火しない。
 
 ## `core.self_protection`
 
@@ -83,7 +89,7 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 | --- | --- | --- | --- | --- |
 | `core.project_hygiene.lock-mismatch-pnpm` | deny | false | high | `pnpm-lock.yaml` がある repo で `npm` / `yarn` install 系 |
 | `core.project_hygiene.lock-mismatch-uv` | deny | false | high | `uv.lock` がある repo で素の `pip install` |
-| `core.project_hygiene.protected-branch-destructive-git` | deny | false | high | protected branch 上で `git reset --hard`, `git clean -fdx`, `git branch -D`, `git stash clear` |
+| `core.project_hygiene.protected-branch-destructive-git` | deny | false | high | protected branch 上で `git reset --hard`, `git clean -fdx` / `git clean -f -d -x`, `git branch -D`, `git stash clear` |
 
 `protected-branch-destructive-git` は aggregate の優先順位により、同操作に対する
 `core.git.*` の `Ask` を `Deny` で上書きする。

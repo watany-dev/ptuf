@@ -34,6 +34,9 @@ ptuf doctor
 
 Codex では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
 
+`ptuf hook <agent>` の stdin payload は最大 8 MiB。上限を超えた場合は JSON parse
+に進まず exit `1` とし、stderr に size limit error を出す。
+
 ## Claude Code への登録
 
 `ptuf init claude-code` は `~/.claude/settings.json` に hook を追加する。

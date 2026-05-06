@@ -61,6 +61,7 @@ cargo install ptuf
 ### From source
 
 ```bash
+make build
 cargo install --path .
 ```
 
@@ -107,7 +108,8 @@ Codex behavior:
 - `Deny` — exit `2`, `hookSpecificOutput.permissionDecision = "deny"`
 
 For both adapters, the human-readable reason is also written to stderr for
-`Ask` or `Deny`.
+`Ask` or `Deny`. Hook stdin payloads are capped at 8 MiB; larger payloads exit
+`1` with a stderr error before JSON parsing.
 
 ## Claude Code
 

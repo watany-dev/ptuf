@@ -29,10 +29,12 @@
 | D3 | audit の default 契約が README / design と実装で割れている | `AuditConfig::default()` は `enabled: true` で、`default_audit_path()` が `~/.local/share/ptuf/audit.jsonl` を返す。`audit.enabled: false` で opt-out できる (`src/config/mod.rs:139-174`) |
 | D6 | MCP fact 抽出が top-level だけで `files[].path` を保護できない | `Facts.paths: Vec<FilePath>` と `path::extract_all` が `path` / `paths[]` / `files[].path` の nested 抽出に対応 (`src/facts/path.rs:53-107`, テスト `src/facts/path.rs:315-378`) |
 | D7 | config schema が rule-level decision / severity override を表現できない | `RawRuleOverride { enabled, decision, severity }` を実装し、`RuleOverride` として merge される (`src/config/schema.rs:91-111`, `src/config/mod.rs:104-110`) |
+| §3.2 | `sudo -u <user>` の値を git command head と誤認して git rule をバイパスできる | sudo unwrap を `facts::shell::unwrap_sudo` に共通化し、value-taking sudo option (`-u root`, `-uroot`, `--user root`, `--user=root` など) を skip してから `core.git` / `core.project_hygiene` に評価させる (`src/facts/shell.rs:72-125`, `src/rules/git.rs`, `src/rules/project_hygiene.rs`) |
+| §3.1 | `git clean -f -d -x` の空白区切り短フラグを見逃す | `core.git` と `core.project_hygiene` の `git clean` 判定が short flags を引数横断で集計し、`--force -d -x` も検出する。dry-run `-n` は引き続き許可する (`src/rules/git.rs`, `src/rules/project_hygiene.rs`) |
 
-その他の項目 (parser 限界、git rule バイパス、redaction 網羅性、
-audit atomicity、CLI parser サイズ、モジュール肥大化、契約 fixture
-不在など) は `../../open-issues.md` で現状コード参照付きに整理した。
+その他の項目 (parser 限界、redaction 網羅性、audit atomicity、CLI parser
+サイズ、モジュール肥大化、契約 fixture 不在など) は
+`../../open-issues.md` で現状コード参照付きに整理した。
 
 ## 元 commit / 環境
 

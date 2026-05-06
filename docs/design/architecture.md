@@ -94,6 +94,8 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 }
 ```
 
+stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit `1`。
+
 出力:
 
 | コマンド | stdout | stderr | exit |
@@ -117,6 +119,7 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 
 - argv parse 失敗
 - stdin 読み取り失敗
+- stdin payload 上限超過
 - JSON parse 失敗
 - policy / plugin load 失敗時の hook response 生成失敗
 - `doctor` / `plugin test` の内部エラー

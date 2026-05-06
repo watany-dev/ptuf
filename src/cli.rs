@@ -12,6 +12,7 @@ use crate::plugin::runner as plugin_runner;
 /// and the CLI must fail-closed
 /// (`docs/design/cli-and-hooks.md:104-114`).
 pub(crate) const POLICY_LOAD_FAILED_RULE: &str = "core.engine.policy-load-failed";
+const MAX_HOOK_STDIN_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookAgent {
@@ -340,13 +341,24 @@ pub fn run<R: Read, W1: Write, W2: Write>(
 
 fn run_hook<R: Read, W1: Write, W2: Write>(
     agent: HookAgent,
-    mut stdin: R,
+    stdin: R,
     stdout: &mut W1,
     stderr: &mut W2,
 ) -> u8 {
     let mut buf = String::new();
-    if stdin.read_to_string(&mut buf).is_err() {
+    if stdin
+        .take(MAX_HOOK_STDIN_BYTES + 1)
+        .read_to_string(&mut buf)
+        .is_err()
+    {
         let _ = writeln!(stderr, "ptuf: failed to read stdin");
+        return 1;
+    }
+    if buf.len() as u64 > MAX_HOOK_STDIN_BYTES {
+        let _ = writeln!(
+            stderr,
+            "ptuf: hook payload exceeds {MAX_HOOK_STDIN_BYTES} bytes"
+        );
         return 1;
     }
     let input: HookInput = match serde_json::from_str(&buf) {
@@ -1299,6 +1311,24 @@ rules:
         assert_eq!(code, 1);
         assert!(out.is_empty());
         assert!(String::from_utf8_lossy(&err).contains("failed to read stdin"));
+    }
+
+    #[test]
+    fn run_hook_returns_one_when_stdin_payload_is_too_large() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let payload = vec![b' '; MAX_HOOK_STDIN_BYTES as usize + 1];
+        let code = run(
+            Command::HookPreToolUse {
+                agent: HookAgent::ClaudeCode,
+            },
+            payload.as_slice(),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 1);
+        assert!(out.is_empty());
+        assert!(String::from_utf8_lossy(&err).contains("hook payload exceeds 8388608 bytes"));
     }
 
     #[test]

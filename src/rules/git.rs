@@ -7,7 +7,7 @@
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::Argv;
+use crate::facts::shell::{Argv, unwrap_sudo};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -89,20 +89,6 @@ fn invokes_matcher(argv: &Argv, matcher: fn(&Argv) -> bool) -> bool {
         return matcher(&unwrapped);
     }
     false
-}
-
-fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
-    if argv.head != "sudo" {
-        return None;
-    }
-    let mut iter = argv.args.iter().skip_while(|a| a.starts_with('-'));
-    let head = iter.next()?.to_string();
-    let rest: Vec<String> = iter.cloned().collect();
-    Some(Argv {
-        env_assignments: Vec::new(),
-        head,
-        args: rest,
-    })
 }
 
 const GIT_HEADS: &[&str] = &["git", "/usr/bin/git", "/usr/local/bin/git"];
@@ -300,20 +286,34 @@ fn matches_clean_fdx(argv: &Argv) -> bool {
         return false;
     }
     let rest = args_after_subcommand(argv, "clean");
-    let long_flags: Vec<&&str> = rest.iter().filter(|a| a.starts_with("--")).collect();
-    let has_long_force = long_flags.iter().any(|a| ***a == *"--force");
-    let has_long_d = long_flags.iter().any(|a| ***a == *"-d");
-    let has_long_x = long_flags.iter().any(|a| ***a == *"-x" || ***a == *"-X");
-    if has_long_force && has_long_d && has_long_x {
-        return true;
-    }
-    rest.iter().any(|a| {
-        if !a.starts_with('-') || a.starts_with("--") {
-            return false;
+    let mut has_force = false;
+    let mut has_dir = false;
+    let mut has_ignored = false;
+    let mut has_dry_run = false;
+
+    for arg in rest {
+        if arg == "--force" {
+            has_force = true;
+            continue;
         }
-        let body = &a[1..];
-        body.contains('f') && body.contains('d') && (body.contains('x') || body.contains('X'))
-    })
+        if arg.starts_with("--") {
+            continue;
+        }
+        let Some(body) = arg.strip_prefix('-') else {
+            continue;
+        };
+        for flag in body.chars() {
+            if flag == 'e' {
+                break;
+            }
+            has_force |= flag == 'f';
+            has_dir |= flag == 'd';
+            has_ignored |= flag == 'x' || flag == 'X';
+            has_dry_run |= flag == 'n';
+        }
+    }
+
+    has_force && has_dir && has_ignored && !has_dry_run
 }
 
 fn matches_branch_delete_force(argv: &Argv) -> bool {
@@ -669,6 +669,19 @@ mod tests {
     }
 
     #[test]
+    fn force_push_denies_via_sudo_user_option() {
+        for cmd in [
+            "sudo -u root git push --force origin main",
+            "sudo -uroot git push --force origin main",
+            "sudo --user root git push --force origin main",
+            "sudo --user=root git push --force origin main",
+            "sudo -E -u root -- git push --force origin main",
+        ] {
+            assert_decision(&FORCE_PUSH_RULE, cmd, DecisionKind::Deny);
+        }
+    }
+
+    #[test]
     fn force_push_does_not_fire_for_lease_variant() {
         assert_allow(&FORCE_PUSH_RULE, "git push --force-with-lease origin main");
     }
@@ -765,6 +778,31 @@ mod tests {
     }
 
     #[test]
+    fn clean_asks_split_short_flags() {
+        assert_decision(&CLEAN_FDX_RULE, "git clean -f -d -x", DecisionKind::Ask);
+        assert_decision(&CLEAN_FDX_RULE, "git clean -f -d -X", DecisionKind::Ask);
+        assert_decision(
+            &CLEAN_FDX_RULE,
+            "git clean --force -d -x",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn clean_asks_when_exclude_pattern_contains_n() {
+        assert_decision(
+            &CLEAN_FDX_RULE,
+            "git clean -fdx -enode_modules",
+            DecisionKind::Ask,
+        );
+        assert_decision(
+            &CLEAN_FDX_RULE,
+            "git clean -fdx -e node_modules",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
     fn clean_asks_via_sudo() {
         assert_decision(&CLEAN_FDX_RULE, "sudo git clean -fdx", DecisionKind::Ask);
     }
@@ -773,6 +811,7 @@ mod tests {
     fn clean_allows_dry_run() {
         assert_allow(&CLEAN_FDX_RULE, "git clean -ndx");
         assert_allow(&CLEAN_FDX_RULE, "git clean -nd");
+        assert_allow(&CLEAN_FDX_RULE, "git clean -n -d -x");
     }
 
     #[test]
@@ -1249,11 +1288,7 @@ mod tests {
             head: "sudo".into(),
             args: vec!["-u".into(), "alice".into()],
         };
-        // Even when only flags + a value remain, the function takes the
-        // first non-flag token (`alice`) as the head. We just exercise
-        // the path; behaviour-wise nothing matches a non-git head.
-        let unwrapped = unwrap_sudo(&argv).expect("non-empty positional");
-        assert_eq!(unwrapped.head, "alice");
+        assert_eq!(unwrap_sudo(&argv), None);
     }
 
     #[test]
