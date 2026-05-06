@@ -4,10 +4,11 @@
 //!
 //! The strategy is conservative: parse the existing settings as a
 //! `serde_json::Value` so unknown keys round-trip, look for any
-//! `hooks.PreToolUse[].hooks[].command` whose tail matches our hook
-//! invocation, and only append a new matcher entry when no such hook
-//! already exists. Writes go through an atomic temp + rename so a
-//! crash can never leave a half-written `settings.json`.
+//! `hooks.PreToolUse[].hooks[]` payload carrying ptuf's stable marker
+//! (or an older command tail-only entry), and only append a new matcher
+//! entry when no such hook already exists. Writes go through an atomic
+//! temp + rename so a crash can never leave a half-written
+//! `settings.json`.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -20,6 +21,10 @@ use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 /// Matcher we install in the new entry — covers every tool ptuf can
 /// actually evaluate plus all MCP tools.
 pub const DEFAULT_MATCHER: &str = "Bash|Read|Edit|Write|WebFetch|mcp__.*";
+
+/// Stable marker written into hook payloads so future command-line flag
+/// changes do not affect idempotency detection.
+pub(crate) const HOOK_NAME: &str = "ptuf";
 
 /// Trailing tokens (split on whitespace) that mark a `command` field
 /// as a ptuf PreToolUse hook. We compare token-by-token instead of
@@ -112,9 +117,15 @@ fn read_settings(path: &Path) -> Result<Value, InitError> {
 }
 
 fn has_existing_hook(root: &Value) -> bool {
-    pre_tool_use_commands(root)
-        .iter()
-        .any(|cmd| command_invokes_ptuf_hook(cmd))
+    pre_tool_use_hooks(root).into_iter().any(hook_invokes_ptuf)
+}
+
+fn hook_invokes_ptuf(hook: &Value) -> bool {
+    hook.get("name").and_then(Value::as_str) == Some(HOOK_NAME)
+        || hook
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(command_invokes_ptuf_hook)
 }
 
 pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
@@ -131,27 +142,37 @@ pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
 }
 
 pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
+    pre_tool_use_hooks(root)
+        .iter()
+        .filter_map(|hook| hook.get("command").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+pub(crate) fn pre_tool_use_hooks(root: &Value) -> Vec<&Value> {
     let Some(arr) = root.pointer("/hooks/PreToolUse").and_then(Value::as_array) else {
         return Vec::new();
     };
-    let mut commands = Vec::new();
+    let mut hooks = Vec::new();
     for entry in arr {
-        commands.extend(entry_commands(entry));
+        hooks.extend(entry_hooks(entry));
     }
-    commands
+    hooks
 }
 
 pub(crate) fn entry_commands(entry: &Value) -> Vec<String> {
+    entry_hooks(entry)
+        .into_iter()
+        .filter_map(|hook| hook.get("command").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+pub(crate) fn entry_hooks(entry: &Value) -> Vec<&Value> {
     let Some(hooks) = entry.get("hooks").and_then(Value::as_array) else {
         return Vec::new();
     };
-    let mut commands = Vec::new();
-    for hook in hooks {
-        if let Some(cmd) = hook.get("command").and_then(Value::as_str) {
-            commands.push(cmd.to_string());
-        }
-    }
-    commands
+    hooks.iter().collect()
 }
 
 fn append_hook(root: &mut Value, settings_path: &Path, command: &str) -> Result<(), InitError> {
@@ -186,6 +207,7 @@ fn append_hook(root: &mut Value, settings_path: &Path, command: &str) -> Result<
     pre_tool_use.push(json!({
         "matcher": DEFAULT_MATCHER,
         "hooks": [{
+            "name": HOOK_NAME,
             "type": "command",
             "command": command,
         }],
@@ -263,6 +285,7 @@ mod tests {
         let body = read(&path);
         assert!(body.contains("\"PreToolUse\""));
         assert!(body.contains(DEFAULT_MATCHER));
+        assert!(body.contains("\"name\": \"ptuf\""));
         assert!(body.contains("/usr/local/bin/ptuf hook claude-code"));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -278,6 +301,34 @@ mod tests {
                         "matcher": "Bash",
                         "hooks": [
                             { "type": "command", "command": "/some/where/ptuf hook claude-code" }
+                        ]
+                    }
+                ]
+            }
+        });
+        fs::write(&path, serde_json::to_string_pretty(&preset).unwrap()).unwrap();
+        let before = read(&path);
+        let outcome = install(&path, "/different/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::AlreadyPresent);
+        assert_eq!(before, read(&path), "file must not have been rewritten");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_is_idempotent_when_ptuf_marker_exists() {
+        let dir = workdir("idempotent-marker");
+        let path = dir.join("settings.json");
+        let preset = json!({
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "name": HOOK_NAME,
+                                "type": "command",
+                                "command": "/some/where/ptuf hook claude-code --future-flag"
+                            }
                         ]
                     }
                 ]

@@ -49,6 +49,7 @@ Codex では `Ask` を `Deny` へ変換するため、実際には exit `2` に�
         "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*",
         "hooks": [
           {
+            "name": "ptuf",
             "type": "command",
             "command": "/usr/local/bin/ptuf hook claude-code"
           }
@@ -62,7 +63,8 @@ Codex では `Ask` を `Deny` へ変換するため、実際には exit `2` に�
 実装上の契約:
 
 - 既存 JSON の未知キーは保持する
-- 既存 entry の検出は command 末尾 `hook claude-code` で行う
+- 既存 entry の検出は hook payload の `name: "ptuf"` marker で行う
+- 旧形式との互換性のため、command 末尾 `hook claude-code` も検出する
 - binary の絶対パス差異は無視する
 - 書き込みは temp file + rename の原子的更新
 - `--settings <PATH>` で対象を差し替えられる

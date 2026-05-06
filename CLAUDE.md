@@ -15,7 +15,7 @@
 (fmt-check / clippy / test / `cargo doc` / cargo-deny) を実行する。手順の
 詳細は README "Develop" と `Makefile` を参照。
 
-`make pbt` (`PROPTEST_CASES=10000 cargo test`) はリリース直前の深掘り PBT 用。
+`make pbt` (`PROPTEST_CASES=10000 cargo test --features testing`) はリリース直前の深掘り PBT 用。
 
 ## アーキテクチャ規約
 

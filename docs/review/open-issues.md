@@ -23,8 +23,8 @@ opaque な flag surface として扱う点に限定される。
 
 | 状態 | 項目 |
 | --- | --- |
-| Resolved in current HEAD | §2 / D4 parser wrapper・redirect 系、D10 adapter 分離、D12 contract test 拡充 |
-| Still open | §1.3 / §4.1 / §4.3 / §4.4 / §4.5 data model・alloc、§5.1 / §5.4 CLI・I/O、§1.1 / §1.2 / D11 engine 構造、§6.1 test strategy 重複 |
+| Resolved in current HEAD | §2 / D4 parser wrapper・redirect 系、D10 adapter 分離、D12 contract test 拡充、§5.4 Claude Code hook stable marker、§6.1 proptest strategy feature gate |
+| Still open | §1.3 / §4.1 / §4.3 / §4.4 / §4.5 data model・alloc、§5.1 CLI parser、§1.1 / §1.2 / D11 engine 構造 |
 | Deferred design choice | §6.2 coverage 95% 方針転換候補 |
 
 ## 1. Concrete bugs (P0)
@@ -72,7 +72,11 @@ inspect できるようになった。adapter 層は `RawHookInput` と normaliz
 | 出典 | 内容 | コード参照 | 優先度 |
 | --- | --- | --- | --- |
 | §5.1 | 自前 CLI parser が 1394 行に成長 (レビュー時 1141 行)。`doctor --json` は実装済みなので未実装フラグ例から外す。残課題は parser が大きく、clap derive 等へ移行する余地がある点 | `src/cli.rs:1-1394` | P2 |
-| §5.4 | `init/claude_code.rs` の hook 重複検出が tail token 一致依存。将来フラグ追加で重複登録の懸念。`name: "ptuf"` 等 stable marker を payload 側に持たせる | `src/init/claude_code.rs:24-28`, `src/init/claude_code.rs:114-120` | P2 |
+
+§5.4 は解消済み。`ptuf init claude-code` が hook payload に
+`name: "ptuf"` stable marker を書き込み、既存 entry 検出も marker を優先する。
+旧形式の command tail (`hook claude-code`) 検出は互換性のため残している。
+コード: `src/init/claude_code.rs`
 
 ## 5. Engine 構造 / 安全性
 
@@ -93,11 +97,11 @@ inspect できるようになった。adapter 層は `RawHookInput` と normaliz
 
 ## 6. テスト基盤
 
-- **§6.1** proptest 戦略が `src/testing/proptest.rs` と
-  `tests/engine_proptest.rs` で二重定義されている。`pub(crate)` 公開が
-  原因。`testing-strategies` を別 crate (`ptuf-testing`) に切るか、
-  `#[cfg(any(test, feature = "testing"))]` で feature gate する。
-  CLAUDE.md でも明記済の既知課題。優先度: P2
+- **§6.1** 解消済み。共通 proptest 戦略は
+  `#[cfg(any(test, feature = "testing"))] pub mod testing` で公開し、
+  `tests/engine_proptest.rs` も `ptuf::testing::proptest::*` を参照する。
+  `testing` feature は optional `proptest` 依存のみを有効化し、通常 build
+  には入らない。
 - **§6.2** 95% coverage 強制が `_via_dyn_dispatch` (`src/rules/mod.rs`
   周辺) のような「coverage を埋めるためだけ」のテストを誘発する。
   ただし CLAUDE.md / Makefile は現在も 95% 以上を要求しているため、

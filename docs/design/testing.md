@@ -78,8 +78,9 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 
 ## ランタイム / CI 構成
 
-- **デフォルト**: `cargo test` (`make check`, CI) は proptest をデフォルト
-  256 ケースで実行。失敗ケースは `proptest-regressions/` に固定化される。
+- **デフォルト**: `cargo test --features testing` (`make check`, CI) は
+  proptest をデフォルト 256 ケースで実行。失敗ケースは
+  `proptest-regressions/` に固定化される。
 - **深掘り**: `make pbt` (デフォルト 10000 ケース、`PBT_CASES=N` で上書き可)
   をローカル / 夜間 / リリース直前に手動実行。
 - **再現性**: `proptest-regressions/` は git 管理。シュリンクで見つかった反例は
@@ -92,10 +93,10 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 ## 戦略 (Strategy) の置き場所
 
 `src/testing/proptest.rs` に共通戦略 (Decision / Severity / HookInput /
-bash_command) を集約し、`#[cfg(test)] pub(crate) mod testing` で各モジュールの
-テストブロックから参照する。`tests/engine_proptest.rs` は integration crate
-として独立コンパイルされるため共通戦略は見えず、必要最小限の戦略をローカル
-複製している。
+bash_command) を集約し、`#[cfg(any(test, feature = "testing"))] pub mod
+testing` で各モジュールのテストブロックと `tests/engine_proptest.rs` の両方
+から参照する。`testing` feature は optional `proptest` 依存だけを有効化し、
+通常の `cargo build --release` では出荷バイナリに含まれない。
 
 ## 契約テスト
 

@@ -23,8 +23,8 @@ This runs the same gates that block CI:
 | Step | What it checks |
 | --- | --- |
 | `fmt-check` | `cargo fmt -- --check` |
-| `lint` | `cargo clippy --all-targets --locked -- -D warnings` |
-| `test` | `cargo test --locked` |
+| `lint` | `cargo clippy --all-targets --locked --features testing -- -D warnings` |
+| `test` | `cargo test --locked --features testing` |
 | `doc` | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked` |
 | `deny` | `cargo deny check advisories licenses bans sources` |
 

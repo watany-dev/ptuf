@@ -1,4 +1,4 @@
-//! Reusable [`proptest`] strategies for ptuf data types.
+//! Reusable proptest strategies for ptuf data types.
 //!
 //! Strategies live in one place so per-module property tests stay
 //! short and focused on the invariant under test rather than on

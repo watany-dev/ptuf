@@ -4,10 +4,10 @@ build:
 	cargo build --release --locked
 
 test:
-	cargo test --locked
+	cargo test --locked --features testing
 
 lint:
-	cargo clippy --all-targets --locked -- -D warnings
+	cargo clippy --all-targets --locked --features testing -- -D warnings
 
 fmt:
 	cargo fmt
@@ -38,7 +38,7 @@ doc:
 # `proptest!` block is exercised at the configured case count.
 PBT_CASES ?= 10000
 pbt:
-	PROPTEST_CASES=$(PBT_CASES) cargo test --locked
+	PROPTEST_CASES=$(PBT_CASES) cargo test --locked --features testing
 
 check: fmt-check lint test doc deny
 
