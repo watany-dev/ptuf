@@ -31,8 +31,9 @@
 | D7 | config schema が rule-level decision / severity override を表現できない | `RawRuleOverride { enabled, decision, severity }` を実装し、`RuleOverride` として merge される (`src/config/schema.rs:91-111`, `src/config/mod.rs:104-110`) |
 | §3.2 | `sudo -u <user>` の値を git command head と誤認して git rule をバイパスできる | sudo unwrap を `facts::shell::unwrap_sudo` に共通化し、value-taking sudo option (`-u root`, `-uroot`, `--user root`, `--user=root` など) を skip してから `core.git` / `core.project_hygiene` に評価させる (`src/facts/shell.rs:72-125`, `src/rules/git.rs`, `src/rules/project_hygiene.rs`) |
 | §3.1 | `git clean -f -d -x` の空白区切り短フラグを見逃す | `core.git` と `core.project_hygiene` の `git clean` 判定が short flags を引数横断で集計し、`--force -d -x` も検出する。dry-run `-n` は引き続き許可する (`src/rules/git.rs`, `src/rules/project_hygiene.rs`) |
+| §5.3 | audit JSONL の `write_all` ループで PIPE_BUF 超え行が分割書き込みになり複数 process 同時 audit で行が混ざる | `JsonlSink::record` が record 毎に `std::fs::File::lock`/`unlock` で OS-level advisory lock (Unix `flock(2)` / Windows `LockFileEx`) を取り、独立 OFD でも行が混ざらないことを cross-OFD 並列テストで検証 (`src/audit/mod.rs::JsonlSink::record`, `src/audit/writer.rs`) |
 
-その他の項目 (parser 限界、redaction 網羅性、audit atomicity、CLI parser
+その他の項目 (parser 限界、redaction 網羅性、CLI parser
 サイズ、モジュール肥大化、契約 fixture 不在など) は
 `../../open-issues.md` で現状コード参照付きに整理した。
 
