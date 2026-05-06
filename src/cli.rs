@@ -72,7 +72,11 @@ pub(crate) fn build_engine_or_fail_closed<W: Write>(
             let _ = writeln!(stderr, "ptuf: could not load policy: {err}");
             Decision::Deny {
                 rule_id: POLICY_LOAD_FAILED_RULE.into(),
-                reason: "ptuf could not load policy; failing closed.".into(),
+                reason: reason::build(
+                    POLICY_LOAD_FAILED_RULE,
+                    "ptuf could not load policy and is failing closed",
+                    &["fix the configuration error reported on stderr and re-run"],
+                ),
             }
         })
 }

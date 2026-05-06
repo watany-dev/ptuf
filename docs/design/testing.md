@@ -107,5 +107,6 @@ testing` で各モジュールのテストブロックと `tests/engine_proptest
 - `doctor --json` の top-level schema
 - audit JSONL の field contract (`schemaVersion`, `agent`, `allowlistId` など)
 - plugin loader error の fail-closed 契約
+- hook stdin の fail-closed 契約 (`core.engine.invalid-payload` での deny)
 - allowlist `when` の suppression 契約
 - MCP nested path と hook script self-protection の end-to-end 契約
