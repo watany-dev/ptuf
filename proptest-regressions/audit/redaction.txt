@@ -7,3 +7,4 @@
 cc ecdf43a9124a8bbba0753e13889c09f72ab8da019ab6cdb5e9401871297f933f # shrinks to suffix = "AA-a_A0A-0_0Aaa-"
 cc 6e0808236faafbec989271eca4080195f91001e8b96e8996fbf90609133c2322 # shrinks to scheme = "http", user = "a", pass = "@", host = "a.com"
 cc dba1e4f081b1e2ecd8020dd08e30e7759da35e9c766b1aa9241860c82ff3ab47 # shrinks to ghp = "ghp_aa0a0A0a0AA0", akia = "AKIA0000A00A0000AAAA", jwt_a = "-00_", jwt_b = "a-aa", jwt_c = "----"
+cc d0ba19692de730ced5fba162e9940d49d701621adb903e4e50f774a9bace56c0 # shrinks to value = "_"
