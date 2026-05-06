@@ -138,6 +138,11 @@ pub fn redact_strict(input: &str) -> String {
 mod tests {
     use super::*;
 
+    const SLACK_PREFIXES: &[&str] = &["xoxa", "xoxb", "xoxp", "xoxr", "xoxs"];
+    const STRIPE_PREFIXES: &[&str] = &[
+        "sk_live", "sk_test", "pk_live", "pk_test", "rk_live", "rk_test", "whsec",
+    ];
+
     #[test]
     fn passes_through_benign_command() {
         let s = "ls -la /tmp";
@@ -243,7 +248,7 @@ mod tests {
 
     #[test]
     fn redacts_slack_bot_token() {
-        for prefix in ["xoxa", "xoxb", "xoxp", "xoxr", "xoxs"] {
+        for prefix in SLACK_PREFIXES {
             let token = format!("{prefix}-1234567890-ABCDEFGHIJ");
             let s = format!("curl -H 'X-Slack-Token: {token}' https://slack.com/api");
             let out = redact_strict(&s);
@@ -257,7 +262,7 @@ mod tests {
         let key = "sk_live_AbCdEf0123456789xyzABCD";
         let s = format!("stripe charges create --api-key {key}");
         let out = redact_strict(&s);
-        assert!(!out.contains(key));
+        assert!(!out.contains(key), "kept {key} in {out}");
         assert!(out.contains("***"));
     }
 
@@ -266,7 +271,8 @@ mod tests {
         let key = "whsec_AbCdEf0123456789xyzABCD";
         let s = format!("export WEBHOOK={key} && cmd");
         let out = redact_strict(&s);
-        assert!(!out.contains(key));
+        assert!(!out.contains(key), "kept {key} in {out}");
+        assert!(out.contains("***"));
     }
 
     #[test]
@@ -398,15 +404,13 @@ mod tests {
             prop_assume!(!s.contains("ghr_"));
             prop_assume!(!s.contains("github_pat_"));
             prop_assume!(!s.contains("sk-"));
-            prop_assume!(!s.contains("sk_live_"));
-            prop_assume!(!s.contains("sk_test_"));
-            prop_assume!(!s.contains("pk_live_"));
-            prop_assume!(!s.contains("pk_test_"));
-            prop_assume!(!s.contains("rk_live_"));
-            prop_assume!(!s.contains("rk_test_"));
-            prop_assume!(!s.contains("whsec_"));
-            for prefix in ["xoxa-", "xoxb-", "xoxp-", "xoxr-", "xoxs-"] {
-                prop_assume!(!s.contains(prefix));
+            for prefix in STRIPE_PREFIXES {
+                let needle = format!("{prefix}_");
+                prop_assume!(!s.contains(&needle));
+            }
+            for prefix in SLACK_PREFIXES {
+                let needle = format!("{prefix}-");
+                prop_assume!(!s.contains(&needle));
             }
             prop_assume!(!s.contains("eyJ"));
             // No `KEY=VALUE` shape with sensitive substrings:
@@ -475,29 +479,31 @@ mod tests {
 
         // Slack token shapes are always replaced. The trailing token must
         // end on a word character so that `\b` matches; the suffix
-        // generator anchors with `[A-Za-z0-9]` accordingly.
+        // generator anchors with `[A-Za-z0-9]` accordingly. Sampling the
+        // prefix as a proptest arg keeps total cases at the default 256
+        // instead of 5×.
         #[test]
-        fn pbt_redacts_slack_tokens(suffix in "[A-Za-z0-9-]{9,29}[A-Za-z0-9]") {
-            for prefix in ["xoxa", "xoxb", "xoxp", "xoxr", "xoxs"] {
-                let needle = format!("{prefix}-{suffix}");
-                let s = format!("ENV={needle} cmd");
-                let out = redact_strict(&s);
-                prop_assert!(!out.contains(&needle), "kept {needle:?} in {out:?}");
-            }
+        fn pbt_redacts_slack_tokens(
+            prefix in proptest::sample::select(SLACK_PREFIXES),
+            suffix in "[A-Za-z0-9-]{9,29}[A-Za-z0-9]",
+        ) {
+            let needle = format!("{prefix}-{suffix}");
+            let s = format!("ENV={needle} cmd");
+            let out = redact_strict(&s);
+            prop_assert!(!out.contains(&needle), "kept {needle:?} in {out:?}");
         }
 
         // Stripe API keys (`sk|pk|rk_live|test_…`) and webhook secret
         // (`whsec_…`) are always replaced.
         #[test]
-        fn pbt_redacts_stripe_keys(suffix in "[A-Za-z0-9]{16,40}") {
-            for prefix in [
-                "sk_live", "sk_test", "pk_live", "pk_test", "rk_live", "rk_test", "whsec",
-            ] {
-                let needle = format!("{prefix}_{suffix}");
-                let s = format!("echo {needle}");
-                let out = redact_strict(&s);
-                prop_assert!(!out.contains(&needle), "kept {needle:?} in {out:?}");
-            }
+        fn pbt_redacts_stripe_keys(
+            prefix in proptest::sample::select(STRIPE_PREFIXES),
+            suffix in "[A-Za-z0-9]{16,40}",
+        ) {
+            let needle = format!("{prefix}_{suffix}");
+            let s = format!("echo {needle}");
+            let out = redact_strict(&s);
+            prop_assert!(!out.contains(&needle), "kept {needle:?} in {out:?}");
         }
 
         // JSON-style `"<sensitive-key>": "<value>"` strips the value
