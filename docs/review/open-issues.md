@@ -74,7 +74,6 @@ shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/archite
 
 | 出典 | 内容 | コード参照 | 優先度 |
 | --- | --- | --- | --- |
-| §5.2 | `stdin.read_to_string` に上限なし。GB 単位の入力でも全部メモリへ。`take(MAX_BYTES)` で上限を入れる | `src/cli.rs:348` | P1 |
 | §5.3 | audit JSONL の `write_all` ループで PIPE_BUF (Linux 4096) を超える行が分割書き込みになる。複数 process 同時 audit で行が混ざる。`flock` か `writev` 1 syscall に倒す | `src/audit/writer.rs:55-61` | P1 |
 | §5.5 | redaction が新形式 token を未対応 (`github_pat_*`, `xox[abp]-*`, `sk_live_*`, GCP service account JSON)。「キーワード周辺の値を redact」の 2 段アプローチに切り替えると将来の漏洩源を広く塞げる | `src/audit/redaction.rs:38-60` | P1 |
 | §5.1 | 自前 CLI parser が 1352 行に成長 (レビュー時 1141 行)。clap derive で 1/3〜1/4 に減る。`--json` のような中途半端な未実装フラグを `#[arg(skip)]` で明示できる | `src/cli.rs` | P2 |
