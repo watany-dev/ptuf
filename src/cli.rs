@@ -7,11 +7,17 @@ use crate::hook_input::HookInput;
 use crate::hook_output;
 use crate::init;
 use crate::plugin::runner as plugin_runner;
+use crate::reason;
 
 /// Reserved rule id used when the engine itself failed to load policy
 /// and the CLI must fail-closed
 /// (`docs/design/cli-and-hooks.md:104-114`).
 pub(crate) const POLICY_LOAD_FAILED_RULE: &str = "core.engine.policy-load-failed";
+/// Reserved rule id used when the hook stdin payload is unreadable,
+/// oversized, or not valid JSON. Claude Code treats `exit 1` as a
+/// non-blocking warning, so these initialisation failures must surface
+/// as a `Decision::Deny` (exit 2) to preserve the fail-closed contract.
+pub(crate) const INVALID_PAYLOAD_RULE: &str = "core.engine.invalid-payload";
 const MAX_HOOK_STDIN_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -304,8 +310,10 @@ USAGE:
 
 EXIT CODES:
     0   allow / monitor / ask / plugin tests pass
-    1   internal error (bad JSON, bad arguments) or plugin tests fail
-    2   deny
+    1   non-hook internal error (eval / plugin / init / doctor / bad arguments)
+        or plugin tests fail
+    2   deny — including hook initialisation failures (invalid stdin payload,
+        policy load error)
 ";
 
 /// Run a parsed [`Command`] against the given I/O streams. Returns the u8
@@ -346,20 +354,37 @@ fn run_hook<R: Read, W1: Write, W2: Write>(
         .is_err()
     {
         let _ = writeln!(stderr, "ptuf: failed to read stdin");
-        return 1;
+        return emit_decision(
+            agent,
+            &invalid_payload_deny("stdin read failure"),
+            stdout,
+            stderr,
+        );
     }
     if buf.len() as u64 > MAX_HOOK_STDIN_BYTES {
         let _ = writeln!(
             stderr,
             "ptuf: hook payload exceeds {MAX_HOOK_STDIN_BYTES} bytes"
         );
-        return 1;
+        return emit_decision(
+            agent,
+            &invalid_payload_deny(&format!(
+                "hook payload exceeds the {MAX_HOOK_STDIN_BYTES}-byte limit"
+            )),
+            stdout,
+            stderr,
+        );
     }
     let input: HookInput = match serde_json::from_str(&buf) {
         Ok(v) => v,
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: invalid hook payload: {err}");
-            return 1;
+            return emit_decision(
+                agent,
+                &invalid_payload_deny(&format!("hook payload is not valid JSON ({err})")),
+                stdout,
+                stderr,
+            );
         }
     };
     let decision = match build_engine_or_fail_closed(stderr, agent.audit_name()) {
@@ -376,6 +401,17 @@ fn run_hook<R: Read, W1: Write, W2: Write>(
         Err(deny) => deny,
     };
     emit_decision(agent, &decision, stdout, stderr)
+}
+
+fn invalid_payload_deny(problem: &str) -> Decision {
+    Decision::Deny {
+        rule_id: INVALID_PAYLOAD_RULE.into(),
+        reason: reason::build(
+            INVALID_PAYLOAD_RULE,
+            problem,
+            &["confirm the hook adapter is sending the documented PreToolUse JSON schema"],
+        ),
+    }
 }
 
 fn run_eval<W1: Write, W2: Write>(
@@ -931,11 +967,15 @@ mod tests {
     }
 
     #[test]
-    fn hook_returns_one_for_invalid_json() {
+    fn hook_fails_closed_for_invalid_json() {
         let (code, out, err) = run_with(&["hook", "claude-code"], "not json");
-        assert_eq!(code, 1);
-        assert!(out.is_empty());
-        assert!(err.contains("invalid hook payload"));
+        assert_eq!(code, 2);
+        assert!(
+            out.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out}"
+        );
+        assert!(err.contains("invalid hook payload"), "stderr: {err}");
+        assert!(err.contains(INVALID_PAYLOAD_RULE), "stderr: {err}");
     }
 
     #[test]
@@ -1309,7 +1349,7 @@ rules:
     }
 
     #[test]
-    fn run_hook_returns_one_when_stdin_read_fails() {
+    fn run_hook_fails_closed_when_stdin_read_fails() {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
@@ -1320,13 +1360,19 @@ rules:
             &mut out,
             &mut err,
         );
-        assert_eq!(code, 1);
-        assert!(out.is_empty());
-        assert!(String::from_utf8_lossy(&err).contains("failed to read stdin"));
+        assert_eq!(code, 2);
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}"
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("failed to read stdin"), "stderr: {err_s}");
+        assert!(err_s.contains(INVALID_PAYLOAD_RULE), "stderr: {err_s}");
     }
 
     #[test]
-    fn run_hook_returns_one_when_stdin_payload_is_too_large() {
+    fn run_hook_fails_closed_when_stdin_payload_is_too_large() {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let payload = vec![b' '; MAX_HOOK_STDIN_BYTES as usize + 1];
@@ -1338,9 +1384,38 @@ rules:
             &mut out,
             &mut err,
         );
-        assert_eq!(code, 1);
-        assert!(out.is_empty());
-        assert!(String::from_utf8_lossy(&err).contains("hook payload exceeds 8388608 bytes"));
+        assert_eq!(code, 2);
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}"
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(
+            err_s.contains("hook payload exceeds 8388608 bytes"),
+            "stderr: {err_s}"
+        );
+        assert!(err_s.contains(INVALID_PAYLOAD_RULE), "stderr: {err_s}");
+    }
+
+    #[test]
+    fn run_hook_fails_closed_when_stdin_read_fails_under_codex_adapter() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::HookPreToolUse {
+                agent: HookAgent::Codex,
+            },
+            FailingReader,
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 2);
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}"
+        );
     }
 
     #[test]

@@ -180,3 +180,9 @@ JSON 版は `schemaVersion: 1` に加えて、少なくとも次の top-level ke
 `hook` と `eval` は engine 構築に失敗すると
 `core.engine.policy-load-failed` で deny する。これは CLI の固定契約であり、
 ライブラリ API `decide()` とは意図的に異なる。
+
+`hook` はさらに stdin 系の初期化エラー (read failure / 8 MiB 超過 / JSON
+parse 失敗) を `core.engine.invalid-payload` で deny する。Claude Code の
+hook 仕様では `exit 1` は **non-blocking warning** として扱われ tool 実行を
+止めないため、これらは必ず exit `2` + adapter の deny JSON で返さなければ
+fail-open になる。`failClosed: false` でもこの境界は緩めない。

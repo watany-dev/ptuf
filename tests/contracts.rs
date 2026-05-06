@@ -115,6 +115,58 @@ fn audit_contract_includes_allowlist_id_for_suppressed_rule() {
 }
 
 #[test]
+fn hook_invalid_stdin_payload_fails_closed() {
+    let dir = repo();
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "claude-code"], "not json");
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert!(
+        value["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .expect("reason string")
+            .contains("core.engine.invalid-payload"),
+        "stdout: {stdout}"
+    );
+    assert!(stderr.contains("invalid hook payload"), "stderr: {stderr}");
+}
+
+#[test]
+fn hook_oversized_stdin_payload_fails_closed() {
+    let dir = repo();
+    let payload = "A".repeat(8 * 1024 * 1024 + 1);
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "claude-code"], &payload);
+    assert_eq!(code, 2, "stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert!(
+        value["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .expect("reason string")
+            .contains("core.engine.invalid-payload"),
+        "stdout: {stdout}"
+    );
+    assert!(stderr.contains("hook payload exceeds"), "stderr: {stderr}");
+}
+
+#[test]
+fn hook_invalid_stdin_payload_fails_closed_under_codex_adapter() {
+    let dir = repo();
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "codex"], "{not valid");
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert!(
+        value["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .expect("reason string")
+            .contains("core.engine.invalid-payload"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
 fn plugin_loader_error_contract_fails_closed() {
     let dir = repo();
     std::fs::write(

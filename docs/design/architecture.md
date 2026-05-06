@@ -132,11 +132,12 @@ stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit 
 以下は exit `1`:
 
 - argv parse 失敗
-- stdin 読み取り失敗
-- stdin payload 上限超過
-- JSON parse 失敗
-- policy / plugin load 失敗時の hook response 生成失敗
 - `doctor` / `plugin test` の内部エラー
+- `init` の書き込み失敗
+
+`hook` サブコマンドは Claude Code の hook 仕様 (exit 1 は non-blocking warning) に
+追従するため、stdin 系の初期化エラーは exit `1` ではなく exit `2` + deny で扱う。
+詳細は次節を参照。
 
 ## fail-closed
 
@@ -144,6 +145,12 @@ CLI 経路 (`hook`, `eval`) は config / plugin のロードに失敗すると
 `core.engine.policy-load-failed` を返して fail-closed する。これは
 `failClosed: false` でも変わらない。設定ファイル自体が読めない状況では、その設定を
 信用できないためである。
+
+`hook` はさらに stdin 読み取り失敗 / 8 MiB 上限超過 / JSON parse 失敗を
+`core.engine.invalid-payload` で deny する (exit `2` + adapter の deny JSON)。
+Claude Code の hook 仕様では exit `1` が non-blocking warning として扱われ
+tool 実行を止めないため、これらの初期化エラーを exit `1` のまま放置すると
+fail-open する。`failClosed: false` でもこの境界は緩めない。
 
 一方、ライブラリ API `decide()` は組み込み呼び出しの後方互換性を優先し、
 default engine にフォールバックする。`try_decide()` は CLI と同じ
