@@ -220,14 +220,8 @@ fn doctor_prints_each_section() {
 
 #[test]
 fn init_claude_code_dry_run_is_idempotent() {
-    let dir = std::env::temp_dir().join(format!(
-        "ptuf-init-smoke-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let path = dir.join("settings.json");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("settings.json");
     let path_str = path.to_string_lossy().into_owned();
 
     let (code1, stdout1, _) = run(
@@ -244,22 +238,17 @@ fn init_claude_code_dry_run_is_idempotent() {
     );
     assert_eq!(code2, 0);
     assert!(stdout2.contains("would register hook"));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn init_codex_dry_run_targets_repo_local_files() {
-    let dir = std::env::temp_dir().join(format!(
-        "ptuf-init-codex-smoke-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
 
     let mut child = binary()
         .args(["init", "codex", "--dry-run"])
-        .current_dir(&dir)
+        .current_dir(dir_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -273,25 +262,20 @@ fn init_codex_dry_run_targets_repo_local_files() {
     assert_eq!(code, 0, "stdout: {stdout}");
     assert!(stdout.contains(".codex/hooks.json"));
     assert!(stdout.contains(".codex/config.toml"));
-    assert!(!dir.join(".codex/hooks.json").exists());
-    assert!(!dir.join(".codex/config.toml").exists());
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!dir_path.join(".codex/hooks.json").exists());
+    assert!(!dir_path.join(".codex/config.toml").exists());
 }
 
 #[test]
 fn engine_loads_local_ptuf_yaml_in_cwd() {
-    let dir = std::env::temp_dir().join(format!(
-        "ptuf-engine-smoke-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
-    std::fs::write(dir.join(".ptuf.yaml"), "mode: monitor\n").expect("write yaml");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+    std::fs::write(dir_path.join(".ptuf.yaml"), "mode: monitor\n").expect("write yaml");
 
     let mut child = binary()
         .args(["eval", "--tool", "Bash", "rm -rf /"])
-        .current_dir(&dir)
+        .current_dir(dir_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -307,7 +291,6 @@ fn engine_loads_local_ptuf_yaml_in_cwd() {
         "monitor mode must demote deny to exit 0; stdout: {stdout}"
     );
     assert!(stdout.contains("Decision: monitor"), "stdout: {stdout}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -320,24 +303,20 @@ fn help_prints_usage_with_exit_zero() {
 
 #[test]
 fn audit_jsonl_carries_schema_version_and_agent_for_hook_subcommand() {
-    let dir = std::env::temp_dir().join(format!(
-        "ptuf-audit-smoke-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
-    let audit_path = dir.join("audit.jsonl");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+    let audit_path = dir_path.join("audit.jsonl");
     let yaml = format!(
         "audit:\n  path: {}\n  includeAllowed: true\n",
         audit_path.display()
     );
-    std::fs::write(dir.join(".ptuf.yaml"), yaml).expect("write yaml");
+    std::fs::write(dir_path.join(".ptuf.yaml"), yaml).expect("write yaml");
 
     let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
     let mut child = binary()
         .args(["hook", "claude-code"])
-        .current_dir(&dir)
+        .current_dir(dir_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -355,29 +334,24 @@ fn audit_jsonl_carries_schema_version_and_agent_for_hook_subcommand() {
     assert!(line.contains("\"schemaVersion\":1"), "line: {line}");
     assert!(line.contains("\"agent\":\"claude-code\""), "line: {line}");
     assert!(line.contains("\"decision\":\"deny\""), "line: {line}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn audit_jsonl_carries_codex_agent_for_hook_subcommand() {
-    let dir = std::env::temp_dir().join(format!(
-        "ptuf-audit-codex-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
-    let audit_path = dir.join("audit.jsonl");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+    let audit_path = dir_path.join("audit.jsonl");
     let yaml = format!(
         "audit:\n  path: {}\n  includeAllowed: true\n",
         audit_path.display()
     );
-    std::fs::write(dir.join(".ptuf.yaml"), yaml).expect("write yaml");
+    std::fs::write(dir_path.join(".ptuf.yaml"), yaml).expect("write yaml");
 
     let payload = r#"{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD~3"}}"#;
     let mut child = binary()
         .args(["hook", "codex"])
-        .current_dir(&dir)
+        .current_dir(dir_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -395,25 +369,20 @@ fn audit_jsonl_carries_codex_agent_for_hook_subcommand() {
     assert!(line.contains("\"schemaVersion\":1"), "line: {line}");
     assert!(line.contains("\"agent\":\"codex\""), "line: {line}");
     assert!(line.contains("\"decision\":\"ask\""), "line: {line}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn audit_jsonl_carries_agent_cli_for_eval_subcommand() {
-    let dir = std::env::temp_dir().join(format!(
-        "ptuf-audit-eval-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
-    let audit_path = dir.join("audit.jsonl");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+    let audit_path = dir_path.join("audit.jsonl");
     let yaml = format!("audit:\n  path: {}\n", audit_path.display());
-    std::fs::write(dir.join(".ptuf.yaml"), yaml).expect("write yaml");
+    std::fs::write(dir_path.join(".ptuf.yaml"), yaml).expect("write yaml");
 
     let mut child = binary()
         .args(["eval", "--tool", "Bash", "rm -rf /"])
-        .current_dir(&dir)
+        .current_dir(dir_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -427,7 +396,6 @@ fn audit_jsonl_carries_agent_cli_for_eval_subcommand() {
     let line = body.lines().next().expect("at least one line");
     assert!(line.contains("\"agent\":\"cli\""), "line: {line}");
     assert!(line.contains("\"schemaVersion\":1"), "line: {line}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -452,20 +420,19 @@ fn hook_denies_mcp_filesystem_read_of_aws_credentials() {
 
 #[test]
 fn project_hygiene_denies_npm_install_when_pnpm_lock_present_and_pack_enabled() {
-    let dir =
-        std::env::temp_dir().join(format!("ptuf-hyg-pnpm-{}-{}", std::process::id(), line!()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
-    std::fs::write(dir.join("pnpm-lock.yaml"), "").expect("write lockfile");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+    std::fs::write(dir_path.join("pnpm-lock.yaml"), "").expect("write lockfile");
     std::fs::write(
-        dir.join(".ptuf.yaml"),
+        dir_path.join(".ptuf.yaml"),
         "packs:\n  core.project_hygiene:\n    enabled: true\n",
     )
     .expect("write yaml");
 
     let mut child = binary()
         .args(["eval", "--tool", "Bash", "npm install lodash"])
-        .current_dir(&dir)
+        .current_dir(dir_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -479,25 +446,20 @@ fn project_hygiene_denies_npm_install_when_pnpm_lock_present_and_pack_enabled() 
         stderr.contains("core.project_hygiene.lock-mismatch-pnpm"),
         "stderr was: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn project_hygiene_allows_npm_install_when_pack_disabled_by_default() {
     // No `.ptuf.yaml` ⇒ pack stays at the default (disabled), so even
     // with a pnpm-lock.yaml present the rule must not fire.
-    let dir = std::env::temp_dir().join(format!(
-        "ptuf-hyg-default-off-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
-    std::fs::write(dir.join("pnpm-lock.yaml"), "").expect("write lockfile");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+    std::fs::write(dir_path.join("pnpm-lock.yaml"), "").expect("write lockfile");
 
     let mut child = binary()
         .args(["eval", "--tool", "Bash", "npm install lodash"])
-        .current_dir(&dir)
+        .current_dir(dir_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -506,28 +468,24 @@ fn project_hygiene_allows_npm_install_when_pack_disabled_by_default() {
     drop(child.stdin.take());
     let output = child.wait_with_output().expect("wait");
     assert_eq!(output.status.code(), Some(0));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn project_hygiene_denies_destructive_git_on_protected_branch() {
-    let dir = std::env::temp_dir().join(format!(
-        "ptuf-hyg-protected-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
-    std::fs::write(dir.join(".git").join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+    std::fs::write(dir_path.join(".git").join("HEAD"), "ref: refs/heads/main\n")
+        .expect("write HEAD");
     std::fs::write(
-        dir.join(".ptuf.yaml"),
+        dir_path.join(".ptuf.yaml"),
         "packs:\n  core.project_hygiene:\n    enabled: true\n",
     )
     .expect("write yaml");
 
     let mut child = binary()
         .args(["eval", "--tool", "Bash", "git reset --hard HEAD~1"])
-        .current_dir(&dir)
+        .current_dir(dir_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -541,5 +499,4 @@ fn project_hygiene_denies_destructive_git_on_protected_branch() {
         stderr.contains("core.project_hygiene.protected-branch-destructive-git"),
         "stderr was: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }

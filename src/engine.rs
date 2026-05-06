@@ -1083,21 +1083,14 @@ rules:
 
     #[test]
     fn engine_with_config_opens_jsonl_sink_when_audit_path_is_set() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-engine-jsonl-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("audit.jsonl");
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
         let mut cfg = Config::default();
         cfg.audit.path = Some(path.clone());
         let engine = Engine::with_config(cfg).expect("with_config");
         let _ = engine.decide(&bash("rm -rf /"));
         let body = std::fs::read_to_string(&path).expect("read audit log");
         assert!(body.contains("\"decision\":\"deny\""));
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

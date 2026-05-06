@@ -81,9 +81,10 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
   をローカル / 夜間 / リリース直前に手動実行。
 - **再現性**: `proptest-regressions/` は git 管理。シュリンクで見つかった反例は
   全員のローカルと CI で同じシードで再現される。
-- **依存方針**: `proptest` は `[dev-dependencies]` のみ。出荷バイナリ
-  (`cargo build --release`) には含まれず、配布物の依存ツリーは無変更。
-  CLAUDE.md の "Minimal Dependencies" 原則を満たす。
+- **依存方針**: テスト用クレート (`proptest`, `tempfile`) は
+  `[dev-dependencies]` のみ。出荷バイナリ (`cargo build --release`) には
+  含まれず、配布物の依存ツリーは無変更。CLAUDE.md の "Minimal
+  Dependencies" 原則を満たす。
 
 ## 戦略 (Strategy) の置き場所
 
