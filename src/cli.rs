@@ -564,10 +564,7 @@ fn run_init_claude(
     options: &ClaudeInitOptions,
     dry_run: bool,
 ) -> Result<init::InstallOutcome, init::InitError> {
-    let resolved_path = match options.settings_path.as_deref() {
-        Some(path) => path.to_path_buf(),
-        None => init::claude_code::default_settings_path().ok_or(init::InitError::HomeNotSet)?,
-    };
+    let resolved_path = resolve_claude_settings_path(options)?;
     let binary = init::claude_code::detect_binary();
     init::claude_code::install(&resolved_path, &binary, dry_run)
 }
