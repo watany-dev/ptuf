@@ -439,3 +439,62 @@ pub fn richer_hook_input() -> impl Strategy<Value = HookInput> {
         }),
     ]
 }
+
+/// Single argv token biased toward tokens that the CLI parser
+/// (`crate::cli::parse`) actually distinguishes: subcommand names,
+/// agent names, flag names with and without `=value` form, tool
+/// names, plus a sliver of arbitrary printable ASCII so adversarial
+/// shapes get probed too. Returned tokens never contain whitespace
+/// so they line up one-to-one with `argv` slots.
+fn argv_token() -> impl Strategy<Value = String> {
+    let subcmd = proptest::sample::select(
+        &[
+            "doctor",
+            "init",
+            "hook",
+            "eval",
+            "plugin",
+            "test",
+            "--help",
+            "-h",
+            "--version",
+            "-V",
+        ][..],
+    )
+    .prop_map(|s| s.to_string());
+    let agent = proptest::sample::select(&["claude-code", "codex"][..]).prop_map(|s| s.to_string());
+    let flag = proptest::sample::select(
+        &[
+            "--json",
+            "--dry-run",
+            "--tool",
+            "--settings",
+            "--root",
+            "--hooks",
+            "--config",
+            "--tool=Bash",
+            "--settings=foo",
+            "--root=/tmp",
+            "--hooks=foo.json",
+            "--config=foo.toml",
+        ][..],
+    )
+    .prop_map(|s| s.to_string());
+    let tool = proptest::sample::select(&["Bash", "Read", "Write", "Edit"][..])
+        .prop_map(|s| s.to_string());
+    let arbitrary = "[!-~]{0,16}".prop_map(|s| s.to_string());
+    prop_oneof![
+        4 => subcmd,
+        2 => agent,
+        3 => flag,
+        2 => tool,
+        2 => arbitrary,
+    ]
+}
+
+/// Argv vector for `crate::cli::parse` PBT: 0 to 6 tokens drawn from
+/// [`argv_token`]. The empty vector exercises the "missing subcommand"
+/// error branch; longer vectors stress the per-subcommand parsers.
+pub fn argv_tokens() -> impl Strategy<Value = Vec<String>> {
+    vec(argv_token(), 0..=6)
+}
