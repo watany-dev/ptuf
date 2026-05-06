@@ -1502,4 +1502,211 @@ rules:
             serde_json::from_str(s.trim_end()).expect("must be valid JSON");
         assert_eq!(value["schemaVersion"], 1);
     }
+
+    fn report_with_codex_paths(
+        config_path: Option<PathBuf>,
+        hooks_path: Option<PathBuf>,
+    ) -> Report {
+        Report::gather_with_codex(
+            None,
+            None,
+            Layout::default(),
+            None,
+            CodexPaths {
+                config_path,
+                hooks_path,
+            },
+        )
+    }
+
+    #[test]
+    fn codex_render_home_not_set_emits_warning() {
+        let report = report_with_codex_paths(None, None);
+        assert!(!report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("$HOME not set and no repository root detected"));
+        let v = to_json_value(&report);
+        assert_eq!(v["codex"]["state"], "homeNotSet");
+    }
+
+    #[test]
+    fn codex_render_hooks_missing_emits_warning() {
+        let dir = workdir("render-codex-hooks-missing");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::write(&config_path, "[features]\ncodex_hooks = true\n").unwrap();
+        let report = report_with_codex_paths(Some(config_path), Some(hooks_path.clone()));
+        assert!(!report.has_failure());
+        let s = render(&report);
+        assert!(s.contains(&hooks_path.display().to_string()));
+        assert!(s.contains("not present"));
+        let v = to_json_value(&report);
+        assert_eq!(v["codex"]["state"], "hooksMissing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_render_hooks_disabled_emits_warning() {
+        let dir = workdir("render-codex-hooks-disabled");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::write(&config_path, "[features]\ncodex_hooks = false\n").unwrap();
+        fs::write(&hooks_path, r#"{"hooks":{"PreToolUse":[]}}"#).unwrap();
+        let report = report_with_codex_paths(Some(config_path), Some(hooks_path));
+        assert!(!report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("features.codex_hooks is disabled"));
+        let v = to_json_value(&report);
+        assert_eq!(v["codex"]["state"], "hooksDisabled");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_render_hook_registered_renders_matcher() {
+        let dir = workdir("render-codex-hook-registered");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::write(&config_path, "[features]\ncodex_hooks = true\n").unwrap();
+        fs::write(
+            &hooks_path,
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash|apply_patch|mcp__.*","hooks":[{"type":"command","command":"ptuf hook codex"}]}]}}"#,
+        )
+        .unwrap();
+        let report = report_with_codex_paths(Some(config_path), Some(hooks_path));
+        assert!(!report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("ptuf hook registered"));
+        assert!(s.contains("Bash|apply_patch|mcp__.*"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_render_hook_registered_omits_matcher_when_absent() {
+        let dir = workdir("render-codex-hook-registered-no-matcher");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::write(&config_path, "[features]\ncodex_hooks = true\n").unwrap();
+        fs::write(
+            &hooks_path,
+            r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"ptuf hook codex"}]}]}}"#,
+        )
+        .unwrap();
+        let report = report_with_codex_paths(Some(config_path), Some(hooks_path));
+        let s = render(&report);
+        assert!(s.contains("ptuf hook registered"));
+        assert!(!s.contains("matcher:"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_render_hook_missing_emits_warning() {
+        let dir = workdir("render-codex-hook-missing");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::write(&config_path, "[features]\ncodex_hooks = true\n").unwrap();
+        fs::write(
+            &hooks_path,
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"other hook"}]}]}}"#,
+        )
+        .unwrap();
+        let report = report_with_codex_paths(Some(config_path), Some(hooks_path));
+        assert!(!report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("no ptuf hook registered"));
+        let v = to_json_value(&report);
+        assert_eq!(v["codex"]["state"], "hookMissing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_render_hook_missing_when_pre_tool_use_array_absent() {
+        let dir = workdir("render-codex-hook-missing-no-pre-tool-use");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::write(&config_path, "[features]\ncodex_hooks = true\n").unwrap();
+        fs::write(&hooks_path, r#"{"hooks":{}}"#).unwrap();
+        let report = report_with_codex_paths(Some(config_path), Some(hooks_path));
+        let v = to_json_value(&report);
+        assert_eq!(v["codex"]["state"], "hookMissing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_render_invalid_config_is_failure() {
+        let dir = workdir("render-codex-invalid-config");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::write(&config_path, "[features\ncodex_hooks = true").unwrap();
+        let report = report_with_codex_paths(Some(config_path), Some(hooks_path));
+        assert!(report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("invalid TOML"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_render_invalid_hooks_is_failure() {
+        let dir = workdir("render-codex-invalid-hooks");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::write(&config_path, "[features]\ncodex_hooks = true\n").unwrap();
+        fs::write(&hooks_path, "{not json").unwrap();
+        let report = report_with_codex_paths(Some(config_path), Some(hooks_path));
+        assert!(report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("invalid JSON"));
+        let v = to_json_value(&report);
+        assert_eq!(v["codex"]["state"], "invalidHooks");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_render_io_for_config_is_failure() {
+        let dir = workdir("render-codex-io-config");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::create_dir_all(&config_path).unwrap();
+        let report = report_with_codex_paths(Some(config_path), Some(hooks_path));
+        assert!(report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("unreadable"));
+        let v = to_json_value(&report);
+        assert_eq!(v["codex"]["state"], "io");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_render_io_for_hooks_is_failure() {
+        let dir = workdir("render-codex-io-hooks");
+        let config_path = dir.join("config.toml");
+        let hooks_path = dir.join("hooks.json");
+        fs::write(&config_path, "[features]\ncodex_hooks = true\n").unwrap();
+        fs::create_dir_all(&hooks_path).unwrap();
+        let report = report_with_codex_paths(Some(config_path), Some(hooks_path));
+        assert!(report.has_failure());
+        let s = render(&report);
+        // The first matching arm in render_codex prints config_path,
+        // since config_path is `Some` here. We just assert the failure
+        // string surfaces; arm-with-only-hooks-path is unreachable in
+        // practice because build_codex_status returns HomeNotSet when
+        // either path is None.
+        assert!(s.contains("unreadable"));
+        let v = to_json_value(&report);
+        assert_eq!(v["codex"]["state"], "io");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn claude_settings_io_state_when_path_is_a_directory() {
+        let dir = workdir("claude-io");
+        let path = dir.join("settings.json");
+        fs::create_dir_all(&path).unwrap();
+        let report = Report::gather(None, None, Layout::default(), Some(path));
+        assert!(report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("unreadable"));
+        let v = to_json_value(&report);
+        assert_eq!(v["claude"]["state"], "io");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
