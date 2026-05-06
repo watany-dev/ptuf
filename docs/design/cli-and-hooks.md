@@ -20,7 +20,7 @@ ptuf doctor
 | `ptuf hook <agent>` | hook 本体。stdin JSON を評価する |
 | `ptuf eval --tool <name> <command>` | 単発評価 |
 | `ptuf plugin test <path>` | plugin rule の `tests:` を実行 |
-| `ptuf init <agent>` | agent 側の hook 設定を配線 |
+| `ptuf init <agent> [--verify [--json]]` | agent 側の hook 設定を配線 (オプションで synthetic payload による事後検証) |
 | `ptuf doctor [--json]` | binary / config / plugin / hook の診断 |
 | `ptuf --help`, `ptuf --version` | 情報表示 |
 
@@ -106,6 +106,80 @@ codex_hooks = true
   `--config` が必要
 - `hooks.json` は JSON object、`config.toml` は valid TOML である必要がある
 - 既存 entry の検出は command 末尾 `hook codex` で行う
+
+## install verification (`--verify`)
+
+`ptuf init <agent> --verify` は配線を書いたあと、内部 Engine を起動して
+synthetic payload を 1 度だけ評価する。これは「設定ファイルが書けた」だけ
+ではなく「ptuf 本体が deny 判定に到達できる」ことをインストール直後に確認
+する目的で、CI gate や README の手動確認手順を不要にする。
+
+検査項目は 2 件:
+
+| Check | 期待結果 |
+| --- | --- |
+| Synthetic deny | `rm -rf /` payload が `core.filesystem.destructive-rm` (hard_deny) で deny される |
+| Fail-closed internal error | 不正な plugin path を含む config を builtin Engine に渡すと `core.engine.policy-load-failed` の fail-closed 経路に落ちる |
+
+両 check は **builtin rules のみ** で評価する。ユーザ policy / plugin の
+override は意図的に無視する — verify は ptuf 本体の guardrail が機能して
+いるかを確かめるものであり、ユーザ環境の効果を再現するものではない。
+
+`--verify` は `--dry-run` と同時には使えず、`--json` は `--verify` と
+セットでのみ有効。両ルールに違反した場合は parse error で exit `1` を返す。
+
+### 失敗時の挙動
+
+- 直前のインストールが `Installed` ステータスだった場合、書き込んだ
+  ファイルを **書き込み前のスナップショットに巻き戻す** (snapshot は
+  install 前の `fs::read` を temp+rename で書き戻す)。書き込み前にファイル
+  が存在しなかった場合は削除する。
+- 既に hook が登録済み (`AlreadyPresent`) の状態で verify が落ちた場合は
+  ファイルには触れず、stderr で「手動で見直すか古い設定の可能性を疑え」
+  と通知する。
+- いずれの経路でも exit code は `1`。
+
+### 出力フォーマット
+
+text 版:
+
+```text
+ptuf init claude-code: registered hook in settings=/home/alice/.claude/settings.json
+  matcher: Bash|Read|Edit|Write|WebFetch|mcp__.*
+  command: /home/alice/.local/bin/ptuf hook claude-code
+Verify:
+  Synthetic deny test: passed (rule: core.filesystem.destructive-rm)
+  Fail-closed internal error test: passed (rule: core.engine.policy-load-failed)
+  Warnings: none
+```
+
+`--verify --json` 版は `schemaVersion: 1` を持ち、以下の top-level key を
+出す。
+
+```json
+{
+  "schemaVersion": 1,
+  "agent": "claude-code",
+  "installed": true,
+  "alreadyPresent": false,
+  "paths": [{"label": "settings", "path": "/home/alice/.claude/settings.json"}],
+  "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*",
+  "command": "/home/alice/.local/bin/ptuf hook claude-code",
+  "verify": {
+    "syntheticDeny": {"status": "passed", "ruleId": "core.filesystem.destructive-rm"},
+    "failClosed":    {"status": "passed", "ruleId": "core.engine.policy-load-failed"},
+    "warnings": []
+  },
+  "rolledBack": false
+}
+```
+
+`status: "failed"` の場合は `ruleId` の代わりに `detail` フィールドが入る。
+
+`syntheticDeny.ruleId` が `core.filesystem.destructive-rm` で固定であることは
+`tests/contracts.rs` の contract test で保証される。`failClosed.ruleId` は
+`hook` / `eval` と同じ CLI fail-closed contract (`core.engine.policy-load-failed`)
+を共有する。
 
 ## hook response
 

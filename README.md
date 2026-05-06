@@ -75,8 +75,8 @@ cargo install --path .
 ptuf hook <agent>
 ptuf eval --tool <name> <command>
 ptuf plugin test <path>
-ptuf init claude-code [--dry-run] [--settings <path>]
-ptuf init codex [--dry-run] [--root <path>] [--hooks <path>] [--config <path>]
+ptuf init claude-code [--dry-run] [--settings <path>] [--verify [--json]]
+ptuf init codex [--dry-run] [--root <path>] [--hooks <path>] [--config <path>] [--verify [--json]]
 ptuf doctor [--json]
 ptuf --help
 ptuf --version
@@ -124,6 +124,8 @@ The simplest path is:
 ```bash
 ptuf init claude-code
 ptuf init claude-code --dry-run
+ptuf init claude-code --verify           # install + run synthetic deny check
+ptuf init claude-code --verify --json    # machine-readable verify report
 ```
 
 This writes or updates `~/.claude/settings.json` with a `PreToolUse` entry like:
@@ -160,6 +162,7 @@ ptuf init codex
 ptuf init codex --dry-run
 ptuf init codex --root /path/to/repo
 ptuf init codex --hooks /tmp/hooks.json --config /tmp/config.toml
+ptuf init codex --verify           # install + run synthetic deny check
 ```
 
 That writes:
