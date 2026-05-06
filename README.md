@@ -254,12 +254,17 @@ make coverage
 make pbt
 ```
 
-- `make check` runs the same five steps as CI:
-  `fmt-check`, `clippy`, `test`, `cargo doc`, and `cargo-deny`
+- `make check` runs the five core gates that block CI:
+  `fmt-check`, `clippy`, `test`, `cargo doc`, and `cargo-deny`. CI
+  additionally runs `cargo tarpaulin` (95% floor, see `make coverage`),
+  an MSRV `cargo check` on Rust 1.93.0, `actionlint`, and `cargo-machete`.
+  Daily, `cargo audit` runs as a scheduled workflow.
 - `make coverage` runs `cargo tarpaulin` with a `95%` floor and excludes
-  `src/main.rs`
+  `src/main.rs` plus Windows-specific files (`*_windows.rs`,
+  `windows*.rs`); the Windows code paths are exercised by the
+  `windows-latest` test job
 - `make pbt` reruns the property-based test suite at
-  `PBT_CASES=10000` by default
+  `PBT_CASES=10000` by default — run before tagging a release
 
 ## Design Docs
 

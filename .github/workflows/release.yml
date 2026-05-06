@@ -12,6 +12,21 @@
 #
 # Note that the GitHub Release will be created with a generated
 # title/body based on your changelogs.
+#
+# IMPORTANT — DO NOT REGENERATE BLINDLY.
+# This workflow is the cargo-dist 0.31.0 generated output with multiple
+# hand-patches that MUST be re-applied after `dist generate`:
+#   - workflow-level `permissions: contents: read` (minimal), plus
+#     per-job `permissions:` blocks (zizmor-recommended)
+#   - top-level `concurrency:` serialised per ref with
+#     cancel-in-progress: false (do not abandon partial uploads)
+#   - the `plan` step uses env (IS_PR / REF_NAME) instead of inline
+#     `${{ }}` to keep github.ref_name out of shell template expansion
+#   - third-party actions are SHA-pinned in this file
+# See CONTRIBUTING.md "Regenerating release.yml" for the runbook.
+#
+# SLSA build provenance and sigstore signing will be added later as
+# JOB-LEVEL patches on the `host` job in a separate PR.
 
 name: Release
 # Workflow-level permissions are minimized. Only the `host` job, which calls
