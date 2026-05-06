@@ -9,14 +9,22 @@ cargo-dist-version = "0.31.0"
 ci = "github"
 # The installers to generate for each app
 installers = ["shell", "powershell"]
-# Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# Target platforms to build apps for (Rust target-triple syntax).
+# Linux uses musl for fully-static binaries that run on any glibc/musl host
+# without runtime version skew — preferred for a guardrail / safety tool whose
+# install path needs to be reproducible and verifiable.
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Where to host releases
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# Use `.tar.gz` rather than the cargo-dist default `.tar.xz`. `tar -xzf`
+# is universally available; xz needs `xz-utils` which is not always installed
+# on minimal containers used in CI / supply-chain audits.
+unix-archive = ".tar.gz"
+windows-archive = ".zip"
 # `release.yml` is hand-patched (SHA-pinned actions, scoped permissions,
 # template-injection fixes, concurrency block) to satisfy zizmor auditor
 # findings. Tell cargo-dist to skip the regeneration check on the CI file.
@@ -24,7 +32,9 @@ install-updater = false
 # cargo-dist-version.
 allow-dirty = ["ci"]
 
-# Linux build profile uses `lld` (see .cargo/config.toml). Install it on the
-# CI runner so x86_64-unknown-linux-gnu builds succeed.
+# `lld` is needed for the gnu Linux dev profile (see `.cargo/config.toml`).
+# `musl-tools` provides `musl-gcc`, which the rustc musl targets use as the
+# C linker for the libc crate's `cc` invocations.
 [dist.dependencies.apt]
 lld = "*"
+musl-tools = "*"

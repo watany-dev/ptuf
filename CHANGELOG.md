@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Verified release artifacts (P0-7). The `Release` workflow now publishes
+  a combined `SHA256SUMS` covering every archive and installer, a
+  CycloneDX JSON SBOM (`ptuf-<tag>.cdx.json`) generated from
+  `Cargo.lock` via `cargo-cyclonedx`, and a SLSA v1.0 build-provenance
+  attestation produced by `actions/attest-build-provenance` and signed
+  via GitHub OIDC + sigstore. Users can now pin a version, run
+  `sha256sum --ignore-missing -c SHA256SUMS`, and optionally
+  `gh attestation verify <archive> --repo watany-dev/ptuf`. README has
+  a new "Verified install" section with Linux/macOS and Windows
+  recipes.
+- Linux release artifacts now ship as fully-static `*-musl` builds
+  (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`),
+  replacing the previous `*-gnu` artifacts. Static linking removes
+  glibc-version skew across distros and matches the safety-tool norm
+  for verifiable distribution.
+- `unix-archive = ".tar.gz"` for cargo-dist so Linux/macOS archives
+  are `tar -xzf`-extractable on minimal containers without `xz-utils`.
 - `try_decide(&HookInput) -> Result<Decision, EngineError>` — fallible
   variant of `decide()` that surfaces config / plugin load errors instead
   of falling back to a default-configured engine. Embedded callers that

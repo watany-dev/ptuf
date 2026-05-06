@@ -25,8 +25,11 @@
 #   - third-party actions are SHA-pinned in this file
 # See CONTRIBUTING.md "Regenerating release.yml" for the runbook.
 #
-# SLSA build provenance and sigstore signing will be added later as
-# JOB-LEVEL patches on the `host` job in a separate PR.
+# Supply-chain hand-patches on the `host` job (see CONTRIBUTING.md):
+#   - id-token: write / attestations: write permissions
+#   - combined SHA256SUMS generation
+#   - CycloneDX SBOM generation via cargo-cyclonedx
+#   - SLSA build-provenance attestation via actions/attest-build-provenance
 
 name: Release
 # Workflow-level permissions are minimized. Only the `host` job, which calls
@@ -263,7 +266,9 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-22.04"
     permissions:
-      contents: write  # required by `gh release create` in the Create GitHub Release step
+      contents: write       # `gh release create` in the Create GitHub Release step
+      id-token: write       # OIDC token for sigstore via attest-build-provenance
+      attestations: write   # GitHub artifact attestation API
     outputs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
@@ -308,6 +313,60 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
+      - name: Generate combined SHA256SUMS
+        # cargo-dist already emits per-archive `*.sha256` sidecar files.
+        # Users typically expect a single `SHA256SUMS` file they can pass to
+        # `sha256sum --ignore-missing -c SHA256SUMS`. Build it from the
+        # archives + installers, deliberately excluding the per-file
+        # `.sha256` sidecars (they would shadow themselves) and any
+        # `dist-manifest.json` (already removed in Cleanup).
+        working-directory: artifacts
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2046
+          shopt -s nullglob
+          files=( *.tar.gz *.zip *.sh *.ps1 )
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no release artifacts found in artifacts/" >&2
+            exit 1
+          fi
+          sha256sum -- "${files[@]}" > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+      - name: Install cargo-cyclonedx
+        # Pinned for reproducibility. Bump when upstream cuts a new release;
+        # the action runner already has a stable Rust toolchain pre-installed.
+        run: cargo install cargo-cyclonedx --locked --version 0.5.9
+      - name: Generate CycloneDX SBOM
+        env:
+          TAG: "${{ needs.plan.outputs.tag }}"
+        run: |
+          set -euo pipefail
+          cargo cyclonedx --format json
+          # cargo-cyclonedx writes `<crate>.cdx.json` next to each member's
+          # Cargo.toml. ptuf is a single-crate workspace, so glob is safe.
+          shopt -s nullglob
+          generated=( ./*.cdx.json )
+          if [ "${#generated[@]}" -ne 1 ]; then
+            echo "expected exactly one *.cdx.json, found: ${generated[*]}" >&2
+            exit 1
+          fi
+          dest="artifacts/ptuf-${TAG}.cdx.json"
+          mv -- "${generated[0]}" "$dest"
+          echo "--- SBOM head ---"
+          head -c 400 "$dest"; echo
+      - name: Attest build provenance
+        # Generates a SLSA v1.0 build-provenance attestation, signed via
+        # GitHub's OIDC token + sigstore. Verifiable with
+        # `gh attestation verify <file> --repo watany-dev/ptuf` without any
+        # cosign / sigstore-go install.
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/SHA256SUMS
+            artifacts/ptuf-*.cdx.json
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"

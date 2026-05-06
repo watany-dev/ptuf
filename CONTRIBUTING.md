@@ -97,6 +97,10 @@ The current hand-patch set:
 - Workflow-level `permissions: contents: read` (minimum), with
   per-job `permissions:` blocks granting only what each job needs
   (zizmor `excessive-permissions` requirement).
+- The `host` job additionally requests `id-token: write` and
+  `attestations: write` for `actions/attest-build-provenance`. These
+  are minimum-required for the SLSA provenance step; do not promote
+  them to the workflow level.
 - A top-level `concurrency:` group keyed on `github.ref` with
   `cancel-in-progress: false` so a re-trigger never abandons
   partially-uploaded artifacts.
@@ -105,11 +109,22 @@ The current hand-patch set:
   expansion (zizmor `template-injection`).
 - Every third-party action is pinned to a full commit SHA with a
   trailing `# vX.Y.Z` comment.
+- Three supply-chain steps live between `Cleanup` and
+  `Create GitHub Release` in the `host` job:
+  1. **Generate combined `SHA256SUMS`** — `sha256sum` over every
+     `*.tar.gz` / `*.zip` / `*.sh` / `*.ps1` artifact, written to
+     `artifacts/SHA256SUMS` with `set -euo pipefail` and a non-empty
+     guard.
+  2. **Generate CycloneDX SBOM** — `cargo install cargo-cyclonedx
+     --locked --version <pin>` then `cargo cyclonedx --format json`,
+     renamed to `artifacts/ptuf-<tag>.cdx.json`.
+  3. **`actions/attest-build-provenance`** (SHA-pinned) — produces
+     a SLSA v1.0 provenance bundle covering archives, installers,
+     `SHA256SUMS`, and the SBOM. Verifiable via
+     `gh attestation verify`.
 
 `zizmor` audit suppressions for cargo-dist patterns that cannot
-currently be patched live in `.github/zizmor.yml`. SLSA build
-provenance and sigstore signing are deferred — they will be added as
-**job-level** patches on the `host` job in a separate PR.
+currently be patched live in `.github/zizmor.yml`.
 
 ### Bumping cargo-dist
 
@@ -120,10 +135,11 @@ provenance and sigstore signing are deferred — they will be added as
 dist init  # answer prompts as before, or `dist generate`
 # 3. Re-apply the hardening patches listed above:
 #    - workflow-level `permissions: contents: read`
-#    - per-job `permissions:` blocks
+#    - per-job `permissions:` blocks (incl. host: id-token / attestations)
 #    - top-level `concurrency:` block
 #    - `plan` step env-based ref handling
 #    - SHA-pin every third-party action
+#    - host job: SHA256SUMS, SBOM, attest-build-provenance steps
 # 4. Diff against the previous release.yml carefully (the
 #    DO-NOT-REGENERATE header in release.yml lists the patch set).
 # 5. Run the workflow on a tagged PR to validate end-to-end.

@@ -56,6 +56,72 @@ Or download an archive for your platform from
 [GitHub Releases](https://github.com/watany-dev/ptuf/releases) and place the
 `ptuf` binary on your `PATH`.
 
+### Verified install (recommended for security review)
+
+Because `ptuf` runs as a guardrail on agent tool calls, prefer the verified
+path over the convenience installer when you need to attest the binary you
+are running. Each tagged release publishes:
+
+- One archive per platform (`ptuf-<target>.tar.gz` / `.zip`)
+- A combined `SHA256SUMS` covering every archive and installer
+- A CycloneDX SBOM (`ptuf-<tag>.cdx.json`)
+- A SLSA v1.0 build-provenance attestation, signed via GitHub OIDC + sigstore
+
+#### Linux / macOS
+
+```bash
+# 1. Pin a version and platform
+VERSION=v0.0.1
+PLATFORM=x86_64-unknown-linux-musl   # also: aarch64-unknown-linux-musl,
+                                     # x86_64-apple-darwin, aarch64-apple-darwin
+
+BASE="https://github.com/watany-dev/ptuf/releases/download/${VERSION}"
+
+# 2. Download archive + SHA256SUMS
+curl -LO "${BASE}/ptuf-${PLATFORM}.tar.gz"
+curl -LO "${BASE}/SHA256SUMS"
+
+# 3. Verify checksum (fails closed if the archive was tampered with)
+sha256sum --ignore-missing -c SHA256SUMS
+
+# 4. (Optional) Verify the build provenance against this repository.
+#    Requires the GitHub CLI (`gh auth login` first).
+gh attestation verify "ptuf-${PLATFORM}.tar.gz" --repo watany-dev/ptuf
+
+# 5. Extract and install
+tar -xzf "ptuf-${PLATFORM}.tar.gz"
+install -m 0755 "ptuf-${PLATFORM}/ptuf" "${HOME}/.local/bin/ptuf"
+```
+
+#### Windows (PowerShell)
+
+```powershell
+# 1. Pin a version
+$Version  = 'v0.0.1'
+$Platform = 'x86_64-pc-windows-msvc'
+$Base     = "https://github.com/watany-dev/ptuf/releases/download/$Version"
+
+# 2. Download archive + SHA256SUMS
+Invoke-WebRequest "$Base/ptuf-$Platform.zip"  -OutFile "ptuf-$Platform.zip"
+Invoke-WebRequest "$Base/SHA256SUMS"          -OutFile SHA256SUMS
+
+# 3. Verify checksum
+$expected = (Select-String -Path SHA256SUMS -Pattern "ptuf-$Platform.zip").Line.Split(' ')[0]
+$actual   = (Get-FileHash -Algorithm SHA256 "ptuf-$Platform.zip").Hash.ToLower()
+if ($expected -ne $actual) { throw "checksum mismatch: $actual != $expected" }
+
+# 4. (Optional) Verify build provenance
+gh attestation verify "ptuf-$Platform.zip" --repo watany-dev/ptuf
+
+# 5. Extract
+Expand-Archive "ptuf-$Platform.zip" -DestinationPath .
+```
+
+If you do not want to install the GitHub CLI, the same attestation can be
+verified with `cosign verify-blob-attestation` against the GitHub
+attestation API; see `gh attestation verify --help` for the underlying
+sigstore-go bundle layout.
+
 ### From crates.io
 
 ```bash
