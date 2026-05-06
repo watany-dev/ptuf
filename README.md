@@ -246,6 +246,10 @@ match decide(&input) {
 `Engine::for_cwd()` first and falls back to `Engine::default()` if policy or
 plugin loading fails. The CLI path is stricter and fails closed.
 
+For embedded callers that want the same fail-closed contract as the CLI, use
+`try_decide(&HookInput) -> Result<Decision, EngineError>` instead — it
+surfaces config and plugin load errors rather than silently degrading.
+
 ## Develop
 
 Before pushing, run:

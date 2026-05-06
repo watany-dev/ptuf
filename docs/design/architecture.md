@@ -132,7 +132,8 @@ CLI 経路 (`hook`, `eval`) は config / plugin のロードに失敗すると
 信用できないためである。
 
 一方、ライブラリ API `decide()` は組み込み呼び出しの後方互換性を優先し、
-default engine にフォールバックする。
+default engine にフォールバックする。`try_decide()` は CLI と同じ
+fail-closed 契約を embed 利用側に提供する並立 API である。
 
 ## audit
 
