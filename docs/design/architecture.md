@@ -47,7 +47,7 @@ hook response / eval text / audit JSONL
 
 | fact | 内容 |
 | --- | --- |
-| `bash` | `Bash` tool の `command` を parse した command / segment / pipeline |
+| `bash` | `Bash` tool の `command` を parse した command / segment / pipeline。`Bash::has_command_substitution` で `` ` … ` `` / `$(…)` を検出した旨を surface する (rule 側はまだ消費していない) |
 | `path` | 先頭の file path (`Read` / `Edit` / `Write` / MCP の top-level `path`) |
 | `paths` | 抽出された全 path |
 | `url` | `WebFetch` または MCP の top-level `url` |
@@ -132,7 +132,8 @@ CLI 経路 (`hook`, `eval`) は config / plugin のロードに失敗すると
 信用できないためである。
 
 一方、ライブラリ API `decide()` は組み込み呼び出しの後方互換性を優先し、
-default engine にフォールバックする。
+default engine にフォールバックする。`try_decide()` は CLI と同じ
+fail-closed 契約を embed 利用側に提供する並立 API である。
 
 ## audit
 

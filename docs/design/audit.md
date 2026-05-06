@@ -81,3 +81,8 @@ audit:
 - NFS など advisory lock が no-op になる FS では原子性を保証できないため、
   ローカルファイルシステム上に置くこと
 - 現時点で `ptuf audit` のような専用閲覧 CLI は実装していない
+- audit sink の **open 失敗** は `Engine::audit_warning()` 経由で 1 度だけ
+  surface される (CLI は stderr に流す)。**書き込み失敗** (permission /
+  disk full) は `Engine::drain_audit_write_warnings()` に蓄積し、CLI が
+  hook / eval 完了後に stderr へドレインする — どちらも tool 実行は
+  止めない (best-effort 契約)

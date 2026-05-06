@@ -29,11 +29,15 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) で次を実�
 - `Facts`
 - `HookInput`
 - `decide`
+- `try_decide`
 
 `decide(&HookInput) -> Decision` は後方互換用の薄い API であり、まず
 `Engine::for_cwd()` を試し、設定や plugin の読み込みに失敗した場合は
 `Engine::default()` にフォールバックする。CLI 経路はこれと異なり
 fail-closed で動作する。
+
+`try_decide(&HookInput) -> Result<Decision, EngineError>` は失敗を握り潰さ
+ない並立 API。embed 利用側で CLI と同じ fail-closed 契約が欲しい場合に使う。
 
 ## CLI の現在形
 
