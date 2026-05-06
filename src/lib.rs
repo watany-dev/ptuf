@@ -29,14 +29,29 @@ pub use hook_input::HookInput;
 ///
 /// Tries the CWD-derived [`Engine::for_cwd`] first so embedded callers
 /// pick up project policy when one exists. On failure (config / plugin
-/// load error) falls back silently to a default-configured engine —
-/// CLI entry points instead route through `cli::build_engine_or_fail_closed`,
-/// which fail-closes per `docs/design/cli-and-hooks.md:104-114`.
+/// load error) falls back to an [`Engine::builder`]-built engine tagged
+/// `embed-fallback`. The builder-built engine still populates
+/// [`crate::self_paths::ProtectedPaths`] (binary + HOME-rooted claude
+/// settings), so self-protection is preserved even when configuration
+/// discovery fails — closing the gap that an empty `ProtectedPaths`
+/// fallback used to leave open. CLI entry points instead route through
+/// `cli::build_engine_or_fail_closed`, which fail-closes per
+/// `docs/design/cli-and-hooks.md:104-114`.
 ///
 /// Embedded callers that want the same fail-closed contract as the CLI
 /// should call [`try_decide`] instead.
 pub fn decide(input: &HookInput) -> Decision {
-    let engine = Engine::for_cwd().unwrap_or_else(|_| Engine::default());
+    let engine = match Engine::for_cwd() {
+        Ok(engine) => engine,
+        Err(_) => match Engine::builder().agent("embed-fallback").build() {
+            Ok(engine) => engine,
+            // `Config::default()` lists no plugin paths, so this branch
+            // is structurally unreachable. Keep a `with_components`
+            // fallback for documented invariance without using
+            // `expect`, per CLAUDE.md.
+            Err(_) => Engine::with_components(config::Config::default(), plugin::PluginSet::new()),
+        },
+    };
     engine.decide(input).decision
 }
 

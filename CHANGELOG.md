@@ -38,6 +38,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`<(…)` / `>(…)`) into a single paren-balanced word. These let rules
   judge per-pipeline shapes that previously fell through the parser
   (review §2 / D4).
+- `Engine::builder()` — canonical entry point for embed callers that
+  want to inject a `Config`, `PluginSet`, `AuditSink`, or `repo_root`
+  without going through `Engine::for_cwd`. Every builder-built engine
+  runs `ProtectedPaths::collect_with_env`, so `binary` / claude / codex
+  settings are populated even with `Config::default()`. Closes the
+  embed-fallback gap left by the removed `Engine::default` shim
+  (review §1.7).
+- `Engine::protected_paths()` — read-only accessor for the engine's
+  resolved self-protection target set. Useful for embed callers and
+  tests that want to assert the binary / settings guardrail was wired.
+- `PathFact { tool, raw, expanded, absolute, canonical_or_raw, origin }`
+  expanded out of the previous `FilePath` shape. `expanded` carries the
+  `~` / `$HOME`-resolved form, `absolute` adds the `base_dir` join when
+  the input was relative, and `canonical_or_raw` falls back to
+  `absolute` for any I/O failure (missing file, permission denied,
+  symlink loop). `pub type FilePath = PathFact;` keeps the historical
+  name compiling. `PathOrigin` distinguishes `ToolInputDirect`
+  (`file_path`, MCP `path`) / `ToolInputNested` (`files[].path`,
+  `paths[]`, `items[].path`) / `ApplyPatch` / `BashRedirect` (engine
+  emits these from `Pipeline.redirects` so self-protection sees the
+  same view as file-tool inputs) (review D8).
 
 ### Changed
 - `tokenize` in `src/facts/shell.rs` now asserts forward progress on
@@ -52,6 +73,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Pipeline.redirects` surface. When `Bash::has_command_substitution`
   is set the rule falls back to the previous command-wide co-occurrence
   to preserve the safety-first false-positive bias (review D5).
+- `crate::decide` (and the engine's per-decide path) now classifies
+  Bash redirect operands (`> file`, `>> file`, `< file`, `2> file`,
+  `&> file`) against `ProtectedPaths`. Previously only positional
+  arguments to known writer heads (`rm`, `cp`, `mv`, …) were inspected,
+  so `echo y > ~/.claude/settings.json` slipped past
+  `core.self_protection.claude-settings`. Scripts that intentionally
+  redirect into a self-protection target may now produce new Deny
+  decisions; this is a bug-fix-class behaviour change (review D8).
+- `crate::decide`'s embed fallback (when `Engine::for_cwd` cannot
+  discover a config) now goes through `Engine::builder().agent(
+  "embed-fallback").build()`. The fallback engine therefore populates
+  `ProtectedPaths` with the running binary and HOME-rooted claude /
+  codex settings, where the previous `Engine::default()` fallback left
+  those slots empty. Embedded callers that depended on the empty
+  fallback to bypass self-protection will see new Deny decisions for
+  binary / settings edits (review §1.7).
+- `ProtectedPaths::collect_with_env` now pre-canonicalises every
+  target path (binary, configs, plugins, claude / codex settings, hook
+  scripts) at collect time. `path_matches` only canonicalises the
+  candidate side at match time. Net effect is a single `canonicalize()`
+  per target instead of per match; behaviour is unchanged for files
+  whose canonical form is stable across decides (review D8).
 
 ### BREAKING
 - `Bash` (in `ptuf::facts::shell`) gained a public field
@@ -63,6 +106,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `redirects: Vec<Redirect>` (with companion `Redirect` / `RedirectOp`
   types). Exhaustive destructuring of `Bash` / `Pipeline` requires `..`.
   Both types are constructed only by `parse()`.
+- `impl Default for Engine` was removed. Callers that relied on
+  `Engine::default()` should switch to `Engine::builder().build()` (or
+  `Engine::for_cwd()` when project policy is desired). The builder
+  populates `ProtectedPaths` whereas the deleted `Default` shim left
+  it empty, so the new construction path is *not* a drop-in
+  replacement when the caller expected self-protection to be a noop
+  (review §1.7).
+- `FilePath` is now a type alias for `PathFact`. Existing field
+  accesses (`fp.tool` / `fp.raw` / `fp.absolute`) keep compiling, but
+  exhaustive struct destructuring (`FilePath { tool, raw, absolute }`)
+  now requires `..` because the underlying `PathFact` adds `expanded`,
+  `canonical_or_raw`, and `origin` (review D8).
 
 ## [0.0.1] - 2026-05-05
 

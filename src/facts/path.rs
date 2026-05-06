@@ -22,16 +22,59 @@ pub enum PathTool {
     Mcp,
 }
 
-/// File-path fact derived from a `Read`/`Edit`/`Write` payload.
+/// Source carrier that produced a [`PathFact`].
+///
+/// Distinguishes top-level tool inputs (`file_path`, MCP `path`) from
+/// nested inputs (`files[].path`, `paths[]`, `items[].path`),
+/// `apply_patch` patch lines, and Bash redirect targets. Rules and
+/// self-protection use this to decide whether a path is a write
+/// destination (and therefore eligible for guardrail checks) or merely
+/// a read reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PathOrigin {
+    /// Top-level `file_path` (Read/Edit/Write) or top-level MCP `path`.
+    ToolInputDirect,
+    /// Nested MCP carriers: `files[].path`, `items[].path`, `paths[]`.
+    ToolInputNested,
+    /// `apply_patch` `*** Add/Update/Delete/Move` lines.
+    ApplyPatch,
+    /// Bash redirect operand (`>`, `>>`, `<`, `2>`, `&>`). Surfaced
+    /// only by the engine — never emitted by [`extract_all_with_env`]
+    /// because Bash inputs do not carry a tool-level `file_path`.
+    BashRedirect,
+}
+
+/// File-path fact derived from a tool payload.
+///
+/// Preserves the source string (`raw`), the env-expanded form
+/// (`expanded`), the absolutised form (`absolute`), and a best-effort
+/// canonicalised form (`canonical_or_raw`) so self-protection,
+/// file-tool, and Bash redirect classification all see the same view.
+/// `canonical_or_raw` falls back to `absolute` for any I/O failure
+/// (missing file, permission denied, symlink loop) so consumers never
+/// have to handle `Option`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FilePath {
+pub struct PathFact {
     pub tool: PathTool,
-    /// The string exactly as it appeared in `tool_input.file_path`.
+    /// The string exactly as it appeared in the tool payload.
     pub raw: String,
     /// `~` / `$HOME` / `${HOME}` expanded against the supplied env.
     /// Falls back to `raw` when `HOME` is unset.
+    pub expanded: PathBuf,
+    /// `expanded` joined onto `base_dir` when relative; identical to
+    /// `expanded` when already absolute or no `base_dir` is supplied.
     pub absolute: PathBuf,
+    /// `absolute.canonicalize()` on success, otherwise a clone of
+    /// `absolute`. Symlinks are collapsed when filesystem state allows.
+    pub canonical_or_raw: PathBuf,
+    /// Source carrier this fact was extracted from.
+    pub origin: PathOrigin,
 }
+
+/// Backward-compatible alias kept so call sites that reference the
+/// historical `FilePath` name continue to compile. New code should
+/// prefer [`PathFact`].
+pub type FilePath = PathFact;
 
 /// Expand `~` / `$HOME` forms and, when requested, resolve a relative
 /// path against `base_dir`.
@@ -45,15 +88,15 @@ pub(crate) fn resolve_with_env(raw: &str, base_dir: Option<&Path>, env: &dyn Env
     expanded
 }
 
-/// Build all visible [`FilePath`]s using the supplied env lookup. The
+/// Build all visible [`PathFact`]s using the supplied env lookup. The
 /// `facts::extract` default path uses [`SystemEnv`]; tests inject a
 /// `MapEnv` to verify `~` expansion deterministically.
 ///
 /// MCP tool calls (`mcp__<server>__<tool>`) are normalised on generic
 /// path carriers, including `path`, `paths[]`, `files[].path`, and
 /// `items[].path`.
-pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<FilePath> {
-    let (tool, values): (PathTool, Vec<String>) = match input.tool_name.as_str() {
+pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathFact> {
+    let (tool, tagged): (PathTool, Vec<(String, PathOrigin)>) = match input.tool_name.as_str() {
         "Read" | "Edit" | "Write" => {
             let tool = match input.tool_name.as_str() {
                 "Read" => PathTool::Read,
@@ -64,7 +107,7 @@ pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<FileP
                 .tool_input
                 .get("file_path")
                 .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
+                .map(|raw| (raw.to_owned(), PathOrigin::ToolInputDirect))
                 .into_iter()
                 .collect();
             (tool, values)
@@ -75,19 +118,18 @@ pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<FileP
                 .get("command")
                 .and_then(serde_json::Value::as_str)
                 .map(collect_apply_patch_paths)
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .into_iter()
+                .map(|raw| (raw, PathOrigin::ApplyPatch))
+                .collect();
             (PathTool::ApplyPatch, values)
         }
         _ if input.is_mcp_tool() => (PathTool::Mcp, collect_mcp_paths(&input.tool_input)),
         _ => return Vec::new(),
     };
-    values
+    tagged
         .into_iter()
-        .map(|raw| FilePath {
-            tool,
-            absolute: resolve_with_env(&raw, None, env),
-            raw,
-        })
+        .map(|(raw, origin)| PathFact::from_raw(raw, tool, origin, None, env))
         .collect()
 }
 
@@ -107,19 +149,25 @@ pub fn extract_all(input: &HookInput) -> Vec<FilePath> {
     extract_all_with_env(input, &SystemEnv)
 }
 
-fn collect_mcp_paths(value: &serde_json::Value) -> Vec<String> {
+fn collect_mcp_paths(value: &serde_json::Value) -> Vec<(String, PathOrigin)> {
     let mut out = Vec::new();
-    push_string(value.get("path"), &mut out);
+    if let Some(s) = value.get("path").and_then(serde_json::Value::as_str) {
+        out.push((s.to_string(), PathOrigin::ToolInputDirect));
+    }
     for key in ["files", "items"] {
         if let Some(items) = value.get(key).and_then(serde_json::Value::as_array) {
             for item in items {
-                push_string(item.get("path"), &mut out);
+                if let Some(s) = item.get("path").and_then(serde_json::Value::as_str) {
+                    out.push((s.to_string(), PathOrigin::ToolInputNested));
+                }
             }
         }
     }
     if let Some(paths) = value.get("paths").and_then(serde_json::Value::as_array) {
         for item in paths {
-            push_string(Some(item), &mut out);
+            if let Some(s) = item.as_str() {
+                out.push((s.to_string(), PathOrigin::ToolInputNested));
+            }
         }
     }
     out
@@ -146,9 +194,36 @@ fn collect_apply_patch_paths(command: &str) -> Vec<String> {
     out
 }
 
-fn push_string(value: Option<&serde_json::Value>, out: &mut Vec<String>) {
-    if let Some(raw) = value.and_then(serde_json::Value::as_str) {
-        out.push(raw.to_string());
+impl PathFact {
+    /// Build a [`PathFact`] from a raw path string and its source
+    /// metadata. Resolves expansion, absolutisation, and a best-effort
+    /// canonicalisation in one pass. Public so the engine can produce
+    /// [`PathOrigin::BashRedirect`] facts from parsed Bash pipelines.
+    pub fn from_raw(
+        raw: String,
+        tool: PathTool,
+        origin: PathOrigin,
+        base_dir: Option<&Path>,
+        env: &dyn EnvLookup,
+    ) -> Self {
+        let expanded = expand_home(&raw, env);
+        let absolute = if expanded.is_relative() {
+            match base_dir {
+                Some(base) => base.join(&expanded),
+                None => expanded.clone(),
+            }
+        } else {
+            expanded.clone()
+        };
+        let canonical_or_raw = absolute.canonicalize().unwrap_or_else(|_| absolute.clone());
+        Self {
+            tool,
+            raw,
+            expanded,
+            absolute,
+            canonical_or_raw,
+            origin,
+        }
     }
 }
 
@@ -289,6 +364,53 @@ mod tests {
         let i = input("Read", serde_json::json!("~/.ssh/id"));
         let fp = extract_with_env(&i, &MapEnv::empty()).unwrap();
         assert_eq!(fp.absolute, PathBuf::from("~/.ssh/id"));
+    }
+
+    #[test]
+    fn path_fact_canonical_falls_back_to_absolute_when_missing() {
+        // Closes the D8 contract: `canonical_or_raw` is total — for any
+        // absolute path that does not exist on disk, it equals
+        // `absolute` rather than panicking or producing an empty
+        // `PathBuf`.
+        let i = input(
+            "Read",
+            serde_json::json!("/ptuf-d8-nonexistent/most-likely-missing"),
+        );
+        let fp = extract_with_env(&i, &MapEnv::with_home("/h")).expect("path");
+        assert_eq!(fp.canonical_or_raw, fp.absolute);
+        assert_eq!(
+            fp.canonical_or_raw,
+            PathBuf::from("/ptuf-d8-nonexistent/most-likely-missing")
+        );
+    }
+
+    #[test]
+    fn path_fact_origin_distinguishes_apply_patch_from_direct() {
+        let direct = input("Edit", serde_json::json!("/tmp/x"));
+        let direct_fp = extract_with_env(&direct, &MapEnv::with_home("/h")).expect("path");
+        assert_eq!(direct_fp.origin, PathOrigin::ToolInputDirect);
+
+        let patched = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Add File: x\n*** End Patch\n"
+            }),
+        };
+        let patch_fp = extract_with_env(&patched, &MapEnv::with_home("/h")).expect("path");
+        assert_eq!(patch_fp.origin, PathOrigin::ApplyPatch);
+    }
+
+    #[test]
+    fn path_fact_mcp_nested_origin_is_nested() {
+        let i = HookInput {
+            tool_name: "mcp__github__push_files".into(),
+            tool_input: serde_json::json!({
+                "files": [{"path": "/tmp/nested"}],
+            }),
+        };
+        let paths = extract_all_with_env(&i, &MapEnv::with_home("/h"));
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].origin, PathOrigin::ToolInputNested);
     }
 
     #[test]

@@ -19,6 +19,17 @@ use serde_json::json;
 use ptuf::hook_output::from_decision;
 use ptuf::{Decision, Engine, HookInput};
 
+/// Build an engine with the default configuration via the public
+/// builder. The previous `default_engine()` shim was removed when the
+/// builder became canonical (see `docs/review/open-issues.md` §1.7); the
+/// builder run cannot fail for `Config::default()` because no plugins
+/// are listed.
+fn default_engine() -> Engine {
+    Engine::builder()
+        .build()
+        .expect("Engine::builder with default config cannot fail")
+}
+
 const DANGEROUS_HEADS: &[&str] = &[
     "rm", "/bin/rm", "curl", "wget", "scp", "rsync", "nc", "sudo", "bash", "python",
 ];
@@ -83,7 +94,7 @@ proptest! {
     // The default engine pipeline never panics on any structured input.
     #[test]
     fn pbt_default_engine_decide_is_total(input in hook_input()) {
-        let _ = Engine::default().decide(&input);
+        let _ = default_engine().decide(&input);
     }
 
     // Adversarial: even arbitrary printable ASCII as a Bash `command`
@@ -94,14 +105,14 @@ proptest! {
             tool_name: "Bash".into(),
             tool_input: json!({ "command": cmd }),
         };
-        let _ = Engine::default().decide(&input);
+        let _ = default_engine().decide(&input);
     }
 
     // The hook-output envelope contract: only Ask / Deny produce a
     // response; that response carries the decision's reason verbatim.
     #[test]
     fn pbt_hook_output_envelope_matches_decision(input in hook_input()) {
-        let outcome = Engine::default().decide(&input);
+        let outcome = default_engine().decide(&input);
         match outcome.decision {
             Decision::Allow | Decision::Monitor { .. } => {
                 prop_assert!(from_decision(&outcome.decision).is_none());
@@ -128,7 +139,7 @@ proptest! {
     // The stateless `decide` shim agrees with the engine's own decision.
     #[test]
     fn pbt_stateless_decide_matches_engine(input in hook_input()) {
-        let engine_dec = Engine::default().decide(&input).decision;
+        let engine_dec = default_engine().decide(&input).decision;
         let shim_dec = ptuf::decide(&input);
         prop_assert_eq!(engine_dec, shim_dec);
     }
@@ -138,7 +149,7 @@ proptest! {
     // engine never invents free-floating Deny/Ask/Monitor decisions.
     #[test]
     fn pbt_non_allow_decisions_carry_non_empty_rule_id(input in hook_input()) {
-        let dec = Engine::default().decide(&input).decision;
+        let dec = default_engine().decide(&input).decision;
         match &dec {
             Decision::Allow => {}
             Decision::Monitor { rule_id }
@@ -153,7 +164,7 @@ proptest! {
     // and never reports a demotion.
     #[test]
     fn pbt_default_engine_outcome_is_enforce(input in hook_input()) {
-        let outcome = Engine::default().decide(&input);
+        let outcome = default_engine().decide(&input);
         prop_assert_eq!(outcome.mode, ptuf::config::Mode::Enforce);
         prop_assert!(!outcome.mode_demoted);
     }
@@ -162,8 +173,8 @@ proptest! {
     // the default engine.
     #[test]
     fn pbt_default_engine_is_deterministic(input in hook_input()) {
-        let a = Engine::default().decide(&input).decision;
-        let b = Engine::default().decide(&input).decision;
+        let a = default_engine().decide(&input).decision;
+        let b = default_engine().decide(&input).decision;
         prop_assert_eq!(a, b);
     }
 
@@ -173,7 +184,7 @@ proptest! {
     // stay decoupled from the message format.
     #[test]
     fn pbt_deny_reason_is_non_empty(input in hook_input()) {
-        if let Decision::Deny { reason, .. } = Engine::default().decide(&input).decision {
+        if let Decision::Deny { reason, .. } = default_engine().decide(&input).decision {
             prop_assert!(!reason.is_empty());
         }
     }

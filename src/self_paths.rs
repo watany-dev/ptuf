@@ -150,11 +150,25 @@ impl ProtectedPaths {
             }
         }
 
+        // Pre-cache `canonical_or_raw` on every target list so
+        // `path_matches` only canonicalises the candidate. Symlinks
+        // collapse for files that exist; non-existent targets keep
+        // their raw form, which still matches a likewise non-existent
+        // candidate via byte equality.
+        let binary = std::env::current_exe()
+            .ok()
+            .map(|p| p.canonicalize().unwrap_or(p));
+        let configs = canonicalise_each(configs);
+        let plugins = canonicalise_each(config.plugin_paths.clone());
+        let claude_settings = canonicalise_each(claude_settings);
+        let codex_settings = canonicalise_each(codex_settings);
+        let hook_scripts = canonicalise_each(hook_scripts);
+
         Self {
             repo_root: repo_root.map(Path::to_path_buf),
-            binary: std::env::current_exe().ok(),
+            binary,
             configs,
-            plugins: config.plugin_paths.clone(),
+            plugins,
             claude_settings,
             codex_settings,
             hook_scripts,
@@ -226,16 +240,30 @@ impl ProtectedPaths {
     }
 }
 
-/// True when `candidate` refers to the same file as `target`. Tries
-/// `canonicalize` first so symlinks collapse, then falls back to a
-/// raw byte comparison so missing files still match.
+/// Replace each entry with its `canonicalize().unwrap_or(self)` form
+/// so the target side never re-canonicalises during match-time. The
+/// helper is shared across every protected list; non-existent targets
+/// keep their raw form, which still matches a likewise non-existent
+/// candidate via byte equality.
+fn canonicalise_each(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths
+        .into_iter()
+        .map(|p| p.canonicalize().unwrap_or(p))
+        .collect()
+}
+
+/// True when `candidate` refers to the same file as `target`. The
+/// caller guarantees that `target` was already passed through
+/// [`canonicalise_each`] at collect time, so we only canonicalise the
+/// candidate here. Falls back to byte equality so missing files still
+/// match when both sides spell the path identically.
 fn path_matches(candidate: &Path, target: &Path) -> bool {
     if candidate == target {
         return true;
     }
-    match (candidate.canonicalize(), target.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
+    match candidate.canonicalize() {
+        Ok(c) => c == target,
+        Err(_) => false,
     }
 }
 
@@ -479,6 +507,65 @@ mod tests {
             p.hook_scripts
                 .iter()
                 .any(|path| path == &PathBuf::from("/repo/./hooks/guard.sh"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn relative_hook_command_canonicalizes_against_settings_dir() {
+        #![allow(clippy::expect_used)]
+        // D8: a HOME claude settings file referencing `./hooks/guard.sh`
+        // must classify a candidate Edit on the canonical hook path as
+        // `HookScript`. `Path` equality already collapses `CurDir`
+        // components so this passes today, but the regression check
+        // pins the cross-tool consistency contract — a relative hook
+        // command and a candidate edit on the same physical file must
+        // converge on the same `ProtectedKind` regardless of whether
+        // either side carries a leading `./`.
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-canonical-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let home = dir.join("home");
+        let hooks_dir = home.join(".claude/hooks");
+        std::fs::create_dir_all(&hooks_dir).expect("mkdir hooks");
+        std::fs::write(
+            home.join(".claude/settings.json"),
+            r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "./hooks/guard.sh hook claude-code" }
+        ]
+      }
+    ]
+  }
+}"#,
+        )
+        .expect("write settings");
+        let guard = hooks_dir.join("guard.sh");
+        std::fs::write(&guard, "#!/bin/sh\n").expect("write guard");
+        let home_string = home.to_string_lossy().into_owned();
+        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
+        let candidate = guard
+            .canonicalize()
+            .expect("guard.sh canonicalises to a real path");
+        let input = HookInput {
+            tool_name: "Edit".into(),
+            tool_input: serde_json::json!({
+                "file_path": candidate.to_str().expect("utf-8"),
+            }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(
+            labels.contains(&ProtectedKind::HookScript),
+            "expected HookScript classification, got {labels:?} (hook_scripts: {:?})",
+            p.hook_scripts,
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
