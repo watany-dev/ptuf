@@ -38,7 +38,57 @@ v0.0.1 ships:
 
 ## Install
 
-### Pre-built binaries (recommended)
+### Verified install (recommended)
+
+Because `ptuf` runs as a `PreToolUse` guardrail, the recommended path is to
+pin a version, verify the SHA-256 checksum, and verify the GitHub-issued
+[Build Provenance Attestation][provenance] before extracting.
+
+[provenance]: https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds
+
+```bash
+VERSION=v0.0.1
+TARGET=x86_64-unknown-linux-musl   # or x86_64-unknown-linux-gnu,
+                                   # aarch64-unknown-linux-gnu,
+                                   # x86_64-apple-darwin,
+                                   # aarch64-apple-darwin,
+                                   # x86_64-pc-windows-msvc (use .zip below)
+ARCHIVE="ptuf-${TARGET}.tar.gz"
+BASE="https://github.com/watany-dev/ptuf/releases/download/${VERSION}"
+
+# 1. Download the archive and the aggregate checksum file.
+curl -LO "${BASE}/${ARCHIVE}"
+curl -LO "${BASE}/SHA256SUMS"
+
+# 2. Verify the SHA-256 checksum.
+sha256sum --ignore-missing -c SHA256SUMS
+
+# 3. Verify the Sigstore-backed build provenance attestation.
+#    Requires `gh` CLI 2.49+.
+gh attestation verify "${ARCHIVE}" --owner watany-dev
+
+# 4. Extract and install.
+tar -xzf "${ARCHIVE}"
+sudo install -m 0755 "ptuf-${TARGET}/ptuf" /usr/local/bin/ptuf
+ptuf --version
+```
+
+Optionally inspect the SPDX SBOM:
+
+```bash
+curl -LO "${BASE}/ptuf-${VERSION}.spdx.json"
+jq '.packages[].name' "ptuf-${VERSION}.spdx.json"
+```
+
+> Verification artifacts (`SHA256SUMS`, `ptuf-<version>.spdx.json`,
+> attestations) are attached by the `Release Verify` workflow that runs
+> after `release: published`. They may take a few minutes to appear after
+> the release goes live.
+
+### Quick install (unverified)
+
+These installers trust GitHub TLS only — no checksum or attestation
+verification. Convenient for ephemeral or interactive use.
 
 Linux / macOS:
 
@@ -51,10 +101,6 @@ Windows (PowerShell):
 ```powershell
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/latest/download/ptuf-installer.ps1 | iex"
 ```
-
-Or download an archive for your platform from
-[GitHub Releases](https://github.com/watany-dev/ptuf/releases) and place the
-`ptuf` binary on your `PATH`.
 
 ### From crates.io
 

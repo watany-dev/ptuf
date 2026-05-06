@@ -51,3 +51,36 @@ Out of scope (treat as feature requests, not vulnerabilities):
 
 Until a `1.0.0` release, only the latest published version receives
 security fixes.
+
+## Verifying Releases
+
+Every tagged release publishes:
+
+- One `ptuf-<target>.tar.gz` (or `.zip` on Windows) per supported target
+- `SHA256SUMS` — aggregate SHA-256 of every archive plus the SBOM
+- `ptuf-<tag>.spdx.json` — Syft-generated SPDX 2.3 SBOM of the
+  source dependency tree (`Cargo.lock`)
+- GitHub Build Provenance Attestations on every archive and on the
+  `SHA256SUMS` file (Sigstore-backed, OIDC-issued, no long-lived keys)
+- An SBOM Attestation linking the SBOM to each archive
+
+The recommended verification flow (also documented in `README.md`):
+
+```bash
+sha256sum --ignore-missing -c SHA256SUMS
+gh attestation verify <archive> --owner watany-dev
+```
+
+The `SHA256SUMS` file itself is covered by build-provenance attestation,
+so `gh attestation verify SHA256SUMS --owner watany-dev` lets you anchor
+trust on the aggregate file before relying on `sha256sum -c`.
+
+### Operational notes
+
+- Verification artifacts are attached by a separate workflow that runs
+  on `release: published`. They typically appear within a few minutes
+  of the release going live; for very fresh releases, allow some time
+  before running the verification commands.
+- If `gh attestation verify` returns a failure for a release that you
+  obtained from an official source, treat it as a security incident and
+  use the **Reporting a Vulnerability** channel above before installing.
