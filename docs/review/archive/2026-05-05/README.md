@@ -36,6 +36,8 @@
 | §1.6 | `crate::decide()` が config / plugin load error を握り潰す | 並立する `try_decide(&HookInput) -> Result<Decision, EngineError>` を追加。CLI と同じ fail-closed 契約を embed 利用側にも提供 (`src/lib.rs:35-58`) |
 | D9 | audit write failure が `let _ = ...` で握り潰されている | `Engine::audit_write_warnings: Mutex<Vec<String>>` に蓄積し、`drain_audit_write_warnings()` で取得。CLI hook / eval が完了後に stderr へドレインする (`src/engine.rs:30-44, 230-243, 312-358`, `src/cli.rs:371-400`) |
 | §5.3 | audit JSONL の `write_all` ループで PIPE_BUF 超え行が分割書き込みになり複数 process 同時 audit で行が混ざる | `JsonlSink::record` が record 毎に `std::fs::File::lock`/`unlock` で OS-level advisory lock (Unix `flock(2)` / Windows `LockFileEx`) を取り、独立 OFD でも行が混ざらないことを cross-OFD 並列テストで検証 (`src/audit/mod.rs::JsonlSink::record`, `src/audit/writer.rs`) |
+| §4.2 | `parse_argv` が `Vec::remove(0)` で head と env assignment を剥がすため argv 長 N に対し O(N²) | `parse_argv` 内で `Vec` を `VecDeque` に変換し `pop_front` で剥がすよう変更 (`src/facts/shell.rs::parse_argv`) |
+| §6.3 | テスト群が `std::env::temp_dir().join(format!(pid, line!))` を手書きし、panic 時に scratch dir が残る・cleanup boilerplate が散在する | `tempfile = "3"` を `[dev-dependencies]` に追加し、`src/audit/writer.rs` 2 件・`src/engine.rs` 1 件・`tests/cli_smoke.rs` 9 件を `tempfile::TempDir::new()` の RAII Drop に置換 |
 
 その他の項目 (parser 限界、redaction 網羅性、CLI parser
 サイズ、モジュール肥大化、契約 fixture 不在など) は

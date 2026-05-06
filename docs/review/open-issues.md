@@ -4,7 +4,7 @@
 **現時点 (`v0.0.1` HEAD) でも未解決の指摘のみ** を抜粋して整理する。
 解決済みは [archive/2026-05-05/README.md](archive/2026-05-05/README.md)
 を参照 (D1 / D2 / D3 / D6 / D7 / §3.1 / §3.2 / §3.3 / §3.5 / §1.6 /
-§5.3 / D9 を解消)。
+§5.3 / D9 / §4.2 / §6.3 を解消)。
 
 各項目には次を付ける:
 
@@ -59,8 +59,6 @@ shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/archite
 - **§4.1** `Argv.head: String`, `args: Vec<String>` が all-owned。
   `parse<'a>(&'a str) -> Bash<'a>` で借用可。コード:
   `src/facts/shell.rs:28-35`
-- **§4.2** `parse_argv` の `words.remove(0)` が O(N²)。`VecDeque::pop_front`
-  で O(N)。コード: `src/facts/shell.rs:217,225`
 - **§4.3** `Decision::Deny.reason: String` を `reason::build()` で毎回
   構築。`Cow<'static, str>` か lazy formatter で Allow ホットパスから
   外す。コード: `src/reason.rs`, `src/decision.rs`
@@ -120,10 +118,6 @@ shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/archite
   周辺) のような「coverage を埋めるためだけ」のテストを誘発する。
   branch coverage 指標への置換、または coverage 数値を捨てる方針転換。
   優先度: P2
-- **§6.3** `temp_dir().join(format!(...))` の手動 cleanup が複数箇所。
-  `tempfile::TempDir` への置換で RAII / panic safety を確保。コード:
-  `src/audit/writer.rs:111`, `src/audit/writer.rs:129`,
-  `src/engine.rs:1046`, `tests/cli_smoke.rs` (8 箇所)。優先度: P2
 - **D12** 契約 fixture (`tests/contracts/*`) が無い。`coverage 95%` を
   満たしても、設計書が「実装済み」と書く契約の未実装が検出されない。
   CLI exit code、stdout/stderr、audit schema、doctor JSON、plugin
