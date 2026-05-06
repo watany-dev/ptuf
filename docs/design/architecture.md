@@ -47,7 +47,7 @@ hook response / eval text / audit JSONL
 
 | fact | 内容 |
 | --- | --- |
-| `bash` | `Bash` tool の `command` を parse した command / segment / pipeline。`Bash::has_command_substitution` で `` ` … ` `` / `$(…)` を検出した旨を surface する (rule 側はまだ消費していない) |
+| `bash` | `Bash` tool の `command` を parse した command / segment / pipeline。`Pipeline.redirects` で `>` / `>>` / `<` / `2>` / `&>` / heredoc の operator と target を保持する。`Bash::has_command_substitution` / `has_redirect` / `has_heredoc` / `has_process_substitution` で `` ` … ` `` / `$(…)` / リダイレクト / heredoc / `<(…)` `>(…)` の存在を surface する (一部 rule は pessimistic fallback に利用) |
 | `path` | 先頭の file path (`Read` / `Edit` / `Write` / MCP の top-level `path`) |
 | `paths` | 抽出された全 path |
 | `url` | `WebFetch` または MCP の top-level `url` |

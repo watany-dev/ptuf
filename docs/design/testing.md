@@ -43,6 +43,14 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - 空白のみ ⇒ `segments.is_empty()`
 - セパレータをシングルクォートで囲んだ文字列は単一 segment になる
 - `flags()` と `positional()` は `args` の互いに素な分割
+- redirect operator (`>` / `>>` / `<` / `2>` / `&>`) は `Pipeline.redirects`
+  に保存され、続く word が target になる
+- heredoc (`<<TAG` / `<<-TAG`) の body は terminator までを 1 word として
+  `Redirect.target` に保持し、`Bash::has_heredoc` を true にする
+- process substitution (`<(...)` / `>(...)`) は paren-balance で 1 word として
+  吸収され `Bash::has_process_substitution` を true にする
+- tokenizer は 1 byte 以上前進する (forward-progress;
+  `debug_assert!(advanced > 0)`)
 
 ### 組み込み rule (全件)
 

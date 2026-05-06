@@ -3,6 +3,7 @@ use crate::facts::Facts;
 use crate::{Decision, HookInput};
 
 pub mod destructive_rm;
+pub mod dynamic_eval;
 pub mod git;
 pub mod patterns;
 pub mod project_hygiene;
@@ -45,6 +46,7 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &destructive_rm::DestructiveRm,
     &remote_pipe::RemoteScriptPipe,
     &sensitive_net::SensitivePathToNetwork,
+    &dynamic_eval::DynamicEval,
     &git::FORCE_PUSH_RULE,
     &git::FORCE_PUSH_WITH_LEASE_RULE,
     &git::RESET_HARD_RULE,
@@ -145,6 +147,7 @@ mod tests {
             assert!(ids.contains(&self_id), "missing rule_id {self_id}");
         }
         assert!(ids.contains(&"core.secrets.sensitive-read"));
+        assert!(ids.contains(&"core.engine.dynamic-eval"));
         for hyg_id in [
             "core.project_hygiene.lock-mismatch-pnpm",
             "core.project_hygiene.lock-mismatch-uv",
