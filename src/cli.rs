@@ -66,19 +66,24 @@ pub(crate) fn build_engine_or_fail_closed<W: Write>(
     stderr: &mut W,
     agent: &'static str,
 ) -> Result<Engine, Decision> {
-    Engine::for_cwd()
-        .map(|engine| engine.with_agent(agent))
-        .map_err(|err| {
+    match Engine::for_cwd() {
+        Ok(engine) => Ok(engine.with_agent(agent)),
+        Err(err) => {
             let _ = writeln!(stderr, "ptuf: could not load policy: {err}");
-            Decision::Deny {
-                rule_id: POLICY_LOAD_FAILED_RULE.into(),
-                reason: reason::build(
-                    POLICY_LOAD_FAILED_RULE,
-                    "ptuf could not load policy and is failing closed",
-                    &["fix the configuration error reported on stderr and re-run"],
-                ),
-            }
-        })
+            Err(policy_load_failed_deny())
+        }
+    }
+}
+
+fn policy_load_failed_deny() -> Decision {
+    Decision::Deny {
+        rule_id: POLICY_LOAD_FAILED_RULE.into(),
+        reason: reason::build(
+            POLICY_LOAD_FAILED_RULE,
+            "ptuf could not load policy and is failing closed",
+            &["fix the configuration error reported on stderr and re-run"],
+        ),
+    }
 }
 
 /// Parsed CLI invocation. The bare invocation (no arguments) is
@@ -352,43 +357,30 @@ fn run_hook<R: Read, W1: Write, W2: Write>(
     stderr: &mut W2,
 ) -> u8 {
     let mut buf = String::new();
-    if stdin
+    let read = stdin
         .take(MAX_HOOK_STDIN_BYTES + 1)
-        .read_to_string(&mut buf)
-        .is_err()
-    {
+        .read_to_string(&mut buf);
+    if read.is_err() {
         let _ = writeln!(stderr, "ptuf: failed to read stdin");
-        return emit_decision(
-            agent,
-            &invalid_payload_deny("stdin read failure"),
-            stdout,
-            stderr,
-        );
+        let deny = invalid_payload_deny("stdin read failure");
+        return emit_decision(agent, &deny, stdout, stderr);
     }
     if buf.len() as u64 > MAX_HOOK_STDIN_BYTES {
         let _ = writeln!(
             stderr,
             "ptuf: hook payload exceeds {MAX_HOOK_STDIN_BYTES} bytes"
         );
-        return emit_decision(
-            agent,
-            &invalid_payload_deny(&format!(
-                "hook payload exceeds the {MAX_HOOK_STDIN_BYTES}-byte limit"
-            )),
-            stdout,
-            stderr,
-        );
+        let problem = format!("hook payload exceeds the {MAX_HOOK_STDIN_BYTES}-byte limit");
+        let deny = invalid_payload_deny(&problem);
+        return emit_decision(agent, &deny, stdout, stderr);
     }
     let input: HookInput = match serde_json::from_str(&buf) {
         Ok(v) => v,
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: invalid hook payload: {err}");
-            return emit_decision(
-                agent,
-                &invalid_payload_deny(&format!("hook payload is not valid JSON ({err})")),
-                stdout,
-                stderr,
-            );
+            let problem = format!("hook payload is not valid JSON ({err})");
+            let deny = invalid_payload_deny(&problem);
+            return emit_decision(agent, &deny, stdout, stderr);
         }
     };
     let decision = match build_engine_or_fail_closed(stderr, agent.audit_name()) {
@@ -542,36 +534,31 @@ fn run_init_codex(
 }
 
 fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: bool, stdout: &mut W) {
-    let path_summary = outcome
+    let parts: Vec<String> = outcome
         .paths
         .iter()
         .map(|p| format!("{}={}", p.label, p.path.display()))
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect();
+    let path_summary = parts.join(", ");
+    let agent = outcome.agent;
     match outcome.status {
         init::InstallStatus::AlreadyPresent => {
             let suffix = if dry_run { " (dry-run)" } else { "" };
-            let _ = writeln!(
-                stdout,
-                "ptuf init {}{suffix}: {path_summary} already contains a ptuf hook entry; nothing to do.",
-                outcome.agent
+            let line = format!(
+                "ptuf init {agent}{suffix}: {path_summary} already contains a ptuf hook entry; nothing to do."
             );
+            let _ = writeln!(stdout, "{line}");
         }
         init::InstallStatus::Installed => {
-            let _ = writeln!(
-                stdout,
-                "ptuf init {}: registered hook in {path_summary}",
-                outcome.agent
-            );
+            let line = format!("ptuf init {agent}: registered hook in {path_summary}");
+            let _ = writeln!(stdout, "{line}");
             let _ = writeln!(stdout, "  matcher: {}", outcome.matcher);
             let _ = writeln!(stdout, "  command: {}", outcome.command);
         }
         init::InstallStatus::WouldInstall => {
-            let _ = writeln!(
-                stdout,
-                "ptuf init {} (dry-run): would register hook in {path_summary}",
-                outcome.agent
-            );
+            let line =
+                format!("ptuf init {agent} (dry-run): would register hook in {path_summary}");
+            let _ = writeln!(stdout, "{line}");
             let _ = writeln!(stdout, "  matcher: {}", outcome.matcher);
             let _ = writeln!(stdout, "  command: {}", outcome.command);
             let _ = writeln!(stdout, "Run without --dry-run to apply.");
@@ -1469,5 +1456,218 @@ rules:
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn hook_agent_audit_name_strings() {
+        assert_eq!(HookAgent::ClaudeCode.audit_name(), "claude-code");
+        assert_eq!(HookAgent::Codex.audit_name(), "codex");
+    }
+
+    #[test]
+    fn parses_init_rejects_unknown_agent() {
+        assert!(matches!(
+            parse(&s(&["init", "bogus"])),
+            Err(ParseError::UnknownAgent(_))
+        ));
+    }
+
+    #[test]
+    fn parses_init_codex_with_alternate_flag_forms() {
+        let cmd = parse(&s(&[
+            "init",
+            "codex",
+            "--root=/repo",
+            "--hooks",
+            "/tmp/hooks.json",
+            "--config=/tmp/config.toml",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Codex(CodexInitOptions {
+                    root: Some(PathBuf::from("/repo")),
+                    hooks_path: Some(PathBuf::from("/tmp/hooks.json")),
+                    config_path: Some(PathBuf::from("/tmp/config.toml")),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_eval_rejects_extra_positional() {
+        assert!(matches!(
+            parse(&s(&["eval", "--tool", "Bash", "ls", "extra"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn hook_codex_evaluates_valid_payload_through_engine() {
+        let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let (code, _out, _err) = run_with(&["hook", "codex"], payload);
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn hook_codex_converts_engine_ask_to_deny() {
+        let payload = r#"{"tool_name":"Bash","tool_input":{"command":"bash -c 'echo hi'"}}"#;
+        let (code, out, _err) = run_with(&["hook", "codex"], payload);
+        assert_eq!(code, 2);
+        assert!(
+            out.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out}"
+        );
+    }
+
+    #[test]
+    fn render_install_outcome_renders_installed_status() {
+        let outcome = init::InstallOutcome {
+            agent: "claude-code",
+            paths: vec![init::InstallPath {
+                label: "settings",
+                path: PathBuf::from("/tmp/settings.json"),
+            }],
+            matcher: "Bash|Read".into(),
+            command: "/bin/ptuf hook claude-code".into(),
+            status: init::InstallStatus::Installed,
+        };
+        let mut out = Vec::new();
+        render_install_outcome(&outcome, false, &mut out);
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.contains("registered hook"), "out: {s}");
+        assert!(s.contains("matcher: Bash|Read"), "out: {s}");
+        assert!(s.contains("command: /bin/ptuf"), "out: {s}");
+    }
+
+    #[test]
+    fn render_install_outcome_renders_would_install_status() {
+        let outcome = init::InstallOutcome {
+            agent: "codex",
+            paths: vec![init::InstallPath {
+                label: "config",
+                path: PathBuf::from("/tmp/codex.toml"),
+            }],
+            matcher: "Bash".into(),
+            command: "/bin/ptuf hook codex".into(),
+            status: init::InstallStatus::WouldInstall,
+        };
+        let mut out = Vec::new();
+        render_install_outcome(&outcome, true, &mut out);
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.contains("would register hook"), "out: {s}");
+        assert!(s.contains("Run without --dry-run"), "out: {s}");
+    }
+
+    #[test]
+    fn render_install_outcome_renders_already_present_status() {
+        let outcome = init::InstallOutcome {
+            agent: "claude-code",
+            paths: vec![init::InstallPath {
+                label: "settings",
+                path: PathBuf::from("/tmp/settings.json"),
+            }],
+            matcher: "Bash|Read".into(),
+            command: "/bin/ptuf hook claude-code".into(),
+            status: init::InstallStatus::AlreadyPresent,
+        };
+        let mut out = Vec::new();
+        render_install_outcome(&outcome, false, &mut out);
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.contains("already contains"), "out: {s}");
+    }
+
+    /// RAII guard that swaps the process cwd for the duration of a test
+    /// and restores it on drop. Tests using this helper rely on the
+    /// `--test-threads=1` setting in `Makefile` / CI so concurrent cwd
+    /// mutation cannot occur.
+    struct CwdGuard {
+        original: PathBuf,
+    }
+
+    impl CwdGuard {
+        fn change_to(target: &std::path::Path) -> std::io::Result<Self> {
+            let original = std::env::current_dir()?;
+            std::env::set_current_dir(target)?;
+            Ok(Self { original })
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
+    fn make_engine_failing_repo(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-engine-fail-{}-{}-{}",
+            label,
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        std::fs::write(
+            dir.join(".ptuf.yaml"),
+            "plugins:\n  - path: ./missing-plugin.yaml\n",
+        )
+        .expect("write .ptuf.yaml");
+        dir
+    }
+
+    #[test]
+    fn run_hook_fails_closed_when_engine_construction_fails() {
+        let dir = make_engine_failing_repo("hook");
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::HookPreToolUse {
+                agent: HookAgent::ClaudeCode,
+            },
+            payload.as_bytes(),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 2);
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}"
+        );
+        assert!(out_s.contains(POLICY_LOAD_FAILED_RULE), "stdout: {out_s}");
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("could not load policy"), "stderr: {err_s}");
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_eval_fails_closed_when_engine_construction_fails() {
+        let dir = make_engine_failing_repo("eval");
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Eval {
+                tool: "Bash".into(),
+                command: "ls".into(),
+            },
+            std::io::empty(),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 2);
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(out_s.contains("Decision: deny"), "stdout: {out_s}");
+        assert!(out_s.contains(POLICY_LOAD_FAILED_RULE), "stdout: {out_s}");
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("could not load policy"), "stderr: {err_s}");
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
