@@ -109,30 +109,20 @@ mod tests {
 
     #[test]
     fn open_append_creates_missing_parent_dirs() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-audit-writer-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let nested = dir.join("nested/deep/audit.jsonl");
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let nested = dir.path().join("nested/deep/audit.jsonl");
         let mut f = open_append(&nested).expect("open");
         append_record(&mut f, &rec()).expect("write");
         let body = std::fs::read_to_string(&nested).expect("read");
         assert!(body.contains("\"decision\":\"deny\""));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn open_append_with_no_parent_works_for_bare_filename() {
-        // PathBuf::parent() of a single-component path returns Some("")
-        // — exercise the early-return branch in open_append.
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("ptuf-audit-bare-{}.jsonl", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+    fn open_append_works_when_parent_already_exists() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
         let mut f = open_append(&path).expect("open");
         append_record(&mut f, &rec()).expect("write");
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
