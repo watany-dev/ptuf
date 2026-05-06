@@ -5,6 +5,32 @@ rules:
   # dtolnay/rust-toolchain は SHA ピンで運用しており supply-chain 観点での
   # 代替動機が乏しい。rustup スクリプト化は ergonomic 後退と回帰リスクが
   # 見合わないため維持する。
+  # release.yml は cargo-dist 生成物で、再生成時に介入が巻き戻るので
+  # ファイル単位で抑制する。
   superfluous-actions:
     ignore:
       - ci.yml
+      - publish-crates.yml
+      - release.yml
+
+  # release.yml は cargo-dist v0.31.0 が `matrix.install_dist.run` /
+  # `matrix.packages_install` / `needs.plan.outputs.tag-flag` などを
+  # ${{ }} で展開する。matrix 値はワークフロー著者管理 (dist plan) で
+  # 外部入力ではないため受容する。`github.ref_name` 等の本当に外部由来の
+  # 値はファイル本体で env: 経由に書き換え済み。
+  # 上流 cargo-dist がこの構造を改修したら本 ignore は撤去する。
+  template-injection:
+    ignore:
+      - release.yml
+
+  # cargo-dist 生成物の job 名規約 (plan / host / announce など) を
+  # 維持するため抑制。`name:` を手で足すと `dist generate` で消える。
+  anonymous-definition:
+    ignore:
+      - release.yml
+
+  # crates.io Trusted Publishing への移行は本 PR のスコープ外。
+  # 移行時に publish-crates.yml を全面書き換えして本 ignore は撤去する。
+  use-trusted-publishing:
+    ignore:
+      - publish-crates.yml
