@@ -153,3 +153,6 @@ fail-closed 契約を embed 利用側に提供する並立 API である。
 
 判定後、設定に応じて audit JSONL を追記する。詳細は [`audit.md`](audit.md) を
 参照。
+
+timestamp と allowlist expiry の RFC3339 処理は `time` crate に委譲する。
+自前の年月日計算は持たない。

@@ -242,13 +242,9 @@ pub fn non_bash_hook_input() -> impl Strategy<Value = HookInput> {
     ]
 }
 
-/// All four engine [`Mode`] variants drawn uniformly.
+/// All engine [`Mode`] variants drawn uniformly.
 pub fn mode() -> impl Strategy<Value = Mode> {
-    prop_oneof![
-        Just(Mode::Enforce),
-        Just(Mode::Monitor),
-        Just(Mode::Observe),
-    ]
+    prop_oneof![Just(Mode::Enforce), Just(Mode::Monitor)]
 }
 
 /// All six [`ProtectedKind`] variants drawn uniformly.

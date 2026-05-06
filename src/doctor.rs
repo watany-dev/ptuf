@@ -435,7 +435,6 @@ fn mode_label(mode: config::Mode) -> &'static str {
     match mode {
         config::Mode::Enforce => "enforce",
         config::Mode::Monitor => "monitor",
-        config::Mode::Observe => "observe",
     }
 }
 
@@ -1187,7 +1186,6 @@ rules:
     fn mode_label_covers_all_variants() {
         assert_eq!(mode_label(config::Mode::Enforce), "enforce");
         assert_eq!(mode_label(config::Mode::Monitor), "monitor");
-        assert_eq!(mode_label(config::Mode::Observe), "observe");
     }
 
     #[test]

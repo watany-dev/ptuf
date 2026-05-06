@@ -21,6 +21,16 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) で次を実�
 - `ptuf init <agent>`, `ptuf doctor [--json]`, `ptuf plugin test <path>`
 - `tests/contracts.rs` による hook / audit / `doctor --json` 契約の固定
 
+## ビルド前提と依存
+
+- Rust edition は `2024`
+- MSRV は `1.93.0`
+- 実行時依存は `serde`, `serde_json`, `serde_yaml_ng`, `regex`, `time`,
+  `toml_edit`
+- `time` は audit timestamp と allowlist `expiresAt` の RFC3339
+  formatting / parsing に使う
+- dev 依存は `proptest` と `tempfile`
+
 ## 公開 API
 
 `src/lib.rs` は以下を公開する。

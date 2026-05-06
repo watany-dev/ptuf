@@ -66,7 +66,7 @@ audit:
 | key | 型 | 説明 |
 | --- | --- | --- |
 | `version` | `u32` | 現在は `1` |
-| `mode` | `enforce` / `monitor` / `observe` | 実行 mode |
+| `mode` | `enforce` / `monitor` | 実行 mode |
 | `failClosed` | `bool` | runtime policy load 失敗時の意図。CLI の初期化失敗には効かない |
 | `packs` | map | pack ごとの設定 |
 | `rules` | map | rule id 単位の override |

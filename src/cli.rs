@@ -61,13 +61,7 @@ pub(crate) fn build_engine_or_fail_closed<W: Write>(
     agent: &'static str,
 ) -> Result<Engine, Decision> {
     Engine::for_cwd()
-        .map(|engine| {
-            let engine = engine.with_agent(agent);
-            if let Some(warning) = engine.audit_warning() {
-                let _ = writeln!(stderr, "{warning}");
-            }
-            engine
-        })
+        .map(|engine| engine.with_agent(agent))
         .map_err(|err| {
             let _ = writeln!(stderr, "ptuf: could not load policy: {err}");
             Decision::Deny {
@@ -371,6 +365,9 @@ fn run_hook<R: Read, W1: Write, W2: Write>(
     let decision = match build_engine_or_fail_closed(stderr, agent.audit_name()) {
         Ok(engine) => {
             let decision = engine.decide(&input).decision;
+            if let Some(warning) = engine.audit_warning_for_decision(&decision) {
+                let _ = writeln!(stderr, "{warning}");
+            }
             for warning in engine.drain_audit_write_warnings() {
                 let _ = writeln!(stderr, "{warning}");
             }
@@ -394,6 +391,9 @@ fn run_eval<W1: Write, W2: Write>(
     let decision = match build_engine_or_fail_closed(stderr, "cli") {
         Ok(engine) => {
             let decision = engine.decide(&input).decision;
+            if let Some(warning) = engine.audit_warning_for_decision(&decision) {
+                let _ = writeln!(stderr, "{warning}");
+            }
             for warning in engine.drain_audit_write_warnings() {
                 let _ = writeln!(stderr, "{warning}");
             }
@@ -908,7 +908,7 @@ mod tests {
         let (code, out, err) = run_with(&["eval", "--tool", "Bash", "ls -la"], "");
         assert_eq!(code, 0);
         assert!(out.contains("Decision: allow"));
-        assert!(err.is_empty());
+        assert!(err.is_empty(), "unexpected stderr: {err}");
     }
 
     #[test]
@@ -927,7 +927,7 @@ mod tests {
         let (code, out, err) = run_with(&["hook", "claude-code"], payload);
         assert_eq!(code, 0);
         assert!(out.is_empty());
-        assert!(err.is_empty());
+        assert!(err.is_empty(), "unexpected stderr: {err}");
     }
 
     #[test]

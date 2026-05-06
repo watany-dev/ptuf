@@ -46,7 +46,6 @@ deny > ask > monitor > allow
 | --- | --- |
 | `enforce` | `Deny` をそのまま block する |
 | `monitor` | `Deny` を `Monitor` に降格する |
-| `observe` | 現状は `monitor` と同じく `Deny` を `Monitor` に降格する |
 
 降格前の結果が `Deny` で、mode によって `Monitor` へ変わった場合は
 `Outcome.mode_demoted = true` となり、audit の `modeDemoted` にも反映される。

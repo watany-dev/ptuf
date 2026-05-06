@@ -27,13 +27,13 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - `aggregate([d, d, …])` == `d` (冪等律)
 - `aggregate(xs ++ ys)` == `aggregate([aggregate(xs), aggregate(ys)])` (結合律)
 - 並べ替えに対し `severity` が不変 (交換律)
-- 任意の `x ∈ xs` について `aggregate(xs).severity() >= x.severity()` (上界)
+- 任意の `x ∈ xs` について `aggregate(xs).rank() >= x.rank()` (上界)
 
 ### `engine::demote_for_mode`
 
 - `Mode::Enforce` ⇒ 入力をそのまま返す (恒等)
-- `Mode::Monitor | Mode::Observe` で `Allow / Ask / Monitor` ⇒ 不変
-- `Mode::Monitor | Mode::Observe` で `Deny { rule_id, .. }` ⇒
+- `Mode::Monitor` で `Allow / Ask / Monitor` ⇒ 不変
+- `Mode::Monitor` で `Deny { rule_id, .. }` ⇒
   `Monitor { rule_id }` (rule_id を保存)
 - demote は severity を増加させない
 

@@ -43,7 +43,7 @@ pub struct AuditRecord {
     pub project_root: Option<String>,
     pub mode: &'static str,
     /// `true` when the engine demoted a `Deny` decision to `Monitor`
-    /// because the policy mode was `monitor` or `observe`.
+    /// because the policy mode was `monitor`.
     #[serde(rename = "modeDemoted", skip_serializing_if = "is_false")]
     pub mode_demoted: bool,
     /// Allowlist `id` whose suppression turned a would-be Deny / Ask /
@@ -125,7 +125,6 @@ fn mode_label(mode: Mode) -> &'static str {
     match mode {
         Mode::Enforce => "enforce",
         Mode::Monitor => "monitor",
-        Mode::Observe => "observe",
     }
 }
 
@@ -237,25 +236,6 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains("\"modeDemoted\":true"));
         assert!(json.contains("\"mode\":\"monitor\""));
-    }
-
-    #[test]
-    fn observe_mode_serialises_as_observe() {
-        let r = AuditRecord::build(
-            UNIX_EPOCH,
-            &Decision::Allow,
-            Mode::Observe,
-            false,
-            &input("Bash", "ls"),
-            None,
-            None,
-            "ls".into(),
-            None,
-            "claude-code",
-            Vec::new(),
-        );
-        let json = serde_json::to_string(&r).unwrap();
-        assert!(json.contains("\"mode\":\"observe\""));
     }
 
     #[test]
@@ -396,11 +376,10 @@ mod tests {
         #[test]
         fn pbt_mode_label_is_lowercase_tag(m in mode()) {
             let label = mode_label(m);
-            prop_assert!(matches!(label, "enforce" | "monitor" | "observe"));
+            prop_assert!(matches!(label, "enforce" | "monitor"));
             let expected = match m {
                 Mode::Enforce => "enforce",
                 Mode::Monitor => "monitor",
-                Mode::Observe => "observe",
             };
             prop_assert_eq!(label, expected);
         }

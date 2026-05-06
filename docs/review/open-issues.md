@@ -4,7 +4,8 @@
 **現時点 (`v0.0.1` HEAD) でも未解決の指摘のみ** を抜粋して整理する。
 解決済みは [archive/2026-05-05/README.md](archive/2026-05-05/README.md)
 を参照 (D1 / D2 / D3 / D6 / D7 / D8 / §3.1 / §3.2 / §3.3 / §3.5 / §1.6 /
-§1.7 / §5.3 / §5.5 / D9 / D5 / §2-conservative / §4.2 / §6.3 を解消。
+§1.7 / §5.3 / §5.5 / D9 / D5 / §2-conservative / §4.2 / §6.3 / §1.4 /
+§1.5 / §5.6 を解消。
 §2 / D4 は parser の redirect / heredoc / process substitution 部分のみ
 解消済で、`xargs` / `find -exec` / inner_code 抽出は未対応で残置)。
 
@@ -56,7 +57,6 @@
 | --- | --- | --- | --- |
 | §5.1 | 自前 CLI parser が 1352 行に成長 (レビュー時 1141 行)。clap derive で 1/3〜1/4 に減る。`--json` のような中途半端な未実装フラグを `#[arg(skip)]` で明示できる | `src/cli.rs` | P2 |
 | §5.4 | `init/claude_code.rs` の hook 重複検出が tail token 一致依存。将来フラグ追加で重複登録の懸念。`name: "ptuf"` 等 stable marker を payload 側に持たせる | `src/init/claude_code.rs` | P2 |
-| §5.6 | `audit/time.rs` の RFC3339 自前実装。月日計算は典型的なバグ温床。`time` クレートを 1 つ入れる方がメンテ性が高い (Minimal Dependencies 方針とのトレードオフ) | `src/audit/time.rs` | P2 |
 
 ## 5. Engine 構造 / 安全性
 
@@ -69,15 +69,6 @@
   (`src/rules/git.rs` 等)。`enum Rule { Filesystem(...), Git(GitRuleId),
   SelfProtection(ProtectedKind), Plugin(PluginRule), … }` で動的
   ディスパッチを消す。優先度: P2
-- **§1.4** `Decision::severity() -> u8` 手書き比較。`Decision` の variant
-  順序を Allow → Monitor → Ask → Deny に揃えれば
-  `#[derive(PartialOrd, Ord)]` で自動導出可、`aggregate` も
-  `decisions.into_iter().max()` で済む。コード: `src/decision.rs:39-46`。
-  優先度: P2
-- **§1.5** `Mode::Observe` がデッドバリアント。`engine.rs` の
-  `demote_for_mode` では `Monitor | Observe` を同一扱い。
-  `docs/design/roadmap.md:49` でも「現状は monitor と同じ」と明記。
-  意味を分けるか削除する。優先度: P2
 - **D11** 大型ファイル: `src/engine.rs` 1812 行 / `src/cli.rs` 1352 行 /
   `src/doctor.rs` 1712 行 / `src/plugin/dsl.rs` 1067 行。レビュー時
   (engine 1362, cli 1158, doctor 1073, dsl 1056) より増加している。

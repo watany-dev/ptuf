@@ -216,10 +216,9 @@ impl<'de> Deserialize<'de> for Mode {
         match raw.as_str() {
             "enforce" => Ok(Mode::Enforce),
             "monitor" => Ok(Mode::Monitor),
-            "observe" => Ok(Mode::Observe),
             other => Err(serde::de::Error::unknown_variant(
                 other,
-                &["enforce", "monitor", "observe"],
+                &["enforce", "monitor"],
             )),
         }
     }
@@ -253,8 +252,6 @@ mod tests {
         assert_eq!(enforce, Mode::Enforce);
         let monitor: Mode = serde_yaml_ng::from_str("monitor").expect("monitor");
         assert_eq!(monitor, Mode::Monitor);
-        let observe: Mode = serde_yaml_ng::from_str("observe").expect("observe");
-        assert_eq!(observe, Mode::Observe);
     }
 
     #[test]
@@ -262,6 +259,14 @@ mod tests {
         let err = serde_yaml_ng::from_str::<Mode>("yolo").expect_err("unknown variant must fail");
         let msg = err.to_string();
         assert!(msg.contains("yolo"), "unexpected message: {msg}");
+    }
+
+    #[test]
+    fn mode_rejects_removed_observe_variant() {
+        let err =
+            serde_yaml_ng::from_str::<Mode>("observe").expect_err("observe is not a known mode");
+        let msg = err.to_string();
+        assert!(msg.contains("observe"), "unexpected message: {msg}");
     }
 
     #[test]

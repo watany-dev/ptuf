@@ -256,6 +256,16 @@ impl Engine {
         self.audit_warning.as_deref()
     }
 
+    /// Audit open warning, but only when this decision would have been
+    /// recorded under the active audit config.
+    pub(crate) fn audit_warning_for_decision(&self, decision: &Decision) -> Option<&str> {
+        if should_record(decision, &self.config) {
+            self.audit_warning()
+        } else {
+            None
+        }
+    }
+
     /// Drain any audit write failures captured since the last call.
     ///
     /// Open failures are reported once via [`Self::audit_warning`];
@@ -657,7 +667,7 @@ fn rule_matches_pack(rule_id: &str, pack: &str) -> bool {
 }
 
 fn demote_for_mode(decision: Decision, mode: Mode) -> Decision {
-    if matches!(mode, Mode::Monitor | Mode::Observe)
+    if matches!(mode, Mode::Monitor)
         && let Decision::Deny { rule_id, .. } = decision
     {
         return Decision::Monitor { rule_id };
@@ -824,17 +834,6 @@ mod tests {
     fn monitor_mode_demotes_deny_to_monitor() {
         let cfg = Config {
             mode: Mode::Monitor,
-            ..Config::default()
-        };
-        let outcome = engine_with(cfg).decide(&bash("rm -rf /"));
-        assert!(matches!(outcome.decision, Decision::Monitor { .. }));
-        assert!(outcome.mode_demoted);
-    }
-
-    #[test]
-    fn observe_mode_also_demotes_deny() {
-        let cfg = Config {
-            mode: Mode::Observe,
             ..Config::default()
         };
         let outcome = engine_with(cfg).decide(&bash("rm -rf /"));
@@ -1519,15 +1518,11 @@ rules:
     use proptest::prelude::*;
 
     fn mode_strategy() -> impl Strategy<Value = Mode> {
-        prop_oneof![
-            Just(Mode::Enforce),
-            Just(Mode::Monitor),
-            Just(Mode::Observe),
-        ]
+        prop_oneof![Just(Mode::Enforce), Just(Mode::Monitor)]
     }
 
     fn demoting_mode() -> impl Strategy<Value = Mode> {
-        prop_oneof![Just(Mode::Monitor), Just(Mode::Observe)]
+        Just(Mode::Monitor)
     }
 
     fn non_deny_decision() -> impl Strategy<Value = Decision> {
@@ -1548,14 +1543,14 @@ rules:
             prop_assert_eq!(out, d);
         }
 
-        // Allow / Monitor / Ask are unaffected by Monitor and Observe.
+        // Allow / Monitor / Ask are unaffected by Monitor.
         #[test]
-        fn pbt_monitor_observe_only_touch_deny(d in non_deny_decision(), mode in demoting_mode()) {
+        fn pbt_monitor_only_touches_deny(d in non_deny_decision(), mode in demoting_mode()) {
             let out = demote_for_mode(d.clone(), mode);
             prop_assert_eq!(out, d);
         }
 
-        // Deny under Monitor / Observe ⇒ Monitor with same rule_id.
+        // Deny under Monitor ⇒ Monitor with same rule_id.
         #[test]
         fn pbt_deny_demotes_to_monitor_preserving_rule_id(
             id in crate::testing::proptest::rule_id(),
@@ -1575,7 +1570,7 @@ rules:
         fn pbt_demote_never_increases_severity(d in decision(), mode in mode_strategy()) {
             let raw = d.clone();
             let out = demote_for_mode(d, mode);
-            prop_assert!(out.severity() <= raw.severity());
+            prop_assert!(out.rank() <= raw.rank());
         }
 
         // The default-engine end-to-end pipeline must not panic.
@@ -1693,15 +1688,6 @@ rules:
             // its default (Ask in this case), but it must not be Allow.
             let is_allow = outcome.decision == Decision::Allow;
             prop_assert!(!is_allow);
-        }
-
-        // Observe mode never produces a Deny on any input.
-        #[test]
-        fn pbt_observe_mode_never_denies(input in hook_input()) {
-            let cfg = Config { mode: Mode::Observe, ..Config::default() };
-            let outcome = engine_with(cfg).decide(&input);
-            let is_deny = matches!(outcome.decision, Decision::Deny { .. });
-            prop_assert!(!is_deny);
         }
 
         // The audited record's command_redacted is exactly redact_strict

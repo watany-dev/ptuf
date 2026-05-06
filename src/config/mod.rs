@@ -29,16 +29,12 @@ pub mod yaml;
 ///
 /// `Enforce` (default) honours `Decision::Deny` as a blocking deny.
 /// `Monitor` demotes denies to `Monitor` so that the hook never blocks
-/// the agent but still records the event. `Observe` is a v0.3 stretch
-/// goal — for v0.2 it behaves identically to `Monitor` but is
-/// preserved as a distinct variant so that downstream callers can
-/// branch on it.
+/// the agent but still records the event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     #[default]
     Enforce,
     Monitor,
-    Observe,
 }
 
 /// Resolved runtime configuration.
