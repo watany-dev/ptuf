@@ -15,7 +15,6 @@
 
 | 出典 | 内容 | コード参照 | 優先度 |
 | --- | --- | --- | --- |
-| §3.1 | `matches_clean_fdx` の長フラグ判定がデッドコード。`long_flags` は `--` 始まりに絞っているのに `has_long_d` / `has_long_x` が短フラグ (`-d` / `-x`) を探すため常に false。`git clean -f -d -x` の空白区切り形式を見逃す | `src/rules/git.rs:303-306` | P0 |
 | §3.3 | `read_word` のクオート意味論が ad hoc。backtick 中身を pessimistic に扱うか、内部コマンドとして再パースするか方針未確定 | `src/facts/shell.rs` | P1 |
 | §3.5 | `lone_ampersand_does_not_loop` テストはパーサ無限ループ修正の痕跡。`read_word` が必ず最低 1 byte 進む不変条件を `debug_assert!` 等で明示すべき | `src/facts/shell.rs:460-470` | P2 |
 

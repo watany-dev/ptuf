@@ -85,18 +85,20 @@ pub(crate) fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
             break;
         }
         if let Some(flag) = arg.strip_prefix("--") {
-            if let Some(name) = flag.split('=').next() {
-                if SUDO_VALUE_LONG_FLAGS.contains(&name) && !flag.contains('=') {
-                    i += 1;
-                }
+            if let Some(name) = flag.split('=').next()
+                && SUDO_VALUE_LONG_FLAGS.contains(&name)
+                && !flag.contains('=')
+            {
+                i += 1;
             }
             i += 1;
             continue;
         }
-        if let Some(value_flag) = short_sudo_value_flag(arg) {
-            if arg.len() == 2 && arg.ends_with(value_flag) {
-                i += 1;
-            }
+        if let Some(value_flag) = short_sudo_value_flag(arg)
+            && arg.len() == 2
+            && arg.ends_with(value_flag)
+        {
+            i += 1;
         }
         i += 1;
     }

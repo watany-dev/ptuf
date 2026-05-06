@@ -286,20 +286,34 @@ fn matches_clean_fdx(argv: &Argv) -> bool {
         return false;
     }
     let rest = args_after_subcommand(argv, "clean");
-    let long_flags: Vec<&&str> = rest.iter().filter(|a| a.starts_with("--")).collect();
-    let has_long_force = long_flags.iter().any(|a| ***a == *"--force");
-    let has_long_d = long_flags.iter().any(|a| ***a == *"-d");
-    let has_long_x = long_flags.iter().any(|a| ***a == *"-x" || ***a == *"-X");
-    if has_long_force && has_long_d && has_long_x {
-        return true;
-    }
-    rest.iter().any(|a| {
-        if !a.starts_with('-') || a.starts_with("--") {
-            return false;
+    let mut has_force = false;
+    let mut has_dir = false;
+    let mut has_ignored = false;
+    let mut has_dry_run = false;
+
+    for arg in rest {
+        if arg == "--force" {
+            has_force = true;
+            continue;
         }
-        let body = &a[1..];
-        body.contains('f') && body.contains('d') && (body.contains('x') || body.contains('X'))
-    })
+        if arg.starts_with("--") {
+            continue;
+        }
+        let Some(body) = arg.strip_prefix('-') else {
+            continue;
+        };
+        for flag in body.chars() {
+            if flag == 'e' {
+                break;
+            }
+            has_force |= flag == 'f';
+            has_dir |= flag == 'd';
+            has_ignored |= flag == 'x' || flag == 'X';
+            has_dry_run |= flag == 'n';
+        }
+    }
+
+    has_force && has_dir && has_ignored && !has_dry_run
 }
 
 fn matches_branch_delete_force(argv: &Argv) -> bool {
@@ -764,6 +778,31 @@ mod tests {
     }
 
     #[test]
+    fn clean_asks_split_short_flags() {
+        assert_decision(&CLEAN_FDX_RULE, "git clean -f -d -x", DecisionKind::Ask);
+        assert_decision(&CLEAN_FDX_RULE, "git clean -f -d -X", DecisionKind::Ask);
+        assert_decision(
+            &CLEAN_FDX_RULE,
+            "git clean --force -d -x",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn clean_asks_when_exclude_pattern_contains_n() {
+        assert_decision(
+            &CLEAN_FDX_RULE,
+            "git clean -fdx -enode_modules",
+            DecisionKind::Ask,
+        );
+        assert_decision(
+            &CLEAN_FDX_RULE,
+            "git clean -fdx -e node_modules",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
     fn clean_asks_via_sudo() {
         assert_decision(&CLEAN_FDX_RULE, "sudo git clean -fdx", DecisionKind::Ask);
     }
@@ -772,6 +811,7 @@ mod tests {
     fn clean_allows_dry_run() {
         assert_allow(&CLEAN_FDX_RULE, "git clean -ndx");
         assert_allow(&CLEAN_FDX_RULE, "git clean -nd");
+        assert_allow(&CLEAN_FDX_RULE, "git clean -n -d -x");
     }
 
     #[test]

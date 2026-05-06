@@ -61,6 +61,7 @@ cargo install ptuf
 ### From source
 
 ```bash
+make build
 cargo install --path .
 ```
 
