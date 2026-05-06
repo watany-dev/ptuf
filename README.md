@@ -134,6 +134,7 @@ This writes or updates `~/.claude/settings.json` with a `PreToolUse` entry like:
         "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*",
         "hooks": [
           {
+            "name": "ptuf",
             "type": "command",
             "command": "/absolute/path/to/ptuf hook claude-code"
           }
@@ -144,8 +145,9 @@ This writes or updates `~/.claude/settings.json` with a `PreToolUse` entry like:
 }
 ```
 
-The installer is idempotent. It detects an existing ptuf entry by the command
-tail `hook claude-code`, regardless of the absolute binary path.
+The installer is idempotent. It detects an existing ptuf entry by the
+`name: "ptuf"` marker, and still recognizes the legacy command tail
+`hook claude-code` regardless of the absolute binary path.
 
 ## Codex
 

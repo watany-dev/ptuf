@@ -23,8 +23,8 @@ opaque な flag surface として扱う点に限定される。
 
 | 状態 | 項目 |
 | --- | --- |
-| Resolved in current HEAD | §2 / D4 parser wrapper・redirect 系、D10 adapter 分離、D12 contract test 拡充、§5.4 Claude Code hook stable marker、§6.1 proptest strategy feature gate |
-| Still open | §1.3 / §4.1 / §4.3 / §4.4 / §4.5 data model・alloc、§5.1 CLI parser、§1.1 / §1.2 / D11 engine 構造 |
+| Resolved in current HEAD | §2 / D4 parser wrapper・redirect 系、D10 adapter 分離、D12 contract test 拡充、§5.4 Claude Code hook stable marker、§6.1 proptest strategy feature gate、§4.3 reason temporary allocation、§4.5 self-protection label allocation |
+| Deferred architecture backlog | §1.3 / §4.1 data model・borrowed shell AST、§4.4 plugin cache、§5.1 CLI parser、§1.1 / §1.2 builtin rule / DSL 統合、D11 大型ファイル分割 |
 | Deferred design choice | §6.2 coverage 95% 方針転換候補 |
 
 ## 1. Concrete bugs (P0)
@@ -55,23 +55,25 @@ inspect できるようになった。adapter 層は `RawHookInput` と normaliz
 - **§4.1** `Argv.head: String`, `args: Vec<String>` が all-owned。
   `parse<'a>(&'a str) -> Bash<'a>` で借用可。コード:
   `src/facts/shell.rs:90-109`
-- **§4.3** `Decision::Deny.reason: String` を `reason::build()` で毎回
-  構築。`Cow<'static, str>` か lazy formatter で Allow ホットパスから
-  外す。コード: `src/decision.rs:5-9`, `src/reason.rs:3-12`
+- **§4.3** 解消済み。`reason::build()` は rule trigger 後にのみ呼ばれ、
+  Allow ホットパスでは構築されない。alternatives 生成も `format!`
+  temporary を避け、`write!` / `writeln!` ベースに変更済み。
+  `Decision::{Ask,Deny}.reason: String` は JSON wire shape と public API churn
+  を避けるため維持。コード: `src/decision.rs:5-9`, `src/reason.rs:3-15`
 - **§4.4** plugin loader の AST 共有なし。Engine ごとにファイル読み込み +
-  コンパイル。daemon 化時は `Arc<LoadedPlugin>` キャッシュが必要。
+  コンパイル。CLI 1 起動 1 回の現状では実害が小さいため、daemon 化時の
+  `Arc<LoadedPlugin>` キャッシュ候補として deferred。
   コード: `src/plugin/loader.rs:53-64`
-- **§4.5** `Engine::decide` の `facts.protected = self.protected
-  .classify_input_with_paths_pair(input, &facts.paths, &redirect_facts)` で
-  `ProtectedKind` 用の小さな `Vec` を毎回作る。中間の path clone は
-  解消済みだが、戻り値は `SmallVec<[_; 4]>` で十分。コード:
-  `src/engine.rs:290-294`, `src/self_paths.rs:198-204`
+- **§4.5** 解消済み。`ProtectedKind` 用の小さな `Vec` は
+  allocation-free な `ProtectedKinds` (`[ProtectedKind; 6] + len`) に置換済み。
+  `smallvec` などの新規 dependency は追加していない。コード:
+  `src/engine.rs:290-294`, `src/self_paths.rs:46-108`, `src/self_paths.rs:260-283`
 
 ## 4. CLI / I/O
 
 | 出典 | 内容 | コード参照 | 優先度 |
 | --- | --- | --- | --- |
-| §5.1 | 自前 CLI parser が 1394 行に成長 (レビュー時 1141 行)。`doctor --json` は実装済みなので未実装フラグ例から外す。残課題は parser が大きく、clap derive 等へ移行する余地がある点 | `src/cli.rs:1-1394` | P2 |
+| §5.1 | deferred。自前 CLI parser が 1394 行に成長 (レビュー時 1141 行)。`doctor --json` は実装済みなので未実装フラグ例から外す。残課題は parser が大きく、clap derive 等へ移行する余地がある点 | `src/cli.rs:1-1394` | P2 |
 
 §5.4 は解消済み。`ptuf init claude-code` が hook payload に
 `name: "ptuf"` stable marker を書き込み、既存 entry 検出も marker を優先する。
@@ -80,16 +82,16 @@ inspect できるようになった。adapter 層は `RawHookInput` と normaliz
 
 ## 5. Engine 構造 / 安全性
 
-- **§1.1** builtin rule (`src/rules/`) と plugin DSL
+- **§1.1** deferred。builtin rule (`src/rules/`) と plugin DSL
   (`src/plugin/dsl.rs`) の二重実装。builtin を YAML 1 本
   (`include_str!("builtins.yaml")`) で配布し、起動時に DSL コンパイラを
   通す案。Rust 専用にすべきは self_protection の `ProtectedPaths` 突合
   のように DSL では書けないものだけ。優先度: P2 (大改修)
-- **§1.2** `dyn ConfigRule` static slice + `pub static` 16 個
+- **§1.2** deferred。`dyn ConfigRule` static slice + `pub static` 16 個
   (`src/rules/git.rs` 等)。`enum Rule { Filesystem(...), Git(GitRuleId),
   SelfProtection(ProtectedKind), Plugin(PluginRule), … }` で動的
   ディスパッチを消す。優先度: P2
-- **D11** 大型ファイル: `src/engine.rs` 2065 行 / `src/cli.rs` 1394 行 /
+- **D11** deferred。大型ファイル: `src/engine.rs` 2065 行 / `src/cli.rs` 1394 行 /
   `src/doctor.rs` 1710 行 / `src/plugin/dsl.rs` 1066 行。レビュー時
   (engine 1362, cli 1158, doctor 1073, dsl 1056) より増加している。
   `engine/{evaluator,allowlist,audit}.rs`, `cli/{parse,commands}.rs`,

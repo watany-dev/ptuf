@@ -46,7 +46,7 @@ pub struct Facts {
     pub sensitive: Vec<sensitive::SensitivePath>,
     /// Self-protection match labels populated by the engine layer; pure
     /// `extract` leaves this empty.
-    pub protected: Vec<crate::self_paths::ProtectedKind>,
+    pub protected: crate::self_paths::ProtectedKinds,
     /// Project-level facts (lock files, current branch, protected
     /// branch flag) populated by the engine layer; pure `extract`
     /// leaves this default-empty.
@@ -68,7 +68,7 @@ pub fn extract(input: &HookInput) -> Facts {
         paths,
         url,
         sensitive,
-        protected: Vec::new(),
+        protected: crate::self_paths::ProtectedKinds::new(),
         project: project::ProjectFacts::default(),
     }
 }

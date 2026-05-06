@@ -1,11 +1,14 @@
 /// Build the canonical "Rule Feedback" reason string used by `ask` / `deny`
 /// decisions. See `docs/design/decision-model.md`.
 pub fn build(rule_id: &str, problem: &str, alternatives: &[&str]) -> String {
-    let mut out = format!("Blocked by ptuf rule {rule_id}.\n\n{problem}\n");
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    let _ = write!(out, "Blocked by ptuf rule {rule_id}.\n\n{problem}\n");
     if !alternatives.is_empty() {
         out.push_str("\nSafer alternative:\n");
         for (i, alt) in alternatives.iter().enumerate() {
-            out.push_str(&format!("{}. {alt}\n", i + 1));
+            let _ = writeln!(out, "{}. {alt}", i + 1);
         }
     }
     out

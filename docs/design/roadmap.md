@@ -51,6 +51,11 @@
 - signed / pinned plugin 配布
 - generated file など、project_hygiene の追加 rule
 - optional WASM plugin runtime
+- CLI parser の分割または `clap` derive 等への移行
+- `engine/{evaluator,allowlist,audit}.rs` などへの Engine 分割
+- builtin rule と plugin DSL の統合 (`builtins.yaml` + DSL compiler など)
+- daemon 化時の plugin loader cache (`Arc<LoadedPlugin>` など)
+- `parse<'a>(&'a str) -> Bash<'a>` 形式の borrowed shell AST
 
 ## 設計原則
 

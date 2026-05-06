@@ -38,6 +38,69 @@ impl ProtectedKind {
     }
 }
 
+/// Small, allocation-free set of protected target labels.
+///
+/// There are only six [`ProtectedKind`] variants, so a fixed buffer is
+/// simpler than pulling in a small-vector dependency for the hook hot path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProtectedKinds {
+    kinds: [ProtectedKind; Self::CAPACITY],
+    len: usize,
+}
+
+impl ProtectedKinds {
+    const CAPACITY: usize = 6;
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push_unique(&mut self, kind: ProtectedKind) {
+        if self.contains(&kind) {
+            return;
+        }
+        if self.len < Self::CAPACITY {
+            self.kinds[self.len] = kind;
+            self.len += 1;
+        }
+    }
+
+    pub fn contains(&self, kind: &ProtectedKind) -> bool {
+        self.as_slice().contains(kind)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ProtectedKind> {
+        self.as_slice().iter()
+    }
+
+    pub fn as_slice(&self) -> &[ProtectedKind] {
+        &self.kinds[..self.len]
+    }
+}
+
+impl Default for ProtectedKinds {
+    fn default() -> Self {
+        Self {
+            kinds: [ProtectedKind::Binary; Self::CAPACITY],
+            len: 0,
+        }
+    }
+}
+
+impl From<&[ProtectedKind]> for ProtectedKinds {
+    fn from(kinds: &[ProtectedKind]) -> Self {
+        let mut out = Self::new();
+        for kind in kinds {
+            out.push_unique(*kind);
+        }
+        out
+    }
+}
+
 /// Resolved set of paths whose modification ptuf treats as a
 /// guardrail-bypass attempt.
 #[derive(Debug, Clone, Default)]
@@ -176,8 +239,8 @@ impl ProtectedPaths {
     }
 
     /// Classify a `HookInput` against the protected set, returning the
-    /// matched labels. Empty slice means "no self-protection match".
-    pub fn classify_input(&self, input: &HookInput) -> Vec<ProtectedKind> {
+    /// matched labels. Empty set means "no self-protection match".
+    pub fn classify_input(&self, input: &HookInput) -> ProtectedKinds {
         let paths = crate::facts::path::extract_all(input);
         self.classify_input_with_paths(input, &paths)
     }
@@ -188,7 +251,7 @@ impl ProtectedPaths {
         &self,
         input: &HookInput,
         paths: &[crate::facts::path::FilePath],
-    ) -> Vec<ProtectedKind> {
+    ) -> ProtectedKinds {
         self.classify_input_with_paths_pair(input, paths, &[])
     }
 
@@ -200,8 +263,8 @@ impl ProtectedPaths {
         input: &HookInput,
         paths: &[crate::facts::path::FilePath],
         extra: &[crate::facts::path::FilePath],
-    ) -> Vec<ProtectedKind> {
-        let mut out = Vec::new();
+    ) -> ProtectedKinds {
+        let mut out = ProtectedKinds::new();
         let cwd = if self.repo_root.is_none() {
             std::env::current_dir().ok()
         } else {
@@ -210,10 +273,8 @@ impl ProtectedPaths {
         let base_dir = self.repo_root.as_deref().or(cwd.as_deref());
         let candidates = candidate_targets(input, paths.iter().chain(extra.iter()), base_dir);
         for cand in &candidates {
-            if let Some(kind) = self.match_path(cand)
-                && !out.contains(&kind)
-            {
-                out.push(kind);
+            if let Some(kind) = self.match_path(cand) {
+                out.push_unique(kind);
             }
         }
         out
@@ -377,6 +438,48 @@ mod tests {
         ] {
             assert!(!k.as_str().is_empty());
         }
+    }
+
+    #[test]
+    fn protected_kinds_defaults_to_empty() {
+        let kinds = ProtectedKinds::default();
+        assert!(kinds.is_empty());
+        assert_eq!(kinds.as_slice(), &[]);
+        assert_eq!(kinds.iter().count(), 0);
+    }
+
+    #[test]
+    fn protected_kinds_push_unique_preserves_order() {
+        let mut kinds = ProtectedKinds::new();
+        kinds.push_unique(ProtectedKind::Config);
+        kinds.push_unique(ProtectedKind::Plugin);
+        kinds.push_unique(ProtectedKind::Config);
+
+        assert!(!kinds.is_empty());
+        assert!(kinds.contains(&ProtectedKind::Config));
+        assert!(kinds.contains(&ProtectedKind::Plugin));
+        assert!(!kinds.contains(&ProtectedKind::Binary));
+        assert_eq!(
+            kinds.as_slice(),
+            &[ProtectedKind::Config, ProtectedKind::Plugin]
+        );
+    }
+
+    #[test]
+    fn protected_kinds_from_slice_deduplicates() {
+        let kinds = ProtectedKinds::from(
+            [
+                ProtectedKind::HookScript,
+                ProtectedKind::HookScript,
+                ProtectedKind::Binary,
+            ]
+            .as_slice(),
+        );
+        let collected: Vec<_> = kinds.iter().copied().collect();
+        assert_eq!(
+            collected,
+            vec![ProtectedKind::HookScript, ProtectedKind::Binary]
+        );
     }
 
     #[test]

@@ -144,10 +144,11 @@ mod tests {
     use super::*;
     use crate::facts::Facts;
     use crate::hook_input::sample;
+    use crate::self_paths::ProtectedKinds;
 
     fn facts_with(protected: &[ProtectedKind]) -> Facts {
         Facts {
-            protected: protected.to_vec(),
+            protected: ProtectedKinds::from(protected),
             ..Facts::default()
         }
     }
