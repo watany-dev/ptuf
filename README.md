@@ -243,8 +243,11 @@ match decide(&input) {
 ```
 
 `decide()` is intentionally backward-compatible and lenient: it tries
-`Engine::for_cwd()` first and falls back to `Engine::default()` if policy or
-plugin loading fails. The CLI path is stricter and fails closed.
+`Engine::for_cwd()` first and falls back to `Engine::builder().agent(
+"embed-fallback").build()` if policy or plugin loading fails. The fallback
+engine still populates `ProtectedPaths` (running binary, Claude/Codex
+settings) so self-protection guardrails remain in place. The CLI path is
+stricter and fails closed.
 
 For embedded callers that want the same fail-closed contract as the CLI, use
 `try_decide(&HookInput) -> Result<Decision, EngineError>` instead — it

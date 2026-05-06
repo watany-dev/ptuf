@@ -3,10 +3,10 @@
 `docs/review/archive/2026-05-05/{redesign,design-debt}.md` のレビューから、
 **現時点 (`v0.0.1` HEAD) でも未解決の指摘のみ** を抜粋して整理する。
 解決済みは [archive/2026-05-05/README.md](archive/2026-05-05/README.md)
-を参照 (D1 / D2 / D3 / D6 / D7 / §3.1 / §3.2 / §3.3 / §3.5 / §1.6 /
-§5.3 / §5.5 / D9 / D5 / §2-conservative / §4.2 / §6.3 を解消。§2 / D4
-は parser の redirect / heredoc / process substitution 部分のみ解消済で、
-`xargs` / `find -exec` / inner_code 抽出は未対応で残置)。
+を参照 (D1 / D2 / D3 / D6 / D7 / D8 / §3.1 / §3.2 / §3.3 / §3.5 / §1.6 /
+§1.7 / §5.3 / §5.5 / D9 / D5 / §2-conservative / §4.2 / §6.3 を解消。
+§2 / D4 は parser の redirect / heredoc / process substitution 部分のみ
+解消済で、`xargs` / `find -exec` / inner_code 抽出は未対応で残置)。
 
 各項目には次を付ける:
 
@@ -42,11 +42,6 @@ shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/archite
     (`destructive-rm` 等) に流す `Argv.inner_code` / `inner_argv` 連結。
     現状は head 検出 + Ask で止まっているため、内側の特定動作は
     inspectable でない。
-- **D8: path 正規化が浅い**。`~` / `$HOME` 展開はあるが相対 → 絶対化や
-  Bash と file-tool 間の正規化共有が不完全。`PathFact { raw, expanded,
-  absolute, canonical_or_raw, origin }` のような分解が望ましい。
-  コード: `src/self_paths.rs:142-170`, `src/facts/path.rs:38-46`,
-  `src/facts/path.rs:155-200`
 - **D10: adapter 層の型が無い**。`HookInput` が Claude Code / Codex /
   内部 normalized event を兼ねているため、新 adapter 追加で条件分岐が
   増える。`RawHookInput` と `Event { agent, event, tool, inputs, paths,
@@ -101,9 +96,6 @@ shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/archite
   `demote_for_mode` では `Monitor | Observe` を同一扱い。
   `docs/design/roadmap.md:49` でも「現状は monitor と同じ」と明記。
   意味を分けるか削除する。優先度: P2
-- **§1.7** `Engine::default()` が空 `ProtectedPaths` を持つので、
-  上記 fallback と組み合わせると self_protection が embed 経路でほぼ
-  効かない。`Engine::builder()` で必須項目を強制する案。優先度: P1
 - **D11** 大型ファイル: `src/engine.rs` 1812 行 / `src/cli.rs` 1352 行 /
   `src/doctor.rs` 1712 行 / `src/plugin/dsl.rs` 1067 行。レビュー時
   (engine 1362, cli 1158, doctor 1073, dsl 1056) より増加している。

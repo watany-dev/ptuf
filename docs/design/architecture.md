@@ -39,7 +39,11 @@ hook response / eval text / audit JSONL
 ```
 
 `crate::decide()` だけは例外で、`Engine::for_cwd()` 失敗時に
-`Engine::default()` へフォールバックする。
+`Engine::builder().agent("embed-fallback").build()` へフォールバックする。
+builder は `ProtectedPaths::collect_with_env` を必ず通すため、`current_exe()`
+由来の binary や HOME-rooted Claude/Codex settings といった self-protection
+ターゲットは fallback 経路でも populate される (旧 `Engine::default()` シムは
+P1 として削除)。embed 利用者は `Engine::builder()` 直接利用も可能。
 
 ## Facts
 
@@ -48,12 +52,20 @@ hook response / eval text / audit JSONL
 | fact | 内容 |
 | --- | --- |
 | `bash` | `Bash` tool の `command` を parse した command / segment / pipeline。`Pipeline.redirects` で `>` / `>>` / `<` / `2>` / `&>` / heredoc の operator と target を保持する。`Bash::has_command_substitution` / `has_redirect` / `has_heredoc` / `has_process_substitution` で `` ` … ` `` / `$(…)` / リダイレクト / heredoc / `<(…)` `>(…)` の存在を surface する (一部 rule は pessimistic fallback に利用) |
-| `path` | 先頭の file path (`Read` / `Edit` / `Write` / MCP の top-level `path`) |
-| `paths` | 抽出された全 path |
+| `path` | 先頭の file path (`Read` / `Edit` / `Write` / MCP の top-level `path`)。`PathFact` として `raw` / `expanded` / `absolute` / `canonical_or_raw` / `origin` を保持する |
+| `paths` | tool 入力 (`Read` / `Edit` / `Write` / `apply_patch` / MCP) 由来の全 `PathFact`。Bash redirect target はここには含まれない (engine が self-protection 用に別 slice として供給する) |
 | `url` | `WebFetch` または MCP の top-level `url` |
 | `sensitive` | path / URL / write payload などから検出した機密分類 |
-| `protected` | self-protection 対象との一致。engine 側で補完 |
+| `protected` | self-protection 対象との一致。engine 側で `Facts.paths` と Bash redirect target (`Pipeline.redirects[].target`) を `ProtectedPaths::classify_input_with_paths_pair` に二本のスライスとして渡して補完する (中間 `Vec` の clone は発生させない) |
 | `project` | lock file、現在 branch、protected branch 判定。engine 側で補完 |
+
+`PathFact.origin` は `ToolInputDirect` (top-level `file_path` / MCP `path`) /
+`ToolInputNested` (`files[].path` / `paths[]` / `items[].path`) /
+`ApplyPatch` (`*** Add/Update/Delete/Move` 行) / `BashRedirect` (`>` / `>>` /
+`<` / `2>` / `&>` の operand。engine のみが emit する) の 4 種で、書込み先かど
+うかの判定や cross-tool 一貫性の根拠に使う。`canonical_or_raw` は構築時に 1
+回だけ `canonicalize()` を試み、I/O 失敗時は `absolute` に fallback する
+(symlink loop / permission denied / 未存在 path で panic しない不変条件)。
 
 plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に限る:
 

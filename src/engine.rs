@@ -229,6 +229,26 @@ impl Engine {
         &self.plugins
     }
 
+    /// Read-only view of the resolved self-protection target set.
+    ///
+    /// Even an engine built via [`Engine::builder`] with an empty
+    /// `Config` populates `binary` from `current_exe()` and HOME-rooted
+    /// claude/codex settings, so embed callers retain the binary
+    /// guardrail when configuration discovery fails.
+    pub fn protected_paths(&self) -> &ProtectedPaths {
+        &self.protected
+    }
+
+    /// Begin assembling an [`Engine`] via the builder API.
+    ///
+    /// Unlike the removed `Engine::default` shim, the builder always
+    /// runs [`ProtectedPaths::collect_with_env`] so self-protection is
+    /// populated before evaluation begins. This is the canonical entry
+    /// point for embed integrations that cannot use [`Engine::for_cwd`].
+    pub fn builder() -> EngineBuilder {
+        EngineBuilder::default()
+    }
+
     /// Warning captured while initialising the audit sink, if any.
     /// CLI callers surface this on stderr; library callers can ignore
     /// it and keep best-effort audit semantics.
@@ -253,9 +273,15 @@ impl Engine {
     /// Evaluate a single hook payload.
     pub fn decide(&self, input: &HookInput) -> Outcome {
         let mut facts = facts::extract(input);
-        facts.protected = self
-            .protected
-            .classify_input_with_paths(input, &facts.paths);
+        // self-protection sees the union of tool-input paths and any
+        // Bash redirect targets surfaced by the parser (`>`, `>>`, `<`,
+        // `2>`, `&>`). Redirect facts are kept off `facts.paths` to
+        // preserve the tool-input semantics the plugin DSL relies on.
+        let redirect_facts =
+            facts::path::from_bash_redirects(facts.bash.as_ref(), self.repo_root.as_deref());
+        facts.protected =
+            self.protected
+                .classify_input_with_paths_pair(input, &facts.paths, &redirect_facts);
         facts.project = self.project_facts.clone();
         let now = SystemTime::now();
         let allowlist_ctx = AllowlistContext {
@@ -408,10 +434,92 @@ fn should_record(decision: &Decision, config: &Config) -> bool {
     }
 }
 
-impl Default for Engine {
-    fn default() -> Self {
-        // `Config::default()` lists no plugins, so this cannot fail.
-        Self::with_components(Config::default(), PluginSet::new())
+/// Builder for [`Engine`] that always populates self-protection.
+///
+/// Embed callers prefer [`Engine::for_cwd`] when configuration discovery
+/// is available; the builder is the right shape when callers want to
+/// inject a `Config`, [`PluginSet`], or `AuditSink` explicitly without
+/// touching the filesystem. Unlike the removed `Engine::default` shim,
+/// a builder-built engine always runs
+/// [`ProtectedPaths::collect_with_env`] so the binary guardrail is in
+/// place even when the caller passes `Config::default()`.
+#[derive(Default)]
+pub struct EngineBuilder {
+    config: Option<Config>,
+    repo_root: Option<PathBuf>,
+    plugins: Option<PluginSet>,
+    audit_sink: Option<Box<dyn AuditSink>>,
+    agent: Option<&'static str>,
+}
+
+impl EngineBuilder {
+    /// Use this `Config` instead of [`Config::default`].
+    pub fn config(mut self, config: Config) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    /// Anchor self-protection and project facts at this repo root.
+    pub fn repo_root(mut self, repo_root: impl Into<PathBuf>) -> Self {
+        self.repo_root = Some(repo_root.into());
+        self
+    }
+
+    /// Use a pre-built [`PluginSet`] instead of loading from
+    /// `config.plugin_paths`. Useful for tests that want hand-rolled
+    /// plugins without disk I/O.
+    pub fn plugins(mut self, plugins: PluginSet) -> Self {
+        self.plugins = Some(plugins);
+        self
+    }
+
+    /// Override the audit sink. When unset, [`NoopSink`] is used so the
+    /// builder never opens a JSONL file behind the caller's back; route
+    /// through [`Engine::with_config`] / [`Engine::for_cwd`] for the
+    /// production audit-from-config behaviour.
+    pub fn audit_sink(mut self, sink: Box<dyn AuditSink>) -> Self {
+        self.audit_sink = Some(sink);
+        self
+    }
+
+    /// Tag the resulting engine with an adapter name.
+    pub fn agent(mut self, agent: &'static str) -> Self {
+        self.agent = Some(agent);
+        self
+    }
+
+    /// Finalise the builder.
+    ///
+    /// When a [`PluginSet`] was injected via [`Self::plugins`] this is
+    /// infallible. Otherwise plugin paths in `config.plugin_paths` are
+    /// loaded eagerly and the failure surfaces as
+    /// [`EngineError::Plugin`].
+    pub fn build(self) -> Result<Engine, EngineError> {
+        let config = self.config.unwrap_or_default();
+        let plugins = match self.plugins {
+            Some(p) => p,
+            None => {
+                let mut set = PluginSet::new();
+                set.load_paths(&config.plugin_paths)?;
+                set
+            }
+        };
+        let protected = ProtectedPaths::collect(self.repo_root.as_deref(), &config);
+        let plugin_versions = compute_plugin_versions(&plugins);
+        let project_facts =
+            facts::project::collect(self.repo_root.as_deref(), &config.protected_branches);
+        Ok(Engine {
+            config,
+            plugins,
+            audit_sink: self.audit_sink.unwrap_or_else(|| Box::new(NoopSink)),
+            audit_warning: None,
+            audit_write_warnings: Mutex::new(Vec::new()),
+            repo_root: self.repo_root,
+            protected,
+            agent: self.agent.unwrap_or("unknown"),
+            plugin_versions,
+            project_facts,
+        })
     }
 }
 
@@ -603,7 +711,7 @@ mod tests {
 
     #[test]
     fn default_engine_returns_allow_for_safe_command() {
-        let outcome = Engine::default().decide(&bash("ls"));
+        let outcome = engine_with(Config::default()).decide(&bash("ls"));
         assert_eq!(outcome.decision, Decision::Allow);
         assert_eq!(outcome.mode, Mode::Enforce);
         assert!(!outcome.mode_demoted);
@@ -611,9 +719,80 @@ mod tests {
 
     #[test]
     fn default_engine_denies_destructive_rm() {
-        let outcome = Engine::default().decide(&bash("rm -rf /"));
+        let outcome = engine_with(Config::default()).decide(&bash("rm -rf /"));
         assert!(matches!(outcome.decision, Decision::Deny { .. }));
         assert!(!outcome.mode_demoted);
+    }
+
+    #[test]
+    fn engine_builder_with_default_config_populates_self_protection_binary() {
+        // A builder-built engine with `Config::default()` and no
+        // repo_root must still expose the running binary as a protected
+        // target — otherwise embed callers lose self-protection when
+        // configuration discovery fails.
+        let engine = Engine::builder()
+            .build()
+            .expect("default-config builder cannot fail");
+        assert!(
+            engine.protected_paths().binary.is_some(),
+            "builder must populate ProtectedPaths.binary even without a repo_root",
+        );
+    }
+
+    #[test]
+    fn engine_builder_repo_root_is_recorded() {
+        let engine = Engine::builder()
+            .repo_root(std::path::PathBuf::from("/tmp/ptuf-builder-root"))
+            .build()
+            .expect("builder with repo_root cannot fail");
+        assert_eq!(
+            engine.protected_paths().repo_root.as_deref(),
+            Some(std::path::Path::new("/tmp/ptuf-builder-root")),
+        );
+    }
+
+    #[test]
+    fn bash_redirect_target_classifies_as_protected_claude_settings() {
+        // A Bash redirect target must drive the same self-protection
+        // classification path as a Read/Edit payload, so that
+        // `echo y > .claude/settings.json` cannot bypass the guardrail.
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-engine-redirect-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".claude")).expect("mkdir");
+        std::fs::write(dir.join(".claude/settings.json"), "{}").expect("write");
+        let engine = Engine::builder()
+            .repo_root(dir.clone())
+            .build()
+            .expect("builder cannot fail with default config");
+        let target = dir.join(".claude/settings.json");
+        let target_str = target.to_str().expect("utf-8 path");
+        let outcome = engine.decide(&bash(&format!("echo y > {target_str}")));
+        match outcome.decision {
+            Decision::Deny { ref rule_id, .. }
+                if rule_id == "core.self_protection.claude-settings" => {}
+            other => panic!("expected core.self_protection.claude-settings deny, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn engine_builder_with_injected_plugins_does_not_load_paths() {
+        // Injecting a PluginSet must skip `load_paths`, so a config
+        // listing a non-existent plugin path still builds.
+        let cfg = Config {
+            plugin_paths: vec![std::path::PathBuf::from("/does/not/exist.yaml")],
+            ..Config::default()
+        };
+        let engine = Engine::builder()
+            .config(cfg)
+            .plugins(PluginSet::new())
+            .build()
+            .expect("injected plugins must skip plugin_paths loading");
+        assert_eq!(engine.plugins().rules().count(), 0);
     }
 
     #[test]
@@ -1235,7 +1414,7 @@ rules:
 
     #[test]
     fn outcome_allowlist_id_none_when_no_rule_was_suppressed() {
-        let outcome = Engine::default().decide(&bash("ls"));
+        let outcome = engine_with(Config::default()).decide(&bash("ls"));
         assert!(outcome.allowlist_id.is_none());
     }
 
@@ -1377,13 +1556,13 @@ rules:
         // The default-engine end-to-end pipeline must not panic.
         #[test]
         fn pbt_default_engine_decide_never_panics(input in hook_input()) {
-            let _ = Engine::default().decide(&input);
+            let _ = engine_with(Config::default()).decide(&input);
         }
 
         // Default engine runs in Enforce mode and never reports a demotion.
         #[test]
         fn pbt_default_engine_never_demotes(input in hook_input()) {
-            let outcome = Engine::default().decide(&input);
+            let outcome = engine_with(Config::default()).decide(&input);
             prop_assert_eq!(outcome.mode, Mode::Enforce);
             prop_assert!(!outcome.mode_demoted);
         }
@@ -1392,7 +1571,7 @@ rules:
         // mode_demoted iff the same input under Enforce produced Deny.
         #[test]
         fn pbt_monitor_mode_demotion_flag_matches_enforce_baseline(input in hook_input()) {
-            let baseline = Engine::default().decide(&input).decision;
+            let baseline = engine_with(Config::default()).decide(&input).decision;
             let cfg = Config {
                 mode: Mode::Monitor,
                 ..Config::default()
@@ -1410,7 +1589,7 @@ rules:
         fn pbt_default_engine_never_panics_on_richer_inputs(
             input in crate::testing::proptest::richer_hook_input(),
         ) {
-            let outcome = Engine::default().decide(&input);
+            let outcome = engine_with(Config::default()).decide(&input);
             prop_assert!(!outcome.mode_demoted);
         }
 
