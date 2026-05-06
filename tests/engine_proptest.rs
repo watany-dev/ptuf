@@ -20,10 +20,8 @@ use ptuf::hook_output::from_decision;
 use ptuf::{Decision, Engine, HookInput};
 
 /// Build an engine with the default configuration via the public
-/// builder. The previous `default_engine()` shim was removed when the
-/// builder became canonical (see `docs/review/open-issues.md` §1.7); the
-/// builder run cannot fail for `Config::default()` because no plugins
-/// are listed.
+/// builder. Cannot fail for `Config::default()` because no plugin
+/// paths are listed.
 fn default_engine() -> Engine {
     Engine::builder()
         .build()

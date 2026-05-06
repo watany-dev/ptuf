@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::scope::{EnvLookup, SystemEnv};
+use crate::facts::shell::{Bash, RedirectOp};
 use crate::hook_input::HookInput;
 
 /// Tools whose payload exposes a `file_path` field that ptuf inspects.
@@ -151,26 +152,30 @@ pub fn extract_all(input: &HookInput) -> Vec<FilePath> {
 
 fn collect_mcp_paths(value: &serde_json::Value) -> Vec<(String, PathOrigin)> {
     let mut out = Vec::new();
-    if let Some(s) = value.get("path").and_then(serde_json::Value::as_str) {
-        out.push((s.to_string(), PathOrigin::ToolInputDirect));
-    }
+    push_tagged(value.get("path"), PathOrigin::ToolInputDirect, &mut out);
     for key in ["files", "items"] {
         if let Some(items) = value.get(key).and_then(serde_json::Value::as_array) {
             for item in items {
-                if let Some(s) = item.get("path").and_then(serde_json::Value::as_str) {
-                    out.push((s.to_string(), PathOrigin::ToolInputNested));
-                }
+                push_tagged(item.get("path"), PathOrigin::ToolInputNested, &mut out);
             }
         }
     }
     if let Some(paths) = value.get("paths").and_then(serde_json::Value::as_array) {
         for item in paths {
-            if let Some(s) = item.as_str() {
-                out.push((s.to_string(), PathOrigin::ToolInputNested));
-            }
+            push_tagged(Some(item), PathOrigin::ToolInputNested, &mut out);
         }
     }
     out
+}
+
+fn push_tagged(
+    value: Option<&serde_json::Value>,
+    origin: PathOrigin,
+    out: &mut Vec<(String, PathOrigin)>,
+) {
+    if let Some(s) = value.and_then(serde_json::Value::as_str) {
+        out.push((s.to_owned(), origin));
+    }
 }
 
 fn collect_apply_patch_paths(command: &str) -> Vec<String> {
@@ -207,14 +212,7 @@ impl PathFact {
         env: &dyn EnvLookup,
     ) -> Self {
         let expanded = expand_home(&raw, env);
-        let absolute = if expanded.is_relative() {
-            match base_dir {
-                Some(base) => base.join(&expanded),
-                None => expanded.clone(),
-            }
-        } else {
-            expanded.clone()
-        };
+        let absolute = resolve_with_env(&raw, base_dir, env);
         let canonical_or_raw = absolute.canonicalize().unwrap_or_else(|_| absolute.clone());
         Self {
             tool,
@@ -225,6 +223,42 @@ impl PathFact {
             origin,
         }
     }
+}
+
+/// Build [`PathFact`]s for every Bash redirect target that points at a
+/// file (`>`, `>>`, `<`, `2>`, `&>`). Heredoc bodies are skipped because
+/// the target carries the body text rather than a path. The facts are
+/// tagged with [`PathOrigin::BashRedirect`] so self-protection can treat
+/// them as write destinations without polluting `Facts.paths`, which the
+/// plugin DSL relies on to mean "tool-input-derived path".
+///
+/// Relative redirect targets are resolved against `repo_root` when one
+/// is known; `~` and `$HOME` are expanded against the production
+/// environment so `> ~/.claude/settings.json` hits the `ClaudeSettings`
+/// guardrail.
+pub fn from_bash_redirects(bash: Option<&Bash>, repo_root: Option<&Path>) -> Vec<PathFact> {
+    let Some(bash) = bash else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for pipeline in &bash.segments {
+        for redirect in &pipeline.redirects {
+            if matches!(redirect.op, RedirectOp::Heredoc) {
+                continue;
+            }
+            if redirect.target.is_empty() {
+                continue;
+            }
+            out.push(PathFact::from_raw(
+                redirect.target.clone(),
+                PathTool::Write,
+                PathOrigin::BashRedirect,
+                repo_root,
+                &SystemEnv,
+            ));
+        }
+    }
+    out
 }
 
 fn expand_home(raw: &str, env: &dyn EnvLookup) -> PathBuf {
@@ -368,19 +402,18 @@ mod tests {
 
     #[test]
     fn path_fact_canonical_falls_back_to_absolute_when_missing() {
-        // Closes the D8 contract: `canonical_or_raw` is total — for any
-        // absolute path that does not exist on disk, it equals
-        // `absolute` rather than panicking or producing an empty
-        // `PathBuf`.
+        // `canonical_or_raw` is total: for any absolute path that does
+        // not exist on disk it equals `absolute` rather than panicking
+        // or yielding an empty `PathBuf`.
         let i = input(
             "Read",
-            serde_json::json!("/ptuf-d8-nonexistent/most-likely-missing"),
+            serde_json::json!("/ptuf-nonexistent-path/most-likely-missing"),
         );
         let fp = extract_with_env(&i, &MapEnv::with_home("/h")).expect("path");
         assert_eq!(fp.canonical_or_raw, fp.absolute);
         assert_eq!(
             fp.canonical_or_raw,
-            PathBuf::from("/ptuf-d8-nonexistent/most-likely-missing")
+            PathBuf::from("/ptuf-nonexistent-path/most-likely-missing")
         );
     }
 

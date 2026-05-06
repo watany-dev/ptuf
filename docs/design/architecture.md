@@ -56,7 +56,7 @@ P1 として削除)。embed 利用者は `Engine::builder()` 直接利用も可�
 | `paths` | tool 入力 (`Read` / `Edit` / `Write` / `apply_patch` / MCP) 由来の全 `PathFact`。Bash redirect target はここには含まれない (engine が self-protection 用に別 slice として供給する) |
 | `url` | `WebFetch` または MCP の top-level `url` |
 | `sensitive` | path / URL / write payload などから検出した機密分類 |
-| `protected` | self-protection 対象との一致。engine 側で `Facts.paths` と Bash redirect target (`Pipeline.redirects[].target`) の和集合を `ProtectedPaths::classify_input_with_paths` に渡して補完する |
+| `protected` | self-protection 対象との一致。engine 側で `Facts.paths` と Bash redirect target (`Pipeline.redirects[].target`) を `ProtectedPaths::classify_input_with_paths_pair` に二本のスライスとして渡して補完する (中間 `Vec` の clone は発生させない) |
 | `project` | lock file、現在 branch、protected branch 判定。engine 側で補完 |
 
 `PathFact.origin` は `ToolInputDirect` (top-level `file_path` / MCP `path`) /

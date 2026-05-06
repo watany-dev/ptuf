@@ -13,13 +13,10 @@ use std::time::SystemTime;
 use crate::audit::record::AuditRecord;
 use crate::audit::time::parse_rfc3339_to_secs;
 use crate::audit::{AuditSink, JsonlSink, NoopSink, redact_strict};
-use crate::config::scope::SystemEnv;
 use crate::config::{self, Allowlist, Config, ConfigError, Mode, PackOverride, RedactionMode};
 use crate::decision::{Decision, DecisionKind, Severity, aggregate};
 use crate::facts;
-use crate::facts::path::{PathFact, PathOrigin, PathTool};
 use crate::facts::project::ProjectFacts;
-use crate::facts::shell::{Bash, RedirectOp};
 use crate::hook_input::HookInput;
 use crate::plugin::{PluginError, PluginSet};
 use crate::rules::{self, ConfigRule};
@@ -278,14 +275,13 @@ impl Engine {
         let mut facts = facts::extract(input);
         // self-protection sees the union of tool-input paths and any
         // Bash redirect targets surfaced by the parser (`>`, `>>`, `<`,
-        // `2>`, `&>`). Bash redirect facts are kept out of
-        // `facts.paths` to preserve the tool-input semantics that the
-        // plugin DSL and rules already rely on.
+        // `2>`, `&>`). Redirect facts are kept off `facts.paths` to
+        // preserve the tool-input semantics the plugin DSL relies on.
         let redirect_facts =
-            bash_redirect_path_facts(facts.bash.as_ref(), self.repo_root.as_deref());
-        let mut all_paths = facts.paths.clone();
-        all_paths.extend(redirect_facts);
-        facts.protected = self.protected.classify_input_with_paths(input, &all_paths);
+            facts::path::from_bash_redirects(facts.bash.as_ref(), self.repo_root.as_deref());
+        facts.protected =
+            self.protected
+                .classify_input_with_paths_pair(input, &facts.paths, &redirect_facts);
         facts.project = self.project_facts.clone();
         let now = SystemTime::now();
         let allowlist_ctx = AllowlistContext {
@@ -430,44 +426,6 @@ fn audit_sink_from_config(config: &Config) -> (Box<dyn AuditSink>, Option<String
     }
 }
 
-/// Build [`PathFact`]s for every Bash redirect target that points at a
-/// file (`>`, `>>`, `<`, `2>`, `&>`). Heredoc bodies are skipped because
-/// the target carries the body text rather than a path. The facts are
-/// tagged with [`PathOrigin::BashRedirect`] so self-protection can treat
-/// them as write destinations without polluting `Facts.paths`, which the
-/// plugin DSL relies on to mean "tool-input-derived path".
-///
-/// Relative redirect targets are resolved against `repo_root` when one
-/// is known; otherwise they remain relative (self-protection compares
-/// suffixes for HOME-rooted targets, and the repo-root-relative path
-/// would not match either way without a base). `~` and `$HOME` are
-/// expanded against the production environment so `> ~/.claude/settings.json`
-/// hits the `ClaudeSettings` guardrail.
-fn bash_redirect_path_facts(bash: Option<&Bash>, repo_root: Option<&Path>) -> Vec<PathFact> {
-    let Some(bash) = bash else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for pipeline in &bash.segments {
-        for redirect in &pipeline.redirects {
-            if matches!(redirect.op, RedirectOp::Heredoc) {
-                continue;
-            }
-            if redirect.target.is_empty() {
-                continue;
-            }
-            out.push(PathFact::from_raw(
-                redirect.target.clone(),
-                PathTool::Write,
-                PathOrigin::BashRedirect,
-                repo_root,
-                &SystemEnv,
-            ));
-        }
-    }
-    out
-}
-
 fn should_record(decision: &Decision, config: &Config) -> bool {
     match decision {
         Decision::Allow => config.audit.include_allowed,
@@ -564,13 +522,6 @@ impl EngineBuilder {
         })
     }
 }
-
-// Note: there is no `impl Default for Engine`. Embed callers should use
-// [`Engine::builder`] (or [`Engine::for_cwd`]) so self-protection is
-// populated. The previous `Default` shim returned an engine with an
-// empty `ProtectedPaths`, which is now treated as a P1 self-protection
-// gap and removed. Tests construct engines via [`Engine::with_components`]
-// or [`Engine::with_config`] directly.
 
 fn is_pack_disabled(rule: &(dyn ConfigRule + Sync), config: &Config) -> bool {
     if rule.hard_deny() {
@@ -775,10 +726,10 @@ mod tests {
 
     #[test]
     fn engine_builder_with_default_config_populates_self_protection_binary() {
-        // Closes the §1.7 self-protection gap: a builder-built engine
-        // with `Config::default()` and no repo_root must still expose
-        // the running binary as a protected target. This is the
-        // invariant that the deleted `Engine::default()` shim violated.
+        // A builder-built engine with `Config::default()` and no
+        // repo_root must still expose the running binary as a protected
+        // target — otherwise embed callers lose self-protection when
+        // configuration discovery fails.
         let engine = Engine::builder()
             .build()
             .expect("default-config builder cannot fail");
@@ -802,11 +753,9 @@ mod tests {
 
     #[test]
     fn bash_redirect_target_classifies_as_protected_claude_settings() {
-        // D8 cross-tool consistency: a Bash redirect target must drive
-        // the same self-protection classification path as a Read/Edit
-        // payload. Pre-fix, `candidate_targets` only inspected
-        // writer-head positionals (`rm`, `cp`, ...) and skipped the
-        // redirect operand entirely.
+        // A Bash redirect target must drive the same self-protection
+        // classification path as a Read/Edit payload, so that
+        // `echo y > .claude/settings.json` cannot bypass the guardrail.
         let dir = std::env::temp_dir().join(format!(
             "ptuf-engine-redirect-{}-{}",
             std::process::id(),

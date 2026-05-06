@@ -158,11 +158,11 @@ impl ProtectedPaths {
         let binary = std::env::current_exe()
             .ok()
             .map(|p| p.canonicalize().unwrap_or(p));
-        let configs = canonicalise_each(configs);
-        let plugins = canonicalise_each(config.plugin_paths.clone());
-        let claude_settings = canonicalise_each(claude_settings);
-        let codex_settings = canonicalise_each(codex_settings);
-        let hook_scripts = canonicalise_each(hook_scripts);
+        let configs = canonicalize_each(configs);
+        let plugins = canonicalize_each(config.plugin_paths.clone());
+        let claude_settings = canonicalize_each(claude_settings);
+        let codex_settings = canonicalize_each(codex_settings);
+        let hook_scripts = canonicalize_each(hook_scripts);
 
         Self {
             repo_root: repo_root.map(Path::to_path_buf),
@@ -189,6 +189,18 @@ impl ProtectedPaths {
         input: &HookInput,
         paths: &[crate::facts::path::FilePath],
     ) -> Vec<ProtectedKind> {
+        self.classify_input_with_paths_pair(input, paths, &[])
+    }
+
+    /// Variant that classifies the union of `paths` (tool-input
+    /// derived) and `extra` (engine-supplied, e.g. Bash redirect
+    /// targets) without forcing the caller to allocate a merged `Vec`.
+    pub fn classify_input_with_paths_pair(
+        &self,
+        input: &HookInput,
+        paths: &[crate::facts::path::FilePath],
+        extra: &[crate::facts::path::FilePath],
+    ) -> Vec<ProtectedKind> {
         let mut out = Vec::new();
         let cwd = if self.repo_root.is_none() {
             std::env::current_dir().ok()
@@ -196,7 +208,7 @@ impl ProtectedPaths {
             None
         };
         let base_dir = self.repo_root.as_deref().or(cwd.as_deref());
-        let candidates = candidate_targets(input, paths, base_dir);
+        let candidates = candidate_targets(input, paths.iter().chain(extra.iter()), base_dir);
         for cand in &candidates {
             if let Some(kind) = self.match_path(cand)
                 && !out.contains(&kind)
@@ -245,7 +257,7 @@ impl ProtectedPaths {
 /// helper is shared across every protected list; non-existent targets
 /// keep their raw form, which still matches a likewise non-existent
 /// candidate via byte equality.
-fn canonicalise_each(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+fn canonicalize_each(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths
         .into_iter()
         .map(|p| p.canonicalize().unwrap_or(p))
@@ -254,7 +266,7 @@ fn canonicalise_each(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 
 /// True when `candidate` refers to the same file as `target`. The
 /// caller guarantees that `target` was already passed through
-/// [`canonicalise_each`] at collect time, so we only canonicalise the
+/// [`canonicalize_each`] at collect time, so we only canonicalise the
 /// candidate here. Falls back to byte equality so missing files still
 /// match when both sides spell the path identically.
 fn path_matches(candidate: &Path, target: &Path) -> bool {
@@ -267,9 +279,9 @@ fn path_matches(candidate: &Path, target: &Path) -> bool {
     }
 }
 
-fn candidate_targets(
+fn candidate_targets<'a>(
     input: &HookInput,
-    paths: &[crate::facts::path::FilePath],
+    paths: impl IntoIterator<Item = &'a crate::facts::path::FilePath>,
     base_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -514,14 +526,10 @@ mod tests {
     #[test]
     fn relative_hook_command_canonicalizes_against_settings_dir() {
         #![allow(clippy::expect_used)]
-        // D8: a HOME claude settings file referencing `./hooks/guard.sh`
-        // must classify a candidate Edit on the canonical hook path as
-        // `HookScript`. `Path` equality already collapses `CurDir`
-        // components so this passes today, but the regression check
-        // pins the cross-tool consistency contract — a relative hook
-        // command and a candidate edit on the same physical file must
-        // converge on the same `ProtectedKind` regardless of whether
-        // either side carries a leading `./`.
+        // A relative hook command (`./hooks/guard.sh`) and a candidate
+        // edit on the same physical file must converge on the same
+        // `ProtectedKind` regardless of whether either side carries a
+        // leading `./`.
         let dir = std::env::temp_dir().join(format!(
             "ptuf-self-paths-canonical-{}-{}",
             std::process::id(),

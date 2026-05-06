@@ -59,6 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `paths[]`, `items[].path`) / `ApplyPatch` / `BashRedirect` (engine
   emits these from `Pipeline.redirects` so self-protection sees the
   same view as file-tool inputs) (review D8).
+- `facts::path::from_bash_redirects(bash, repo_root) -> Vec<PathFact>`
+  — public helper that walks a parsed `Bash`'s `Pipeline.redirects` and
+  returns one `PathFact { origin: BashRedirect, tool: Write }` per
+  non-heredoc target. The engine uses it to feed self-protection;
+  embed callers can reuse it without reimplementing the walk.
+- `ProtectedPaths::classify_input_with_paths_pair(input, paths, extra)`
+  — sibling of `classify_input_with_paths` that classifies the union
+  of two `PathFact` slices (tool-input-derived and engine-supplied)
+  without forcing the caller to allocate a merged `Vec`.
 
 ### Changed
 - `tokenize` in `src/facts/shell.rs` now asserts forward progress on
