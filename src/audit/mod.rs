@@ -104,7 +104,10 @@ impl AuditSink for MemorySink {
 }
 
 /// JSONL file sink. The file is opened once and reused; concurrent
-/// writes from one process serialise behind the [`Mutex`].
+/// writes from one process serialise behind the inner [`Mutex`], and
+/// concurrent ptuf processes are serialised by an OS-level advisory
+/// lock taken on every record (`flock(2)` on Unix, `LockFileEx` on
+/// Windows) so JSONL lines never interleave across writers.
 pub struct JsonlSink {
     file: Mutex<File>,
 }
@@ -123,10 +126,20 @@ impl JsonlSink {
 
 impl AuditSink for JsonlSink {
     fn record(&self, record: &AuditRecord) -> Result<(), AuditError> {
-        match self.file.lock() {
-            Ok(mut guard) => writer::append_record(&mut *guard, record).map_err(AuditError::Write),
-            Err(_) => Ok(()),
-        }
+        let Ok(mut guard) = self.file.lock() else {
+            return Ok(());
+        };
+        // OS-level advisory lock serialises concurrent ptuf processes
+        // appending to the same file. The in-process Mutex above does
+        // not span other OFDs so flock is required even on Linux where
+        // a single write() on O_APPEND is otherwise atomic.
+        File::lock(&guard).map_err(|e| AuditError::Write(WriteError::Io(e)))?;
+        let result = writer::append_record(&mut *guard, record).map_err(AuditError::Write);
+        // unlock failures are best-effort: the same OFD's existing lock
+        // remains valid (Linux flock treats a re-lock as a no-op) and
+        // closing the File on Drop releases it unconditionally.
+        let _ = File::unlock(&guard);
+        result
     }
 }
 
@@ -268,6 +281,95 @@ mod tests {
         // record() must swallow the poison and return Ok so the engine
         // does not surface audit errors to the agent.
         assert!(sink.record(&rec()).is_ok());
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn jsonl_sink_serialises_concurrent_writes_across_independent_handles() {
+        // Multiple JsonlSink instances on the same path use independent
+        // OFDs and bypass the in-process Mutex<File>. flock(2) is the
+        // only thing keeping their writes from interleaving — this test
+        // is the cross-process correctness check.
+        use std::collections::HashSet;
+        use std::sync::Arc;
+
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-audit-flock-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("audit.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        let n_sinks = 4;
+        let n_threads_per_sink = 4;
+        let n_per_thread = 25;
+        let total = n_sinks * n_threads_per_sink * n_per_thread;
+
+        let sinks: Vec<Arc<JsonlSink>> = (0..n_sinks)
+            .map(|_| Arc::new(JsonlSink::open(&path).expect("open")))
+            .collect();
+
+        let mut handles = Vec::new();
+        for (sink_id, sink) in sinks.iter().enumerate() {
+            for tid in 0..n_threads_per_sink {
+                let sink = sink.clone();
+                handles.push(std::thread::spawn(move || {
+                    for iter in 0..n_per_thread {
+                        // ~8 KB filler forces multi-page writes so any
+                        // missing flock would surface as torn lines.
+                        let filler = "x".repeat(8000);
+                        let marker = format!("s{sink_id}t{tid}i{iter}-{filler}");
+                        let r = AuditRecord::build(
+                            UNIX_EPOCH,
+                            &Decision::Deny {
+                                rule_id: "r".into(),
+                                reason: "x".into(),
+                            },
+                            Mode::Enforce,
+                            false,
+                            &HookInput {
+                                tool_name: "Bash".into(),
+                                tool_input: json!({"command": "rm -rf /"}),
+                            },
+                            None,
+                            Some(Severity::Critical),
+                            marker,
+                            None,
+                            "claude-code",
+                            Vec::new(),
+                        );
+                        sink.record(&r).expect("record");
+                    }
+                }));
+            }
+        }
+        for h in handles {
+            h.join().expect("join");
+        }
+
+        let body = std::fs::read_to_string(&path).expect("read");
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), total, "row count mismatch — torn lines?");
+
+        let mut markers: HashSet<String> = HashSet::new();
+        for (lineno, line) in lines.iter().enumerate() {
+            let v: serde_json::Value = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("torn line at {lineno}: {e}: {line}"));
+            let cmd = v
+                .get("commandRedacted")
+                .and_then(|c| c.as_str())
+                .expect("commandRedacted present");
+            let prefix = cmd
+                .split_once('-')
+                .map(|(p, _)| p.to_string())
+                .expect("marker prefix");
+            assert!(markers.insert(prefix), "duplicate marker on line {lineno}");
+        }
+        assert_eq!(markers.len(), total);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);

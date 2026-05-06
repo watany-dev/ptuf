@@ -75,5 +75,9 @@ audit:
 ## 運用メモ
 
 - writer は JSONL を追記するだけで、ローテーションは行わない
-- Windows では POSIX `O_APPEND` と同等の原子性を保証しないため best-effort
+- 1 record ごとに OS レベルの advisory lock を取って書き込むため、
+  複数 ptuf プロセスが同じ JSONL に同時 append しても行が混ざらない
+  (Unix は `flock(2)`、Windows は `LockFileEx`)
+- NFS など advisory lock が no-op になる FS では原子性を保証できないため、
+  ローカルファイルシステム上に置くこと
 - 現時点で `ptuf audit` のような専用閲覧 CLI は実装していない
