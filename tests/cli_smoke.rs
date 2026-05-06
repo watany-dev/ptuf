@@ -79,8 +79,6 @@ fn eval_allows_safe_command_with_exit_zero() {
 
 #[test]
 fn eval_asks_dynamic_eval_bash_dash_c() {
-    // PR-B regression: `bash -c <code>` hides the inner command from
-    // every other rule, so the engine should at least ask the user.
     let (code, stdout, _stderr) = run(&["eval", "--tool", "Bash", "bash -c 'echo hi'"], "");
     assert_eq!(code, 0);
     assert!(stdout.contains("Decision: ask"));
@@ -89,8 +87,6 @@ fn eval_asks_dynamic_eval_bash_dash_c() {
 
 #[test]
 fn eval_allows_unrelated_segments_with_sensitive_and_sink() {
-    // PR-C regression: an unrelated `ls ~/.ssh` segment must NOT
-    // contaminate a separate `curl ...` segment.
     let (code, stdout, stderr) = run(
         &[
             "eval",
@@ -107,8 +103,6 @@ fn eval_allows_unrelated_segments_with_sensitive_and_sink() {
 
 #[test]
 fn eval_denies_redirect_into_sensitive_path() {
-    // PR-A + PR-C regression: `curl ... > ~/.ssh/foo` co-locates a
-    // network sink with a sensitive redirect target in one pipeline.
     let (code, _stdout, stderr) = run(
         &[
             "eval",

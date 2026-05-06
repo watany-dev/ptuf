@@ -1,14 +1,6 @@
-//! `core.engine.dynamic-eval` — flag commands that load code at runtime.
-//!
-//! `bash -c …`, `python -c …`, `node -e …`, `eval …` and friends hide
-//! the actual command behind a string argument that the parser cannot
-//! re-enter. Their fact extraction is therefore opaque to every other
-//! built-in rule. This rule asks the user to confirm such two-stage
-//! invocations so a reviewer sees the inner code before it executes.
-//!
-//! Default is `Ask` (not `Deny`) and the rule is overridable: agents
-//! frequently have legitimate reasons to run `bash -c` and projects can
-//! suppress this via `rule_overrides` or an allowlist.
+//! `core.engine.dynamic-eval` — Ask before running interpreters whose
+//! `-c` / `-e` / first-positional argument hides code from the parser
+//! (so other built-in rules cannot inspect what will actually run).
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
@@ -24,13 +16,9 @@ const RULE_ID: &str = "core.engine.dynamic-eval";
 
 #[derive(Debug, Clone, Copy)]
 enum EvalShape {
-    /// Triggered when `-c <code>` appears anywhere in the args.
     FlagDashC,
-    /// Triggered when `-e <code>` appears anywhere in the args.
     FlagDashE,
-    /// Triggered when either `-c <code>` or `-e <code>` appears.
     FlagDashCorE,
-    /// Triggered when the first positional argument is present.
     FirstPositional,
 }
 

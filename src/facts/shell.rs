@@ -572,54 +572,11 @@ fn parse_pipeline(tokens: Vec<Token>) -> Pipeline {
                     commands.push(parse_argv(std::mem::take(&mut current_words)));
                 }
             }
-            Token::Redirect(op) => match op {
-                RedirectOp::Heredoc => {
-                    let body = match iter.next() {
-                        Some(Token::HeredocBody(b)) => b,
-                        // Defensive: heredoc tokens are emitted in pairs.
-                        // If the body is missing fall back to empty.
-                        other => {
-                            // Restore an out-of-place token so we do not
-                            // silently swallow user input.
-                            if let Some(t) = other {
-                                match t {
-                                    Token::Word(w) => current_words.push(w),
-                                    Token::HeredocBody(_) => {}
-                                    _ => {}
-                                }
-                            }
-                            String::new()
-                        }
-                    };
-                    redirects.push(Redirect {
-                        op: RedirectOp::Heredoc,
-                        target: body,
-                    });
-                }
-                _ => {
-                    let target = match iter.next() {
-                        Some(Token::Word(w)) => w,
-                        // No following word: keep the operator with an
-                        // empty target so callers still see that a
-                        // redirect was present.
-                        other => {
-                            if let Some(t) = other {
-                                match t {
-                                    Token::Word(w) => current_words.push(w),
-                                    Token::HeredocBody(_) => {}
-                                    _ => {}
-                                }
-                            }
-                            String::new()
-                        }
-                    };
-                    redirects.push(Redirect { op, target });
-                }
-            },
-            Token::HeredocBody(_) => {
-                // Body without a leading Heredoc marker — defensively skip.
+            Token::Redirect(op) => {
+                let target = take_redirect_target(&mut iter, op, &mut current_words);
+                redirects.push(Redirect { op, target });
             }
-            // Segment splitters never reach here; ignore defensively.
+            Token::HeredocBody(_) => {}
             Token::And | Token::Or | Token::Semi => {}
         }
     }
@@ -629,6 +586,28 @@ fn parse_pipeline(tokens: Vec<Token>) -> Pipeline {
     Pipeline {
         commands,
         redirects,
+    }
+}
+
+/// Pull the word following a redirect operator. For `Heredoc`, expect a
+/// `HeredocBody` token; otherwise expect a `Word`. If the next token is
+/// something else (parser drift), put it back into `current_words` when
+/// it is a stray `Word` so we do not silently lose user input, and yield
+/// an empty target so the redirect itself is still surfaced.
+fn take_redirect_target(
+    iter: &mut std::vec::IntoIter<Token>,
+    op: RedirectOp,
+    current_words: &mut Vec<String>,
+) -> String {
+    let next = iter.next();
+    match (op, next) {
+        (RedirectOp::Heredoc, Some(Token::HeredocBody(b))) => b,
+        (_, Some(Token::Word(w))) if op != RedirectOp::Heredoc => w,
+        (_, Some(Token::Word(w))) => {
+            current_words.push(w);
+            String::new()
+        }
+        _ => String::new(),
     }
 }
 
