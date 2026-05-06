@@ -156,6 +156,10 @@ mod tests {
     use std::time::UNIX_EPOCH;
 
     fn rec() -> AuditRecord {
+        rec_with_command("rm -rf /".into())
+    }
+
+    fn rec_with_command(command: String) -> AuditRecord {
         AuditRecord::build(
             UNIX_EPOCH,
             &Decision::Deny {
@@ -170,7 +174,7 @@ mod tests {
             },
             None,
             Some(Severity::Critical),
-            "rm -rf /".into(),
+            command,
             None,
             "claude-code",
             Vec::new(),
@@ -323,26 +327,7 @@ mod tests {
                         // missing flock would surface as torn lines.
                         let filler = "x".repeat(8000);
                         let marker = format!("s{sink_id}t{tid}i{iter}-{filler}");
-                        let r = AuditRecord::build(
-                            UNIX_EPOCH,
-                            &Decision::Deny {
-                                rule_id: "r".into(),
-                                reason: "x".into(),
-                            },
-                            Mode::Enforce,
-                            false,
-                            &HookInput {
-                                tool_name: "Bash".into(),
-                                tool_input: json!({"command": "rm -rf /"}),
-                            },
-                            None,
-                            Some(Severity::Critical),
-                            marker,
-                            None,
-                            "claude-code",
-                            Vec::new(),
-                        );
-                        sink.record(&r).expect("record");
+                        sink.record(&rec_with_command(marker)).expect("record");
                     }
                 }));
             }
