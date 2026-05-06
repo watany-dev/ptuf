@@ -89,6 +89,7 @@ jobs:
         run: |
           cargo tarpaulin --out json --out html \
             --locked \
+            --features testing \
             --skip-clean \
             --fail-under 95 \
             --exclude-files "src/main.rs" \
