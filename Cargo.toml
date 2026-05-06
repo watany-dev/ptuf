@@ -31,6 +31,11 @@ name = "engine_proptest"
 path = "tests/engine_proptest.rs"
 required-features = ["testing"]
 
+[[test]]
+name = "cli_parse_proptest"
+path = "tests/cli_parse_proptest.rs"
+required-features = ["testing"]
+
 [features]
 default = []
 testing = ["dep:proptest"]

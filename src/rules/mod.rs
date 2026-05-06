@@ -248,8 +248,30 @@ mod tests {
         assert!(ids.contains(&"core.secrets.sensitive-path-to-network".into()));
     }
 
-    use crate::testing::proptest::richer_hook_input;
+    use crate::testing::proptest::{non_bash_hook_input, richer_hook_input};
     use proptest::prelude::*;
+
+    /// Rule ids whose `evaluate()` short-circuits on
+    /// `facts.bash.as_ref()?` and therefore must stay silent for any
+    /// non-Bash hook input. Kept in sync with the early-return guard
+    /// in each rule's source file.
+    const BASH_ONLY_RULE_IDS: &[&str] = &[
+        "core.filesystem.destructive-rm",
+        "core.network.remote-script-pipe",
+        "core.secrets.sensitive-path-to-network",
+        "core.engine.dynamic-eval",
+        "core.git.force-push",
+        "core.git.force-push-with-lease",
+        "core.git.reset-hard",
+        "core.git.clean-fdx",
+        "core.git.branch-delete-force",
+        "core.git.stash-clear",
+        "core.git.remote-set-url",
+        "core.git.no-verify",
+        "core.git.no-gpg-sign",
+        "core.git.config-override-bypass",
+        "core.git.env-bypass",
+    ];
 
     proptest! {
         // evaluate_all never panics for any well-formed HookInput.
@@ -257,6 +279,24 @@ mod tests {
         fn pbt_evaluate_all_never_panics(input in richer_hook_input()) {
             let facts = crate::facts::extract(&input);
             let _ = evaluate_all(&facts, &input);
+        }
+
+        // Bash-only rules early-return on `facts.bash = None`, so any
+        // non-Bash HookInput must leave their evaluate() returning None.
+        // See `docs/design/testing.md` "組み込み rule (全件)".
+        #[test]
+        fn pbt_bash_only_rules_silent_on_non_bash(input in non_bash_hook_input()) {
+            let facts = crate::facts::extract(&input);
+            for rule in RULES {
+                if BASH_ONLY_RULE_IDS.contains(&rule.id()) {
+                    prop_assert!(
+                        rule.evaluate(&facts, &input).is_none(),
+                        "Bash-only rule {} fired on non-Bash tool {:?}",
+                        rule.id(),
+                        input.tool_name,
+                    );
+                }
+            }
         }
 
         // Every decision returned by evaluate_all carries a rule_id that
