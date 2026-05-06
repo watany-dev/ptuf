@@ -65,10 +65,17 @@ audit:
 
 `redaction: strict` では以下を伏せる。
 
-- `TOKEN`, `KEY`, `SECRET`, `PASSWORD` などを含む env assignment の値
-- `ghp_...`, `sk-...`, `AKIA...`, JWT などの代表的 token
+- `TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `CREDENTIAL`, `PRIVATE` を
+  含む env assignment (`KEY=VALUE` 形式) と JSON object
+  (`"KEY": "VALUE"` 形式) の値
+- GitHub classic token (`ghp_…` / `gho_…` / `ghu_…` / `ghs_…` /
+  `ghr_…`) と GitHub fine-grained PAT (`github_pat_…`)
+- Slack token (`xoxa-` / `xoxb-` / `xoxp-` / `xoxr-` / `xoxs-`)
+- Stripe API key (`sk_live_…` / `sk_test_…` / `pk_live_…` /
+  `pk_test_…` / `rk_live_…` / `rk_test_…` / `whsec_…`)
+- OpenAI 系 key (`sk-…`)、AWS Access Key ID (`AKIA…`)、JWT 3-segment
 - URL 中の basic auth password
-- PEM blob
+- PEM blob (`-----BEGIN … PRIVATE KEY-----`)
 
 `redaction: off` も実装されているが、意図的な opt-in 用である。
 
