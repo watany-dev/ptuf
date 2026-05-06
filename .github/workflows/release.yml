@@ -12,10 +12,26 @@
 #
 # Note that the GitHub Release will be created with a generated
 # title/body based on your changelogs.
+#
+# IMPORTANT — DO NOT REGENERATE BLINDLY.
+# This workflow has been hand-patched after `dist init`/`dist generate`:
+#   1. `concurrency`, `id-token: write`, `attestations: write` were added
+#      below the `permissions` block.
+#   2. Third-party action versions are intentionally left as floating
+#      major-version tags here ONLY because cargo-dist regenerates them
+#      on every upgrade. They will be SHA-pinned via a follow-up
+#      automation (see CONTRIBUTING.md "Regenerating release.yml").
+# See CONTRIBUTING.md for the upgrade procedure.
 
 name: Release
 permissions:
   "contents": "write"
+  "id-token": "write"
+  "attestations": "write"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 # This task will run whenever you push a git tag that looks like a version
 # like "1.0.0", "v0.1.0-prerelease.1", "my-app/0.1.0", "releases/v1.0.0", etc.
