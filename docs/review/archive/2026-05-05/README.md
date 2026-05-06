@@ -36,6 +36,7 @@
 | §1.6 | `crate::decide()` が config / plugin load error を握り潰す | 並立する `try_decide(&HookInput) -> Result<Decision, EngineError>` を追加。CLI と同じ fail-closed 契約を embed 利用側にも提供 (`src/lib.rs:35-58`) |
 | D9 | audit write failure が `let _ = ...` で握り潰されている | `Engine::audit_write_warnings: Mutex<Vec<String>>` に蓄積し、`drain_audit_write_warnings()` で取得。CLI hook / eval が完了後に stderr へドレインする (`src/engine.rs:30-44, 230-243, 312-358`, `src/cli.rs:371-400`) |
 | §5.3 | audit JSONL の `write_all` ループで PIPE_BUF 超え行が分割書き込みになり複数 process 同時 audit で行が混ざる | `JsonlSink::record` が record 毎に `std::fs::File::lock`/`unlock` で OS-level advisory lock (Unix `flock(2)` / Windows `LockFileEx`) を取り、独立 OFD でも行が混ざらないことを cross-OFD 並列テストで検証 (`src/audit/mod.rs::JsonlSink::record`, `src/audit/writer.rs`) |
+| §5.5 | redaction が GitHub fine-grained PAT / Slack 新形式 / Stripe / GCP service account JSON を未対応 | `GH_FINE_GRAINED_TOKEN` (`github_pat_<22>_<59>`)、`SLACK_TOKEN` (`xox[abprs]-…`)、`STRIPE_KEY` (`(sk\|pk\|rk)_(live\|test)_…` / `whsec_…`) を追加。さらに JSON-style `"key": "value"` の sensitive 値を伏せる `JSON_SENSITIVE_KEY` を導入し OAuth `client_secret` / GCP `private_key` などをまとめて redact。`docs/design/audit.md:64-78` も列挙更新 (`src/audit/redaction.rs`) |
 
 その他の項目 (parser 限界、redaction 網羅性、CLI parser
 サイズ、モジュール肥大化、契約 fixture 不在など) は
