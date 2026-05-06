@@ -5,7 +5,7 @@
 
 ## 現在の実装スコープ
 
-ptuf は v0.4.0 時点で次を実装済み:
+ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) で次を実装済み:
 
 - `PreToolUse` 向け CLI とライブラリ
 - Claude Code / Codex adapter
@@ -78,7 +78,7 @@ fail-closed で動作する。
 | [`cli-and-hooks.md`](cli-and-hooks.md) | `init` / `hook` / `doctor` と agent 統合 |
 | [`audit.md`](audit.md) | audit JSONL schema と redaction |
 | [`testing.md`](testing.md) | example-based test と PBT の役割分担 |
-| [`roadmap.md`](roadmap.md) | v0.1〜v0.4 の到達点と今後の候補 |
+| [`roadmap.md`](roadmap.md) | M1〜M4 の到達点と今後の候補 |
 
 ## 言語規約
 

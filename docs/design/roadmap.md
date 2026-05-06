@@ -4,7 +4,10 @@
 
 ## マイルストーン整理
 
-### v0.1 — 最小ガードレール (実装済み)
+公開バージョン `v0.0.1` にこれら M1〜M4 をまとめて含めた。M1〜M4 は
+リリースタグではなく、実装の段階を区切るための内部マイルストーン名である。
+
+### M1 — 最小ガードレール (実装済み)
 
 - `Decision` と `aggregate`
 - `ptuf hook claude-code`
@@ -13,7 +16,7 @@
 - `core.network.remote-script-pipe`
 - `core.secrets.sensitive-path-to-network`
 
-### v0.2 — Config / Plugin / Audit (実装済み)
+### M2 — Config / Plugin / Audit (実装済み)
 
 - layered YAML config
 - YAML plugin loader
@@ -21,7 +24,7 @@
 - audit JSONL
 - `mode`, `failClosed`, allowlist
 
-### v0.3 — ツール面の拡張 (実装済み)
+### M3 — ツール面の拡張 (実装済み)
 
 - `Read` / `Edit` / `Write` / `WebFetch`
 - `core.secrets.sensitive-read`
@@ -30,7 +33,7 @@
 - `ptuf init claude-code`
 - `ptuf doctor`
 
-### v0.4 — adapter / project facts / MCP (実装済み)
+### M4 — adapter / project facts / MCP (実装済み)
 
 - `ptuf hook codex`
 - `ptuf init codex`
