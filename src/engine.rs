@@ -780,6 +780,31 @@ mod tests {
     }
 
     #[test]
+    fn inner_shell_redirect_target_classifies_as_protected_claude_settings() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-engine-inner-redirect-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".claude")).expect("mkdir");
+        std::fs::write(dir.join(".claude/settings.json"), "{}").expect("write");
+        let engine = Engine::builder()
+            .repo_root(dir.clone())
+            .build()
+            .expect("builder cannot fail with default config");
+        let target = dir.join(".claude/settings.json");
+        let target_str = target.to_str().expect("utf-8 path");
+        let outcome = engine.decide(&bash(&format!("bash -lc 'echo y > {target_str}'")));
+        match outcome.decision {
+            Decision::Deny { ref rule_id, .. }
+                if rule_id == "core.self_protection.claude-settings" => {}
+            other => panic!("expected core.self_protection.claude-settings deny, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn engine_builder_with_injected_plugins_does_not_load_paths() {
         // Injecting a PluginSet must skip `load_paths`, so a config
         // listing a non-existent plugin path still builds.

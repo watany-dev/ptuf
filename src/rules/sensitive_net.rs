@@ -57,7 +57,8 @@ impl ConfigRule for SensitivePathToNetwork {
 /// preferable to letting a substitution hide an exfiltration shape.
 fn bash_co_locates_sink_and_sensitive(bash: &Bash) -> bool {
     if bash.has_command_substitution {
-        let mut commands = bash.segments.iter().flat_map(|p| p.commands.iter());
+        let commands = bash.commands();
+        let mut commands = commands.into_iter();
         let has_sink = commands.clone().any(invokes_network_sink);
         let has_sensitive = commands.any(references_sensitive_token);
         return has_sink && has_sensitive;

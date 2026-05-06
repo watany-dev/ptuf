@@ -215,7 +215,7 @@ rules:
 | `event` | `string` | 現在は `PreToolUse` と比較 |
 | `tool` | `string` | `tool_name` と一致 |
 | `toolAny` | `string[]` | `tool_name` がいずれかに一致 |
-| `shell.argv` | `{ headAny: [string] }` | command head がいずれかに一致 |
+| `shell.argv` | `{ headAny: [string] }` | command head がいずれかに一致。`bash -c`, `eval`, `xargs`, `find -exec` のような wrapper で surfaced した nested command も含む |
 | `shell.pipeline` | `{ from: { commandAny: [...] }, to: { commandAny: [...] } }` | pipeline に from→to の流れがある |
 | `path.filePathPrefixAny` | `string[]` | 抽出 path が prefix に一致 |
 | `url.schemeAny` | `string[]` | URL scheme が一致 |

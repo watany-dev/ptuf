@@ -53,9 +53,8 @@ impl ConfigRule for GitRule {
     fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
         let bash = facts.bash.as_ref()?;
         let triggered = bash
-            .segments
-            .iter()
-            .flat_map(|p| p.commands.iter())
+            .commands()
+            .into_iter()
             .any(|cmd| invokes_matcher(cmd, self.spec.matcher));
         if !triggered {
             return None;
@@ -1287,6 +1286,9 @@ mod tests {
             env_assignments: Vec::new(),
             head: "sudo".into(),
             args: vec!["-u".into(), "alice".into()],
+            inner_argv: Vec::new(),
+            inner_code: Vec::new(),
+            inner_redirects: Vec::new(),
         };
         assert_eq!(unwrap_sudo(&argv), None);
     }
@@ -1298,6 +1300,16 @@ mod tests {
         assert!(matches!(
             FORCE_PUSH_RULE.evaluate(&facts, &input),
             Some(Decision::Deny { .. })
+        ));
+    }
+
+    #[test]
+    fn reset_hard_matches_inside_bash_dash_c() {
+        let input = bash("bash -c 'git reset --hard HEAD~1'");
+        let facts = crate::facts::extract(&input);
+        assert!(matches!(
+            RESET_HARD_RULE.evaluate(&facts, &input),
+            Some(Decision::Ask { .. })
         ));
     }
 

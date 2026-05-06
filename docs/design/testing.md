@@ -49,6 +49,9 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
   `Redirect.target` に保持し、`Bash::has_heredoc` を true にする
 - process substitution (`<(...)` / `>(...)`) は paren-balance で 1 word として
   吸収され `Bash::has_process_substitution` を true にする
+- `bash -lc`, `sh -ec` のような combined short option でも `-c` / `-e` を認識する
+- `Argv.inner_argv` / `inner_redirects` は wrapper (`bash -c`, `eval`, `xargs`,
+  `find -exec`) の内側 command / redirect を bounded depth で surface する
 - tokenizer は 1 byte 以上前進する (forward-progress;
   `debug_assert!(advanced > 0)`)
 
@@ -93,3 +96,15 @@ bash_command) を集約し、`#[cfg(test)] pub(crate) mod testing` で各モジ�
 テストブロックから参照する。`tests/engine_proptest.rs` は integration crate
 として独立コンパイルされるため共通戦略は見えず、必要最小限の戦略をローカル
 複製している。
+
+## 契約テスト
+
+`tests/contracts.rs` と `tests/contracts/*.json` は公開契約を固定する層である。
+ここでは example-based / PBT とは別に、次を regression として保持する。
+
+- hook deny 時の `hookSpecificOutput` JSON shape
+- `doctor --json` の top-level schema
+- audit JSONL の field contract (`schemaVersion`, `agent`, `allowlistId` など)
+- plugin loader error の fail-closed 契約
+- allowlist `when` の suppression 契約
+- MCP nested path と hook script self-protection の end-to-end 契約

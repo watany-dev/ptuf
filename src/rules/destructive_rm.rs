@@ -35,9 +35,8 @@ impl ConfigRule for DestructiveRm {
     fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
         let bash = facts.bash.as_ref()?;
         let triggered = bash
-            .segments
-            .iter()
-            .flat_map(|p| p.commands.iter())
+            .commands()
+            .into_iter()
             .any(is_destructive_rm_invocation);
         if !triggered {
             return None;
@@ -152,6 +151,16 @@ mod tests {
     #[test]
     fn denies_rm_rf_root() {
         assert_deny("rm -rf /");
+    }
+
+    #[test]
+    fn denies_bash_dash_c_wrapped_rm() {
+        assert_deny("bash -c 'rm -rf /'");
+    }
+
+    #[test]
+    fn denies_find_exec_wrapped_rm() {
+        assert_deny(r"find . -name tmp -exec rm -rf / \;");
     }
 
     #[test]

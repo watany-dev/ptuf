@@ -60,11 +60,7 @@ impl ConfigRule for DynamicEval {
 
     fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
         let bash = facts.bash.as_ref()?;
-        let triggered = bash
-            .segments
-            .iter()
-            .flat_map(|p| p.commands.iter())
-            .any(invokes_dynamic_eval);
+        let triggered = bash.commands().into_iter().any(invokes_dynamic_eval);
         if !triggered {
             return None;
         }
@@ -128,13 +124,30 @@ fn shape_triggers(shape: EvalShape, args: &[String]) -> bool {
 /// Return `true` when `args` contains `flag` followed by another arg, i.e.
 /// the interpreter is actually being asked to evaluate code.
 fn has_flag_with_value(args: &[String], flag: &str) -> bool {
+    let Some(short_flag) = flag
+        .strip_prefix('-')
+        .filter(|rest| rest.len() == 1)
+        .and_then(|rest| rest.chars().next())
+    else {
+        return false;
+    };
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        if arg == flag {
+        if arg == flag || short_flag_cluster_contains(arg, short_flag) {
             return iter.next().is_some();
         }
     }
     false
+}
+
+fn short_flag_cluster_contains(arg: &str, flag: char) -> bool {
+    let Some(rest) = arg.strip_prefix('-') else {
+        return false;
+    };
+    if rest.starts_with('-') || rest.is_empty() {
+        return false;
+    }
+    rest.chars().any(|c| c == flag)
 }
 
 #[cfg(test)]
@@ -182,6 +195,12 @@ mod tests {
     }
 
     #[test]
+    fn asks_on_combined_shell_short_options() {
+        assert_ask("bash -lc 'echo hi'");
+        assert_ask("sh -ec 'echo hi'");
+    }
+
+    #[test]
     fn asks_on_python_dash_c() {
         assert_ask("python -c 'import os; os.system(\"id\")'");
         assert_ask("python3 -c 'print(1)'");
@@ -221,6 +240,11 @@ mod tests {
     #[test]
     fn asks_on_absolute_path_head() {
         assert_ask("/usr/bin/bash -c 'echo hi'");
+    }
+
+    #[test]
+    fn asks_on_find_exec_eval_wrapper_itself() {
+        assert_ask(r"find . -exec bash -c 'echo hi' \;");
     }
 
     #[test]

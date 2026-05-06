@@ -284,6 +284,7 @@ fn candidate_targets<'a>(
     paths: impl IntoIterator<Item = &'a crate::facts::path::FilePath>,
     base_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
+    let event = input.event();
     let mut out = Vec::new();
     // Edit / Write / Read all expose `file_path`.
     for fp in paths {
@@ -301,10 +302,10 @@ fn candidate_targets<'a>(
     // every positional that looks like a path. Don't try to interpret
     // the command itself — false positives are cheap (we reject), but
     // missing a target can let an unsafe write through.
-    if let Some(cmd) = input.bash_command() {
+    if let Some(cmd) = event.command {
         let bash = crate::facts::shell::parse(cmd);
         let writer_heads = ["rm", "mv", "cp", "chmod", "chown", "tee", "ln"];
-        for argv in bash.segments.iter().flat_map(|p| p.commands.iter()) {
+        for argv in bash.commands() {
             let head = match argv.head.as_str() {
                 "sudo" => argv.positional().next().unwrap_or(""),
                 other => other,

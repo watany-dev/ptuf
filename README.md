@@ -20,11 +20,15 @@ v0.0.1 ships:
   dynamic-eval engine guard, and opt-in project hygiene
 - Tool-aware fact extraction for `Bash`, `Read`, `Edit`, `Write`, `WebFetch`,
   and generic `mcp__<server>__<tool>` payloads
+- Bounded wrapper inspection for `bash -c`, `sh -c`, `eval`, `xargs`, and
+  `find -exec`, including wrapped redirect targets for self-protection
 - Layered YAML config and YAML plugins with rule-local `tests:`
 - `ptuf init <agent>` for Claude Code and Codex hook installation
 - `ptuf doctor [--json]` for binary/config/plugin/hook diagnostics
 - Audit JSONL with `schemaVersion: 1`, `agent`, `pluginVersions`, and
   `allowlistId`
+- Contract tests for hook JSON, `doctor --json`, audit schema, allowlists, MCP
+  nested paths, and hook-script self-protection
 
 ## Requirements
 
@@ -227,6 +231,9 @@ ptuf plugin test ./ptuf-plugin.yaml
 ```
 
 Plugin tests evaluate the plugin rule itself, not the full built-in engine.
+
+For end-to-end protocol regressions, the repository also keeps
+`tests/contracts.rs` plus JSON fixtures for hook/audit/doctor behavior.
 
 ## Library Use
 

@@ -56,11 +56,12 @@ pub struct Facts {
 /// Build a [`Facts`] view of a hook input. Pure function with no I/O
 /// other than the production env lookup used for `~` expansion.
 pub fn extract(input: &HookInput) -> Facts {
-    let bash = input.bash_command().map(shell::parse);
+    let event = input.event();
+    let bash = event.command.map(shell::parse);
     let paths = path::extract_all(input);
     let path = paths.first().cloned();
-    let url = input.web_fetch_url().and_then(url::parse);
-    let sensitive = collect_sensitive(input, bash.as_ref(), &paths, url.as_ref());
+    let url = event.urls.first().and_then(|url| url::parse(url));
+    let sensitive = collect_sensitive(&event, bash.as_ref(), &paths, url.as_ref());
     Facts {
         bash,
         path,
@@ -73,7 +74,7 @@ pub fn extract(input: &HookInput) -> Facts {
 }
 
 fn collect_sensitive(
-    input: &HookInput,
+    event: &crate::hook_input::Event<'_>,
     bash: Option<&shell::Bash>,
     paths: &[path::FilePath],
     url: Option<&url::Url>,
@@ -82,7 +83,7 @@ fn collect_sensitive(
     let mut push_all = |s: &str| out.extend(sensitive::classify(s));
 
     if let Some(b) = bash {
-        for cmd in b.segments.iter().flat_map(|p| p.commands.iter()) {
+        for cmd in b.commands() {
             push_all(&cmd.head);
             for a in &cmd.args {
                 push_all(a);
@@ -102,7 +103,7 @@ fn collect_sensitive(
         push_all(&u.host);
     }
 
-    if let Some(s) = input.write_payload() {
+    if let Some(s) = event.content {
         push_all(s);
     }
 

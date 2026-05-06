@@ -136,11 +136,12 @@ Codex:
 ## MCP fact 抽出
 
 `tool_name` が `mcp__<server>__<tool>` 形式なら、ptuf は server 固有 adapter を
-書かずに以下の top-level key を読む。
+書かずに以下の key を読む。
 
 | key | 用途 |
 | --- | --- |
 | `path` | `Facts.path` / `Facts.paths` |
+| `files[].path`, `items[].path`, `paths[]` | `Facts.paths` に追加する nested path |
 | `url` | `Facts.url` |
 | `content` | write payload として secret 判定に流す |
 
@@ -160,6 +161,17 @@ Codex:
 
 text 版はセクションごとに `✓`, `⚠`, `✗` を表示する。ひとつでも `✗` があれば
 exit `1`、それ以外は `0`。
+
+JSON 版は `schemaVersion: 1` に加えて、少なくとも次の top-level key を持つ。
+
+- `binary`
+- `project`
+- `configLayers`
+- `config`
+- `plugins`
+- `claude`
+- `codex`
+- `hasFailure`
 
 ## fail-closed
 

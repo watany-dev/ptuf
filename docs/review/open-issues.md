@@ -23,29 +23,11 @@
 
 ## 2. Parser / fact extraction (P1)
 
-shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/architecture.md`)
-の理想形と乖離している。
-
-- **§2 / D4: shell parser の残盲点 (部分解消)**
-  - 解消済 (PR-A 2026-05-06): redirect (`>` / `>>` / `<` / `2>` / `&>`),
-    heredoc (`<<TAG` / `<<-TAG`), process substitution (`<(…)` / `>(…)`),
-    command substitution (`` ` … ` `` / `$(…)`) の存在検出。
-    `Pipeline.redirects: Vec<Redirect>` と `Bash::has_redirect /
-    has_heredoc / has_process_substitution / has_command_substitution`
-    で surface 済 (`src/facts/shell.rs`)。
-  - 解消済 (PR-B 2026-05-06): `bash -c` / `python -c` / `node -e` /
-    `perl -e` / `ruby -c|-e` / `eval …` は新 rule
-    `core.engine.dynamic-eval` (Ask) で確認させる
-    (`src/rules/dynamic_eval.rs`)。
-  - **残課題**: `xargs <cmd>` / `find -exec <cmd> {} ;` の inner argv
-    再 parse、`bash -c` の inner code を再 parse して既存 rule
-    (`destructive-rm` 等) に流す `Argv.inner_code` / `inner_argv` 連結。
-    現状は head 検出 + Ask で止まっているため、内側の特定動作は
-    inspectable でない。
-- **D10: adapter 層の型が無い**。`HookInput` が Claude Code / Codex /
-  内部 normalized event を兼ねているため、新 adapter 追加で条件分岐が
-  増える。`RawHookInput` と `Event { agent, event, tool, inputs, paths,
-  urls, content }` への分離が必要。コード: `src/hook_input.rs`
+(該当なし — §2 / D4 と D10 は解消済み。`Argv.inner_argv` /
+`inner_code` により `bash -c`, `eval`, `xargs`, `find -exec` の内側 command を
+1 段だけ再 parse し、`destructive-rm` / `core.git.*` など既存 rule が inspect
+できるようになった。adapter 層は `RawHookInput` と normalized `Event` を
+分離し、facts 抽出は `Event` ビュー経由で行う。)
 
 ## 3. Data model & performance (P2)
 
@@ -113,9 +95,7 @@ shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/archite
   周辺) のような「coverage を埋めるためだけ」のテストを誘発する。
   branch coverage 指標への置換、または coverage 数値を捨てる方針転換。
   優先度: P2
-- **D12** 契約 fixture (`tests/contracts/*`) が無い。`coverage 95%` を
-  満たしても、設計書が「実装済み」と書く契約の未実装が検出されない。
-  CLI exit code、stdout/stderr、audit schema、doctor JSON、plugin
-  loader error、allowlist condition、MCP nested paths、hook script
-  self-protection、`~`/`$HOME`/relative path の self-protection など。
-  優先度: P1
+- (該当なし — D12 は解消済み。`tests/contracts.rs` と
+  `tests/contracts/*.json` が hook response、`doctor --json`、audit schema、
+  plugin loader error、allowlist condition、MCP nested path、hook script
+  self-protection の end-to-end 契約を固定する。)

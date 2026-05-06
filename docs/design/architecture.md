@@ -51,12 +51,12 @@ P1 として削除)。embed 利用者は `Engine::builder()` 直接利用も可�
 
 | fact | 内容 |
 | --- | --- |
-| `bash` | `Bash` tool の `command` を parse した command / segment / pipeline。`Pipeline.redirects` で `>` / `>>` / `<` / `2>` / `&>` / heredoc の operator と target を保持する。`Bash::has_command_substitution` / `has_redirect` / `has_heredoc` / `has_process_substitution` で `` ` … ` `` / `$(…)` / リダイレクト / heredoc / `<(…)` `>(…)` の存在を surface する (一部 rule は pessimistic fallback に利用) |
+| `bash` | `Bash` tool の `command` を parse した command / segment / pipeline。`Pipeline.redirects` で `>` / `>>` / `<` / `2>` / `&>` / heredoc の operator と target を保持する。`Bash::has_command_substitution` / `has_redirect` / `has_heredoc` / `has_process_substitution` で `` ` … ` `` / `$(…)` / リダイレクト / heredoc / `<(…)` `>(…)` の存在を surface する。`Argv.inner_argv` / `inner_code` / `inner_redirects` は `bash -c`, `eval`, `xargs`, `find -exec` の内側 command と redirect を bounded depth で再 parse し、既存 rule と self-protection が inspectable な形に連結する |
 | `path` | 先頭の file path (`Read` / `Edit` / `Write` / MCP の top-level `path`)。`PathFact` として `raw` / `expanded` / `absolute` / `canonical_or_raw` / `origin` を保持する |
 | `paths` | tool 入力 (`Read` / `Edit` / `Write` / `apply_patch` / MCP) 由来の全 `PathFact`。Bash redirect target はここには含まれない (engine が self-protection 用に別 slice として供給する) |
 | `url` | `WebFetch` または MCP の top-level `url` |
 | `sensitive` | path / URL / write payload などから検出した機密分類 |
-| `protected` | self-protection 対象との一致。engine 側で `Facts.paths` と Bash redirect target (`Pipeline.redirects[].target`) を `ProtectedPaths::classify_input_with_paths_pair` に二本のスライスとして渡して補完する (中間 `Vec` の clone は発生させない) |
+| `protected` | self-protection 対象との一致。engine 側で `Facts.paths` と Bash redirect target (`Pipeline.redirects[].target` に加え wrapper 由来の `Argv.inner_redirects[].target`) を `ProtectedPaths::classify_input_with_paths_pair` に二本のスライスとして渡して補完する (中間 `Vec` の clone は発生させない) |
 | `project` | lock file、現在 branch、protected branch 判定。engine 側で補完 |
 
 `PathFact.origin` は `ToolInputDirect` (top-level `file_path` / MCP `path`) /
@@ -85,8 +85,10 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 - `claude-code`
 - `codex`
 
-どちらも stdin の JSON payload を `HookInput` として評価するが、hook response の
-扱いが異なる。
+adapter は stdin payload をまず `RawHookInput` として受け、内部では
+normalized `Event { agent, event, tool, inputs, paths, urls, content }`
+ビューへ変換して fact 抽出に渡す。公開 API は後方互換のため `HookInput` を維持
+する。hook response の扱いは agent ごとに次の差分を持つ。
 
 - Claude Code: `Ask` はそのまま `permissionDecision = "ask"`
 - Codex: `Ask` は `Deny` へ変換して block する

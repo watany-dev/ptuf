@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::scope::{EnvLookup, SystemEnv};
-use crate::facts::shell::{Bash, RedirectOp};
+use crate::facts::shell::{Bash, Redirect, RedirectOp};
 use crate::hook_input::HookInput;
 
 /// Tools whose payload exposes a `file_path` field that ptuf inspects.
@@ -241,24 +241,48 @@ pub fn from_bash_redirects(bash: Option<&Bash>, repo_root: Option<&Path>) -> Vec
         return Vec::new();
     };
     let mut out = Vec::new();
+    collect_bash_redirects(bash, repo_root, &mut out);
+    out
+}
+
+fn collect_bash_redirects(bash: &Bash, repo_root: Option<&Path>, out: &mut Vec<PathFact>) {
     for pipeline in &bash.segments {
         for redirect in &pipeline.redirects {
-            if matches!(redirect.op, RedirectOp::Heredoc) {
-                continue;
-            }
-            if redirect.target.is_empty() {
-                continue;
-            }
-            out.push(PathFact::from_raw(
-                redirect.target.clone(),
-                PathTool::Write,
-                PathOrigin::BashRedirect,
-                repo_root,
-                &SystemEnv,
-            ));
+            push_redirect_fact(redirect, repo_root, out);
+        }
+        for command in &pipeline.commands {
+            collect_command_redirects(command, repo_root, out);
         }
     }
-    out
+}
+
+fn collect_command_redirects(
+    command: &crate::facts::shell::Argv,
+    repo_root: Option<&Path>,
+    out: &mut Vec<PathFact>,
+) {
+    for redirect in &command.inner_redirects {
+        push_redirect_fact(redirect, repo_root, out);
+    }
+    for nested in &command.inner_argv {
+        collect_command_redirects(nested, repo_root, out);
+    }
+}
+
+fn push_redirect_fact(redirect: &Redirect, repo_root: Option<&Path>, out: &mut Vec<PathFact>) {
+    if matches!(redirect.op, RedirectOp::Heredoc) {
+        return;
+    }
+    if redirect.target.is_empty() {
+        return;
+    }
+    out.push(PathFact::from_raw(
+        redirect.target.clone(),
+        PathTool::Write,
+        PathOrigin::BashRedirect,
+        repo_root,
+        &SystemEnv,
+    ));
 }
 
 fn expand_home(raw: &str, env: &dyn EnvLookup) -> PathBuf {

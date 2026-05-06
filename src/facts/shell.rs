@@ -96,6 +96,17 @@ pub struct Argv {
     pub head: String,
     /// Remaining arguments (flags + positional).
     pub args: Vec<String>,
+    /// Inner commands surfaced from wrappers such as `xargs`,
+    /// `find -exec`, or `bash -c`.
+    pub inner_argv: Vec<Argv>,
+    /// Inner code blobs carried by dynamic-eval wrappers. Rules that
+    /// cannot inspect `inner_argv` directly can still surface these to
+    /// users or audit.
+    pub inner_code: Vec<String>,
+    /// Redirects surfaced from inner shell code such as `bash -c
+    /// 'echo hi > file'`. Kept separate from the outer pipeline so
+    /// self-protection can inspect wrapped writes.
+    pub inner_redirects: Vec<Redirect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +124,27 @@ impl Argv {
     /// Iterate over positional (non-flag) arguments.
     pub fn positional(&self) -> impl Iterator<Item = &str> {
         self.args.iter().filter(|a| !is_flag(a)).map(String::as_str)
+    }
+
+    fn collect_commands<'a>(&'a self, out: &mut Vec<&'a Argv>) {
+        out.push(self);
+        for inner in &self.inner_argv {
+            inner.collect_commands(out);
+        }
+    }
+}
+
+impl Bash {
+    /// All surfaced commands, including nested wrapper payloads such as
+    /// `bash -c`, `xargs`, and `find -exec`.
+    pub fn commands(&self) -> Vec<&Argv> {
+        let mut out = Vec::new();
+        for pipe in &self.segments {
+            for command in &pipe.commands {
+                command.collect_commands(&mut out);
+            }
+        }
+        out
     }
 }
 
@@ -173,6 +205,9 @@ pub(crate) fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
         env_assignments: Vec::new(),
         head,
         args: rest,
+        inner_argv: Vec::new(),
+        inner_code: Vec::new(),
+        inner_redirects: Vec::new(),
     })
 }
 
@@ -194,6 +229,10 @@ fn is_flag(a: &str) -> bool {
 ///
 /// Returns an empty `Bash` (no segments) for an entirely blank command.
 pub fn parse(command: &str) -> Bash {
+    parse_with_depth(command, 2)
+}
+
+fn parse_with_depth(command: &str, nesting_budget: usize) -> Bash {
     let TokenizeOutput {
         tokens,
         has_command_substitution,
@@ -202,7 +241,10 @@ pub fn parse(command: &str) -> Bash {
         has_process_substitution,
     } = tokenize(command);
     let segments = split_segments(tokens);
-    let pipelines: Vec<Pipeline> = segments.into_iter().map(parse_pipeline).collect();
+    let pipelines: Vec<Pipeline> = segments
+        .into_iter()
+        .map(|segment| parse_pipeline(segment, nesting_budget))
+        .collect();
     Bash {
         segments: pipelines
             .into_iter()
@@ -559,7 +601,7 @@ fn split_segments(tokens: Vec<Token>) -> Vec<Vec<Token>> {
     segments
 }
 
-fn parse_pipeline(tokens: Vec<Token>) -> Pipeline {
+fn parse_pipeline(tokens: Vec<Token>, nesting_budget: usize) -> Pipeline {
     let mut commands = Vec::new();
     let mut redirects = Vec::new();
     let mut current_words: Vec<String> = Vec::new();
@@ -569,7 +611,10 @@ fn parse_pipeline(tokens: Vec<Token>) -> Pipeline {
             Token::Word(w) => current_words.push(w),
             Token::Pipe => {
                 if !current_words.is_empty() {
-                    commands.push(parse_argv(std::mem::take(&mut current_words)));
+                    commands.push(parse_argv(
+                        std::mem::take(&mut current_words),
+                        nesting_budget,
+                    ));
                 }
             }
             Token::Redirect(op) => {
@@ -581,7 +626,7 @@ fn parse_pipeline(tokens: Vec<Token>) -> Pipeline {
         }
     }
     if !current_words.is_empty() {
-        commands.push(parse_argv(current_words));
+        commands.push(parse_argv(current_words, nesting_budget));
     }
     Pipeline {
         commands,
@@ -611,7 +656,7 @@ fn take_redirect_target(
     }
 }
 
-fn parse_argv(words: Vec<String>) -> Argv {
+fn parse_argv(words: Vec<String>, nesting_budget: usize) -> Argv {
     // VecDeque so the head-stripping loop runs in O(N) overall instead
     // of O(N²) — `Vec::remove(0)` shifts every remaining element.
     let mut words: std::collections::VecDeque<String> = words.into();
@@ -626,11 +671,183 @@ fn parse_argv(words: Vec<String>) -> Argv {
         }
     }
     let head = words.pop_front().unwrap_or_default();
-    Argv {
+    let mut argv = Argv {
         env_assignments,
         head,
         args: words.into(),
+        inner_argv: Vec::new(),
+        inner_code: Vec::new(),
+        inner_redirects: Vec::new(),
+    };
+    if nesting_budget > 0 {
+        augment_inner_commands(&mut argv, nesting_budget - 1);
     }
+    argv
+}
+
+fn augment_inner_commands(argv: &mut Argv, nesting_budget: usize) {
+    if let Some(code) = extract_shell_dash_c(argv) {
+        merge_inner_shell(argv, &code, nesting_budget);
+    }
+    if let Some(code) = extract_eval_code(argv) {
+        merge_inner_shell(argv, &code, nesting_budget);
+    }
+    if let Some(inner) = extract_xargs_inner(argv, nesting_budget) {
+        argv.inner_argv.push(inner);
+    }
+    if let Some(inner) = extract_find_exec_inner(argv, nesting_budget) {
+        argv.inner_argv.push(inner);
+    }
+}
+
+fn merge_inner_shell(argv: &mut Argv, code: &str, nesting_budget: usize) {
+    argv.inner_code.push(code.to_string());
+    let inner = parse_inner_shell(code, nesting_budget);
+    argv.inner_argv.extend(inner.commands);
+    argv.inner_redirects.extend(inner.redirects);
+}
+
+struct InnerShell {
+    commands: Vec<Argv>,
+    redirects: Vec<Redirect>,
+}
+
+fn parse_inner_shell(code: &str, nesting_budget: usize) -> InnerShell {
+    let inner = parse_with_depth(code, nesting_budget);
+    let mut commands = Vec::new();
+    let mut redirects = Vec::new();
+    for segment in inner.segments {
+        redirects.extend(segment.redirects.iter().cloned());
+        commands.extend(segment.commands);
+    }
+    InnerShell {
+        commands,
+        redirects,
+    }
+}
+
+fn extract_shell_dash_c(argv: &Argv) -> Option<String> {
+    if !is_shell_dash_c_head(&argv.head) {
+        return None;
+    }
+    let mut iter = argv.args.iter();
+    while let Some(arg) = iter.next() {
+        if short_flag_cluster_contains(arg, 'c') {
+            return iter.next().cloned();
+        }
+    }
+    None
+}
+
+fn is_shell_dash_c_head(head: &str) -> bool {
+    matches!(
+        head_basename(head),
+        "bash" | "sh" | "zsh" | "ksh" | "dash" | "fish"
+    )
+}
+
+fn extract_eval_code(argv: &Argv) -> Option<String> {
+    if head_basename(&argv.head) != "eval" {
+        return None;
+    }
+    argv.args.iter().find(|arg| !arg.starts_with('-')).cloned()
+}
+
+fn extract_xargs_inner(argv: &Argv, nesting_budget: usize) -> Option<Argv> {
+    if head_basename(&argv.head) != "xargs" {
+        return None;
+    }
+    let start = xargs_command_start(&argv.args)?;
+    let words: Vec<String> = argv.args.iter().skip(start).cloned().collect();
+    if words.is_empty() {
+        return None;
+    }
+    Some(parse_argv(words, nesting_budget))
+}
+
+fn xargs_command_start(args: &[String]) -> Option<usize> {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if arg == "--" {
+            return (i + 1 < args.len()).then_some(i + 1);
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            return Some(i);
+        }
+        if xargs_flag_takes_value(arg) && i + 1 < args.len() && !arg.contains('=') {
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+fn xargs_flag_takes_value(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-a" | "-d"
+            | "-E"
+            | "-e"
+            | "-I"
+            | "-i"
+            | "-L"
+            | "-l"
+            | "-n"
+            | "-P"
+            | "-s"
+            | "--arg-file"
+            | "--delimiter"
+            | "--eof"
+            | "--eof-str"
+            | "--replace"
+            | "--max-lines"
+            | "--max-args"
+            | "--max-procs"
+            | "--max-chars"
+    )
+}
+
+fn extract_find_exec_inner(argv: &Argv, nesting_budget: usize) -> Option<Argv> {
+    if head_basename(&argv.head) != "find" {
+        return None;
+    }
+    let start = argv
+        .args
+        .iter()
+        .position(|arg| arg == "-exec" || arg == "-execdir")?;
+    let end = argv
+        .args
+        .iter()
+        .skip(start + 1)
+        .position(|arg| arg == ";" || arg == "+")?;
+    let words: Vec<String> = argv
+        .args
+        .iter()
+        .skip(start + 1)
+        .take(end)
+        .filter(|arg| arg.as_str() != "{}")
+        .cloned()
+        .collect();
+    if words.is_empty() {
+        return None;
+    }
+    Some(parse_argv(words, nesting_budget))
+}
+
+fn head_basename(head: &str) -> &str {
+    head.rsplit('/').next().unwrap_or(head)
+}
+
+fn short_flag_cluster_contains(arg: &str, flag: char) -> bool {
+    let Some(rest) = arg.strip_prefix('-') else {
+        return false;
+    };
+    if rest.starts_with('-') || rest.is_empty() {
+        return false;
+    }
+    rest.chars().any(|c| c == flag)
 }
 
 fn split_env_assignment(word: &str) -> Option<(String, String)> {
@@ -661,6 +878,9 @@ mod tests {
             env_assignments: Vec::new(),
             head: head.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
+            inner_argv: Vec::new(),
+            inner_code: Vec::new(),
+            inner_redirects: Vec::new(),
         }
     }
 
@@ -884,6 +1104,79 @@ mod tests {
         assert_eq!(first[1].head, "sudo");
         assert_eq!(first[1].args, vec!["bash".to_string()]);
         assert_eq!(b.segments[1].commands[0].head, "ls");
+    }
+
+    #[test]
+    fn parses_bash_dash_c_inner_command() {
+        let b = parse("bash -c 'rm -rf /'");
+        let inner = &b.segments[0].commands[0].inner_argv;
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0], argv("rm", &["-rf", "/"]));
+        assert_eq!(b.segments[0].commands[0].inner_code, vec!["rm -rf /"]);
+    }
+
+    #[test]
+    fn parses_combined_shell_short_options_with_dash_c() {
+        let b = parse("bash -lc 'rm -rf /'");
+        let inner = &b.segments[0].commands[0].inner_argv;
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0], argv("rm", &["-rf", "/"]));
+    }
+
+    #[test]
+    fn parses_eval_inner_command() {
+        let b = parse("eval 'git reset --hard HEAD~1'");
+        let inner = &b.segments[0].commands[0].inner_argv;
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0], argv("git", &["reset", "--hard", "HEAD~1"]));
+    }
+
+    #[test]
+    fn parses_xargs_inner_command() {
+        let b = parse("printf '/\\0' | xargs -0 rm -rf");
+        let inner = &b.segments[0].commands[1].inner_argv;
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0], argv("rm", &["-rf"]));
+    }
+
+    #[test]
+    fn parses_xargs_inner_command_with_dash_x_flag() {
+        let b = parse("printf '/\\0' | xargs -0 -x rm -rf /");
+        let inner = &b.segments[0].commands[1].inner_argv;
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0], argv("rm", &["-rf", "/"]));
+    }
+
+    #[test]
+    fn parses_find_exec_inner_command() {
+        let b = parse(r"find . -name tmp -exec rm -rf {} \;");
+        let inner = &b.segments[0].commands[0].inner_argv;
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0], argv("rm", &["-rf"]));
+    }
+
+    #[test]
+    fn preserves_redirects_from_inner_shell_code() {
+        let b = parse("bash -c 'echo hi > .claude/settings.json'");
+        assert_eq!(b.segments[0].commands[0].inner_redirects.len(), 1);
+        assert_eq!(
+            b.segments[0].commands[0].inner_redirects[0],
+            Redirect {
+                op: RedirectOp::Stdout,
+                target: ".claude/settings.json".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn commands_flattens_nested_wrappers() {
+        let b = parse("bash -c 'xargs rm -rf'");
+        let heads: Vec<_> = b
+            .commands()
+            .into_iter()
+            .map(|argv| argv.head.as_str())
+            .collect();
+        assert_eq!(heads, vec!["bash", "xargs", "rm"]);
     }
 
     #[test]

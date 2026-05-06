@@ -15,8 +15,11 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) で次を実�
   `core.project_hygiene` (opt-in)
 - facts 抽出:
   `shell.*`, `path`, `url`, `sensitive_path`, `protected`, `project`
+- `bash -c`, `sh -c`, `eval`, `xargs`, `find -exec` に対する bounded wrapper
+  inspection と、wrapped redirect を含む self-protection
 - layered YAML config, YAML plugin, allowlist, audit JSONL
 - `ptuf init <agent>`, `ptuf doctor [--json]`, `ptuf plugin test <path>`
+- `tests/contracts.rs` による hook / audit / `doctor --json` 契約の固定
 
 ## 公開 API
 

@@ -246,9 +246,8 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
         WhenNode::ShellArgvHeadAny(heads) => match facts.bash.as_ref() {
             None => false,
             Some(bash) => bash
-                .segments
-                .iter()
-                .flat_map(|p| p.commands.iter())
+                .commands()
+                .into_iter()
                 .any(|argv| heads.contains(&argv.head)),
         },
         WhenNode::ShellPipelineFromTo { from, to } => match facts.bash.as_ref() {

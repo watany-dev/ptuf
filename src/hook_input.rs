@@ -1,13 +1,54 @@
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct RawHookInput {
+    pub tool_name: String,
+    #[serde(default)]
+    pub tool_input: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct HookInput {
     pub tool_name: String,
     #[serde(default)]
     pub tool_input: serde_json::Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Event<'a> {
+    pub agent: Option<&'a str>,
+    pub event: &'static str,
+    pub tool: &'a str,
+    pub inputs: &'a serde_json::Value,
+    pub command: Option<&'a str>,
+    pub paths: Vec<&'a str>,
+    pub urls: Vec<&'a str>,
+    pub content: Option<&'a str>,
+}
+
+impl From<RawHookInput> for HookInput {
+    fn from(value: RawHookInput) -> Self {
+        Self {
+            tool_name: value.tool_name,
+            tool_input: value.tool_input,
+        }
+    }
+}
+
 impl HookInput {
+    pub fn event(&self) -> Event<'_> {
+        Event {
+            agent: None,
+            event: "PreToolUse",
+            tool: &self.tool_name,
+            inputs: &self.tool_input,
+            command: self.bash_command(),
+            paths: collect_event_paths(self),
+            urls: collect_event_urls(self),
+            content: self.write_payload(),
+        }
+    }
+
     /// If this is a Bash tool call with a string `command` field, return it.
     pub fn bash_command(&self) -> Option<&str> {
         if self.tool_name != "Bash" {
@@ -17,9 +58,12 @@ impl HookInput {
     }
 
     /// String `file_path` for `Read` / `Edit` / `Write` payloads, or the
-    /// generic `path` field for `mcp__*` tool calls. MCP servers vary in
-    /// payload shape; v1 only inspects the top-level `path` key (not
-    /// nested arrays such as `mcp__github__push_files.files[].path`).
+    /// generic top-level `path` field for `mcp__*` tool calls.
+    ///
+    /// Nested MCP path arrays (`files[].path`, `items[].path`, `paths[]`)
+    /// are collected by [`Self::event`] for fact extraction, but this
+    /// compatibility accessor intentionally keeps the older top-level-only
+    /// behavior.
     pub fn file_path(&self) -> Option<&str> {
         match self.tool_name.as_str() {
             "Read" | "Edit" | "Write" => self.tool_input.get("file_path")?.as_str(),
@@ -86,6 +130,74 @@ fn split_mcp(name: &str) -> Option<(&str, &str)> {
 
 fn is_mcp(name: &str) -> bool {
     split_mcp(name).is_some()
+}
+
+fn collect_event_paths(input: &HookInput) -> Vec<&str> {
+    let mut out = Vec::new();
+    match input.tool_name.as_str() {
+        "Read" | "Edit" | "Write" => {
+            if let Some(path) = input
+                .tool_input
+                .get("file_path")
+                .and_then(serde_json::Value::as_str)
+            {
+                out.push(path);
+            }
+        }
+        name if is_mcp(name) => {
+            if let Some(path) = input
+                .tool_input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+            {
+                out.push(path);
+            }
+            for key in ["files", "items"] {
+                if let Some(items) = input
+                    .tool_input
+                    .get(key)
+                    .and_then(serde_json::Value::as_array)
+                {
+                    for item in items {
+                        if let Some(path) = item.get("path").and_then(serde_json::Value::as_str) {
+                            out.push(path);
+                        }
+                    }
+                }
+            }
+            if let Some(paths) = input
+                .tool_input
+                .get("paths")
+                .and_then(serde_json::Value::as_array)
+            {
+                for item in paths {
+                    if let Some(path) = item.as_str() {
+                        out.push(path);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+fn collect_event_urls(input: &HookInput) -> Vec<&str> {
+    match input.tool_name.as_str() {
+        "WebFetch" => input
+            .tool_input
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .into_iter()
+            .collect(),
+        name if is_mcp(name) => input
+            .tool_input
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +383,28 @@ mod tests {
         .expect("parse");
         assert_eq!(parsed.write_payload(), Some("hi"));
         assert_eq!(parsed.file_path(), Some("/tmp/x"));
+    }
+
+    #[test]
+    fn raw_hook_input_converts_to_hook_input() {
+        let raw: RawHookInput =
+            serde_json::from_str(r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#)
+                .expect("parse");
+        let parsed = HookInput::from(raw);
+        assert_eq!(parsed.tool_name, "Bash");
+        assert_eq!(parsed.bash_command(), Some("ls"));
+    }
+
+    #[test]
+    fn event_normalizes_nested_mcp_paths() {
+        let parsed: HookInput = serde_json::from_str(
+            r#"{"tool_name":"mcp__github__push_files","tool_input":{"files":[{"path":"/tmp/a"}],"paths":["/tmp/b"]}}"#,
+        )
+        .expect("parse");
+        let event = parsed.event();
+        assert_eq!(event.tool, "mcp__github__push_files");
+        assert_eq!(event.event, "PreToolUse");
+        assert_eq!(event.paths, vec!["/tmp/a", "/tmp/b"]);
     }
 
     #[test]

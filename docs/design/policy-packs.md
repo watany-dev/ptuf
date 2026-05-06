@@ -95,13 +95,15 @@ command head と誤認しないように unwrap してから評価する。
 | --- | --- | --- | --- | --- |
 | `core.engine.dynamic-eval` | ask | false | medium | `bash -c …` / `sh -c` / `python -c` / `node -e` / `perl -e` / `ruby -c\|-e` / `eval …` 等の 2 段階実行 |
 
-interpreter の `-c` / `-e` flag や `eval` の引数は parser から見えない
-opaque な inner code として扱われ、他の rule (`destructive-rm` 等) は
-inner code を検査できない。`core.engine.dynamic-eval` は `Ask` を返して
-ユーザに inner code を確認させる。`sudo bash -c …` のような sudo 経由も
-unwrap して評価する。`bash --login` や `python file.py` のような通常起動は
-発火しない。allowlist (`overrides.allow` の glob) や `rule_overrides.disable`
-で project-local に抑制できる。
+shell wrapper (`bash -c`, `sh -c`, `eval`, `xargs`, `find -exec`) については、
+bounded depth の再 parse により inner command と redirect が既存 rule
+(`destructive-rm`, self-protection など) にも流れる。一方で `python -c`,
+`node -e`, `perl -e`, `ruby -e` のような interpreter 組み込みコードは依然
+opaque なので、`core.engine.dynamic-eval` が `Ask` を返してユーザに inner code
+確認を求める。`sudo bash -c …` のような sudo 経由も unwrap して評価する。
+`bash --login` や `python file.py` のような通常起動は発火しない。allowlist
+(`overrides.allow` の glob) や `rule_overrides.disable` で project-local に
+抑制できる。
 
 ## `core.project_hygiene`
 
