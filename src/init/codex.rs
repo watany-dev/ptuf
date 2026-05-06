@@ -350,6 +350,19 @@ mod tests {
     }
 
     #[test]
+    fn resolve_paths_can_derive_hooks_from_explicit_config_path() {
+        let paths = resolve_paths(
+            None,
+            None,
+            None,
+            Some(Path::new("/repo/.codex/config.toml")),
+        )
+        .unwrap();
+        assert_eq!(paths.hooks_path, PathBuf::from("/repo/.codex/hooks.json"));
+        assert_eq!(paths.config_path, PathBuf::from("/repo/.codex/config.toml"));
+    }
+
+    #[test]
     fn resolve_paths_requires_root_or_explicit_target() {
         let err = resolve_paths(None, None, None, None).unwrap_err();
         assert!(matches!(err, InitError::RepoRootNotFound));
@@ -541,5 +554,292 @@ mod tests {
         assert!(!command_invokes_ptuf_hook(
             "ptuf hook claude-code pre-tool-use"
         ));
+    }
+
+    #[test]
+    fn detect_binary_returns_a_non_empty_string() {
+        assert!(!detect_binary().is_empty());
+    }
+
+    #[test]
+    fn default_home_hooks_path_ends_with_codex_when_home_is_set() {
+        if let Some(path) = default_home_hooks_path() {
+            assert!(path.ends_with(".codex/hooks.json"));
+        }
+    }
+
+    #[test]
+    fn default_home_config_path_ends_with_codex_when_home_is_set() {
+        if let Some(path) = default_home_config_path() {
+            assert!(path.ends_with(".codex/config.toml"));
+        }
+    }
+
+    #[test]
+    fn command_executable_returns_first_token_or_none() {
+        assert_eq!(command_executable("/x/ptuf hook codex"), Some("/x/ptuf"));
+        assert_eq!(command_executable(""), None);
+    }
+
+    #[test]
+    fn entry_commands_returns_empty_when_hooks_key_is_missing() {
+        let entry = json!({ "matcher": DEFAULT_MATCHER });
+        assert!(entry_commands(&entry).is_empty());
+    }
+
+    #[test]
+    fn entry_commands_returns_empty_when_hooks_is_not_an_array() {
+        let entry = json!({ "matcher": DEFAULT_MATCHER, "hooks": "not-an-array" });
+        assert!(entry_commands(&entry).is_empty());
+    }
+
+    #[test]
+    fn empty_hooks_file_is_treated_as_empty_object() {
+        let dir = workdir("empty-hooks");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        fs::write(&targets.hooks_path, "").unwrap();
+        let outcome = install(&targets, "/x/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        let after: Value = serde_json::from_str(&read(&targets.hooks_path)).unwrap();
+        assert!(after.pointer("/hooks/PreToolUse").is_some());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_config_file_is_treated_as_empty_document() {
+        let dir = workdir("empty-config");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        fs::create_dir_all(targets.config_path.parent().unwrap()).unwrap();
+        fs::write(&targets.config_path, "").unwrap();
+        let outcome = install(&targets, "/x/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        assert!(read(&targets.config_path).contains("codex_hooks = true"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_reports_io_error_when_hooks_path_is_a_directory() {
+        let dir = workdir("hooks-is-dir");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join("hooks-as-dir"),
+            config_path: dir.join("config.toml"),
+        };
+        fs::create_dir_all(&targets.hooks_path).unwrap();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
+        assert!(matches!(err, InitError::Io { .. }));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_reports_io_error_when_config_path_is_a_directory() {
+        let dir = workdir("config-is-dir");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join("hooks.json"),
+            config_path: dir.join("config-as-dir"),
+        };
+        fs::create_dir_all(&targets.config_path).unwrap();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
+        assert!(matches!(err, InitError::Io { .. }));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_rejects_when_top_level_is_not_object() {
+        let dir = workdir("non-object-hooks");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        fs::write(&targets.hooks_path, "[]").unwrap();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
+        assert!(matches!(err, InitError::Schema { .. }));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_rejects_when_hooks_value_is_wrong_type() {
+        let dir = workdir("hooks-wrong-type");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        fs::write(&targets.hooks_path, r#"{"hooks": 42}"#).unwrap();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
+        match err {
+            InitError::Schema { message, .. } => {
+                assert!(message.contains("hooks"), "got: {message}");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_rejects_when_pre_tool_use_is_wrong_type() {
+        let dir = workdir("pretooluse-wrong-type");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        fs::write(
+            &targets.hooks_path,
+            r#"{"hooks": {"PreToolUse": "not-an-array"}}"#,
+        )
+        .unwrap();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
+        match err {
+            InitError::Schema { message, .. } => {
+                assert!(message.contains("PreToolUse"), "got: {message}");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_appends_when_a_different_matcher_already_exists() {
+        let dir = workdir("append-matcher");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        let preset = json!({
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            { "type": "command", "command": "/usr/bin/something-else" }
+                        ]
+                    }
+                ]
+            }
+        });
+        fs::write(
+            &targets.hooks_path,
+            serde_json::to_string_pretty(&preset).unwrap(),
+        )
+        .unwrap();
+        let outcome = install(&targets, "/usr/local/bin/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        let after: Value = serde_json::from_str(&read(&targets.hooks_path)).unwrap();
+        let arr = after
+            .pointer("/hooks/PreToolUse")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(arr.len(), 2, "existing entry preserved, ours appended");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn already_present_detection_ignores_unrelated_command_strings() {
+        let dir = workdir("unrelated-cmd");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        let preset = json!({
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            { "type": "command", "command": "/x/something-else --flag" },
+                            { "type": "command", "command": "echo hi" }
+                        ]
+                    }
+                ]
+            }
+        });
+        fs::write(
+            &targets.hooks_path,
+            serde_json::to_string_pretty(&preset).unwrap(),
+        )
+        .unwrap();
+        let outcome = install(&targets, "/usr/local/bin/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        let after: Value = serde_json::from_str(&read(&targets.hooks_path)).unwrap();
+        let arr = after
+            .pointer("/hooks/PreToolUse")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(arr.len(), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_preserves_unknown_keys_in_hooks_and_config() {
+        let dir = workdir("preserve-keys");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        let preset = json!({
+            "model": "gpt-codex",
+            "extras": { "deep": { "value": 42 } }
+        });
+        fs::write(
+            &targets.hooks_path,
+            serde_json::to_string_pretty(&preset).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            &targets.config_path,
+            "[other]\nkeep = \"me\"\n\n[features]\napproval_policy = true\n",
+        )
+        .unwrap();
+        install(&targets, "/usr/local/bin/ptuf", false).unwrap();
+        let after_hooks: Value = serde_json::from_str(&read(&targets.hooks_path)).unwrap();
+        assert_eq!(
+            after_hooks.get("model").and_then(Value::as_str),
+            Some("gpt-codex")
+        );
+        assert_eq!(
+            after_hooks
+                .pointer("/extras/deep/value")
+                .and_then(Value::as_i64),
+            Some(42)
+        );
+        let after_config = read(&targets.config_path).parse::<DocumentMut>().unwrap();
+        assert_eq!(
+            after_config["other"]["keep"].as_str(),
+            Some("me"),
+            "unrelated [other] table must survive"
+        );
+        let features = after_config["features"].as_table_like().unwrap();
+        assert_eq!(
+            features
+                .get("approval_policy")
+                .and_then(|item| item.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            features.get("codex_hooks").and_then(|item| item.as_bool()),
+            Some(true)
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

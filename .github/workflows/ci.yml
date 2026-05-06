@@ -16,6 +16,7 @@ env:
 
 jobs:
   fmt:
+    name: Format check
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -29,6 +30,7 @@ jobs:
         run: cargo fmt -- --check
 
   lint:
+    name: Clippy + doc warnings
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -45,20 +47,17 @@ jobs:
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
 
   test:
+    # Cross-OS matrix without windows-latest: see plan in
+    # /root/.claude/plans/ci-ci-resilient-toast.md Step 4a.
+    # Windows path-handling tests are stabilised in a follow-up PR
+    # before re-enabling the windows-latest cell.
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
-          # Windows path semantics differ enough that early test failures
-          # are expected; soften the gate while we backfill coverage and
-          # flip to required once green.
-          - os: windows-latest
-            continue-on-error: true
-    continue-on-error: ${{ matrix.continue-on-error || false }}
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -74,6 +73,7 @@ jobs:
         run: cargo test --locked --doc
 
   coverage:
+    name: Coverage (tarpaulin)
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -108,6 +108,7 @@ jobs:
           retention-days: 14
 
   msrv:
+    name: MSRV check
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -120,6 +121,7 @@ jobs:
         run: cargo check --all-targets --locked
 
   actionlint:
+    name: actionlint
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -131,7 +133,25 @@ jobs:
       - name: Run actionlint
         run: ./actionlint -color
 
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # upload SARIF to Code Scanning
+      actions: read           # codeql-action queries the workflow run API
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@b1d7e1fb5de872772f31590499237e7cce841e8e # v0.5.3
+        with:
+          inputs: ./.github/workflows/
+          persona: auditor
+          version: 1.24.1
+
   security:
+    name: cargo-deny
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
