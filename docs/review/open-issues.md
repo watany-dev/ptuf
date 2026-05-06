@@ -2,8 +2,9 @@
 
 `docs/review/archive/2026-05-05/{redesign,design-debt}.md` のレビューから、
 **現時点 (`v0.0.1` HEAD) でも未解決の指摘のみ** を抜粋して整理する。
-解決済みの 6 件 (D1 / D2 / D3 / D6 / D7 / §3.2) は
-[archive/2026-05-05/README.md](archive/2026-05-05/README.md) を参照。
+解決済みは [archive/2026-05-05/README.md](archive/2026-05-05/README.md)
+を参照 (D1 / D2 / D3 / D6 / D7 / §3.2 に加え、§3.3 / §3.5 / §1.6 / D9 を
+本セッションで解消)。
 
 各項目には次を付ける:
 
@@ -13,10 +14,10 @@
 
 ## 1. Concrete bugs (P0)
 
-| 出典 | 内容 | コード参照 | 優先度 |
-| --- | --- | --- | --- |
-| §3.3 | `read_word` のクオート意味論が ad hoc。backtick 中身を pessimistic に扱うか、内部コマンドとして再パースするか方針未確定 | `src/facts/shell.rs` | P1 |
-| §3.5 | `lone_ampersand_does_not_loop` テストはパーサ無限ループ修正の痕跡。`read_word` が必ず最低 1 byte 進む不変条件を `debug_assert!` 等で明示すべき | `src/facts/shell.rs:460-470` | P2 |
+(該当なし — §3.3 / §3.5 は解消済み。`Bash::has_command_substitution`
+で command substitution を pessimistic 扱いに surface できるようになった。
+`tokenize` の `read_word` 呼び出しに `debug_assert!(advanced > 0)` を
+追加して forward-progress 不変条件を明示。)
 
 ## 2. Parser / fact extraction (P1)
 
@@ -100,19 +101,9 @@ shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/archite
   `demote_for_mode` では `Monitor | Observe` を同一扱い。
   `docs/design/roadmap.md:49` でも「現状は monitor と同じ」と明記。
   意味を分けるか削除する。優先度: P2
-- **§1.6** `lib.rs:36` の `Engine::for_cwd().unwrap_or_else(|_|
-  Engine::default())` が config / plugin の load error を握り潰す。
-  embedded caller 向けに `try_decide` で `Result` を返す API を出すと
-  CLI 経路 (`build_engine_or_fail_closed`) との差が誠実に見える。
-  コード: `src/lib.rs:35-38`。優先度: P1
 - **§1.7** `Engine::default()` が空 `ProtectedPaths` を持つので、
   上記 fallback と組み合わせると self_protection が embed 経路でほぼ
   効かない。`Engine::builder()` で必須項目を強制する案。優先度: P1
-- **D9** audit write failure が `let _ = self.audit_sink.record(&record)` で
-  握り潰されている。open 失敗は `Engine::audit_warning()`
-  (`src/engine.rs:226`) 経由で CLI / doctor から見えるようになっているが、
-  write 失敗 (permission / disk full) は依然無音。コード:
-  `src/engine.rs:302-315`。優先度: P1
 - **D11** 大型ファイル: `src/engine.rs` 1812 行 / `src/cli.rs` 1352 行 /
   `src/doctor.rs` 1712 行 / `src/plugin/dsl.rs` 1067 行。レビュー時
   (engine 1362, cli 1158, doctor 1073, dsl 1056) より増加している。

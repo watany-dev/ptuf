@@ -369,7 +369,13 @@ fn run_hook<R: Read, W1: Write, W2: Write>(
         }
     };
     let decision = match build_engine_or_fail_closed(stderr, agent.audit_name()) {
-        Ok(engine) => engine.decide(&input).decision,
+        Ok(engine) => {
+            let decision = engine.decide(&input).decision;
+            for warning in engine.drain_audit_write_warnings() {
+                let _ = writeln!(stderr, "{warning}");
+            }
+            decision
+        }
         Err(deny) => deny,
     };
     emit_decision(agent, &decision, stdout, stderr)
@@ -386,7 +392,13 @@ fn run_eval<W1: Write, W2: Write>(
         tool_input: serde_json::json!({ "command": command }),
     };
     let decision = match build_engine_or_fail_closed(stderr, "cli") {
-        Ok(engine) => engine.decide(&input).decision,
+        Ok(engine) => {
+            let decision = engine.decide(&input).decision;
+            for warning in engine.drain_audit_write_warnings() {
+                let _ = writeln!(stderr, "{warning}");
+            }
+            decision
+        }
         Err(deny) => deny,
     };
     let _ = writeln!(stdout, "Decision: {}", decision_label(&decision));

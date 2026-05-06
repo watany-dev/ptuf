@@ -5,15 +5,24 @@
 //! args). Quoting (`'`, `"`, `` ` ``) is honoured so that a separator
 //! inside quotes does not split the command.
 //!
-//! Scope intentionally excludes redirects, heredocs, command
-//! substitution, and process substitution; rules that need them must
-//! grow the lexer first. See `docs/design/architecture.md` §fact
-//! extraction.
+//! Scope intentionally excludes redirects, heredocs, and process
+//! substitution; rules that need them must grow the lexer first.
+//! Command substitution (`` `…` `` / `$(…)`) is *detected* but the
+//! body is treated as opaque text inside the surrounding word — the
+//! parser does not re-enter to extract facts from substitution bodies.
+//! Rules that need accurate argv (e.g. sensitive-net) can opt in to
+//! pessimistic handling by reading [`Bash::has_command_substitution`].
+//! See `docs/design/architecture.md` §fact extraction.
 
 /// A parsed Bash command line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bash {
     pub segments: Vec<Pipeline>,
+    /// `true` if the source contained a `` ` … ` `` or `$(…)` command
+    /// substitution. The substitution body is folded into the
+    /// surrounding word as opaque text, so callers that depend on
+    /// accurate argv should treat such commands pessimistically.
+    pub has_command_substitution: bool,
 }
 
 /// One `;` / `&&` / `||`-bounded pipeline. Multiple commands inside are
@@ -130,7 +139,7 @@ fn is_flag(a: &str) -> bool {
 ///
 /// Returns an empty `Bash` (no segments) for an entirely blank command.
 pub fn parse(command: &str) -> Bash {
-    let tokens = tokenize(command);
+    let (tokens, has_command_substitution) = tokenize(command);
     let segments = split_segments(tokens);
     let pipelines: Vec<Pipeline> = segments.into_iter().map(parse_pipeline).collect();
     Bash {
@@ -138,6 +147,7 @@ pub fn parse(command: &str) -> Bash {
             .into_iter()
             .filter(|p| !p.commands.is_empty())
             .collect(),
+        has_command_substitution,
     }
 }
 
@@ -150,8 +160,9 @@ enum Token {
     Semi,
 }
 
-fn tokenize(s: &str) -> Vec<Token> {
+fn tokenize(s: &str) -> (Vec<Token>, bool) {
     let mut out = Vec::new();
+    let mut saw_command_substitution = false;
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -189,19 +200,35 @@ fn tokenize(s: &str) -> Vec<Token> {
             continue;
         }
         // Otherwise: read a word, honouring quotes.
-        let (word, advanced) = read_word(&bytes[i..]);
+        let (word, advanced, word_subst) = read_word(&bytes[i..]);
+        // Forward-progress invariant: every separator and whitespace
+        // byte is consumed above, so `read_word` is always called on a
+        // non-trivial first byte and must advance by at least 1. The
+        // assertion documents this; if a future change adds a code path
+        // that returns 0, debug builds fail fast instead of looping.
+        debug_assert!(advanced > 0, "read_word must consume at least one byte");
+        if word_subst {
+            saw_command_substitution = true;
+        }
         out.push(Token::Word(word));
         i += advanced;
     }
-    out
+    (out, saw_command_substitution)
 }
 
 /// Read a single shell "word" starting at `bytes[0]`. Quoted spans
 /// (`'`, `"`, `` ` ``) are absorbed into the word with their delimiters
-/// stripped. Returns the decoded word and the number of bytes consumed.
-fn read_word(bytes: &[u8]) -> (String, usize) {
+/// stripped. Returns the decoded word, the number of bytes consumed,
+/// and a flag set when the word contained a `` ` `` or `$(` command
+/// substitution opening.
+///
+/// The caller is expected to skip whitespace and the separator bytes
+/// (`|`, `&`, `;`) before calling — under that contract this function
+/// always consumes at least one byte.
+fn read_word(bytes: &[u8]) -> (String, usize, bool) {
     let mut buf = String::new();
     let mut i = 0;
+    let mut saw_subst = false;
     while i < bytes.len() {
         let c = bytes[i];
         if c.is_ascii_whitespace() {
@@ -215,7 +242,15 @@ fn read_word(bytes: &[u8]) -> (String, usize) {
             i += 2;
             continue;
         }
+        // Unquoted `$(`: command substitution. Body bytes fall through
+        // and are folded into the word as opaque text.
+        if c == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
+            saw_subst = true;
+        }
         if c == b'\'' || c == b'"' || c == b'`' {
+            if c == b'`' {
+                saw_subst = true;
+            }
             let quote = c;
             i += 1;
             while i < bytes.len() && bytes[i] != quote {
@@ -223,6 +258,13 @@ fn read_word(bytes: &[u8]) -> (String, usize) {
                     buf.push(bytes[i + 1] as char);
                     i += 2;
                     continue;
+                }
+                // `$(` inside a double-quoted span is still a command
+                // substitution. Single-quoted spans are literal so the
+                // sequence does not count there.
+                if quote == b'"' && bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'('
+                {
+                    saw_subst = true;
                 }
                 buf.push(bytes[i] as char);
                 i += 1;
@@ -235,7 +277,7 @@ fn read_word(bytes: &[u8]) -> (String, usize) {
         buf.push(c as char);
         i += 1;
     }
-    (buf, i)
+    (buf, i, saw_subst)
 }
 
 fn split_segments(tokens: Vec<Token>) -> Vec<Vec<Token>> {
@@ -498,6 +540,34 @@ mod tests {
     fn handles_backtick_substring_as_word_chunk() {
         let b = parse("echo `date`");
         assert_eq!(b.segments[0].commands[0], argv("echo", &["date"]));
+        // Backtick must mark the whole command as containing a
+        // substitution so rules can opt into pessimistic handling.
+        assert!(b.has_command_substitution);
+    }
+
+    #[test]
+    fn flags_command_substitution_on_dollar_paren() {
+        let b = parse("echo $(date)");
+        assert!(b.has_command_substitution);
+    }
+
+    #[test]
+    fn flags_command_substitution_inside_double_quotes() {
+        let b = parse(r#"echo "hello $(whoami)""#);
+        assert!(b.has_command_substitution);
+    }
+
+    #[test]
+    fn does_not_flag_dollar_paren_inside_single_quotes() {
+        // Single-quoted spans are literal, so `$(...)` inside is data.
+        let b = parse("echo '$(date)'");
+        assert!(!b.has_command_substitution);
+    }
+
+    #[test]
+    fn does_not_flag_plain_command() {
+        let b = parse("ls -la /etc");
+        assert!(!b.has_command_substitution);
     }
 
     #[test]
@@ -546,6 +616,23 @@ mod tests {
         // first segment "ls |" produces a pipeline with [ls]
         assert!(!b.segments.is_empty());
         assert_eq!(b.segments[0].commands[0].head, "ls");
+    }
+
+    #[test]
+    fn read_word_advances_for_every_non_separator_byte() {
+        // Forward-progress contract for `read_word`: when called after
+        // the caller has filtered whitespace and the separator bytes,
+        // it must always consume at least one byte. Walk every printable
+        // ASCII byte that is neither whitespace nor `|`/`&`/`;` and
+        // ensure the lexer terminates with at least one token.
+        for byte in 0x21u8..=0x7eu8 {
+            if matches!(byte, b'|' | b'&' | b';') {
+                continue;
+            }
+            let buf = [byte];
+            let (_, advanced, _) = read_word(&buf);
+            assert!(advanced > 0, "read_word stalled on byte {byte:#x}");
+        }
     }
 
     use crate::testing::proptest::{arbitrary_command, bash_command};

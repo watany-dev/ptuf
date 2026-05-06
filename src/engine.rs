@@ -7,6 +7,7 @@
 //! construct an [`Engine`] once and reuse it.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::SystemTime;
 
 use crate::audit::record::AuditRecord;
@@ -27,6 +28,11 @@ pub struct Engine {
     plugins: PluginSet,
     audit_sink: Box<dyn AuditSink>,
     audit_warning: Option<String>,
+    /// Audit write failures captured during `record_audit` calls.
+    /// Open failures live in `audit_warning` (one-shot at construction);
+    /// per-record write failures (permission denied, disk full) accumulate
+    /// here so the CLI can drain and surface them on stderr.
+    audit_write_warnings: Mutex<Vec<String>>,
     repo_root: Option<PathBuf>,
     protected: ProtectedPaths,
     /// Adapter that constructed this engine — surfaced in audit
@@ -117,6 +123,7 @@ impl Engine {
             plugins,
             audit_sink,
             audit_warning,
+            audit_write_warnings: Mutex::new(Vec::new()),
             repo_root: repo_root.map(Path::to_path_buf),
             protected,
             agent: "unknown",
@@ -155,6 +162,7 @@ impl Engine {
             plugins,
             audit_sink,
             audit_warning,
+            audit_write_warnings: Mutex::new(Vec::new()),
             repo_root: None,
             protected,
             agent: "unknown",
@@ -175,6 +183,7 @@ impl Engine {
             plugins,
             audit_sink: Box::new(NoopSink),
             audit_warning: None,
+            audit_write_warnings: Mutex::new(Vec::new()),
             repo_root: None,
             protected,
             agent: "unknown",
@@ -225,6 +234,20 @@ impl Engine {
     /// it and keep best-effort audit semantics.
     pub fn audit_warning(&self) -> Option<&str> {
         self.audit_warning.as_deref()
+    }
+
+    /// Drain any audit write failures captured since the last call.
+    ///
+    /// Open failures are reported once via [`Self::audit_warning`];
+    /// this method covers the per-record `record_audit` path where
+    /// permission errors or a full disk would otherwise be silent.
+    /// Returns an empty `Vec` if the lock is poisoned, mirroring
+    /// `MemorySink::records`.
+    pub fn drain_audit_write_warnings(&self) -> Vec<String> {
+        match self.audit_write_warnings.lock() {
+            Ok(mut guard) => std::mem::take(&mut *guard),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Evaluate a single hook payload.
@@ -339,7 +362,11 @@ impl Engine {
             self.agent,
             self.plugin_versions.clone(),
         );
-        let _ = self.audit_sink.record(&record);
+        if let Err(err) = self.audit_sink.record(&record)
+            && let Ok(mut guard) = self.audit_write_warnings.lock()
+        {
+            guard.push(format!("ptuf: audit write failed: {err}"));
+        }
     }
 }
 
@@ -558,6 +585,19 @@ mod tests {
     impl AuditSink for SharedMemorySink {
         fn record(&self, record: &AuditRecord) -> Result<(), crate::audit::AuditError> {
             self.0.record(record)
+        }
+    }
+
+    /// Test double that always rejects writes. Used to exercise the
+    /// `record_audit` error capture path without involving the
+    /// filesystem.
+    struct FailingSink;
+
+    impl AuditSink for FailingSink {
+        fn record(&self, _record: &AuditRecord) -> Result<(), crate::audit::AuditError> {
+            Err(crate::audit::AuditError::Write(
+                crate::audit::writer::WriteError::Io(std::io::Error::other("disk full")),
+            ))
         }
     }
 
@@ -1071,6 +1111,36 @@ rules:
         assert!(engine.audit_warning().is_some());
         let outcome = engine.decide(&bash("ls"));
         assert_eq!(outcome.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn record_audit_captures_write_failure_via_failing_sink() {
+        // D9: write failures (permission denied, disk full, ...) used
+        // to be silent. They should now accumulate in the engine and
+        // be observable through `drain_audit_write_warnings`.
+        let mut cfg = Config::default();
+        cfg.audit.include_denied = true;
+        let engine = engine_with(cfg).with_audit_sink(Box::new(FailingSink));
+        // Pre-condition: nothing captured before any decide call.
+        assert!(engine.drain_audit_write_warnings().is_empty());
+
+        let outcome = engine.decide(&bash("rm -rf /"));
+        assert!(matches!(outcome.decision, Decision::Deny { .. }));
+
+        let warnings = engine.drain_audit_write_warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("audit write failed"),
+            "unexpected warning text: {}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("disk full"),
+            "underlying io::Error message should be propagated: {}",
+            warnings[0]
+        );
+        // Drain semantics: a second call returns nothing.
+        assert!(engine.drain_audit_write_warnings().is_empty());
     }
 
     #[test]
