@@ -7,7 +7,7 @@
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::Argv;
+use crate::facts::shell::{Argv, unwrap_sudo};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -89,20 +89,6 @@ fn invokes_matcher(argv: &Argv, matcher: fn(&Argv) -> bool) -> bool {
         return matcher(&unwrapped);
     }
     false
-}
-
-fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
-    if argv.head != "sudo" {
-        return None;
-    }
-    let mut iter = argv.args.iter().skip_while(|a| a.starts_with('-'));
-    let head = iter.next()?.to_string();
-    let rest: Vec<String> = iter.cloned().collect();
-    Some(Argv {
-        env_assignments: Vec::new(),
-        head,
-        args: rest,
-    })
 }
 
 const GIT_HEADS: &[&str] = &["git", "/usr/bin/git", "/usr/local/bin/git"];
@@ -666,6 +652,19 @@ mod tests {
             "sudo git push --force origin main",
             DecisionKind::Deny,
         );
+    }
+
+    #[test]
+    fn force_push_denies_via_sudo_user_option() {
+        for cmd in [
+            "sudo -u root git push --force origin main",
+            "sudo -uroot git push --force origin main",
+            "sudo --user root git push --force origin main",
+            "sudo --user=root git push --force origin main",
+            "sudo -E -u root -- git push --force origin main",
+        ] {
+            assert_decision(&FORCE_PUSH_RULE, cmd, DecisionKind::Deny);
+        }
     }
 
     #[test]
@@ -1249,11 +1248,7 @@ mod tests {
             head: "sudo".into(),
             args: vec!["-u".into(), "alice".into()],
         };
-        // Even when only flags + a value remain, the function takes the
-        // first non-flag token (`alice`) as the head. We just exercise
-        // the path; behaviour-wise nothing matches a non-git head.
-        let unwrapped = unwrap_sudo(&argv).expect("non-empty positional");
-        assert_eq!(unwrapped.head, "alice");
+        assert_eq!(unwrap_sudo(&argv), None);
     }
 
     #[test]

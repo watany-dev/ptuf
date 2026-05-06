@@ -22,7 +22,7 @@
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
 use crate::facts::project::LockKind;
-use crate::facts::shell::Argv;
+use crate::facts::shell::{Argv, unwrap_sudo};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -270,20 +270,6 @@ fn first_positional(argv: &Argv) -> Option<&str> {
         .map(String::as_str)
 }
 
-fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
-    if argv.head != "sudo" {
-        return None;
-    }
-    let mut iter = argv.args.iter().skip_while(|a| a.starts_with('-'));
-    let head = iter.next()?.to_string();
-    let rest: Vec<String> = iter.cloned().collect();
-    Some(Argv {
-        env_assignments: Vec::new(),
-        head,
-        args: rest,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -440,6 +426,16 @@ mod tests {
         assert!(
             matches!(result, Some(Decision::Deny { rule_id, .. }) if rule_id == PROTECTED_GIT_RULE_ID)
         );
+    }
+
+    #[test]
+    fn protected_git_denies_reset_hard_via_sudo_user_option() {
+        let input = bash("sudo -u root git reset --hard HEAD~1");
+        let facts = facts_with_project(&input, protected_branch());
+        assert!(matches!(
+            ProtectedBranchDestructiveGit.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
     }
 
     #[test]

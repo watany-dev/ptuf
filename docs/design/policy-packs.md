@@ -61,6 +61,9 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 | `core.git.env-bypass` | deny | false | high |
 
 末尾 4 rule は hook / signing / fsck bypass を block するためのもの。
+`sudo` 経由の git 実行も同じ matcher に通す。`sudo -u root git ...` や
+`sudo --user=root git ...` のような value-taking sudo option は、option 値を
+command head と誤認しないように unwrap してから評価する。
 
 ## `core.self_protection`
 

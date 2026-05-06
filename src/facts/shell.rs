@@ -52,6 +52,74 @@ impl Argv {
     }
 }
 
+const SUDO_VALUE_SHORT_FLAGS: &[char] = &['C', 'g', 'h', 'p', 'T', 't', 'U', 'u'];
+const SUDO_VALUE_LONG_FLAGS: &[&str] = &[
+    "close-from",
+    "chdir",
+    "group",
+    "host",
+    "login-class",
+    "prompt",
+    "role",
+    "type",
+    "user",
+];
+
+/// Return the command that `sudo` would execute.
+///
+/// This intentionally understands common value-taking sudo options so
+/// `sudo -u root git ...` unwraps to `git ...`, not to `root ...`.
+pub(crate) fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
+    if argv.head != "sudo" {
+        return None;
+    }
+
+    let mut i = 0;
+    while i < argv.args.len() {
+        let arg = argv.args[i].as_str();
+        if arg == "--" {
+            i += 1;
+            break;
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            break;
+        }
+        if let Some(flag) = arg.strip_prefix("--") {
+            if let Some(name) = flag.split('=').next() {
+                if SUDO_VALUE_LONG_FLAGS.contains(&name) && !flag.contains('=') {
+                    i += 1;
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(value_flag) = short_sudo_value_flag(arg) {
+            if arg.len() == 2 && arg.ends_with(value_flag) {
+                i += 1;
+            }
+        }
+        i += 1;
+    }
+
+    let head = argv.args.get(i)?.to_string();
+    let rest = argv.args.iter().skip(i + 1).cloned().collect();
+    Some(Argv {
+        env_assignments: Vec::new(),
+        head,
+        args: rest,
+    })
+}
+
+fn short_sudo_value_flag(arg: &str) -> Option<char> {
+    let mut chars = arg.strip_prefix('-')?.chars();
+    let flag = chars.next()?;
+    if SUDO_VALUE_SHORT_FLAGS.contains(&flag) {
+        Some(flag)
+    } else {
+        None
+    }
+}
+
 fn is_flag(a: &str) -> bool {
     a.starts_with('-') && a != "-" && a != "--"
 }
