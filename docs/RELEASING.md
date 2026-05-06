@@ -53,21 +53,9 @@
      - `Publish to crates.io` runs `cargo publish` (skipped automatically
        for prereleases).
 
-7. Smoke-test post-release using the verified-install path
-   (`README.md` → "Verified install"):
-
-   ```bash
-   VERSION=vX.Y.Z TARGET=x86_64-unknown-linux-musl
-   BASE="https://github.com/watany-dev/ptuf/releases/download/${VERSION}"
-   curl -LO "${BASE}/ptuf-${TARGET}.tar.gz"
-   curl -LO "${BASE}/SHA256SUMS"
-   sha256sum --ignore-missing -c SHA256SUMS
-   gh attestation verify "ptuf-${TARGET}.tar.gz" --owner watany-dev
-   tar -xzf "ptuf-${TARGET}.tar.gz"
-   "./ptuf-${TARGET}/ptuf" --version
-   ```
-
-   And separately:
+7. Smoke-test post-release: run the verified-install recipe in
+   [`README.md` → "Verified install"](../README.md#verified-install-recommended)
+   against the new tag, then separately:
 
    ```bash
    cargo install ptuf

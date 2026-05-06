@@ -7,51 +7,24 @@
 
 ## Context
 
-`ptuf` is a `PreToolUse` guardrail for coding agents. It is downloaded
-and installed onto developer machines and CI runners that subsequently
-trust its decisions to allow or deny tool invocations. For a tool whose
-job is gating other commands on safety, `curl … | sh` (the cargo-dist
-default install path documented in `README.md`) is too thin a chain:
-it relies on GitHub TLS only — no checksum, no provenance, no signed
-manifest of what is being installed.
-
-Concretely, the v0.0.1 release ships:
-
-- `ptuf-<target>.{tar.gz,zip}` for five targets
-- `ptuf-installer.{sh,ps1}`
-- per-archive `ptuf-<target>.{tar.gz,zip}.sha256` files
-
-There is no aggregate checksum file, no SBOM, and no attestation. A user
-who wants to pin a version and verify the binary out-of-band has to
-download every per-archive `.sha256` separately and has no Sigstore /
-SLSA-style claim that the artifact was built from a specific source
-commit by a specific workflow.
-
-This ADR records the design that closes that gap.
+`ptuf` is a `PreToolUse` guardrail for coding agents — a tool that
+gates other commands on safety. The v0.0.1 install path
+(`curl … | sh` from `README.md`) trusts GitHub TLS only: there is no
+aggregate checksum file, no SBOM, and no Sigstore- or SLSA-style claim
+that an artifact was built from a specific source commit. A user who
+wants to pin a version and verify out-of-band has to download every
+per-archive `.sha256` separately. This ADR records the design that
+closes that gap.
 
 ## Decision
 
-Add four classes of verification artifacts to every tagged release
-(stable and prerelease alike), produced by a new sibling GitHub Actions
-workflow `.github/workflows/release-verify.yml` that triggers on
-`release: published`.
-
-### What is published
-
-| Artifact | Source | Purpose |
-| --- | --- | --- |
-| `ptuf-x86_64-unknown-linux-musl.tar.gz` (new) | cargo-dist | Static Linux binary for Alpine / minimal containers |
-| `SHA256SUMS` | sibling workflow | Aggregate checksum, `sha256sum -c` compatible |
-| `ptuf-<tag>.spdx.json` | Syft (`anchore/sbom-action`) | SPDX 2.3 source SBOM from `Cargo.lock` |
-| Build Provenance Attestation | `actions/attest-build-provenance` | Sigstore-backed provenance for archives + `SHA256SUMS` |
-| SBOM Attestation | `actions/attest-sbom` | Links the SBOM to each archive |
-
-Verification (recommended in `README.md`):
-
-```bash
-sha256sum --ignore-missing -c SHA256SUMS
-gh attestation verify <archive> --owner watany-dev
-```
+Add verification artifacts to every tagged release (stable and
+prerelease alike), produced by a new sibling GitHub Actions workflow
+`.github/workflows/release-verify.yml` triggered on `release: published`.
+The published artifact set, the user-facing verification recipe, and
+the post-release operational notes are documented in
+`README.md` "Verified install" and `SECURITY.md` "Verifying Releases" —
+this ADR does not duplicate them.
 
 ### Decisions and rationale
 
@@ -136,50 +109,24 @@ maintainer judgement call remains in the loop.
 
 ## Consequences
 
-### Positive
-
-- Users on supply-chain-sensitive deployments (regulated CI, hardened
-  workstations) have a one-command verification flow that produces
-  Sigstore-anchored evidence.
-- `SECURITY.md` can point to a concrete verification procedure as part
-  of the supported security model.
-- Adding `musl` covers the Alpine / distroless / scratch-container
-  audience without dropping glibc users.
-- `release-verify.yml` is cleanly separable from cargo-dist, so future
-  tweaks (cosign signatures, GitHub dependency graph push, SLSA
-  manifest) attach to the sibling workflow without touching `release.yml`.
-
-### Negative / known costs
+### Costs
 
 - Three new third-party actions to track for SHA-pin updates
   (`anchore/sbom-action`, `actions/attest-build-provenance`,
   `actions/attest-sbom`). Mitigated by `.github/dependabot.yml`'s
   `github-actions` ecosystem.
 - A short post-publish window where the GitHub Release is live but
-  `SHA256SUMS` / SBOM / attestations are not yet attached. Documented
-  in `README.md` and `SECURITY.md`.
-- Verification by `gh attestation verify` requires GitHub CLI 2.49+ on
-  the user side; users on older `gh` cannot use that step. Documented
-  as a tooling requirement; cosign is left as a possible future
-  addition.
+  `SHA256SUMS` / SBOM / attestations are not yet attached.
+- `gh attestation verify` requires GitHub CLI 2.49+ on the user side.
+  Cosign is intentionally left additive for a future ADR.
 
 ### Out of scope
 
 - Cosign keyless signatures (additive, can be layered later).
 - Per-artifact / binary-scanning SBOMs.
 - `cargo-auditable` embedded SBOMs.
-- macOS notarization / codesign.
-- Homebrew tap, Scoop bucket, or other third-party package managers.
 
 ## Verification
 
 End-to-end testing is performed on a `vX.Y.Z-rc.N` tag prior to a
-stable release. The acceptance checklist lives in
-`docs/RELEASING.md` and includes:
-
-- All six target archives build, including `x86_64-unknown-linux-musl`.
-- `release-verify.yml` succeeds and attaches `SHA256SUMS` and the SBOM.
-- `gh attestation verify` succeeds for archives and `SHA256SUMS`.
-- `sha256sum --ignore-missing -c SHA256SUMS` succeeds.
-- The `README.md` "Verified install" recipe runs cleanly in a fresh
-  `ubuntu:22.04` container and `ptuf --version` prints the tag.
+stable release; the acceptance checklist lives in `docs/RELEASING.md`.

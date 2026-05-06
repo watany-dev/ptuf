@@ -8,18 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Release verification pipeline (P0-7): every tagged release now publishes
-  an aggregate `SHA256SUMS` file, a Syft / SPDX 2.3 SBOM
-  (`ptuf-<tag>.spdx.json`), GitHub Build Provenance Attestations on every
-  archive plus `SHA256SUMS`, and an SBOM Attestation linking the SBOM to
-  each archive. Verification is documented in `README.md` →
-  "Verified install" and `SECURITY.md` → "Verifying Releases", and is
-  driven by the new `.github/workflows/release-verify.yml` sibling
-  workflow. The decisions and rationale are recorded in
-  [`docs/adr/0001-release-verification.md`](docs/adr/0001-release-verification.md).
-- `x86_64-unknown-linux-musl` pre-built binary
-  (`ptuf-x86_64-unknown-linux-musl.tar.gz`) for Alpine and other minimal
-  Linux containers, alongside the existing `gnu` builds.
+- Release verification pipeline: aggregate `SHA256SUMS`, SPDX SBOM,
+  and GitHub Build Provenance + SBOM attestations are now attached to
+  every tagged release. See
+  [`docs/adr/0001-release-verification.md`](docs/adr/0001-release-verification.md)
+  and `README.md` → "Verified install".
+- `x86_64-unknown-linux-musl` pre-built binary alongside the existing
+  `gnu` Linux build.
 - `try_decide(&HookInput) -> Result<Decision, EngineError>` — fallible
   variant of `decide()` that surfaces config / plugin load errors instead
   of falling back to a default-configured engine. Embedded callers that

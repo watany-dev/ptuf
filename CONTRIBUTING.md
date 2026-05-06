@@ -79,10 +79,14 @@ platform-specific code:
 
 1. Bump `version` in `Cargo.toml` and update `CHANGELOG.md`.
 2. `git tag vX.Y.Z && git push --tags`.
-3. The `Release` workflow runs `dist plan` → matrix builds across the 5
+3. The `Release` workflow runs `dist plan` → matrix builds across the 6
    supported targets → publishes a GitHub Release with installers.
-4. The `Publish to crates.io` workflow then runs `cargo publish --dry-run --locked`,
-   followed by `cargo publish --locked` for non-prerelease tags.
+4. On `release: published`, two sibling workflows run in parallel:
+   - `Release Verify` aggregates `SHA256SUMS`, generates an SPDX SBOM,
+     and issues GitHub Build Provenance + SBOM attestations.
+     See `docs/adr/0001-release-verification.md`.
+   - `Publish to crates.io` runs `cargo publish --dry-run --locked`,
+     followed by `cargo publish --locked` for non-prerelease tags.
 
 ### Regenerating `release.yml`
 
@@ -107,9 +111,10 @@ The current hand-patch set:
   trailing `# vX.Y.Z` comment.
 
 `zizmor` audit suppressions for cargo-dist patterns that cannot
-currently be patched live in `.github/zizmor.yml`. SLSA build
-provenance and sigstore signing are deferred — they will be added as
-**job-level** patches on the `host` job in a separate PR.
+currently be patched live in `.github/zizmor.yml`. Build provenance
+attestations and the SPDX SBOM are produced by the hand-written
+`release-verify.yml` sibling workflow rather than as patches inside
+`release.yml` (see `docs/adr/0001-release-verification.md`).
 
 ### Bumping cargo-dist
 
