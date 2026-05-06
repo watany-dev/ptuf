@@ -543,6 +543,56 @@ mod tests {
         assert_eq!(fp.absolute, PathBuf::from("/home/me/.aws/credentials"));
     }
 
+    #[test]
+    fn from_bash_redirects_returns_empty_for_none_bash() {
+        assert!(from_bash_redirects(None, None).is_empty());
+    }
+
+    #[test]
+    fn from_bash_redirects_returns_empty_when_no_redirects() {
+        let bash = crate::facts::shell::parse("ls -la");
+        assert!(from_bash_redirects(Some(&bash), None).is_empty());
+    }
+
+    #[test]
+    fn from_bash_redirects_skips_heredoc_target() {
+        // Heredoc bodies live in `Redirect.target` and must not be
+        // misinterpreted as a path.
+        let bash = crate::facts::shell::parse("cat <<EOF\nhello\nEOF\n");
+        assert!(from_bash_redirects(Some(&bash), None).is_empty());
+    }
+
+    #[test]
+    fn from_bash_redirects_emits_for_each_redirect_op() {
+        // `>`, `>>`, `<`, `2>`, `&>` all surface as a `BashRedirect`
+        // PathFact tagged as a `Write` destination.
+        for cmd in [
+            "echo hi > out.txt",
+            "echo hi >> out.txt",
+            "sh < script.sh",
+            "cmd 2> err.log",
+            "cmd &> all.log",
+        ] {
+            let bash = crate::facts::shell::parse(cmd);
+            let facts = from_bash_redirects(Some(&bash), None);
+            assert_eq!(facts.len(), 1, "expected one fact for {cmd:?}");
+            assert_eq!(facts[0].tool, PathTool::Write);
+            assert_eq!(facts[0].origin, PathOrigin::BashRedirect);
+        }
+    }
+
+    #[test]
+    fn from_bash_redirects_resolves_relative_against_repo_root() {
+        let bash = crate::facts::shell::parse("echo y > .claude/settings.json");
+        let facts = from_bash_redirects(Some(&bash), Some(Path::new("/repo")));
+        assert_eq!(facts.len(), 1);
+        assert_eq!(
+            facts[0].absolute,
+            PathBuf::from("/repo/.claude/settings.json")
+        );
+        assert_eq!(facts[0].raw, ".claude/settings.json");
+    }
+
     use crate::testing::proptest::{file_path, richer_hook_input};
     use proptest::prelude::*;
 

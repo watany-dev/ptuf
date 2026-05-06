@@ -666,6 +666,29 @@ mod tests {
         assert!(p.codex_settings.is_empty());
     }
 
+    #[test]
+    fn classify_input_with_paths_pair_includes_extra_slice() {
+        // The pair variant must classify the union of `paths` and
+        // `extra` without forcing a merged Vec. A Bash redirect target
+        // arrives via `extra` and should still hit the matching kind.
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        let input = HookInput {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({ "command": "ls" }),
+        };
+        let extra = vec![crate::facts::path::PathFact::from_raw(
+            "/repo/.claude/settings.json".into(),
+            crate::facts::path::PathTool::Write,
+            crate::facts::path::PathOrigin::BashRedirect,
+            Some(Path::new("/repo")),
+            &env,
+        )];
+        let labels = p.classify_input_with_paths_pair(&input, &[], &extra);
+        assert!(labels.contains(&ProtectedKind::ClaudeSettings));
+    }
+
     use crate::testing::proptest::{protected_kind, richer_hook_input};
     use proptest::prelude::*;
 
