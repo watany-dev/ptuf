@@ -320,26 +320,25 @@ fn parse_pipeline(tokens: Vec<Token>) -> Pipeline {
     Pipeline { commands }
 }
 
-fn parse_argv(mut words: Vec<String>) -> Argv {
+fn parse_argv(words: Vec<String>) -> Argv {
+    // VecDeque so the head-stripping loop runs in O(N) overall instead
+    // of O(N²) — `Vec::remove(0)` shifts every remaining element.
+    let mut words: std::collections::VecDeque<String> = words.into();
     let mut env_assignments = Vec::new();
-    while let Some(first) = words.first() {
+    while let Some(first) = words.front() {
         match split_env_assignment(first) {
             Some((k, v)) => {
                 env_assignments.push(EnvAssignment { key: k, value: v });
-                words.remove(0);
+                words.pop_front();
             }
             None => break,
         }
     }
-    let head = if words.is_empty() {
-        String::new()
-    } else {
-        words.remove(0)
-    };
+    let head = words.pop_front().unwrap_or_default();
     Argv {
         env_assignments,
         head,
-        args: words,
+        args: words.into_iter().collect(),
     }
 }
 
