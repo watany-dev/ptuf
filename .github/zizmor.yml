@@ -34,3 +34,13 @@ rules:
   use-trusted-publishing:
     ignore:
       - publish-crates.yml
+
+  # `dtolnay/rust-toolchain` は version tag を打たず stable ブランチへ
+  # rolling push する設計。SHA ピンは正当だが zizmor の pedantic 期待
+  # (SHA がタグを指す) と噛み合わず stale-action-refs が note 級で残る。
+  # アクション不可能な signal なので suppress する。pin SHA を更新する
+  # ときはコミットログ + 上流の `stable` ブランチで突き合わせる運用。
+  stale-action-refs:
+    ignore:
+      - ci.yml
+      - publish-crates.yml
