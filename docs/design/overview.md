@@ -11,7 +11,8 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) で次を実�
 - Claude Code / Codex adapter
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
-  `core.self_protection` / `core.project_hygiene` (opt-in)
+  `core.self_protection` / `core.engine` /
+  `core.project_hygiene` (opt-in)
 - facts 抽出:
   `shell.*`, `path`, `url`, `sensitive_path`, `protected`, `project`
 - layered YAML config, YAML plugin, allowlist, audit JSONL

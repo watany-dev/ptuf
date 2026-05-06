@@ -16,8 +16,8 @@ stderr, and agent-specific `hookSpecificOutput` JSON.
 
 v0.0.1 ships:
 
-- Built-in packs for filesystem, network, secrets, git, self-protection, and
-  opt-in project hygiene
+- Built-in packs for filesystem, network, secrets, git, self-protection, the
+  dynamic-eval engine guard, and opt-in project hygiene
 - Tool-aware fact extraction for `Bash`, `Read`, `Edit`, `Write`, `WebFetch`,
   and generic `mcp__<server>__<tool>` payloads
 - Layered YAML config and YAML plugins with rule-local `tests:`

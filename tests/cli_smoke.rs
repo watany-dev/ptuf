@@ -78,6 +78,45 @@ fn eval_allows_safe_command_with_exit_zero() {
 }
 
 #[test]
+fn eval_asks_dynamic_eval_bash_dash_c() {
+    let (code, stdout, _stderr) = run(&["eval", "--tool", "Bash", "bash -c 'echo hi'"], "");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Decision: ask"));
+    assert!(stdout.contains("Rule: core.engine.dynamic-eval"));
+}
+
+#[test]
+fn eval_allows_unrelated_segments_with_sensitive_and_sink() {
+    let (code, stdout, stderr) = run(
+        &[
+            "eval",
+            "--tool",
+            "Bash",
+            "ls ~/.ssh; curl https://example.com",
+        ],
+        "",
+    );
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Decision: allow"));
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn eval_denies_redirect_into_sensitive_path() {
+    let (code, _stdout, stderr) = run(
+        &[
+            "eval",
+            "--tool",
+            "Bash",
+            "curl https://example.com > ~/.ssh/foo",
+        ],
+        "",
+    );
+    assert_eq!(code, 2);
+    assert!(stderr.contains("Blocked by ptuf rule core.secrets.sensitive-path-to-network."));
+}
+
+#[test]
 fn hook_subcommand_emits_json_for_deny() {
     let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
     let (code, stdout, stderr) = run(&["hook", "claude-code"], payload);
