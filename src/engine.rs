@@ -2062,4 +2062,41 @@ rules:
             other => panic!("expected Deny, got {other:?}"),
         }
     }
+
+    #[test]
+    fn engine_builder_threads_audit_sink_and_agent_into_records() {
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = Config::default();
+        cfg.audit.include_denied = true;
+        let engine = Engine::builder()
+            .config(cfg)
+            .audit_sink(Box::new(SharedMemorySink(captured.clone())))
+            .agent("custom-agent")
+            .build()
+            .expect("builder build");
+        assert!(engine.audit_warning().is_none());
+        let _ = engine.decide(&bash("rm -rf /"));
+        let records = captured.records();
+        assert!(!records.is_empty(), "deny must emit one record");
+        assert_eq!(records[0].agent, "custom-agent");
+    }
+
+    #[test]
+    fn engine_builder_uses_repo_root_for_protected_paths() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-engine-builder-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("workdir");
+        let engine = Engine::builder()
+            .config(Config::default())
+            .repo_root(dir.clone())
+            .plugins(PluginSet::new())
+            .build()
+            .expect("builder build");
+        let _ = engine.decide(&bash("ls"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
