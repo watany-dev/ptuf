@@ -35,9 +35,10 @@
 | §3.5 | `read_word` が必ず最低 1 byte 進む不変条件が未明示 | `tokenize` の呼び出し直後に `debug_assert!(advanced > 0, ...)` を追加し、`read_word` の docstring で前進性契約を明文化。新規テスト `read_word_advances_for_every_non_separator_byte` で全 printable ASCII を回す (`src/facts/shell.rs:194-206, 627-642`) |
 | §1.6 | `crate::decide()` が config / plugin load error を握り潰す | 並立する `try_decide(&HookInput) -> Result<Decision, EngineError>` を追加。CLI と同じ fail-closed 契約を embed 利用側にも提供 (`src/lib.rs:35-58`) |
 | D9 | audit write failure が `let _ = ...` で握り潰されている | `Engine::audit_write_warnings: Mutex<Vec<String>>` に蓄積し、`drain_audit_write_warnings()` で取得。CLI hook / eval が完了後に stderr へドレインする (`src/engine.rs:30-44, 230-243, 312-358`, `src/cli.rs:371-400`) |
+| §5.3 | audit JSONL の `write_all` ループで PIPE_BUF 超え行が分割書き込みになり複数 process 同時 audit で行が混ざる | `JsonlSink::record` が record 毎に `std::fs::File::lock`/`unlock` で OS-level advisory lock (Unix `flock(2)` / Windows `LockFileEx`) を取り、独立 OFD でも行が混ざらないことを cross-OFD 並列テストで検証 (`src/audit/mod.rs::JsonlSink::record`, `src/audit/writer.rs`) |
 
-その他の項目 (parser の本格拡張、redaction 網羅性、audit atomicity、
-CLI parser サイズ、モジュール肥大化、契約 fixture 不在など) は
+その他の項目 (parser 限界、redaction 網羅性、CLI parser
+サイズ、モジュール肥大化、契約 fixture 不在など) は
 `../../open-issues.md` で現状コード参照付きに整理した。
 
 ## 元 commit / 環境

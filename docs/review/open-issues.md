@@ -3,8 +3,8 @@
 `docs/review/archive/2026-05-05/{redesign,design-debt}.md` のレビューから、
 **現時点 (`v0.0.1` HEAD) でも未解決の指摘のみ** を抜粋して整理する。
 解決済みは [archive/2026-05-05/README.md](archive/2026-05-05/README.md)
-を参照 (D1 / D2 / D3 / D6 / D7 / §3.2 に加え、§3.3 / §3.5 / §1.6 / D9 を
-本セッションで解消)。
+を参照 (D1 / D2 / D3 / D6 / D7 / §3.1 / §3.2 / §3.3 / §3.5 / §1.6 /
+§5.3 / D9 を解消)。
 
 各項目には次を付ける:
 
@@ -75,7 +75,6 @@ shell parser と fact 抽出の到達範囲が、設計書 (`docs/design/archite
 
 | 出典 | 内容 | コード参照 | 優先度 |
 | --- | --- | --- | --- |
-| §5.3 | audit JSONL の `write_all` ループで PIPE_BUF (Linux 4096) を超える行が分割書き込みになる。複数 process 同時 audit で行が混ざる。`flock` か `writev` 1 syscall に倒す | `src/audit/writer.rs:55-61` | P1 |
 | §5.5 | redaction が新形式 token を未対応 (`github_pat_*`, `xox[abp]-*`, `sk_live_*`, GCP service account JSON)。「キーワード周辺の値を redact」の 2 段アプローチに切り替えると将来の漏洩源を広く塞げる | `src/audit/redaction.rs:38-60` | P1 |
 | §5.1 | 自前 CLI parser が 1352 行に成長 (レビュー時 1141 行)。clap derive で 1/3〜1/4 に減る。`--json` のような中途半端な未実装フラグを `#[arg(skip)]` で明示できる | `src/cli.rs` | P2 |
 | §5.4 | `init/claude_code.rs` の hook 重複検出が tail token 一致依存。将来フラグ追加で重複登録の懸念。`name: "ptuf"` 等 stable marker を payload 側に持たせる | `src/init/claude_code.rs` | P2 |

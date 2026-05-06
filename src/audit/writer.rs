@@ -1,11 +1,12 @@
 //! JSONL writer used by [`super::JsonlSink`].
 //!
-//! Serialises one [`AuditRecord`] to a single line, then writes the
-//! line in **one** `write_all` call against a file opened with
-//! `O_APPEND`. POSIX guarantees a single `write` shorter than
-//! `PIPE_BUF` is atomic, so concurrent ptuf processes appending to the
-//! same audit file cannot interleave records. Windows lacks the same
-//! guarantee — see `docs/design/audit.md` and the README caveat.
+//! Serialises one [`AuditRecord`] to a single line and appends it to
+//! a file opened with `O_APPEND`. Cross-process atomicity is
+//! guaranteed by the caller: `JsonlSink::record` takes an OS-level
+//! advisory lock (`flock(2)` on Unix, `LockFileEx` on Windows) around
+//! the write so concurrent ptuf processes cannot interleave records
+//! even when a record exceeds a page or `write_all` has to loop on
+//! partial writes.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
