@@ -282,6 +282,13 @@ make pbt
   additionally runs `cargo tarpaulin` (95% floor, see `make coverage`),
   an MSRV `cargo check` on Rust 1.93.0, `actionlint`, and `cargo-machete`.
   Daily, `cargo audit` runs as a scheduled workflow.
+- Lint policy: `unsafe_code` is forbidden, and `clippy::pedantic` /
+  `nursery` / `cargo` run as group warnings. A curated `restriction`
+  set is denied (`unwrap_used`, `expect_used`, `panic`, `todo`,
+  `unimplemented`, `dbg_macro`, `print_stdout`, `print_stderr`, `exit`,
+  `mem_forget`, `unwrap_in_result`, `unreachable`, ...). See
+  `Cargo.toml [lints.*]` and `clippy.toml` for the full matrix; tests
+  are exempted via `clippy.toml`'s `allow-{unwrap,expect,panic,print,dbg}-in-tests`.
 - `make coverage` runs `cargo tarpaulin` with a `95%` floor and excludes
   `src/main.rs` plus Windows-specific files (`*_windows.rs`,
   `windows*.rs`); the Windows code paths are exercised by the
