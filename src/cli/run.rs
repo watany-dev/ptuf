@@ -162,10 +162,7 @@ pub(super) fn run_init<W1: Write, W2: Write>(
             render_install_outcome(&outcome, dry_run, stdout);
             0
         }
-        Err(err) => {
-            let _ = writeln!(stderr, "ptuf: init failed: {err}");
-            1
-        }
+        Err(err) => fail_init(stderr, err),
     }
 }
 
