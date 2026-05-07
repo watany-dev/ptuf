@@ -53,7 +53,7 @@ pub(super) fn run_hook<R: Read, W1: Write, W2: Write>(
             let problem = format!("hook payload is not valid JSON ({err})");
             let deny = invalid_payload_deny(&problem);
             return emit_decision(agent, &deny, stdout, stderr);
-        }
+        },
     };
     let decision = match build_engine_or_fail_closed(stderr, agent.audit_name()) {
         Ok(engine) => {
@@ -65,7 +65,7 @@ pub(super) fn run_hook<R: Read, W1: Write, W2: Write>(
                 let _ = writeln!(stderr, "{warning}");
             }
             decision
-        }
+        },
         Err(deny) => deny,
     };
     emit_decision(agent, &decision, stdout, stderr)
@@ -102,7 +102,7 @@ pub(super) fn run_eval<W1: Write, W2: Write>(
                 let _ = writeln!(stderr, "{warning}");
             }
             decision
-        }
+        },
         Err(deny) => deny,
     };
     let _ = writeln!(stdout, "Decision: {}", decision_label(&decision));
@@ -127,11 +127,11 @@ pub(super) fn run_plugin_test<W1: Write, W2: Write>(
                 return 1;
             }
             u8::from(!report.passed())
-        }
+        },
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: {err}");
             1
-        }
+        },
     }
 }
 
@@ -149,7 +149,7 @@ pub(super) fn run_init<W1: Write, W2: Write>(
         return match options {
             InitOptions::ClaudeCode(o) => {
                 run_init_claude_verify(&o, init::verify::run, stdout, stderr)
-            }
+            },
             InitOptions::Codex(o) => run_init_codex_verify(&o, init::verify::run, stdout, stderr),
         };
     }
@@ -161,7 +161,7 @@ pub(super) fn run_init<W1: Write, W2: Write>(
         Ok(outcome) => {
             render_install_outcome(&outcome, dry_run, stdout);
             0
-        }
+        },
         Err(err) => fail_init(stderr, err),
     }
 }
@@ -177,7 +177,7 @@ pub(super) fn run_doctor<W1: Write, W2: Write>(json: bool, stdout: &mut W1, stde
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: doctor failed: {err}");
             1
-        }
+        },
     }
 }
 
@@ -319,10 +319,10 @@ where
         match init::restore(ctx.snaps) {
             Ok(()) => {
                 rolled_back = true;
-            }
+            },
             Err(err) => {
                 let _ = writeln!(stderr, "ptuf init: rollback failed: {err}");
-            }
+            },
         }
     }
     if ctx.json {
@@ -330,11 +330,11 @@ where
         match serde_json::to_string_pretty(&value) {
             Ok(s) => {
                 let _ = writeln!(stdout, "{s}");
-            }
+            },
             Err(err) => {
                 let _ = writeln!(stderr, "ptuf: failed to render verify JSON: {err}");
                 return 1;
-            }
+            },
         }
     } else {
         render_install_outcome(ctx.outcome, false, stdout);
@@ -375,13 +375,13 @@ fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: boo
                 "ptuf init {agent}{suffix}: {path_summary} already contains a ptuf hook entry; nothing to do."
             );
             let _ = writeln!(stdout, "{line}");
-        }
+        },
         init::InstallStatus::Installed => {
             let line = format!("ptuf init {agent}: registered hook in {path_summary}");
             let _ = writeln!(stdout, "{line}");
             let _ = writeln!(stdout, "  matcher: {}", outcome.matcher);
             let _ = writeln!(stdout, "  command: {}", outcome.command);
-        }
+        },
         init::InstallStatus::WouldInstall => {
             let line =
                 format!("ptuf init {agent} (dry-run): would register hook in {path_summary}");
@@ -389,7 +389,7 @@ fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: boo
             let _ = writeln!(stdout, "  matcher: {}", outcome.matcher);
             let _ = writeln!(stdout, "  command: {}", outcome.command);
             let _ = writeln!(stdout, "Run without --dry-run to apply.");
-        }
+        },
     }
 }
 

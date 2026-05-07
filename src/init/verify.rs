@@ -86,7 +86,7 @@ fn classify_synthetic_deny(decision: Decision) -> CheckOutcome {
     match decision {
         Decision::Deny { rule_id, .. } if rule_id == SYNTHETIC_DENY_RULE => {
             CheckOutcome::Passed { rule_id }
-        }
+        },
         Decision::Deny { rule_id, .. } => CheckOutcome::Failed {
             detail: format!(
                 "engine returned Deny but with unexpected rule_id={rule_id} (expected {SYNTHETIC_DENY_RULE})"
@@ -410,7 +410,7 @@ mod tests {
             CheckOutcome::Failed { detail } => {
                 assert!(detail.contains("unexpected rule_id=core.other"), "{detail}");
                 assert!(detail.contains(SYNTHETIC_DENY_RULE), "{detail}");
-            }
+            },
             other => panic!("expected Failed, got {other:?}"),
         }
     }
@@ -422,7 +422,7 @@ mod tests {
             CheckOutcome::Failed { detail } => {
                 assert!(detail.contains("Allow"), "{detail}");
                 assert!(detail.contains(SYNTHETIC_DENY_RULE), "{detail}");
-            }
+            },
             other => panic!("expected Failed, got {other:?}"),
         }
     }
@@ -444,7 +444,7 @@ mod tests {
         match outcome {
             CheckOutcome::Failed { detail } => {
                 assert!(detail.contains("missing plugin path"), "{detail}");
-            }
+            },
             other => panic!("expected Failed, got {other:?}"),
         }
     }

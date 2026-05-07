@@ -684,7 +684,7 @@ mod tests {
         match err {
             InitError::Schema { message, .. } => {
                 assert!(message.contains("hooks"), "got: {message}");
-            }
+            },
             other => panic!("unexpected: {other:?}"),
         }
         let _ = fs::remove_dir_all(&dir);
@@ -708,7 +708,7 @@ mod tests {
         match err {
             InitError::Schema { message, .. } => {
                 assert!(message.contains("PreToolUse"), "got: {message}");
-            }
+            },
             other => panic!("unexpected: {other:?}"),
         }
         let _ = fs::remove_dir_all(&dir);

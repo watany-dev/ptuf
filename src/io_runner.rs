@@ -18,7 +18,7 @@ where
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: {err}");
             return ExitCode::from(1);
-        }
+        },
     };
     ExitCode::from(cli::run(command, stdin, stdout, stderr))
 }

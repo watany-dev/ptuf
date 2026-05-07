@@ -181,10 +181,10 @@ impl fmt::Display for ConfigError {
         match self {
             Self::Io { path, source } => {
                 write!(f, "failed to read {}: {}", path.display(), source)
-            }
+            },
             Self::Yaml { path, message } => {
                 write!(f, "failed to parse {}: {}", path.display(), message)
-            }
+            },
         }
     }
 }

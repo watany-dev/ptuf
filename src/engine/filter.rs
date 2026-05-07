@@ -608,7 +608,7 @@ rules:
         match outcome.decision {
             Decision::Monitor { rule_id } => {
                 assert_eq!(rule_id, "pack.demo.no-curl");
-            }
+            },
             other => panic!("expected Monitor, got {other:?}"),
         }
     }
@@ -630,7 +630,7 @@ rules:
             Decision::Ask { rule_id, reason } => {
                 assert_eq!(rule_id, "pack.demo.no-curl");
                 assert!(reason.contains("nope"));
-            }
+            },
             other => panic!("expected Ask, got {other:?}"),
         }
     }
@@ -767,7 +767,7 @@ rules:
             Decision::Deny { rule_id, reason } => {
                 assert_eq!(rule_id, "pack.demo.ask-curl");
                 assert!(reason.contains("confirm"));
-            }
+            },
             other => panic!("expected Deny, got {other:?}"),
         }
     }

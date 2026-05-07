@@ -136,7 +136,7 @@ mod tests {
                 assert_eq!(rule_id, "p.deny");
                 assert!(reason.contains("Blocked by ptuf rule p.deny"));
                 assert!(reason.contains("try again"));
-            }
+            },
             other => panic!("expected Deny, got {other:?}"),
         }
     }

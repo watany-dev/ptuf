@@ -39,20 +39,20 @@ impl std::fmt::Display for InitError {
             Self::UnknownAgent(a) => write!(f, "unknown agent: {a}"),
             Self::Io { path, source } => {
                 write!(f, "io error at {}: {source}", path.display())
-            }
+            },
             Self::Json { path, message } => {
                 write!(f, "invalid JSON in {}: {message}", path.display())
-            }
+            },
             Self::Toml { path, message } => {
                 write!(f, "invalid TOML in {}: {message}", path.display())
-            }
+            },
             Self::Schema { path, message } => {
                 write!(
                     f,
                     "unexpected settings shape in {}: {message}",
                     path.display()
                 )
-            }
+            },
             Self::HomeNotSet => write!(f, "$HOME is not set; pass --settings <PATH> explicitly"),
             Self::RepoRootNotFound => write!(
                 f,
@@ -124,7 +124,7 @@ pub(crate) fn capture(paths: &[&Path]) -> Result<Vec<PathSnapshot>, InitError> {
                     path: path.to_path_buf(),
                     source: e,
                 });
-            }
+            },
         };
         out.push(PathSnapshot {
             path: path.to_path_buf(),
@@ -352,7 +352,7 @@ mod tests {
                         || kind == ErrorKind::Other,
                     "unexpected error kind: {kind:?}",
                 );
-            }
+            },
             other => panic!("expected Io error, got {other:?}"),
         }
 

@@ -162,7 +162,7 @@ audit:
                     message.contains("wat") || message.contains("unknown"),
                     "unexpected message: {message}"
                 );
-            }
+            },
             other => panic!("expected Yaml error, got {other:?}"),
         }
     }

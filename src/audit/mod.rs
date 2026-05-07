@@ -40,7 +40,7 @@ impl std::fmt::Display for AuditError {
             Self::Write(e) => write!(f, "{e}"),
             Self::Open { path, message } => {
                 write!(f, "audit: open {}: {message}", path.display())
-            }
+            },
         }
     }
 }
@@ -220,11 +220,11 @@ mod tests {
         // synchronously and exercises the `AuditError::Open` arm.
         let bad = std::path::PathBuf::from("/proc/this-cannot-be-created/audit.jsonl");
         match JsonlSink::open(&bad) {
-            Ok(_) => {} // Some sandboxes happily create paths under /proc.
+            Ok(_) => {}, // Some sandboxes happily create paths under /proc.
             Err(AuditError::Open { path, message }) => {
                 assert_eq!(path, bad);
                 assert!(!message.is_empty());
-            }
+            },
             Err(other) => panic!("unexpected variant: {other}"),
         }
     }

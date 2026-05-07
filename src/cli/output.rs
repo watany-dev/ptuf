@@ -22,11 +22,11 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         match serde_json::to_string(&response) {
             Ok(body) => {
                 let _ = writeln!(stdout, "{body}");
-            }
+            },
             Err(err) => {
                 let _ = writeln!(stderr, "ptuf: failed to serialise hook response: {err}");
                 return 1;
-            }
+            },
         }
     }
     if let Some(reason) = adapted.reason() {

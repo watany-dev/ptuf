@@ -376,7 +376,7 @@ mod tests {
         fs::write(&path, "{not json").unwrap();
         let err = install(&path, "/x/ptuf", false).unwrap_err();
         match err {
-            InitError::Json { .. } => {}
+            InitError::Json { .. } => {},
             other => panic!("unexpected: {other:?}"),
         }
         assert_eq!(read(&path), "{not json", "file untouched");
@@ -402,7 +402,7 @@ mod tests {
         match err {
             InitError::Schema { message, .. } => {
                 assert!(message.contains("PreToolUse"), "got: {message}");
-            }
+            },
             other => panic!("unexpected: {other:?}"),
         }
         let _ = fs::remove_dir_all(&dir);
@@ -417,7 +417,7 @@ mod tests {
         match err {
             InitError::Schema { message, .. } => {
                 assert!(message.contains("hooks"), "got: {message}");
-            }
+            },
             other => panic!("unexpected: {other:?}"),
         }
         let _ = fs::remove_dir_all(&dir);

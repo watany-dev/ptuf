@@ -56,38 +56,38 @@ impl std::fmt::Display for PluginError {
         match self {
             Self::Io { path, source } => {
                 write!(f, "plugin: read {}: {source}", path.display())
-            }
+            },
             Self::Yaml { path, message } => {
                 write!(f, "plugin: parse {}: {message}", path.display())
-            }
+            },
             Self::ApiVersion { path, found } => {
                 write!(
                     f,
                     "plugin {}: unsupported apiVersion `{found}` (expected `ptuf.dev/v1`)",
                     path.display()
                 )
-            }
+            },
             Self::Kind { path, found } => {
                 write!(
                     f,
                     "plugin {}: unsupported kind `{found}` (expected `Plugin`)",
                     path.display()
                 )
-            }
+            },
             Self::UnsupportedFact { path, name } => {
                 write!(
                     f,
                     "plugin {}: requires fact `{name}` which this version of ptuf does not provide",
                     path.display()
                 )
-            }
+            },
             Self::Compile {
                 path,
                 rule_id,
                 message,
             } => {
                 write!(f, "plugin {}: rule `{rule_id}`: {message}", path.display())
-            }
+            },
         }
     }
 }

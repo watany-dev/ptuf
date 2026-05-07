@@ -43,7 +43,7 @@ fn has_canonical_shape(s: &str) -> bool {
                 && bytes[13] == b':'
                 && bytes[16] == b':'
                 && bytes[19] == b'Z'
-        }
+        },
         25 => {
             bytes[4] == b'-'
                 && bytes[7] == b'-'
@@ -52,7 +52,7 @@ fn has_canonical_shape(s: &str) -> bool {
                 && bytes[16] == b':'
                 && matches!(bytes[19], b'+' | b'-')
                 && bytes[22] == b':'
-        }
+        },
         _ => false,
     }
 }

@@ -503,7 +503,7 @@ mod tests {
         let outcome = engine.decide(&bash(&format!("echo y > {target_str}")));
         match outcome.decision {
             Decision::Deny { ref rule_id, .. }
-                if rule_id == "core.self_protection.claude-settings" => {}
+                if rule_id == "core.self_protection.claude-settings" => {},
             other => panic!("expected core.self_protection.claude-settings deny, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -528,7 +528,7 @@ mod tests {
         let outcome = engine.decide(&bash(&format!("bash -lc 'echo y > {target_str}'")));
         match outcome.decision {
             Decision::Deny { ref rule_id, .. }
-                if rule_id == "core.self_protection.claude-settings" => {}
+                if rule_id == "core.self_protection.claude-settings" => {},
             other => panic!("expected core.self_protection.claude-settings deny, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -863,7 +863,7 @@ rules:
         match &outcome.decision {
             Decision::Deny { rule_id, .. } => {
                 assert_eq!(rule_id, "core.self_protection.plugin");
-            }
+            },
             other => panic!("expected deny from self_protection, got {other:?}"),
         }
     }

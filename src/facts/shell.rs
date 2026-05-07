@@ -591,7 +591,7 @@ fn split_segments(tokens: Vec<Token>) -> Vec<Vec<Token>> {
                 if !current.is_empty() {
                     segments.push(std::mem::take(&mut current));
                 }
-            }
+            },
             other => current.push(other),
         }
     }
@@ -616,13 +616,13 @@ fn parse_pipeline(tokens: Vec<Token>, nesting_budget: usize) -> Pipeline {
                         nesting_budget,
                     ));
                 }
-            }
+            },
             Token::Redirect(op) => {
                 let target = take_redirect_target(&mut iter, op, &mut current_words);
                 redirects.push(Redirect { op, target });
-            }
-            Token::HeredocBody(_) => {}
-            Token::And | Token::Or | Token::Semi => {}
+            },
+            Token::HeredocBody(_) => {},
+            Token::And | Token::Or | Token::Semi => {},
         }
     }
     if !current_words.is_empty() {
@@ -651,7 +651,7 @@ fn take_redirect_target(
         (_, Some(Token::Word(w))) => {
             current_words.push(w);
             String::new()
-        }
+        },
         _ => String::new(),
     }
 }
@@ -666,7 +666,7 @@ fn parse_argv(words: Vec<String>, nesting_budget: usize) -> Argv {
             Some((k, v)) => {
                 env_assignments.push(EnvAssignment { key: k, value: v });
                 words.pop_front();
-            }
+            },
             None => break,
         }
     }

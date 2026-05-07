@@ -57,7 +57,7 @@ impl Decision {
             Self::Allow => None,
             Self::Monitor { rule_id } | Self::Ask { rule_id, .. } | Self::Deny { rule_id, .. } => {
                 Some(rule_id.as_str())
-            }
+            },
         }
     }
 

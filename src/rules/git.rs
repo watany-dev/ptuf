@@ -113,7 +113,7 @@ fn git_subcommand(argv: &Argv) -> Option<&str> {
             | "--exec-path" | "--super-prefix" => {
                 iter.next();
                 continue;
-            }
+            },
             s if s.starts_with("--config=")
                 || s.starts_with("--git-dir=")
                 || s.starts_with("--work-tree=")
@@ -122,7 +122,7 @@ fn git_subcommand(argv: &Argv) -> Option<&str> {
                 || s.starts_with("--super-prefix=") =>
             {
                 continue;
-            }
+            },
             s if s.starts_with('-') => continue,
             s => return Some(s),
         }
@@ -151,12 +151,12 @@ fn config_overrides(argv: &Argv) -> impl Iterator<Item = &str> + '_ {
                     if let Some(v) = iter.next() {
                         return Some(v.as_str());
                     }
-                }
+                },
                 s => {
                     if let Some(rest) = s.strip_prefix("--config=") {
                         return Some(rest);
                     }
-                }
+                },
             }
         }
         None
@@ -623,11 +623,11 @@ mod tests {
         match (want, decision) {
             (DecisionKind::Deny, Some(Decision::Deny { rule_id, .. })) => {
                 assert_eq!(rule_id, rule.spec.id, "wrong rule_id for {cmd:?}")
-            }
+            },
             (DecisionKind::Ask, Some(Decision::Ask { rule_id, .. })) => {
                 assert_eq!(rule_id, rule.spec.id, "wrong rule_id for {cmd:?}")
-            }
-            (DecisionKind::Allow, None) => {}
+            },
+            (DecisionKind::Allow, None) => {},
             (other, got) => panic!("for {cmd:?} expected {other:?}, got {got:?}"),
         }
     }

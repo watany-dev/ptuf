@@ -116,7 +116,7 @@ fn shape_triggers(shape: EvalShape, args: &[String]) -> bool {
         EvalShape::FlagDashE => has_flag_with_value(args, "-e"),
         EvalShape::FlagDashCorE => {
             has_flag_with_value(args, "-c") || has_flag_with_value(args, "-e")
-        }
+        },
         EvalShape::FirstPositional => args.iter().any(|a| !a.starts_with('-')),
     }
 }

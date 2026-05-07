@@ -514,7 +514,7 @@ rules:
                     message.contains("noSuchFact") || message.contains("unknown"),
                     "unexpected message: {message}"
                 );
-            }
+            },
             other => panic!("expected Compile, got {other:?}"),
         }
     }

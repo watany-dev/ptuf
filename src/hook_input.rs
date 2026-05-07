@@ -143,7 +143,7 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
             {
                 out.push(path);
             }
-        }
+        },
         name if is_mcp(name) => {
             if let Some(path) = input
                 .tool_input
@@ -176,8 +176,8 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
                     }
                 }
             }
-        }
-        _ => {}
+        },
+        _ => {},
     }
     out
 }
