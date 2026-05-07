@@ -96,7 +96,7 @@ mod tests {
     fn pre_epoch_clamps_to_epoch_string() {
         // SystemTime can represent times before UNIX_EPOCH on some
         // platforms; we treat those as the epoch rather than panic.
-        let t = UNIX_EPOCH - Duration::from_secs(60);
+        let t = UNIX_EPOCH - Duration::from_mins(1);
         assert_eq!(rfc3339_utc(t), "1970-01-01T00:00:00Z");
     }
 
