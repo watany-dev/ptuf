@@ -164,10 +164,18 @@ fn no_args_returns_one_with_missing_subcommand_error() {
 }
 
 #[test]
-fn invalid_json_in_hook_subcommand_returns_one() {
-    let (code, _stdout, stderr) = run(&["hook", "claude-code"], "not json");
-    assert_eq!(code, 1);
-    assert!(stderr.contains("invalid hook payload"));
+fn invalid_json_in_hook_subcommand_fails_closed() {
+    let (code, stdout, stderr) = run(&["hook", "claude-code"], "not json");
+    assert_eq!(code, 2);
+    assert!(
+        stdout.contains("\"permissionDecision\":\"deny\""),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("core.engine.invalid-payload"),
+        "stdout: {stdout}"
+    );
+    assert!(stderr.contains("invalid hook payload"), "stderr: {stderr}");
 }
 
 #[test]

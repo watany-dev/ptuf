@@ -54,7 +54,10 @@ deny > ask > monitor > allow
 
 - CLI (`hook`, `eval`) は policy load に失敗すると
   `core.engine.policy-load-failed` で deny する
-- これは `failClosed: false` でも変わらない
+- `hook` は stdin 読み取り失敗 / 8 MiB 超過 / JSON parse 失敗を
+  `core.engine.invalid-payload` で deny する (Claude Code は exit 1 を
+  non-blocking warning と解釈するため deny + exit 2 が必須)
+- これらは `failClosed: false` でも変わらない
 - ライブラリ API `decide()` は後方互換のため default engine にフォールバックする
 
 `failClosed` は runtime 中の policy 評価の意図を表す設定であり、CLI 初期化の

@@ -7,11 +7,17 @@ use crate::hook_input::HookInput;
 use crate::hook_output;
 use crate::init;
 use crate::plugin::runner as plugin_runner;
+use crate::reason;
 
 /// Reserved rule id used when the engine itself failed to load policy
 /// and the CLI must fail-closed
 /// (`docs/design/cli-and-hooks.md:104-114`).
 pub(crate) const POLICY_LOAD_FAILED_RULE: &str = "core.engine.policy-load-failed";
+/// Reserved rule id used when the hook stdin payload is unreadable,
+/// oversized, or not valid JSON. Claude Code treats `exit 1` as a
+/// non-blocking warning, so these initialisation failures must surface
+/// as a `Decision::Deny` (exit 2) to preserve the fail-closed contract.
+pub(crate) const INVALID_PAYLOAD_RULE: &str = "core.engine.invalid-payload";
 const MAX_HOOK_STDIN_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,15 +66,24 @@ pub(crate) fn build_engine_or_fail_closed<W: Write>(
     stderr: &mut W,
     agent: &'static str,
 ) -> Result<Engine, Decision> {
-    Engine::for_cwd()
-        .map(|engine| engine.with_agent(agent))
-        .map_err(|err| {
+    match Engine::for_cwd() {
+        Ok(engine) => Ok(engine.with_agent(agent)),
+        Err(err) => {
             let _ = writeln!(stderr, "ptuf: could not load policy: {err}");
-            Decision::Deny {
-                rule_id: POLICY_LOAD_FAILED_RULE.into(),
-                reason: "ptuf could not load policy; failing closed.".into(),
-            }
-        })
+            Err(policy_load_failed_deny())
+        }
+    }
+}
+
+fn policy_load_failed_deny() -> Decision {
+    Decision::Deny {
+        rule_id: POLICY_LOAD_FAILED_RULE.into(),
+        reason: reason::build(
+            POLICY_LOAD_FAILED_RULE,
+            "ptuf could not load policy and is failing closed",
+            &["fix the configuration error reported on stderr and re-run"],
+        ),
+    }
 }
 
 /// Parsed CLI invocation. The bare invocation (no arguments) is
@@ -304,8 +319,10 @@ USAGE:
 
 EXIT CODES:
     0   allow / monitor / ask / plugin tests pass
-    1   internal error (bad JSON, bad arguments) or plugin tests fail
-    2   deny
+    1   non-hook internal error (eval / plugin / init / doctor / bad arguments)
+        or plugin tests fail
+    2   deny — including hook initialisation failures (invalid stdin payload,
+        policy load error)
 ";
 
 /// Run a parsed [`Command`] against the given I/O streams. Returns the u8
@@ -340,26 +357,30 @@ fn run_hook<R: Read, W1: Write, W2: Write>(
     stderr: &mut W2,
 ) -> u8 {
     let mut buf = String::new();
-    if stdin
+    let read = stdin
         .take(MAX_HOOK_STDIN_BYTES + 1)
-        .read_to_string(&mut buf)
-        .is_err()
-    {
+        .read_to_string(&mut buf);
+    if read.is_err() {
         let _ = writeln!(stderr, "ptuf: failed to read stdin");
-        return 1;
+        let deny = invalid_payload_deny("stdin read failure");
+        return emit_decision(agent, &deny, stdout, stderr);
     }
     if buf.len() as u64 > MAX_HOOK_STDIN_BYTES {
         let _ = writeln!(
             stderr,
             "ptuf: hook payload exceeds {MAX_HOOK_STDIN_BYTES} bytes"
         );
-        return 1;
+        let problem = format!("hook payload exceeds the {MAX_HOOK_STDIN_BYTES}-byte limit");
+        let deny = invalid_payload_deny(&problem);
+        return emit_decision(agent, &deny, stdout, stderr);
     }
     let input: HookInput = match serde_json::from_str(&buf) {
         Ok(v) => v,
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: invalid hook payload: {err}");
-            return 1;
+            let problem = format!("hook payload is not valid JSON ({err})");
+            let deny = invalid_payload_deny(&problem);
+            return emit_decision(agent, &deny, stdout, stderr);
         }
     };
     let decision = match build_engine_or_fail_closed(stderr, agent.audit_name()) {
@@ -376,6 +397,17 @@ fn run_hook<R: Read, W1: Write, W2: Write>(
         Err(deny) => deny,
     };
     emit_decision(agent, &decision, stdout, stderr)
+}
+
+fn invalid_payload_deny(problem: &str) -> Decision {
+    Decision::Deny {
+        rule_id: INVALID_PAYLOAD_RULE.into(),
+        reason: reason::build(
+            INVALID_PAYLOAD_RULE,
+            problem,
+            &["confirm the hook adapter is sending the documented PreToolUse JSON schema"],
+        ),
+    }
 }
 
 fn run_eval<W1: Write, W2: Write>(
@@ -502,36 +534,31 @@ fn run_init_codex(
 }
 
 fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: bool, stdout: &mut W) {
-    let path_summary = outcome
+    let parts: Vec<String> = outcome
         .paths
         .iter()
         .map(|p| format!("{}={}", p.label, p.path.display()))
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect();
+    let path_summary = parts.join(", ");
+    let agent = outcome.agent;
     match outcome.status {
         init::InstallStatus::AlreadyPresent => {
             let suffix = if dry_run { " (dry-run)" } else { "" };
-            let _ = writeln!(
-                stdout,
-                "ptuf init {}{suffix}: {path_summary} already contains a ptuf hook entry; nothing to do.",
-                outcome.agent
+            let line = format!(
+                "ptuf init {agent}{suffix}: {path_summary} already contains a ptuf hook entry; nothing to do."
             );
+            let _ = writeln!(stdout, "{line}");
         }
         init::InstallStatus::Installed => {
-            let _ = writeln!(
-                stdout,
-                "ptuf init {}: registered hook in {path_summary}",
-                outcome.agent
-            );
+            let line = format!("ptuf init {agent}: registered hook in {path_summary}");
+            let _ = writeln!(stdout, "{line}");
             let _ = writeln!(stdout, "  matcher: {}", outcome.matcher);
             let _ = writeln!(stdout, "  command: {}", outcome.command);
         }
         init::InstallStatus::WouldInstall => {
-            let _ = writeln!(
-                stdout,
-                "ptuf init {} (dry-run): would register hook in {path_summary}",
-                outcome.agent
-            );
+            let line =
+                format!("ptuf init {agent} (dry-run): would register hook in {path_summary}");
+            let _ = writeln!(stdout, "{line}");
             let _ = writeln!(stdout, "  matcher: {}", outcome.matcher);
             let _ = writeln!(stdout, "  command: {}", outcome.command);
             let _ = writeln!(stdout, "Run without --dry-run to apply.");
@@ -931,11 +958,15 @@ mod tests {
     }
 
     #[test]
-    fn hook_returns_one_for_invalid_json() {
+    fn hook_fails_closed_for_invalid_json() {
         let (code, out, err) = run_with(&["hook", "claude-code"], "not json");
-        assert_eq!(code, 1);
-        assert!(out.is_empty());
-        assert!(err.contains("invalid hook payload"));
+        assert_eq!(code, 2);
+        assert!(
+            out.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out}"
+        );
+        assert!(err.contains("invalid hook payload"), "stderr: {err}");
+        assert!(err.contains(INVALID_PAYLOAD_RULE), "stderr: {err}");
     }
 
     #[test]
@@ -1309,7 +1340,7 @@ rules:
     }
 
     #[test]
-    fn run_hook_returns_one_when_stdin_read_fails() {
+    fn run_hook_fails_closed_when_stdin_read_fails() {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
@@ -1320,13 +1351,19 @@ rules:
             &mut out,
             &mut err,
         );
-        assert_eq!(code, 1);
-        assert!(out.is_empty());
-        assert!(String::from_utf8_lossy(&err).contains("failed to read stdin"));
+        assert_eq!(code, 2);
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}"
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("failed to read stdin"), "stderr: {err_s}");
+        assert!(err_s.contains(INVALID_PAYLOAD_RULE), "stderr: {err_s}");
     }
 
     #[test]
-    fn run_hook_returns_one_when_stdin_payload_is_too_large() {
+    fn run_hook_fails_closed_when_stdin_payload_is_too_large() {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let payload = vec![b' '; MAX_HOOK_STDIN_BYTES as usize + 1];
@@ -1338,9 +1375,38 @@ rules:
             &mut out,
             &mut err,
         );
-        assert_eq!(code, 1);
-        assert!(out.is_empty());
-        assert!(String::from_utf8_lossy(&err).contains("hook payload exceeds 8388608 bytes"));
+        assert_eq!(code, 2);
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}"
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(
+            err_s.contains("hook payload exceeds 8388608 bytes"),
+            "stderr: {err_s}"
+        );
+        assert!(err_s.contains(INVALID_PAYLOAD_RULE), "stderr: {err_s}");
+    }
+
+    #[test]
+    fn run_hook_fails_closed_when_stdin_read_fails_under_codex_adapter() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::HookPreToolUse {
+                agent: HookAgent::Codex,
+            },
+            FailingReader,
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 2);
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}"
+        );
     }
 
     #[test]
@@ -1531,6 +1597,29 @@ rules:
     }
 
     #[test]
+    fn parses_init_rejects_unknown_agent() {
+        assert!(matches!(
+            parse(&s(&["init", "bogus"])),
+            Err(ParseError::UnknownAgent(_))
+        ));
+    }
+
+    #[test]
+    fn parses_eval_rejects_extra_positional() {
+        assert!(matches!(
+            parse(&s(&["eval", "--tool", "Bash", "ls", "extra"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn hook_codex_evaluates_valid_payload_through_engine() {
+        let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let (code, _out, _err) = run_with(&["hook", "codex"], payload);
+        assert_eq!(code, 0);
+    }
+
+    #[test]
     fn render_install_outcome_for_already_present_dry_run_uses_suffix() {
         let outcome = init::InstallOutcome {
             status: init::InstallStatus::AlreadyPresent,
@@ -1683,5 +1772,97 @@ rules:
         let code = run_doctor(true, &mut writer, &mut err);
         assert_eq!(code, 1);
         assert!(String::from_utf8_lossy(&err).contains("doctor failed"));
+    }
+
+    /// RAII guard that swaps the process cwd for the duration of a test
+    /// and restores it on drop. Tests using this helper rely on the
+    /// `--test-threads=1` setting in `Makefile` / CI so concurrent cwd
+    /// mutation cannot occur.
+    struct CwdGuard {
+        original: PathBuf,
+    }
+
+    impl CwdGuard {
+        fn change_to(target: &std::path::Path) -> std::io::Result<Self> {
+            let original = std::env::current_dir()?;
+            std::env::set_current_dir(target)?;
+            Ok(Self { original })
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
+    fn make_engine_failing_repo(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-engine-fail-{}-{}-{}",
+            label,
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        std::fs::write(
+            dir.join(".ptuf.yaml"),
+            "plugins:\n  - path: ./missing-plugin.yaml\n",
+        )
+        .expect("write .ptuf.yaml");
+        dir
+    }
+
+    #[test]
+    fn run_hook_fails_closed_when_engine_construction_fails() {
+        let dir = make_engine_failing_repo("hook");
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::HookPreToolUse {
+                agent: HookAgent::ClaudeCode,
+            },
+            payload.as_bytes(),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 2);
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}"
+        );
+        assert!(out_s.contains(POLICY_LOAD_FAILED_RULE), "stdout: {out_s}");
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("could not load policy"), "stderr: {err_s}");
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_eval_fails_closed_when_engine_construction_fails() {
+        let dir = make_engine_failing_repo("eval");
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Eval {
+                tool: "Bash".into(),
+                command: "ls".into(),
+            },
+            std::io::empty(),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 2);
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(out_s.contains("Decision: deny"), "stdout: {out_s}");
+        assert!(out_s.contains(POLICY_LOAD_FAILED_RULE), "stdout: {out_s}");
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("could not load policy"), "stderr: {err_s}");
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

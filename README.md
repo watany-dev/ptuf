@@ -112,8 +112,10 @@ Codex behavior:
 - `Deny` — exit `2`, `hookSpecificOutput.permissionDecision = "deny"`
 
 For both adapters, the human-readable reason is also written to stderr for
-`Ask` or `Deny`. Hook stdin payloads are capped at 8 MiB; larger payloads exit
-`1` with a stderr error before JSON parsing.
+`Ask` or `Deny`. Hook stdin payloads are capped at 8 MiB. Unreadable, oversized,
+or invalid-JSON stdin is rejected with `Deny` (exit `2`) under the reserved
+`core.engine.invalid-payload` rule so Claude Code blocks the tool — `exit 1`
+would only surface a non-blocking warning and let the call through.
 
 ## Claude Code
 
