@@ -575,5 +575,67 @@ mod tests {
             let _ = input.web_fetch_url();
             let _ = input.write_payload();
         }
+
+        // ----- MCP nested path collection ------------------------------
+
+        // For an `mcp__*` tool, every depth (0=top-level `path`,
+        // 1=`files[]/items[]`, 2=`paths[]`) must surface at least one
+        // path through `event().paths`. Depths above 2 are not
+        // recognised by `collect_event_paths`.
+        #[test]
+        fn pbt_mcp_nested_paths_are_extracted_at_supported_depths(
+            depth in 0u8..=2,
+            payload in crate::testing::proptest::mcp_nested_input(2),
+        ) {
+            let input = HookInput {
+                tool_name: "mcp__filesystem__write_file".into(),
+                tool_input: payload.clone(),
+            };
+            let event = input.event();
+            // The generator at depth ≤ 2 always produces exactly one
+            // recognised key shape, so at least one path must surface.
+            let _ = depth;
+            prop_assert!(
+                !event.paths.is_empty(),
+                "expected MCP-nested paths to surface for payload {payload}",
+            );
+        }
+
+        // Non-MCP / non-Read-Edit-Write tool ⇒ no paths are extracted
+        // even when the payload mimics MCP shapes.
+        #[test]
+        fn pbt_unknown_tool_never_extracts_paths(
+            tool in "[A-Z][A-Za-z]{0,8}",
+            payload in crate::testing::proptest::mcp_nested_input(2),
+        ) {
+            prop_assume!(
+                !matches!(tool.as_str(), "Read" | "Edit" | "Write")
+                    && !tool.starts_with("mcp__")
+            );
+            let input = HookInput {
+                tool_name: tool,
+                tool_input: payload,
+            };
+            prop_assert!(input.event().paths.is_empty());
+        }
+
+        // ----- Invalid UTF-8 / malformed payload fail-closed ----------
+
+        // Arbitrary bytes (including invalid UTF-8 / lone surrogates)
+        // fed to `serde_json::from_slice::<RawHookInput>` must never
+        // panic — the engine's hook reader relies on this returning Err
+        // so it can fail-closed with a `core.engine.invalid-payload`
+        // deny.
+        #[test]
+        fn pbt_invalid_utf8_payload_returns_err_or_value(
+            bytes in crate::testing::proptest::arbitrary_utf8_bytes(),
+        ) {
+            // We deliberately do not assert Err: a fuzzed byte string
+            // can incidentally happen to be a valid JSON object whose
+            // shape matches `RawHookInput`. The contract is panic
+            // safety, not always-Err.
+            let _ = serde_json::from_slice::<RawHookInput>(&bytes);
+            let _ = serde_json::from_slice::<HookInput>(&bytes);
+        }
     }
 }

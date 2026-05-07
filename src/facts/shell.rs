@@ -1366,7 +1366,10 @@ mod tests {
         }
     }
 
-    use crate::testing::proptest::{arbitrary_command, bash_command};
+    use crate::testing::proptest::{
+        arbitrary_command, arbitrary_utf8_bytes, bash_command, bash_heredoc, bash_process_subst,
+        bash_redirects, bash_wrapper_nested, combined_short_opts,
+    };
     use proptest::collection::vec as pvec;
     use proptest::prelude::*;
 
@@ -1472,6 +1475,137 @@ mod tests {
                 prop_assert_eq!(&argv.env_assignments[i].key, &keys[i]);
                 prop_assert_eq!(&argv.env_assignments[i].value, &vals[i]);
             }
+        }
+
+        // testing.md L46: redirect operators are surfaced into
+        // `Pipeline.redirects` and `Bash::has_redirect`. The generated
+        // op count must equal the parsed redirect count, and each
+        // emitted op must map to the matching `RedirectOp` variant.
+        #[test]
+        fn pbt_redirect_operators_surface_to_pipeline(
+            (cmd, ops) in bash_redirects()
+        ) {
+            let b = parse(&cmd);
+            prop_assert!(b.has_redirect);
+            prop_assert_eq!(b.segments.len(), 1);
+            let redirects = &b.segments[0].redirects;
+            prop_assert_eq!(redirects.len(), ops.len());
+            for (i, raw) in ops.iter().enumerate() {
+                let expected = match *raw {
+                    ">" => RedirectOp::Stdout,
+                    ">>" => RedirectOp::StdoutAppend,
+                    "<" => RedirectOp::Stdin,
+                    "2>" => RedirectOp::Stderr,
+                    "&>" => RedirectOp::Merge,
+                    other => panic!("unexpected raw op {other:?}"),
+                };
+                prop_assert_eq!(redirects[i].op, expected);
+            }
+        }
+
+        // testing.md L48-49: heredoc body lives inside a single
+        // `Redirect` with op `Heredoc`. The body word must not contain
+        // the terminator literal (otherwise the heredoc never closes,
+        // which would be a parser bug).
+        #[test]
+        fn pbt_heredoc_body_is_one_redirect((cmd, tag) in bash_heredoc()) {
+            let b = parse(&cmd);
+            prop_assert!(b.has_heredoc);
+            prop_assert!(b.has_redirect);
+            let heredocs: Vec<&Redirect> = b
+                .segments
+                .iter()
+                .flat_map(|p| p.redirects.iter())
+                .filter(|r| matches!(r.op, RedirectOp::Heredoc))
+                .collect();
+            prop_assert!(!heredocs.is_empty());
+            for r in heredocs {
+                prop_assert!(
+                    !r.target.contains(tag),
+                    "heredoc body still contains terminator {tag:?}: {:?}",
+                    r.target
+                );
+            }
+        }
+
+        // testing.md L50-51: `<(...)` / `>(...)` are paren-balanced and
+        // surface as `Bash::has_process_substitution`.
+        #[test]
+        fn pbt_process_substitution_is_flagged(cmd in bash_process_subst()) {
+            let b = parse(&cmd);
+            prop_assert!(b.has_process_substitution);
+        }
+
+        // testing.md L52: `bash -lc`, `sh -ec`, etc. — combined short
+        // options still expose the wrapped command body. The wrapper
+        // inspector folds the body into either `inner_argv` (when the
+        // body parses) or `inner_code` (always preserved verbatim).
+        #[test]
+        fn pbt_combined_short_opts_surface_inner_payload(
+            cmd in combined_short_opts()
+        ) {
+            let b = parse(&cmd);
+            let Some(outer) = b
+                .segments
+                .first()
+                .and_then(|p| p.commands.first())
+            else {
+                prop_assert!(false, "wrapper command did not parse: {cmd}");
+                unreachable!();
+            };
+            prop_assert!(
+                !outer.inner_code.is_empty() || !outer.inner_argv.is_empty(),
+                "combined short option failed to surface payload: {:?}",
+                outer
+            );
+        }
+
+        // testing.md L53-54: wrapper unrolling is bounded — even when
+        // the source nests `bash -c` deeper than the budget, the parser
+        // must terminate and the surfaced `inner_argv` chain must not
+        // exceed the static `nesting_budget` (currently 2, see
+        // `parse(...)` in this file).
+        #[test]
+        fn pbt_inner_argv_chain_is_bounded(
+            depth in 0usize..=4,
+            cmd in bash_wrapper_nested(4)
+        ) {
+            let _ = depth; // keep the strategy paired but sample independently.
+            let b = parse(&cmd);
+            // Walk the deepest `inner_argv` chain reachable from the root.
+            fn deepest(argv: &Argv) -> usize {
+                argv.inner_argv
+                    .iter()
+                    .map(|a| 1 + deepest(a))
+                    .max()
+                    .unwrap_or(0)
+            }
+            for pipe in &b.segments {
+                for argv in &pipe.commands {
+                    let chain = deepest(argv);
+                    prop_assert!(
+                        chain <= 2,
+                        "inner_argv chain {chain} exceeded nesting_budget=2",
+                    );
+                }
+            }
+        }
+
+        // testing.md L55-56: tokenizer makes forward progress on every
+        // step (`debug_assert!(advanced > 0)`). Surface the same
+        // invariant at the public API: even on adversarial byte input
+        // (lossy-decoded into a String), `parse` must terminate well
+        // within a generous wall-clock budget.
+        #[test]
+        fn pbt_parse_terminates_on_arbitrary_bytes(bytes in arbitrary_utf8_bytes()) {
+            let s = String::from_utf8_lossy(&bytes).into_owned();
+            let start = std::time::Instant::now();
+            let _ = parse(&s);
+            prop_assert!(
+                start.elapsed() < std::time::Duration::from_secs(2),
+                "parse stalled on lossy input ({} bytes)",
+                s.len(),
+            );
         }
     }
 }

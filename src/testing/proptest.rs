@@ -498,3 +498,166 @@ fn argv_token() -> impl Strategy<Value = String> {
 pub fn argv_tokens() -> impl Strategy<Value = Vec<String>> {
     vec(argv_token(), 0..=6)
 }
+
+/// Bash command words mixing single-quoted, double-quoted, and
+/// backslash-escaped tokens. Used by `facts::shell::parse` PBT to
+/// stress quote handling and to keep flags/positional invariants
+/// intact across quoting forms.
+pub fn bash_with_quoting() -> impl Strategy<Value = String> {
+    let head = bash_head();
+    let single = "[ a-zA-Z0-9_./-]{0,8}".prop_map(|s| format!("'{s}'"));
+    let double = "[ a-zA-Z0-9_./-]{0,8}".prop_map(|s| format!("\"{s}\""));
+    let escaped = "[a-zA-Z0-9_./-]{1,4}".prop_map(|s| format!("\\ {s}"));
+    let plain = "[a-zA-Z0-9_./-]{1,8}".prop_map(|s| s.to_string());
+    let word = prop_oneof![
+        2 => plain,
+        2 => single,
+        2 => double,
+        1 => escaped,
+    ];
+    (head, vec(word, 0..4)).prop_map(|(h, args)| {
+        if args.is_empty() {
+            h
+        } else {
+            format!("{h} {}", args.join(" "))
+        }
+    })
+}
+
+/// One-pipeline command containing at least one redirect operator
+/// drawn from `>`, `>>`, `<`, `2>`, `&>`. The redirect target is a
+/// short safe filename. Used to verify that every emitted operator
+/// shows up in `Pipeline.redirects` with the same kind.
+pub fn bash_redirects() -> impl Strategy<Value = (String, Vec<&'static str>)> {
+    let op = prop_oneof![Just(">"), Just(">>"), Just("<"), Just("2>"), Just("&>"),];
+    (
+        bash_head(),
+        vec(
+            (op, "[a-z][a-z0-9_]{0,6}").prop_map(|(o, t)| (o, format!("{o} {t}"))),
+            1..3,
+        ),
+    )
+        .prop_map(|(head, redirs)| {
+            let ops: Vec<&'static str> = redirs.iter().map(|(o, _)| *o).collect();
+            let cmd = format!(
+                "{head} {}",
+                redirs
+                    .iter()
+                    .map(|(_, fragment)| fragment.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+            (cmd, ops)
+        })
+}
+
+/// Bash heredoc command (`cat <<TAG\nbody\nTAG\n` form). The
+/// terminator is one of a fixed allow-list and the body avoids the
+/// terminator literal so the heredoc closes cleanly. Used to check
+/// `Bash::has_heredoc` and that the body stays inside one
+/// `Redirect.target`.
+pub fn bash_heredoc() -> impl Strategy<Value = (String, &'static str)> {
+    let terminator = prop_oneof![Just("EOF"), Just("END"), Just("DONE")];
+    let dash = prop_oneof![Just(""), Just("-")];
+    (terminator, dash, "[a-zA-Z0-9 _./-]{0,30}").prop_map(|(tag, dash, body_seed)| {
+        let body: String = body_seed
+            .split_whitespace()
+            .filter(|w| *w != tag)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let cmd = format!("cat <<{dash}{tag}\n{body}\n{tag}\n");
+        (cmd, tag)
+    })
+}
+
+/// Bash command containing at least one process substitution
+/// (`<(cmd)` or `>(cmd)`) with balanced parens around a safe inner
+/// argv. Used to check `Bash::has_process_substitution`.
+pub fn bash_process_subst() -> impl Strategy<Value = String> {
+    let direction = prop_oneof![Just("<"), Just(">")];
+    (bash_head(), direction, "[a-z][a-z0-9_]{0,6}")
+        .prop_map(|(head, dir, inner)| format!("{head} {dir}({inner} arg)"))
+}
+
+/// Combined short-option wrapper (`bash -lc 'X'`, `sh -ec 'X'`,
+/// `dash -ic 'X'`). Used to verify that the wrapper inspector still
+/// pulls `inner_argv` out of grouped short flags.
+pub fn combined_short_opts() -> impl Strategy<Value = String> {
+    let interp = prop_oneof![Just("bash"), Just("sh"), Just("dash")];
+    let opts = prop_oneof![Just("lc"), Just("ec"), Just("ic"), Just("uc"),];
+    (interp, opts, "[a-z][a-z0-9 _-]{0,12}").prop_map(|(i, o, body)| format!("{i} -{o} '{body}'"))
+}
+
+/// Wrapper command nested up to `depth` levels deep using `bash -c`,
+/// `sh -c`, `eval`, or `xargs sh -c`. The innermost layer is a single
+/// safe head. Used to verify the bounded-depth `inner_argv` chain
+/// (the parser uses `nesting_budget = 2` from `parse_with_depth`,
+/// so chains never grow beyond two).
+pub fn bash_wrapper_nested(depth: usize) -> impl Strategy<Value = String> {
+    let depth = depth.min(4);
+    let inner = "[a-z][a-z0-9]{0,4}".prop_map(|s| s.to_string());
+    inner.prop_map(move |leaf| {
+        let mut cmd = leaf;
+        for _ in 0..depth {
+            cmd = format!("bash -c '{}'", cmd.replace('\'', "'\\''"));
+        }
+        cmd
+    })
+}
+
+/// Adversarial byte vector that contains valid printable ASCII most
+/// of the time but mixes in invalid UTF-8 sequences (lone surrogate
+/// markers, naked 0xFF, an incomplete continuation byte) about 30%
+/// of the time. Used to drive fail-closed PBT for the hook stdin
+/// reader, which must surface an error rather than panic.
+pub fn arbitrary_utf8_bytes() -> impl Strategy<Value = Vec<u8>> {
+    let printable = "[ -~]{0,40}".prop_map(|s| s.into_bytes());
+    let bad = prop_oneof![
+        Just(vec![0xFFu8]),
+        Just(vec![0xC2u8]),           // dangling 2-byte lead.
+        Just(vec![0xED, 0xA0, 0x80]), // UTF-8-encoded surrogate U+D800.
+        Just(vec![0xE0, 0x80]),       // truncated 3-byte sequence.
+    ];
+    prop_oneof![
+        7 => printable,
+        3 => (bad, "[ -~]{0,8}").prop_map(|(mut b, tail)| {
+            b.extend_from_slice(tail.as_bytes());
+            b
+        }),
+    ]
+}
+
+/// MCP-shaped `tool_input` JSON for `mcp__<server>__<tool>` payloads.
+/// Covers top-level `path`, `files[].path`, `items[].path`, and
+/// `paths[]` shapes that `collect_event_paths` extracts. The depth
+/// argument selects which shape:
+/// - `0`: top-level `{ "path": "..." }`
+/// - `1`: `{ "files": [ { "path": "..." } ] }` /
+///   `{ "items": [ { "path": "..." } ] }`
+/// - `2`: `{ "paths": ["..."] }`
+pub fn mcp_nested_input(depth: u8) -> impl Strategy<Value = serde_json::Value> {
+    let path_str = file_path();
+    let depth = depth.min(2);
+    match depth {
+        0 => path_str.prop_map(|p| json!({ "path": p })).boxed(),
+        1 => (path_str, prop_oneof![Just("files"), Just("items")])
+            .prop_map(|(p, key)| json!({ key: [{ "path": p }] }))
+            .boxed(),
+        _ => vec(file_path(), 1..3)
+            .prop_map(|ps| json!({ "paths": ps }))
+            .boxed(),
+    }
+}
+
+/// `Bash` commands assembled from heads that no built-in rule fires
+/// on, with at most one safe argument. Used by RULES negative-space
+/// PBT to verify that benign inputs reach `evaluate() == None` for
+/// every rule.
+pub fn safe_command_string() -> impl Strategy<Value = String> {
+    let head = proptest::sample::select(SAFE_HEADS).prop_map(|s| s.to_string());
+    let arg = prop_oneof![
+        Just(String::new()),
+        "[a-zA-Z0-9_./-]{1,8}".prop_map(|s| s.to_string()),
+    ];
+    (head, arg).prop_map(|(h, a)| if a.is_empty() { h } else { format!("{h} {a}") })
+}
