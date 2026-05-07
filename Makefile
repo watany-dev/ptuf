@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check check clean coverage deny doc pbt
+.PHONY: build test lint fmt fmt-check check clean coverage deny doc pbt install-hooks
 
 build:
 	cargo build --release --locked
@@ -43,6 +43,9 @@ pbt:
 	PROPTEST_CASES=$(PBT_CASES) cargo test --locked --features testing
 
 check: fmt-check lint test doc deny
+
+install-hooks:
+	bash scripts/install-hooks.sh
 
 clean:
 	cargo clean

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Tracked git pre-push hook. Installed via `make install-hooks`
+# (which sets `git config core.hooksPath scripts/hooks`).
+#
+# Bypass with `git push --no-verify` only in true emergencies.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+exec make check
