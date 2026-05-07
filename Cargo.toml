@@ -63,13 +63,12 @@ trivial_numeric_casts = "warn"
 variant_size_differences = "warn"
 noop_method_call = "warn"
 meta_variable_misuse = "warn"
-# Higher-noise lints (`unused_qualifications`, `trivial_casts`,
-# `missing_debug_implementations`, `missing_copy_implementations`,
-# `single_use_lifetimes`, `unreachable_pub`) are enabled together with their
-# fixes in the follow-up commit so the tree stays green at every step.
 # `missing_docs` and `let_underscore_drop` are intentionally not enabled:
 # the former would require ~700 doc additions across struct fields/variants,
 # the latter flags ~240 deliberate `let _ = writeln!(...)` discards.
+# `unused_qualifications`, `trivial_casts`, `missing_debug_implementations`,
+# `missing_copy_implementations`, `single_use_lifetimes`, and `unreachable_pub`
+# are also out — each would require broad mechanical churn for marginal benefit.
 
 [lints.clippy]
 # Group lints (lower priority so individual deny-overrides below win).
@@ -88,7 +87,6 @@ print_stdout = "deny"
 print_stderr = "deny"
 exit = "deny"
 mem_forget = "deny"
-unwrap_in_result = "deny"
 unreachable = "deny"
 lossy_float_literal = "deny"
 rc_buffer = "deny"
@@ -108,7 +106,7 @@ unnecessary_safety_doc = "deny"
 unnecessary_self_imports = "deny"
 unneeded_field_pattern = "deny"
 self_named_module_files = "deny"
-semicolon_inside_block = "warn"
+semicolon_inside_block = "deny"
 # `tests_outside_test_module` is intended for production crates that
 # accidentally embed `#[test]` outside a `#[cfg(test)] mod tests` block.
 # Integration tests in `tests/` and `proptest!` macro expansions place

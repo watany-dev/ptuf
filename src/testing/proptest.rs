@@ -33,14 +33,14 @@ use crate::self_paths::ProtectedKind;
 
 /// Short, dotted rule identifiers similar to `core.network.foo`.
 pub fn rule_id() -> impl Strategy<Value = String> {
-    "[a-z][a-z0-9]{0,5}(\\.[a-z][a-z0-9]{0,5}){1,3}".prop_map(|s| s)
+    "[a-z][a-z0-9]{0,5}(\\.[a-z][a-z0-9]{0,5}){1,3}"
 }
 
 /// Short reason strings without control characters; long enough to
 /// exercise allocation but short enough to keep failure messages
 /// readable.
 pub fn reason_text() -> impl Strategy<Value = String> {
-    "[ -~]{0,40}".prop_map(|s| s)
+    "[ -~]{0,40}"
 }
 
 /// `Severity` variants drawn uniformly.
@@ -139,7 +139,7 @@ const SUSPICIOUS_ARGS: &[&str] = &[
 /// command parses as a single argv entry.
 fn bash_word() -> impl Strategy<Value = String> {
     prop_oneof![
-        4 => "[a-zA-Z0-9_./-]{1,12}".prop_map(|s| s),
+        4 => "[a-zA-Z0-9_./-]{1,12}",
         1 => proptest::sample::select(SUSPICIOUS_ARGS).prop_map(std::string::ToString::to_string),
     ]
 }
@@ -148,7 +148,7 @@ fn bash_head() -> impl Strategy<Value = String> {
     prop_oneof![
         2 => proptest::sample::select(SAFE_HEADS).prop_map(std::string::ToString::to_string),
         2 => proptest::sample::select(DANGEROUS_HEADS).prop_map(std::string::ToString::to_string),
-        1 => "[a-z][a-z0-9]{0,8}".prop_map(|s| s),
+        1 => "[a-z][a-z0-9]{0,8}",
     ]
 }
 
@@ -187,7 +187,7 @@ pub fn bash_command() -> impl Strategy<Value = String> {
 /// metacharacters the lexer cares about. Used for panic-safety
 /// properties where structure of the output is not asserted.
 pub fn arbitrary_command() -> impl Strategy<Value = String> {
-    "[ -~]{0,40}".prop_map(|s| s)
+    "[ -~]{0,40}"
 }
 
 /// Hook tool names. Bash is over-represented because that is the
@@ -197,7 +197,7 @@ fn tool_name() -> impl Strategy<Value = String> {
         4 => Just("Bash".to_string()),
         1 => proptest::sample::select(&["Read", "Write", "Edit", "Glob", "Grep"][..])
             .prop_map(std::string::ToString::to_string),
-        1 => "[A-Z][A-Za-z]{0,8}".prop_map(|s| s),
+        1 => "[A-Z][A-Za-z]{0,8}",
     ]
 }
 
@@ -281,8 +281,8 @@ pub fn sensitive_kind() -> impl Strategy<Value = SensitiveKind> {
 /// sensitive paths. The mix is heavily biased so that `path` /
 /// `sensitive` extractors actually exercise their non-empty arms.
 pub fn file_path() -> impl Strategy<Value = String> {
-    let safe_abs = "/(?:tmp|repo|home/me|var/log|opt/app)/[a-zA-Z0-9_./-]{0,16}".prop_map(|s| s);
-    let project_rel = "[a-zA-Z0-9_./-]{1,20}".prop_map(|s| s);
+    let safe_abs = "/(?:tmp|repo|home/me|var/log|opt/app)/[a-zA-Z0-9_./-]{0,16}";
+    let project_rel = "[a-zA-Z0-9_./-]{1,20}";
     let home_form = prop_oneof![
         Just("~".to_string()),
         Just("$HOME".to_string()),
@@ -372,7 +372,7 @@ pub fn web_url() -> impl Strategy<Value = String> {
         ][..],
     )
     .prop_map(std::string::ToString::to_string);
-    let arbitrary = "[ -~]{0,40}".prop_map(|s| s);
+    let arbitrary = "[ -~]{0,40}";
     prop_oneof![
         4 => safe,
         2 => cloud,
@@ -483,7 +483,7 @@ fn argv_token() -> impl Strategy<Value = String> {
     .prop_map(std::string::ToString::to_string);
     let tool = proptest::sample::select(&["Bash", "Read", "Write", "Edit"][..])
         .prop_map(std::string::ToString::to_string);
-    let arbitrary = "[!-~]{0,16}".prop_map(|s| s);
+    let arbitrary = "[!-~]{0,16}";
     prop_oneof![
         4 => subcmd,
         2 => agent,

@@ -1,7 +1,6 @@
-// Integration-test helpers live at the file root rather than inside a
-// `#[cfg(test)]` module, so clippy's `allow-*-in-tests` config does not
-// reach them. The relaxations below mirror the per-file allow that
-// other integration tests use.
+// `clippy.toml`'s `allow-*-in-tests` only matches `#[test]` bodies and
+// `#[cfg(test)]` modules — free helpers at integration-test file scope
+// fall outside both, so relax `unwrap`/`expect` explicitly here.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::BTreeSet;
