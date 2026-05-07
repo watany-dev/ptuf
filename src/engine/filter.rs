@@ -167,7 +167,6 @@ pub(super) fn demote_for_mode(decision: Decision, mode: Mode) -> Decision {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use std::sync::Arc;
 

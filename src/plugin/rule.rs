@@ -95,7 +95,6 @@ impl ConfigRule for PluginRule {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::facts;

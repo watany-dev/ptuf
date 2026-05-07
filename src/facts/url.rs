@@ -91,7 +91,6 @@ fn parse_port_suffix(rest: &str) -> Option<Option<u16>> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 

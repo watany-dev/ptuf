@@ -1,3 +1,9 @@
+// Integration-test helpers live at the file root rather than inside a
+// `#[cfg(test)]` module, so clippy's `allow-*-in-tests` config does not
+// reach them. The relaxations below mirror the per-file allow that
+// other integration tests use.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;

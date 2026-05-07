@@ -74,7 +74,6 @@ pub(super) fn decision_exit_code(agent: HookAgent, decision: &Decision) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use crate::Decision;
 

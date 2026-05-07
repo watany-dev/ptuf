@@ -229,7 +229,6 @@ pub fn load_with_layout(layout: scope::Layout) -> Result<Config, ConfigError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 

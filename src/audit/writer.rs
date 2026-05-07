@@ -65,7 +65,6 @@ pub fn append_record<W: Write>(dst: &mut W, record: &AuditRecord) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::Decision;

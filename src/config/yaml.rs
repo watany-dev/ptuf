@@ -41,7 +41,6 @@ pub fn load_path(path: &Path) -> Result<RawConfig, ConfigError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::config::Mode;

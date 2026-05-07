@@ -457,7 +457,6 @@ fn should_record(decision: &Decision, config: &Config) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use std::sync::Arc;
 

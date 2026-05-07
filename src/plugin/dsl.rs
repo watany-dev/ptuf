@@ -312,7 +312,6 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::facts;

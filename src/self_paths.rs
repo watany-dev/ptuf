@@ -402,7 +402,6 @@ pub fn discover_repo(start: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
 
     use super::*;
     use std::collections::HashMap;
@@ -591,7 +590,6 @@ mod tests {
 
     #[test]
     fn collect_extracts_hook_scripts_from_claude_settings() {
-        #![allow(clippy::expect_used)]
         let dir = std::env::temp_dir().join(format!(
             "ptuf-self-paths-{}-{}",
             std::process::id(),
@@ -629,7 +627,6 @@ mod tests {
 
     #[test]
     fn relative_hook_command_canonicalizes_against_settings_dir() {
-        #![allow(clippy::expect_used)]
         // A relative hook command (`./hooks/guard.sh`) and a candidate
         // edit on the same physical file must converge on the same
         // `ProtectedKind` regardless of whether either side carries a
@@ -684,7 +681,6 @@ mod tests {
 
     #[test]
     fn collect_extracts_hook_scripts_from_codex_hooks_json() {
-        #![allow(clippy::expect_used)]
         let dir = std::env::temp_dir().join(format!(
             "ptuf-self-paths-codex-hooks-{}-{}",
             std::process::id(),

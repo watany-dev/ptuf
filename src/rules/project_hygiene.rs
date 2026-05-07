@@ -274,7 +274,6 @@ fn first_positional(argv: &Argv) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::facts::project::ProjectFacts;

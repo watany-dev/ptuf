@@ -215,7 +215,6 @@ pub fn run<R: Read, W1: Write, W2: Write>(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::HookAgent;
 

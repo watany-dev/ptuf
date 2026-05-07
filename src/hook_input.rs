@@ -210,7 +210,6 @@ pub(crate) fn sample(tool: &str) -> HookInput {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::testing::proptest::hook_input;

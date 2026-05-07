@@ -313,7 +313,6 @@ fn expand_home(raw: &str, env: &dyn EnvLookup) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use std::collections::HashMap;

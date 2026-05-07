@@ -314,7 +314,6 @@ fn sibling_path(path: &Path, file_name: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 

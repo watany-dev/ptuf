@@ -401,7 +401,6 @@ fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: boo
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use std::path::PathBuf;
 

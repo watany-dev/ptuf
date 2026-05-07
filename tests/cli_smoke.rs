@@ -3,6 +3,10 @@
 //! These exercise the full process boundary: argv parsing, stdin handling,
 //! stdout/stderr separation, and exit codes.
 
+// File-root helpers sit outside `#[cfg(test)]`, so clippy's
+// `allow-*-in-tests` does not reach them; relax explicitly.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 

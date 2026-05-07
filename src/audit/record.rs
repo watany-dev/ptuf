@@ -140,7 +140,6 @@ fn severity_label(severity: Severity) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use serde_json::json;

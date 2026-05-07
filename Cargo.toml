@@ -56,6 +56,10 @@ tempfile = "3"
 [lints.rust]
 unsafe_code = "forbid"
 
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
