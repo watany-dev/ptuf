@@ -18,6 +18,7 @@ fmt-check:
 coverage:
 	cargo tarpaulin --out html --out json \
 		--locked \
+		--features testing \
 		--skip-clean \
 		--fail-under 95 \
 		--exclude-files "src/main.rs" \

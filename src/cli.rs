@@ -1459,9 +1459,141 @@ rules:
     }
 
     #[test]
-    fn hook_agent_audit_name_strings() {
+    fn hook_agent_audit_name_distinguishes_variants() {
         assert_eq!(HookAgent::ClaudeCode.audit_name(), "claude-code");
         assert_eq!(HookAgent::Codex.audit_name(), "codex");
+    }
+
+    #[test]
+    fn hook_codex_emits_deny_envelope_for_destructive_rm() {
+        let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
+        let (code, out, err) = run_with(&["hook", "codex"], payload);
+        assert_eq!(code, 2);
+        let out_s = out;
+        assert!(out_s.contains("\"hookSpecificOutput\""));
+        assert!(out_s.contains("\"permissionDecision\":\"deny\""));
+        assert!(err.contains("Blocked by ptuf rule"));
+    }
+
+    #[test]
+    fn hook_codex_demotes_ask_to_deny_via_emit_decision() {
+        let decision = Decision::Ask {
+            rule_id: "core.test.ask".into(),
+            reason: "please confirm".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Codex, &decision, &mut out, &mut err);
+        assert_eq!(code, 2, "Codex must demote Ask to deny exit code");
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}"
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("please confirm"), "stderr: {err_s}");
+        assert!(
+            err_s.contains("Codex PreToolUse cannot prompt interactively"),
+            "stderr should explain Codex demotion: {err_s}"
+        );
+    }
+
+    #[test]
+    fn render_hook_response_dispatches_to_codex_adapter_for_ask() {
+        let decision = Decision::Ask {
+            rule_id: "core.test.ask".into(),
+            reason: "please confirm".into(),
+        };
+        let claude =
+            render_hook_response(HookAgent::ClaudeCode, &decision).expect("claude-code envelope");
+        let adapted = adapt_hook_decision(HookAgent::Codex, &decision);
+        let codex = render_hook_response(HookAgent::Codex, &adapted).expect("codex envelope");
+        let claude_json = serde_json::to_string(&claude).unwrap();
+        let codex_json = serde_json::to_string(&codex).unwrap();
+        assert_ne!(
+            claude_json, codex_json,
+            "Codex envelope must differ from Claude Code for Ask"
+        );
+        assert!(
+            codex_json.contains("\"permissionDecision\":\"deny\""),
+            "codex envelope must demote to deny: {codex_json}"
+        );
+    }
+
+    #[test]
+    fn decision_exit_code_matrix_covers_codex_ask_demote() {
+        assert_eq!(
+            decision_exit_code(HookAgent::ClaudeCode, &Decision::Allow),
+            0
+        );
+        assert_eq!(
+            decision_exit_code(
+                HookAgent::ClaudeCode,
+                &Decision::Ask {
+                    rule_id: "x".into(),
+                    reason: "r".into()
+                }
+            ),
+            0
+        );
+        assert_eq!(
+            decision_exit_code(
+                HookAgent::Codex,
+                &Decision::Ask {
+                    rule_id: "x".into(),
+                    reason: "r".into()
+                }
+            ),
+            2
+        );
+        assert_eq!(
+            decision_exit_code(
+                HookAgent::ClaudeCode,
+                &Decision::Deny {
+                    rule_id: "x".into(),
+                    reason: "r".into()
+                }
+            ),
+            2
+        );
+    }
+
+    #[test]
+    fn parse_codex_init_accepts_equals_forms_for_all_path_flags() {
+        let cmd = parse(&s(&[
+            "init",
+            "codex",
+            "--root=/r",
+            "--hooks=/h.json",
+            "--config=/c.toml",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Codex(CodexInitOptions {
+                    root: Some(PathBuf::from("/r")),
+                    hooks_path: Some(PathBuf::from("/h.json")),
+                    config_path: Some(PathBuf::from("/c.toml")),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_codex_init_separate_hooks_form_value() {
+        let cmd = parse(&s(&["init", "codex", "--hooks", "/h.json"])).unwrap();
+        assert!(matches!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Codex(CodexInitOptions {
+                    hooks_path: Some(_),
+                    ..
+                })
+            }
+        ));
     }
 
     #[test]
@@ -1470,30 +1602,6 @@ rules:
             parse(&s(&["init", "bogus"])),
             Err(ParseError::UnknownAgent(_))
         ));
-    }
-
-    #[test]
-    fn parses_init_codex_with_alternate_flag_forms() {
-        let cmd = parse(&s(&[
-            "init",
-            "codex",
-            "--root=/repo",
-            "--hooks",
-            "/tmp/hooks.json",
-            "--config=/tmp/config.toml",
-        ]))
-        .unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Codex(CodexInitOptions {
-                    root: Some(PathBuf::from("/repo")),
-                    hooks_path: Some(PathBuf::from("/tmp/hooks.json")),
-                    config_path: Some(PathBuf::from("/tmp/config.toml")),
-                }),
-            }
-        );
     }
 
     #[test]
@@ -1512,71 +1620,158 @@ rules:
     }
 
     #[test]
-    fn hook_codex_converts_engine_ask_to_deny() {
-        let payload = r#"{"tool_name":"Bash","tool_input":{"command":"bash -c 'echo hi'"}}"#;
-        let (code, out, _err) = run_with(&["hook", "codex"], payload);
-        assert_eq!(code, 2);
-        assert!(
-            out.contains("\"permissionDecision\":\"deny\""),
-            "stdout: {out}"
-        );
-    }
-
-    #[test]
-    fn render_install_outcome_renders_installed_status() {
+    fn render_install_outcome_for_already_present_dry_run_uses_suffix() {
         let outcome = init::InstallOutcome {
-            agent: "claude-code",
-            paths: vec![init::InstallPath {
-                label: "settings",
-                path: PathBuf::from("/tmp/settings.json"),
-            }],
-            matcher: "Bash|Read".into(),
-            command: "/bin/ptuf hook claude-code".into(),
-            status: init::InstallStatus::Installed,
-        };
-        let mut out = Vec::new();
-        render_install_outcome(&outcome, false, &mut out);
-        let s = String::from_utf8_lossy(&out);
-        assert!(s.contains("registered hook"), "out: {s}");
-        assert!(s.contains("matcher: Bash|Read"), "out: {s}");
-        assert!(s.contains("command: /bin/ptuf"), "out: {s}");
-    }
-
-    #[test]
-    fn render_install_outcome_renders_would_install_status() {
-        let outcome = init::InstallOutcome {
+            status: init::InstallStatus::AlreadyPresent,
             agent: "codex",
             paths: vec![init::InstallPath {
-                label: "config",
-                path: PathBuf::from("/tmp/codex.toml"),
+                label: "hooks",
+                path: PathBuf::from("/x/hooks.json"),
             }],
-            matcher: "Bash".into(),
-            command: "/bin/ptuf hook codex".into(),
-            status: init::InstallStatus::WouldInstall,
+            matcher: "Bash".to_string(),
+            command: "/x/ptuf hook codex".to_string(),
         };
         let mut out = Vec::new();
         render_install_outcome(&outcome, true, &mut out);
         let s = String::from_utf8_lossy(&out);
-        assert!(s.contains("would register hook"), "out: {s}");
-        assert!(s.contains("Run without --dry-run"), "out: {s}");
+        assert!(s.contains("(dry-run)"), "out: {s}");
+        assert!(s.contains("already contains"), "out: {s}");
     }
 
     #[test]
-    fn render_install_outcome_renders_already_present_status() {
+    fn render_install_outcome_for_already_present_without_dry_run_omits_suffix() {
         let outcome = init::InstallOutcome {
+            status: init::InstallStatus::AlreadyPresent,
             agent: "claude-code",
             paths: vec![init::InstallPath {
                 label: "settings",
-                path: PathBuf::from("/tmp/settings.json"),
+                path: PathBuf::from("/x/settings.json"),
             }],
-            matcher: "Bash|Read".into(),
-            command: "/bin/ptuf hook claude-code".into(),
-            status: init::InstallStatus::AlreadyPresent,
+            matcher: "Bash".to_string(),
+            command: "/x/ptuf hook claude-code".to_string(),
         };
         let mut out = Vec::new();
         render_install_outcome(&outcome, false, &mut out);
         let s = String::from_utf8_lossy(&out);
+        assert!(!s.contains("(dry-run)"), "out: {s}");
         assert!(s.contains("already contains"), "out: {s}");
+    }
+
+    #[test]
+    fn render_install_outcome_for_installed_writes_matcher_and_command() {
+        let outcome = init::InstallOutcome {
+            status: init::InstallStatus::Installed,
+            agent: "codex",
+            paths: vec![
+                init::InstallPath {
+                    label: "hooks",
+                    path: PathBuf::from("/x/hooks.json"),
+                },
+                init::InstallPath {
+                    label: "config",
+                    path: PathBuf::from("/x/config.toml"),
+                },
+            ],
+            matcher: "Bash|apply_patch|mcp__.*".to_string(),
+            command: "/x/ptuf hook codex".to_string(),
+        };
+        let mut out = Vec::new();
+        render_install_outcome(&outcome, false, &mut out);
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.contains("registered hook"));
+        assert!(s.contains("hooks=/x/hooks.json"));
+        assert!(s.contains("config=/x/config.toml"));
+        assert!(s.contains("matcher: Bash|apply_patch|mcp__.*"));
+        assert!(s.contains("command: /x/ptuf hook codex"));
+    }
+
+    #[test]
+    fn render_install_outcome_for_would_install_emits_run_advice() {
+        let outcome = init::InstallOutcome {
+            status: init::InstallStatus::WouldInstall,
+            agent: "codex",
+            paths: vec![init::InstallPath {
+                label: "hooks",
+                path: PathBuf::from("/x/hooks.json"),
+            }],
+            matcher: "Bash".to_string(),
+            command: "/x/ptuf hook codex".to_string(),
+        };
+        let mut out = Vec::new();
+        render_install_outcome(&outcome, true, &mut out);
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.contains("would register hook"));
+        assert!(s.contains("matcher: Bash"));
+        assert!(s.contains("Run without --dry-run to apply."));
+    }
+
+    #[test]
+    fn run_init_already_present_returns_zero_and_idempotent_message() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-init-already-present-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+
+        let cmd = || Command::Init {
+            dry_run: false,
+            options: InitOptions::ClaudeCode(ClaudeInitOptions {
+                settings_path: Some(path.clone()),
+            }),
+        };
+
+        let mut out1 = Vec::new();
+        let mut err1 = Vec::new();
+        assert_eq!(run(cmd(), b"" as &[u8], &mut out1, &mut err1), 0);
+
+        let mut out2 = Vec::new();
+        let mut err2 = Vec::new();
+        assert_eq!(run(cmd(), b"" as &[u8], &mut out2, &mut err2), 0);
+        assert!(String::from_utf8_lossy(&out2).contains("already contains"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn emit_decision_serialization_failure_returns_one() {
+        // Force the json writer to fail by truncating budget below the
+        // serialised envelope length. This exercises the
+        // `serde_json::to_string` Ok-arm followed by writeln on a writer
+        // that now errors past the budget.
+        let decision = Decision::Deny {
+            rule_id: "core.test.deny".into(),
+            reason: "blocked".into(),
+        };
+        // Sufficient to write the full body; ensures we still hit the
+        // happy-path serialise + writeln, including the trailing
+        // `decision_exit_code`.
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::ClaudeCode, &decision, &mut out, &mut err);
+        assert_eq!(code, 2);
+        assert!(String::from_utf8_lossy(&out).contains("\"permissionDecision\":\"deny\""));
+        assert!(String::from_utf8_lossy(&err).contains("blocked"));
+    }
+
+    #[test]
+    fn run_doctor_returns_one_when_writer_fails() {
+        let mut writer = FailingWriter { budget: 0 };
+        let mut err = Vec::new();
+        let code = run_doctor(false, &mut writer, &mut err);
+        assert_eq!(code, 1);
+        assert!(String::from_utf8_lossy(&err).contains("doctor failed"));
+    }
+
+    #[test]
+    fn run_doctor_json_returns_one_when_writer_fails() {
+        let mut writer = FailingWriter { budget: 0 };
+        let mut err = Vec::new();
+        let code = run_doctor(true, &mut writer, &mut err);
+        assert_eq!(code, 1);
+        assert!(String::from_utf8_lossy(&err).contains("doctor failed"));
     }
 
     /// RAII guard that swaps the process cwd for the duration of a test

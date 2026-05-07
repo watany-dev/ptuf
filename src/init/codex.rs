@@ -842,4 +842,42 @@ mod tests {
         );
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn sibling_temp_path_falls_back_to_bare_filename_when_no_parent() {
+        let bare = Path::new("hooks.json");
+        let tmp = sibling_temp_path(bare);
+        assert!(
+            tmp.parent()
+                .map(Path::as_os_str)
+                .unwrap_or_default()
+                .is_empty(),
+            "no-parent input must yield no-parent temp path: {tmp:?}"
+        );
+        assert!(tmp.to_string_lossy().contains("hooks.json.ptuf."));
+    }
+
+    #[test]
+    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
+        let p = Path::new("/");
+        let tmp = sibling_temp_path(p);
+        assert!(
+            tmp.to_string_lossy().contains("hooks.json.ptuf."),
+            "missing file_name must default to hooks.json: {tmp:?}"
+        );
+    }
+
+    #[test]
+    fn sibling_path_falls_back_to_bare_filename_when_no_parent() {
+        let bare = Path::new("hooks.json");
+        let other = sibling_path(bare, "config.toml");
+        assert_eq!(other, PathBuf::from("config.toml"));
+    }
+
+    #[test]
+    fn resolve_paths_derives_config_alongside_explicit_bare_hooks_path() {
+        let paths = resolve_paths(None, None, Some(Path::new("hooks.json")), None).unwrap();
+        assert_eq!(paths.hooks_path, PathBuf::from("hooks.json"));
+        assert_eq!(paths.config_path, PathBuf::from("config.toml"));
+    }
 }
