@@ -18,7 +18,14 @@
 //! into an audit file. It runs on already-extracted command strings,
 //! never on raw structured input.
 
-#![allow(clippy::expect_used)]
+// Compile-time-constant regexes are validated by tests; `expect()` here
+// is a hard programmer error if it ever fires. `#[expect]` (rather than
+// `#[allow]`) so the lint comes back if the surrounding code ever stops
+// using `.expect`.
+#![expect(
+    clippy::expect_used,
+    reason = "static regex literals validated by tests"
+)]
 
 use std::sync::LazyLock;
 

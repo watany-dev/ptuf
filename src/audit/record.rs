@@ -78,7 +78,11 @@ impl AuditRecord {
     /// cached `name@version` list; an empty vec is omitted from JSON.
     /// `allowlist_id` should be `Some` only on `Allow` outcomes that
     /// were produced by a non-expired allowlist hit.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "constructor mirrors the audit JSON schema; collapsing into a builder \
+                  struct is tracked separately"
+    )]
     pub fn build(
         timestamp: SystemTime,
         decision: &Decision,
