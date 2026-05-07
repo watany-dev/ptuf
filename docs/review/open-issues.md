@@ -23,8 +23,8 @@ opaque な flag surface として扱う点に限定される。
 
 | 状態 | 項目 |
 | --- | --- |
-| Resolved in current HEAD | §2 / D4 parser wrapper・redirect 系、D10 adapter 分離、D12 contract test 拡充、§5.4 Claude Code hook stable marker、§6.1 proptest strategy feature gate、§4.3 reason temporary allocation、§4.5 self-protection label allocation |
-| Deferred architecture backlog | §1.3 / §4.1 data model・borrowed shell AST、§4.4 plugin cache、§5.1 CLI parser、§1.1 / §1.2 builtin rule / DSL 統合、D11 大型ファイル分割 |
+| Resolved in current HEAD | §2 / D4 parser wrapper・redirect 系、D10 adapter 分離、D12 contract test 拡充、§5.4 Claude Code hook stable marker、§6.1 proptest strategy feature gate、§4.3 reason temporary allocation、§4.5 self-protection label allocation、D11 大型ファイル分割 (engine / cli / doctor) |
+| Deferred architecture backlog | §1.3 / §4.1 data model・borrowed shell AST、§4.4 plugin cache、§5.1 CLI parser、§1.1 / §1.2 builtin rule / DSL 統合 |
 | Deferred design choice | §6.2 coverage 95% 方針転換候補 |
 
 ## 1. Concrete bugs (P0)
@@ -67,13 +67,13 @@ inspect できるようになった。adapter 層は `RawHookInput` と normaliz
 - **§4.5** 解消済み。`ProtectedKind` 用の小さな `Vec` は
   allocation-free な `ProtectedKinds` (`[ProtectedKind; 6] + len`) に置換済み。
   `smallvec` などの新規 dependency は追加していない。コード:
-  `src/engine.rs:290-294`, `src/self_paths.rs:46-108`, `src/self_paths.rs:260-283`
+  `src/engine/mod.rs:300-310`, `src/self_paths.rs:46-108`, `src/self_paths.rs:260-283`
 
 ## 4. CLI / I/O
 
 | 出典 | 内容 | コード参照 | 優先度 |
 | --- | --- | --- | --- |
-| §5.1 | deferred。自前 CLI parser が 1394 行に成長 (レビュー時 1141 行)。`doctor --json` は実装済みなので未実装フラグ例から外す。残課題は parser が大きく、clap derive 等へ移行する余地がある点 | `src/cli.rs:1-1394` | P2 |
+| §5.1 | deferred。自前 CLI parser は `src/cli/parse.rs` に分離済みだが、自前実装が残る点は変わらず。`doctor --json` は実装済みなので未実装フラグ例から外す。残課題は parser が依然として自前実装で、clap derive 等へ移行する余地がある点 | `src/cli/parse.rs` | P2 |
 
 §5.4 は解消済み。`ptuf init claude-code` が hook payload に
 `name: "ptuf"` stable marker を書き込み、既存 entry 検出も marker を優先する。
@@ -91,11 +91,10 @@ inspect できるようになった。adapter 層は `RawHookInput` と normaliz
   (`src/rules/git.rs` 等)。`enum Rule { Filesystem(...), Git(GitRuleId),
   SelfProtection(ProtectedKind), Plugin(PluginRule), … }` で動的
   ディスパッチを消す。優先度: P2
-- **D11** deferred。大型ファイル: `src/engine.rs` 2065 行 / `src/cli.rs` 1394 行 /
-  `src/doctor.rs` 1710 行 / `src/plugin/dsl.rs` 1066 行。レビュー時
-  (engine 1362, cli 1158, doctor 1073, dsl 1056) より増加している。
-  `engine/{evaluator,allowlist,audit}.rs`, `cli/{parse,commands}.rs`,
-  `doctor/json.rs` への分割案。優先度: P2
+- **D11** 解消済み。`src/engine.rs` を `src/engine/{mod,builder,filter}.rs` に、
+  `src/cli.rs` を `src/cli/{mod,parse,run,output,test_support}.rs` に、
+  `src/doctor.rs` を `src/doctor/{mod,json}.rs` に分割し、責務単位で
+  ファイルを縮小した。残る `src/plugin/dsl.rs` 1066 行は次回以降の候補。
 
 ## 6. テスト基盤
 

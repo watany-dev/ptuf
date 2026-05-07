@@ -63,8 +63,8 @@ CLI 経路はこれと異なり fail-closed で動作する。
 - `ptuf hook codex`
 - `ptuf eval --tool <name> <command>`
 - `ptuf plugin test <path>`
-- `ptuf init claude-code [--dry-run] [--settings <PATH>]`
-- `ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>]`
+- `ptuf init claude-code [--dry-run] [--settings <PATH>] [--verify [--json]]`
+- `ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>] [--verify [--json]]`
 - `ptuf doctor [--json]`
 - `ptuf --help`
 - `ptuf --version`

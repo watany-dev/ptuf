@@ -5,11 +5,11 @@ ptuf は CLI shim と判定コアを分けた構成を取る。`src/main.rs` は
 
 ## 層構造
 
-- **CLI shim** (`src/main.rs`, `src/io_runner.rs`, `src/cli.rs`)
+- **CLI shim** (`src/main.rs`, `src/io_runner.rs`, `src/cli/`)
   - argv を parse する
   - stdin / stdout / stderr を配線する
   - 終了コードを返す
-- **判定コア** (`src/engine.rs` ほか)
+- **判定コア** (`src/engine/` ほか)
   - config をロードする
   - facts を抽出する
   - built-in rule と plugin rule を評価する
