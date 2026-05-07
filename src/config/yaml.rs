@@ -223,4 +223,80 @@ audit:
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
+
+    // Ill-formed YAML at the parser level — the colon-only document is
+    // a syntax error before any schema validation can run. Verifies
+    // that `path` is round-tripped verbatim into the error.
+    #[test]
+    fn rejects_syntactically_invalid_yaml() {
+        let yaml = ":\n  -";
+        let path = PathBuf::from("syntax-broken.yaml");
+        let err = parse_str(&path, yaml).expect_err("syntax error expected");
+        match err {
+            ConfigError::Yaml {
+                path: returned,
+                message: _,
+            } => assert_eq!(returned, path),
+            other => panic!("expected Yaml error, got {other:?}"),
+        }
+    }
+
+    // Inconsistent indentation surfaces as a YAML parse error, not as
+    // a schema deserialization error. Both are mapped to `Yaml`.
+    #[test]
+    fn rejects_yaml_with_inconsistent_indentation() {
+        let yaml = "packs:\n  core.network:\n   enabled: true\n     bad: 1\n";
+        let err = parse_str(&p(), yaml).expect_err("indentation error expected");
+        assert!(matches!(err, ConfigError::Yaml { .. }));
+    }
+
+    // Wrong scalar type for a field that expects a struct or sequence.
+    // `audit:` is a struct, not a string.
+    #[test]
+    fn rejects_yaml_with_wrong_value_type() {
+        let yaml = "audit: not-a-struct\n";
+        let err = parse_str(&p(), yaml).expect_err("type mismatch expected");
+        assert!(matches!(err, ConfigError::Yaml { .. }));
+    }
+
+    // The `path` field is preserved verbatim through Yaml errors so
+    // that callers can include it in fail-closed audit records.
+    #[test]
+    fn yaml_error_preserves_caller_supplied_path() {
+        let path = PathBuf::from("/some/where/conf.yaml");
+        let err = parse_str(&path, "mode: yolo\n").expect_err("invalid mode");
+        match err {
+            ConfigError::Yaml {
+                path: returned,
+                message: _,
+            } => assert_eq!(returned, path),
+            other => panic!("expected Yaml error, got {other:?}"),
+        }
+    }
+
+    // Allowlist `when:` clauses are compiled inside `parse_str`.
+    // Compile failures from a deeply-nested invalid mapping must
+    // surface as `ConfigError::Yaml` with the entry id in the message.
+    #[test]
+    fn allowlist_when_compile_error_includes_entry_id() {
+        let yaml = r"
+allowlists:
+  - id: my-bad-id
+    appliesTo:
+      rules: [core.git.reset-hard]
+    when:
+      all:
+        - shell.argv: 42
+";
+        let err = parse_str(&p(), yaml).expect_err("compile failure expected");
+        match err {
+            ConfigError::Yaml { message, .. } => {
+                assert!(
+                    message.contains("my-bad-id"),
+                    "expected entry id in message: {message}"
+                );
+            }
+            other => panic!("expected Yaml error, got {other:?}"),
+        }
+    }
 }

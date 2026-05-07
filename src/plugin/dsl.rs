@@ -382,6 +382,77 @@ all:
         assert_eq!(err, CompileError::UnknownKey("frobnicate".into()));
     }
 
+    // An unknown key buried inside `all:` must surface the *unknown
+    // key* error, not a generic shape error: this is what tells plugin
+    // authors which mapping is wrong.
+    #[test]
+    fn unknown_key_nested_inside_all_is_rejected_by_name() {
+        let v = yaml(
+            r#"
+all:
+  - tool: Bash
+  - frobnicate: yes
+"#,
+        );
+        let err = compile(&v).expect_err("nested unknown key");
+        assert_eq!(err, CompileError::UnknownKey("frobnicate".into()));
+    }
+
+    // Same, but at depth 3 (`all > any > not`).
+    #[test]
+    fn unknown_key_nested_three_deep_is_rejected_by_name() {
+        let v = yaml(
+            r#"
+all:
+  - any:
+      - not:
+          frobnicate: yes
+"#,
+        );
+        let err = compile(&v).expect_err("deeply nested unknown key");
+        assert_eq!(err, CompileError::UnknownKey("frobnicate".into()));
+    }
+
+    // An empty `any:` deep inside an `all:` surfaces as a shape error
+    // attached to `any`, not to the outer `all`.
+    #[test]
+    fn empty_inner_any_surfaces_as_invalid_shape_for_any() {
+        let v = yaml(
+            r#"
+all:
+  - tool: Bash
+  - any: []
+"#,
+        );
+        let err = compile(&v).expect_err("nested empty any");
+        match err {
+            CompileError::InvalidShape { key, message } => {
+                assert_eq!(key, "any");
+                assert!(message.contains("empty"), "unexpected message: {message}");
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    // A non-string element inside a leaf list (`toolAny: [Bash, 42]`)
+    // nested under `any:` must surface as `InvalidShape` for the leaf,
+    // not for the outer combinator.
+    #[test]
+    fn non_string_item_in_nested_tool_any_surfaces_leaf_key() {
+        let v = yaml(
+            r#"
+any:
+  - toolAny: [Bash, 42]
+  - tool: Read
+"#,
+        );
+        let err = compile(&v).expect_err("nested non-string item");
+        match err {
+            CompileError::InvalidShape { key, .. } => assert_eq!(key, "toolAny"),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
     #[test]
     fn shell_argv_requires_head_any() {
         let v = yaml("shell.argv: {}\n");

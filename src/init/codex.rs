@@ -532,6 +532,27 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    // Non-destructive on hooks.json: a malformed file must remain
+    // untouched byte-for-byte after install fails. The same invariant
+    // is asserted for claude_code in
+    // `install_rejects_invalid_json_without_overwriting`.
+    #[test]
+    fn install_does_not_overwrite_invalid_hooks_json() {
+        let dir = workdir("bad-hooks-untouched");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        let before = "{not json";
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        fs::write(&targets.hooks_path, before).unwrap();
+        let _ = install(&targets, "/x/ptuf", false);
+        let after = fs::read_to_string(&targets.hooks_path).unwrap();
+        assert_eq!(after, before, "hooks.json was modified despite Err");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn install_rejects_invalid_config_toml() {
         let dir = workdir("bad-config");
@@ -544,6 +565,25 @@ mod tests {
         fs::write(&targets.config_path, "[features\ncodex_hooks = true").unwrap();
         let err = install(&targets, "/x/ptuf", false).unwrap_err();
         assert!(matches!(err, InitError::Toml { .. }));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Non-destructive on config.toml: a malformed config must remain
+    // untouched byte-for-byte after install fails.
+    #[test]
+    fn install_does_not_overwrite_invalid_config_toml() {
+        let dir = workdir("bad-config-untouched");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        let before = "[features\ncodex_hooks = true";
+        fs::create_dir_all(targets.config_path.parent().unwrap()).unwrap();
+        fs::write(&targets.config_path, before).unwrap();
+        let _ = install(&targets, "/x/ptuf", false);
+        let after = fs::read_to_string(&targets.config_path).unwrap();
+        assert_eq!(after, before, "config.toml was modified despite Err");
         let _ = fs::remove_dir_all(&dir);
     }
 
