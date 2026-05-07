@@ -289,16 +289,17 @@ make pbt
 - `make pbt` reruns the property-based test suite at
   `PBT_CASES=10000` by default — run before tagging a release
 
-The first invocation of `make check` or `make coverage` will run a `tools`
-prerequisite that installs missing supply-chain binaries via
-`cargo install --locked` (`cargo-deny` for `make check`, `cargo-tarpaulin`
-for `make coverage`). Pinned versions live in the `Makefile` as
-`CARGO_DENY_VERSION` / `CARGO_TARPAULIN_VERSION` and must stay in sync with
-`.github/workflows/ci.yml`. To skip the auto-install (CI or pre-provisioned
-environments), pass `SKIP_TOOL_INSTALL=1`; missing tools then fail fast
-instead of being installed. To force a reinstall when an older copy is on
-your `PATH`, run e.g.
-`cargo install --locked --force cargo-deny@0.19.2`.
+`make check` and `make coverage` install their supply-chain prerequisites
+on first use via `cargo install --locked`: `make check` ensures
+`cargo-deny`, and `make coverage` ensures `cargo-tarpaulin`. Run
+`make tools` to install both up front. Pinned versions live in the
+`Makefile` as `CARGO_DENY_VERSION` / `CARGO_TARPAULIN_VERSION` and must
+stay in sync with `.github/workflows/ci.yml`. To skip the auto-install
+(CI or pre-provisioned environments) pass `SKIP_TOOL_INSTALL=1`; missing
+tools then fail fast instead of being installed. To force a reinstall
+when an older copy is on your `PATH`, run
+`cargo install --locked --force cargo-deny@<version>` (or
+`cargo-tarpaulin`) using the version from the `Makefile`.
 
 ## Design Docs
 

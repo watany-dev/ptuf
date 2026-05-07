@@ -15,6 +15,13 @@
 (fmt-check / clippy / test / `cargo doc` / cargo-deny) を実行する。手順の
 詳細は README "Develop" と `Makefile` を参照。
 
+`make check` / `make coverage` の冒頭には `tools` ターゲットが入っており、
+`cargo-deny` / `cargo-tarpaulin` が PATH に無ければ
+`cargo install --locked` で自動導入する。**「ツールが無いからスキップ」
+は許容しない** — 必ず `make check` を完走させてから commit / push する。
+事前導入済みの環境で再インストールを抑止したい場合のみ
+`SKIP_TOOL_INSTALL=1 make check` を使う。
+
 `make pbt` (`PROPTEST_CASES=10000 cargo test --features testing`) はリリース直前の深掘り PBT 用。
 
 ## アーキテクチャ規約

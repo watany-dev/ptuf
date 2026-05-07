@@ -1,4 +1,5 @@
-.PHONY: build test lint fmt fmt-check check clean coverage deny doc pbt tools
+.PHONY: build test lint fmt fmt-check check clean coverage deny doc pbt \
+	tools tools-check tools-coverage
 
 # Keep these aligned with .github/workflows/ci.yml:
 # - CARGO_DENY_VERSION must match the cargo-deny pinned in
@@ -28,7 +29,7 @@ fmt:
 fmt-check:
 	cargo fmt -- --check
 
-coverage: tools
+coverage: tools-coverage
 	cargo tarpaulin --out html --out json \
 		--locked \
 		--features testing \
@@ -55,22 +56,29 @@ PBT_CASES ?= 10000
 pbt:
 	PROPTEST_CASES=$(PBT_CASES) cargo test --locked --features testing
 
-tools:
+tools-check:
 ifeq ($(SKIP_TOOL_INSTALL),)
 	@command -v cargo-deny >/dev/null 2>&1 || \
 		cargo install --locked cargo-deny@$(CARGO_DENY_VERSION)
-	@command -v cargo-tarpaulin >/dev/null 2>&1 || \
-		cargo install --locked cargo-tarpaulin@$(CARGO_TARPAULIN_VERSION)
 else
 	@command -v cargo-deny >/dev/null 2>&1 || { \
-		echo "cargo-deny not found. Run 'make tools' (or unset SKIP_TOOL_INSTALL)." >&2; \
-		exit 1; }
-	@command -v cargo-tarpaulin >/dev/null 2>&1 || { \
-		echo "cargo-tarpaulin not found. Run 'make tools' (or unset SKIP_TOOL_INSTALL)." >&2; \
+		echo "cargo-deny not found. Run 'make tools-check' (or unset SKIP_TOOL_INSTALL)." >&2; \
 		exit 1; }
 endif
 
-check: tools fmt-check lint test doc deny
+tools-coverage:
+ifeq ($(SKIP_TOOL_INSTALL),)
+	@command -v cargo-tarpaulin >/dev/null 2>&1 || \
+		cargo install --locked cargo-tarpaulin@$(CARGO_TARPAULIN_VERSION)
+else
+	@command -v cargo-tarpaulin >/dev/null 2>&1 || { \
+		echo "cargo-tarpaulin not found. Run 'make tools-coverage' (or unset SKIP_TOOL_INSTALL)." >&2; \
+		exit 1; }
+endif
+
+tools: tools-check tools-coverage
+
+check: tools-check fmt-check lint test doc deny
 
 clean:
 	cargo clean
