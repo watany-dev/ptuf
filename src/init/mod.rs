@@ -189,10 +189,10 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
 }
 
 fn sibling_temp_path(path: &Path) -> PathBuf {
-    let mut name = path
-        .file_name()
-        .map(|s| s.to_os_string())
-        .unwrap_or_else(|| std::ffi::OsString::from("snapshot.tmp"));
+    let mut name = path.file_name().map_or_else(
+        || std::ffi::OsString::from("snapshot.tmp"),
+        std::ffi::OsStr::to_os_string,
+    );
     name.push(format!(".ptuf-snap.{}.tmp", std::process::id()));
     match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.join(name),

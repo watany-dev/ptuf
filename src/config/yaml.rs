@@ -200,10 +200,7 @@ audit:
         let path = PathBuf::from("/nonexistent/ptuf-load-path-does-not-exist.yaml");
         let err = load_path(&path).expect_err("should fail");
         match err {
-            ConfigError::Io {
-                path: returned,
-                source: _,
-            } => assert_eq!(returned, path),
+            ConfigError::Io { path: returned, .. } => assert_eq!(returned, path),
             other => panic!("expected Io error, got {other:?}"),
         }
     }

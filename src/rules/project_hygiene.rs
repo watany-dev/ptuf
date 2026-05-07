@@ -180,7 +180,7 @@ fn is_npm_or_yarn_install(argv: &Argv) -> bool {
         // `yarn` with no subcommand defaults to `yarn install`.
         return matches!(
             first_positional(argv),
-            None | Some("install") | Some("add") | Some("ci")
+            None | Some("install" | "add" | "ci")
         );
     }
     false

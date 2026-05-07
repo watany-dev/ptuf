@@ -102,7 +102,7 @@ pub struct RawRuleOverride {
 
 impl From<RawRuleOverride> for RuleOverride {
     fn from(value: RawRuleOverride) -> Self {
-        RuleOverride {
+        Self {
             enabled: value.enabled,
             decision: value.decision,
             severity: value.severity,
@@ -162,7 +162,7 @@ pub struct RawAllowlistApplies {
 
 impl From<RawAllowlist> for Allowlist {
     fn from(value: RawAllowlist) -> Self {
-        Allowlist {
+        Self {
             id: value.id,
             rule_ids: value.applies_to.rules,
             when: value
@@ -200,8 +200,8 @@ impl<'de> Deserialize<'de> for RedactionMode {
     {
         let raw = String::deserialize(deserializer)?;
         match raw.as_str() {
-            "strict" => Ok(RedactionMode::Strict),
-            "off" => Ok(RedactionMode::Off),
+            "strict" => Ok(Self::Strict),
+            "off" => Ok(Self::Off),
             other => Err(serde::de::Error::unknown_variant(other, &["strict", "off"])),
         }
     }
@@ -214,8 +214,8 @@ impl<'de> Deserialize<'de> for Mode {
     {
         let raw = String::deserialize(deserializer)?;
         match raw.as_str() {
-            "enforce" => Ok(Mode::Enforce),
-            "monitor" => Ok(Mode::Monitor),
+            "enforce" => Ok(Self::Enforce),
+            "monitor" => Ok(Self::Monitor),
             other => Err(serde::de::Error::unknown_variant(
                 other,
                 &["enforce", "monitor"],

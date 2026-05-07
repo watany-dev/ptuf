@@ -72,8 +72,121 @@ meta_variable_misuse = "warn"
 # the latter flags ~240 deliberate `let _ = writeln!(...)` discards.
 
 [lints.clippy]
-unwrap_used = "warn"
-expect_used = "warn"
+# Group lints (lower priority so individual deny-overrides below win).
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+# Hand-picked restriction lints — promote unwrap/expect/panic etc. to deny.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+exit = "deny"
+mem_forget = "deny"
+unwrap_in_result = "deny"
+unreachable = "deny"
+lossy_float_literal = "deny"
+rc_buffer = "deny"
+verbose_file_reads = "deny"
+assertions_on_result_states = "deny"
+empty_drop = "deny"
+empty_structs_with_brackets = "deny"
+partial_pub_fields = "deny"
+pub_without_shorthand = "deny"
+redundant_type_annotations = "deny"
+same_name_method = "deny"
+# `string_to_string` was removed in clippy >=1.94 (covered by
+# `clippy::implicit_clone` instead, which lives in `pedantic`).
+try_err = "deny"
+unnecessary_safety_comment = "deny"
+unnecessary_safety_doc = "deny"
+unnecessary_self_imports = "deny"
+unneeded_field_pattern = "deny"
+self_named_module_files = "deny"
+semicolon_inside_block = "warn"
+# `tests_outside_test_module` is intended for production crates that
+# accidentally embed `#[test]` outside a `#[cfg(test)] mod tests` block.
+# Integration tests in `tests/` and `proptest!` macro expansions place
+# their `#[test]` functions at the file root by design, so the lint
+# raises false positives there.
+tests_outside_test_module = "allow"
+
+# Pedantic / nursery exemptions (legitimate code patterns in ptuf).
+module_name_repetitions = "allow"
+option_if_let_else = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_const_for_fn = "allow"
+# Indexing/slicing on already-validated UTF-8 boundaries is pervasive in
+# string-heavy modules (`reason.rs`, doctor formatters, byte processors).
+# Keeping deny would force ~400 ad-hoc `.get()` rewrites with no safety
+# benefit — bounds are invariant-protected upstream.
+indexing_slicing = "allow"
+# Shadowing of unrelated names triggers ~30× on idiomatic
+# `let x = x.trim();` style transforms; keep it relaxed.
+shadow_unrelated = "allow"
+# Doc-paragraph length and markdown lints add stylistic churn that
+# does not materially improve safety.
+too_long_first_doc_paragraph = "allow"
+doc_markdown = "allow"
+# `as` casts in CLI exit-code / formatter glue are intentional and
+# bounded — promoting them adds noise without preventing real bugs.
+as_conversions = "allow"
+# `r#"..."#` is consistently used for embedded YAML/JSON literals where
+# the extra hashes make multi-line content readable.
+needless_raw_string_hashes = "allow"
+# `#[must_use]` on builder-return methods adds churn without catching
+# real bugs in this codebase.
+return_self_not_must_use = "allow"
+# Function-length / bool-count thresholds are governed by `clippy.toml`.
+too_many_lines = "allow"
+struct_excessive_bools = "allow"
+# Cross-platform compiled binaries already require multiple versions of
+# certain transitive crates; the `cargo` group surfaces this and the
+# situation is tracked in `deny.toml` instead.
+multiple_crate_versions = "allow"
+# Pedantic / nursery code-style lints that surface across the codebase
+# but do not prevent real defects. These are documented as group-warn
+# above, then allowed individually so future contributors see what is
+# being deferred and can pick items up.
+multiple_inherent_impl = "allow"
+redundant_clone = "allow"
+clone_on_ref_ptr = "allow"
+redundant_closure_for_method_calls = "allow"
+needless_pass_by_value = "allow"
+match_wildcard_for_single_variants = "allow"
+match_same_arms = "allow"
+needless_continue = "allow"
+needless_collect = "allow"
+used_underscore_binding = "allow"
+semicolon_if_nothing_returned = "allow"
+map_unwrap_or = "allow"
+useless_let_if_seq = "allow"
+use_self = "allow"
+unnecessary_wraps = "allow"
+unnecessary_literal_bound = "allow"
+trivially_copy_pass_by_ref = "allow"
+stable_sort_primitive = "allow"
+option_option = "allow"
+manual_let_else = "allow"
+implicit_clone = "allow"
+format_push_string = "allow"
+default_trait_access = "allow"
+bool_to_int_with_if = "allow"
+# Numeric casts inside CLI / time-arithmetic glue are intentional and
+# bounded; the alternative (`cast_unsigned`, `try_into`) adds noise
+# without preventing real bugs in this codebase.
+cast_sign_loss = "allow"
+cast_possible_truncation = "allow"
+cast_lossless = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
 
 [profile.release]
 opt-level = 3

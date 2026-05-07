@@ -88,8 +88,8 @@ pub enum EngineError {
 impl std::fmt::Display for EngineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EngineError::Config(e) => write!(f, "engine: {e}"),
-            EngineError::Plugin(e) => write!(f, "engine: {e}"),
+            Self::Config(e) => write!(f, "engine: {e}"),
+            Self::Plugin(e) => write!(f, "engine: {e}"),
         }
     }
 }
@@ -97,21 +97,21 @@ impl std::fmt::Display for EngineError {
 impl std::error::Error for EngineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            EngineError::Config(e) => Some(e),
-            EngineError::Plugin(e) => Some(e),
+            Self::Config(e) => Some(e),
+            Self::Plugin(e) => Some(e),
         }
     }
 }
 
 impl From<ConfigError> for EngineError {
     fn from(value: ConfigError) -> Self {
-        EngineError::Config(value)
+        Self::Config(value)
     }
 }
 
 impl From<PluginError> for EngineError {
     fn from(value: PluginError) -> Self {
-        EngineError::Plugin(value)
+        Self::Plugin(value)
     }
 }
 
@@ -386,8 +386,7 @@ impl Engine {
         }
         let raw_command = input
             .bash_command()
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("(tool={})", input.tool_name));
+            .map_or_else(|| format!("(tool={})", input.tool_name), str::to_owned);
         let command_redacted = match self.config.audit.redaction {
             RedactionMode::Strict => redact_strict(&raw_command),
             RedactionMode::Off => raw_command,

@@ -33,14 +33,14 @@ use crate::self_paths::ProtectedKind;
 
 /// Short, dotted rule identifiers similar to `core.network.foo`.
 pub fn rule_id() -> impl Strategy<Value = String> {
-    "[a-z][a-z0-9]{0,5}(\\.[a-z][a-z0-9]{0,5}){1,3}".prop_map(|s| s.to_string())
+    "[a-z][a-z0-9]{0,5}(\\.[a-z][a-z0-9]{0,5}){1,3}".prop_map(|s| s)
 }
 
 /// Short reason strings without control characters; long enough to
 /// exercise allocation but short enough to keep failure messages
 /// readable.
 pub fn reason_text() -> impl Strategy<Value = String> {
-    "[ -~]{0,40}".prop_map(|s| s.to_string())
+    "[ -~]{0,40}".prop_map(|s| s)
 }
 
 /// `Severity` variants drawn uniformly.
@@ -139,16 +139,16 @@ const SUSPICIOUS_ARGS: &[&str] = &[
 /// command parses as a single argv entry.
 fn bash_word() -> impl Strategy<Value = String> {
     prop_oneof![
-        4 => "[a-zA-Z0-9_./-]{1,12}".prop_map(|s| s.to_string()),
-        1 => proptest::sample::select(SUSPICIOUS_ARGS).prop_map(|s| s.to_string()),
+        4 => "[a-zA-Z0-9_./-]{1,12}".prop_map(|s| s),
+        1 => proptest::sample::select(SUSPICIOUS_ARGS).prop_map(std::string::ToString::to_string),
     ]
 }
 
 fn bash_head() -> impl Strategy<Value = String> {
     prop_oneof![
-        2 => proptest::sample::select(SAFE_HEADS).prop_map(|s| s.to_string()),
-        2 => proptest::sample::select(DANGEROUS_HEADS).prop_map(|s| s.to_string()),
-        1 => "[a-z][a-z0-9]{0,8}".prop_map(|s| s.to_string()),
+        2 => proptest::sample::select(SAFE_HEADS).prop_map(std::string::ToString::to_string),
+        2 => proptest::sample::select(DANGEROUS_HEADS).prop_map(std::string::ToString::to_string),
+        1 => "[a-z][a-z0-9]{0,8}".prop_map(|s| s),
     ]
 }
 
@@ -187,7 +187,7 @@ pub fn bash_command() -> impl Strategy<Value = String> {
 /// metacharacters the lexer cares about. Used for panic-safety
 /// properties where structure of the output is not asserted.
 pub fn arbitrary_command() -> impl Strategy<Value = String> {
-    "[ -~]{0,40}".prop_map(|s| s.to_string())
+    "[ -~]{0,40}".prop_map(|s| s)
 }
 
 /// Hook tool names. Bash is over-represented because that is the
@@ -196,8 +196,8 @@ fn tool_name() -> impl Strategy<Value = String> {
     prop_oneof![
         4 => Just("Bash".to_string()),
         1 => proptest::sample::select(&["Read", "Write", "Edit", "Glob", "Grep"][..])
-            .prop_map(|s| s.to_string()),
-        1 => "[A-Z][A-Za-z]{0,8}".prop_map(|s| s.to_string()),
+            .prop_map(std::string::ToString::to_string),
+        1 => "[A-Z][A-Za-z]{0,8}".prop_map(|s| s),
     ]
 }
 
@@ -226,8 +226,8 @@ pub fn hook_input() -> impl Strategy<Value = HookInput> {
 pub fn non_bash_hook_input() -> impl Strategy<Value = HookInput> {
     let names = prop_oneof![
         proptest::sample::select(&["Read", "Write", "Edit", "Glob", "Grep"][..])
-            .prop_map(|s| s.to_string()),
-        "[A-Z][A-Za-z]{0,8}".prop_map(|s| s.to_string()),
+            .prop_map(std::string::ToString::to_string),
+        "[A-Z][A-Za-z]{0,8}".prop_map(|s| s),
     ]
     .prop_filter("must not be Bash", |s| s != "Bash");
     prop_oneof![
@@ -281,9 +281,8 @@ pub fn sensitive_kind() -> impl Strategy<Value = SensitiveKind> {
 /// sensitive paths. The mix is heavily biased so that `path` /
 /// `sensitive` extractors actually exercise their non-empty arms.
 pub fn file_path() -> impl Strategy<Value = String> {
-    let safe_abs =
-        "/(?:tmp|repo|home/me|var/log|opt/app)/[a-zA-Z0-9_./-]{0,16}".prop_map(|s| s.to_string());
-    let project_rel = "[a-zA-Z0-9_./-]{1,20}".prop_map(|s| s.to_string());
+    let safe_abs = "/(?:tmp|repo|home/me|var/log|opt/app)/[a-zA-Z0-9_./-]{0,16}".prop_map(|s| s);
+    let project_rel = "[a-zA-Z0-9_./-]{1,20}".prop_map(|s| s);
     let home_form = prop_oneof![
         Just("~".to_string()),
         Just("$HOME".to_string()),
@@ -320,7 +319,7 @@ pub fn file_path() -> impl Strategy<Value = String> {
             "/repo/.claude/settings.json",
         ][..],
     )
-    .prop_map(|s| s.to_string());
+    .prop_map(std::string::ToString::to_string);
     prop_oneof![
         2 => safe_abs,
         2 => project_rel,
@@ -344,7 +343,7 @@ pub fn web_url() -> impl Strategy<Value = String> {
             "https://user:pass@example.com/x",
         ][..],
     )
-    .prop_map(|s| s.to_string());
+    .prop_map(std::string::ToString::to_string);
     let cloud = proptest::sample::select(
         &[
             "http://169.254.169.254/latest/meta-data/",
@@ -352,7 +351,7 @@ pub fn web_url() -> impl Strategy<Value = String> {
             "http://metadata.google.internal/computeMetadata/v1/",
         ][..],
     )
-    .prop_map(|s| s.to_string());
+    .prop_map(std::string::ToString::to_string);
     let weird_scheme = proptest::sample::select(
         &[
             "file:///etc/shadow",
@@ -361,7 +360,7 @@ pub fn web_url() -> impl Strategy<Value = String> {
             "javascript:alert(1)",
         ][..],
     )
-    .prop_map(|s| s.to_string());
+    .prop_map(std::string::ToString::to_string);
     let malformed = proptest::sample::select(
         &[
             "example.com/foo",
@@ -372,8 +371,8 @@ pub fn web_url() -> impl Strategy<Value = String> {
             "",
         ][..],
     )
-    .prop_map(|s| s.to_string());
-    let arbitrary = "[ -~]{0,40}".prop_map(|s| s.to_string());
+    .prop_map(std::string::ToString::to_string);
+    let arbitrary = "[ -~]{0,40}".prop_map(|s| s);
     prop_oneof![
         4 => safe,
         2 => cloud,
@@ -386,7 +385,8 @@ pub fn web_url() -> impl Strategy<Value = String> {
 /// `HookInput` for `Read` / `Edit` / `Write` covering the three tool
 /// names with realistic `file_path` distributions.
 pub fn read_edit_write_input() -> impl Strategy<Value = HookInput> {
-    let tool = proptest::sample::select(&["Read", "Edit", "Write"][..]).prop_map(|s| s.to_string());
+    let tool = proptest::sample::select(&["Read", "Edit", "Write"][..])
+        .prop_map(std::string::ToString::to_string);
     prop_oneof![
         4 => (tool.clone(), file_path()).prop_map(|(tool_name, fp)| HookInput {
             tool_name,
@@ -434,7 +434,7 @@ pub fn richer_hook_input() -> impl Strategy<Value = HookInput> {
         2 => read_edit_write_input(),
         2 => web_fetch_input(),
         1 => "[A-Z][A-Za-z]{0,8}".prop_map(|s| HookInput {
-            tool_name: s.to_string(),
+            tool_name: s,
             tool_input: json!({}),
         }),
     ]
@@ -461,8 +461,9 @@ fn argv_token() -> impl Strategy<Value = String> {
             "-V",
         ][..],
     )
-    .prop_map(|s| s.to_string());
-    let agent = proptest::sample::select(&["claude-code", "codex"][..]).prop_map(|s| s.to_string());
+    .prop_map(std::string::ToString::to_string);
+    let agent = proptest::sample::select(&["claude-code", "codex"][..])
+        .prop_map(std::string::ToString::to_string);
     let flag = proptest::sample::select(
         &[
             "--json",
@@ -479,10 +480,10 @@ fn argv_token() -> impl Strategy<Value = String> {
             "--config=foo.toml",
         ][..],
     )
-    .prop_map(|s| s.to_string());
+    .prop_map(std::string::ToString::to_string);
     let tool = proptest::sample::select(&["Bash", "Read", "Write", "Edit"][..])
-        .prop_map(|s| s.to_string());
-    let arbitrary = "[!-~]{0,16}".prop_map(|s| s.to_string());
+        .prop_map(std::string::ToString::to_string);
+    let arbitrary = "[!-~]{0,16}".prop_map(|s| s);
     prop_oneof![
         4 => subcmd,
         2 => agent,

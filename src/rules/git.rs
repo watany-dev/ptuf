@@ -142,7 +142,7 @@ fn args_after_subcommand<'a>(argv: &'a Argv, sub: &str) -> Vec<&'a str> {
 
 /// Gather the values of git's `-c key=val` / `--config key=val` /
 /// `--config=key=val` global options.
-fn config_overrides<'a>(argv: &'a Argv) -> impl Iterator<Item = &'a str> + 'a {
+fn config_overrides(argv: &Argv) -> impl Iterator<Item = &str> + '_ {
     let mut iter = argv.args.iter();
     std::iter::from_fn(move || {
         while let Some(a) = iter.next() {

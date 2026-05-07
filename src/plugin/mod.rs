@@ -54,34 +54,34 @@ pub enum PluginError {
 impl std::fmt::Display for PluginError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PluginError::Io { path, source } => {
+            Self::Io { path, source } => {
                 write!(f, "plugin: read {}: {source}", path.display())
             }
-            PluginError::Yaml { path, message } => {
+            Self::Yaml { path, message } => {
                 write!(f, "plugin: parse {}: {message}", path.display())
             }
-            PluginError::ApiVersion { path, found } => {
+            Self::ApiVersion { path, found } => {
                 write!(
                     f,
                     "plugin {}: unsupported apiVersion `{found}` (expected `ptuf.dev/v1`)",
                     path.display()
                 )
             }
-            PluginError::Kind { path, found } => {
+            Self::Kind { path, found } => {
                 write!(
                     f,
                     "plugin {}: unsupported kind `{found}` (expected `Plugin`)",
                     path.display()
                 )
             }
-            PluginError::UnsupportedFact { path, name } => {
+            Self::UnsupportedFact { path, name } => {
                 write!(
                     f,
                     "plugin {}: requires fact `{name}` which this version of ptuf does not provide",
                     path.display()
                 )
             }
-            PluginError::Compile {
+            Self::Compile {
                 path,
                 rule_id,
                 message,
@@ -95,7 +95,7 @@ impl std::fmt::Display for PluginError {
 impl std::error::Error for PluginError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            PluginError::Io { source, .. } => Some(source),
+            Self::Io { source, .. } => Some(source),
             _ => None,
         }
     }

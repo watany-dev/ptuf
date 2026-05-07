@@ -290,8 +290,7 @@ impl Report {
                 writeln!(w, "  failClosed:  {}", c.fail_closed)?;
                 let audit_path = crate::config::resolved_audit_path(c)
                     .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "(disabled)".to_string());
+                    .map_or_else(|| "(disabled)".to_string(), |p| p.display().to_string());
                 writeln!(w, "  audit.path:  {audit_path}")?;
             }
             ConfigStatus::Failed(_) => {
@@ -510,7 +509,7 @@ fn build_codex_status(config_path: Option<&Path>, hooks_path: Option<&Path>) -> 
     let hooks_enabled = config_doc["features"]
         .as_table_like()
         .and_then(|table| table.get("codex_hooks"))
-        .and_then(|item| item.as_bool())
+        .and_then(toml_edit::Item::as_bool)
         == Some(true);
     if !hooks_enabled {
         return CodexState::HooksDisabled;

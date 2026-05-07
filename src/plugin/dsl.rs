@@ -16,9 +16,9 @@ use crate::facts::Facts;
 /// match the YAML keys; the leaves match the supported facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WhenNode {
-    All(Vec<WhenNode>),
-    Any(Vec<WhenNode>),
-    Not(Box<WhenNode>),
+    All(Vec<Self>),
+    Any(Vec<Self>),
+    Not(Box<Self>),
     Event(String),
     Tool(String),
     ToolAny(Vec<String>),
@@ -45,12 +45,12 @@ pub enum CompileError {
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CompileError::UnknownKey(k) => write!(f, "unknown key in when expression: {k}"),
-            CompileError::InvalidShape { key, message } => {
+            Self::UnknownKey(k) => write!(f, "unknown key in when expression: {k}"),
+            Self::InvalidShape { key, message } => {
                 write!(f, "invalid shape for `{key}`: {message}")
             }
-            CompileError::EmptyMapping => write!(f, "when expression was empty"),
-            CompileError::NotAMapping => write!(f, "when expression must be a mapping"),
+            Self::EmptyMapping => write!(f, "when expression was empty"),
+            Self::NotAMapping => write!(f, "when expression must be a mapping"),
         }
     }
 }

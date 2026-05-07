@@ -126,7 +126,7 @@ pub(super) fn run_plugin_test<W1: Write, W2: Write>(
                 let _ = writeln!(stderr, "ptuf: failed to write plugin test report");
                 return 1;
             }
-            if report.passed() { 0 } else { 1 }
+            u8::from(!report.passed())
         }
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: {err}");
@@ -173,13 +173,7 @@ pub(super) fn run_doctor<W1: Write, W2: Write>(json: bool, stdout: &mut W1, stde
         crate::doctor::render_doctor(stdout)
     };
     match result {
-        Ok(failure) => {
-            if failure {
-                1
-            } else {
-                0
-            }
-        }
+        Ok(failure) => u8::from(failure),
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: doctor failed: {err}");
             1
@@ -363,7 +357,7 @@ where
             );
         }
     }
-    if report.passed() { 0 } else { 1 }
+    u8::from(!report.passed())
 }
 
 fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: bool, stdout: &mut W) {

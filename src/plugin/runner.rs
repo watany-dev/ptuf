@@ -181,8 +181,7 @@ fn execute_case(prepared: PreparedCase) -> CaseOutcome {
     };
     let command = input
         .bash_command()
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("(tool={})", input.tool_name));
+        .map_or_else(|| format!("(tool={})", input.tool_name), str::to_owned);
     let facts = facts::extract(&input);
     let got = prepared.rule.evaluate(&facts, &input);
     let passed = match prepared.expectation {
@@ -210,8 +209,8 @@ fn clone_raw_rule(raw: &RawRule) -> RawRule {
         reason: raw.reason.clone(),
         remediation: raw.remediation.clone(),
         tests: super::schema::RawTests {
-            deny: raw.tests.deny.to_vec(),
-            allow: raw.tests.allow.to_vec(),
+            deny: raw.tests.deny.clone(),
+            allow: raw.tests.allow.clone(),
         },
     }
 }

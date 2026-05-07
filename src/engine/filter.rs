@@ -74,8 +74,7 @@ fn decision_with_kind(decision: Decision, kind: DecisionKind) -> Decision {
     let rule_id = decision.rule_id().unwrap_or("").to_string();
     let reason = decision
         .reason()
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("Blocked by ptuf rule {rule_id}."));
+        .map_or_else(|| format!("Blocked by ptuf rule {rule_id}."), str::to_owned);
     match kind {
         DecisionKind::Allow => Decision::Allow,
         DecisionKind::Monitor => Decision::Monitor { rule_id },

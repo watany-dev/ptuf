@@ -179,10 +179,10 @@ pub enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConfigError::Io { path, source } => {
+            Self::Io { path, source } => {
                 write!(f, "failed to read {}: {}", path.display(), source)
             }
-            ConfigError::Yaml { path, message } => {
+            Self::Yaml { path, message } => {
                 write!(f, "failed to parse {}: {}", path.display(), message)
             }
         }
@@ -192,8 +192,8 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ConfigError::Io { source, .. } => Some(source),
-            ConfigError::Yaml { .. } => None,
+            Self::Io { source, .. } => Some(source),
+            Self::Yaml { .. } => None,
         }
     }
 }
