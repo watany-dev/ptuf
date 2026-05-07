@@ -1179,6 +1179,52 @@ mod tests {
         assert_eq!(heads, vec!["bash", "xargs", "rm"]);
     }
 
+    // Walk the longest `inner_argv` chain reachable from `argv`. The
+    // root command is not counted; the chain length equals the number
+    // of unrolled wrapper hops.
+    fn deepest_inner_chain(argv: &Argv) -> usize {
+        argv.inner_argv
+            .iter()
+            .map(|a| 1 + deepest_inner_chain(a))
+            .max()
+            .unwrap_or(0)
+    }
+
+    // Boundary: a single `bash -c` produces a chain of length 1 — well
+    // within `nesting_budget = 2`.
+    #[test]
+    fn inner_argv_chain_length_for_single_wrapper_is_one() {
+        let b = parse("bash -c 'rm -rf /'");
+        let chain = deepest_inner_chain(&b.segments[0].commands[0]);
+        assert_eq!(chain, 1);
+    }
+
+    // Boundary: two nested wrappers (`bash -c 'bash -c "..."'`)
+    // produce a chain of length 2 — exactly at the budget. The
+    // innermost `rm` must surface through `commands()` flattening.
+    #[test]
+    fn inner_argv_chain_at_budget_unrolls_both_layers() {
+        let b = parse(r#"bash -c 'bash -c "rm -rf /"'"#);
+        let chain = deepest_inner_chain(&b.segments[0].commands[0]);
+        assert_eq!(chain, 2);
+        let heads: Vec<_> = b
+            .commands()
+            .into_iter()
+            .map(|argv| argv.head.clone())
+            .collect();
+        assert!(heads.contains(&"rm".to_string()), "got heads: {heads:?}");
+    }
+
+    // Boundary: three nested wrappers exceed the budget. The chain
+    // must still be capped at 2 — the parser refuses to descend
+    // further but does not panic.
+    #[test]
+    fn inner_argv_chain_one_above_budget_is_capped_at_two() {
+        let b = parse(r#"bash -c 'bash -c "bash -c \"rm -rf /\""'"#);
+        let chain = deepest_inner_chain(&b.segments[0].commands[0]);
+        assert!(chain <= 2, "chain {chain} exceeded nesting_budget=2");
+    }
+
     #[test]
     fn lone_ampersand_does_not_loop() {
         // Found by PBT: a bare `&` (not part of `&&`) used to cause an
