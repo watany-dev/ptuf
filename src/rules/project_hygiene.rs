@@ -561,6 +561,62 @@ mod tests {
         }
     }
 
+    // --- private helper coverage ---------------------------------------
+
+    #[test]
+    fn uv_denies_pip_install_via_sudo_wrapper() {
+        let input = bash("sudo pip install requests");
+        let facts = facts_with_project(&input, uv_project());
+        let result = LockMismatchUv.evaluate(&facts, &input);
+        assert!(matches!(result, Some(Decision::Deny { .. })));
+    }
+
+    #[test]
+    fn protected_branch_rule_does_not_fire_for_non_git_command() {
+        let input = bash("rm somefile");
+        let facts = facts_with_project(&input, protected_branch());
+        assert!(
+            ProtectedBranchDestructiveGit
+                .evaluate(&facts, &input)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn protected_branch_rule_does_not_fire_for_git_with_no_subcommand() {
+        // `git` (just the bin) has no positional → first_positional()
+        // returns None and `invokes_destructive_git` short-circuits.
+        let input = bash("git");
+        let facts = facts_with_project(&input, protected_branch());
+        assert!(
+            ProtectedBranchDestructiveGit
+                .evaluate(&facts, &input)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn protected_branch_rule_fires_for_git_clean_with_long_force_flag() {
+        // `git clean --force -dx` exercises the `--force` long-flag arm
+        // of `has_clean_fdx` (the short-flag cluster path is covered
+        // separately by `clean_fdx_*` tests in `rules/git.rs`).
+        let input = bash("git clean --force -dx");
+        let facts = facts_with_project(&input, protected_branch());
+        assert!(matches!(
+            ProtectedBranchDestructiveGit.evaluate(&facts, &input),
+            Some(Decision::Deny { .. }),
+        ));
+    }
+
+    #[test]
+    fn pnpm_does_not_fire_for_npm_with_no_subcommand() {
+        // `npm` alone (no positional) → is_install_subcommand returns
+        // false via the `None => false` arm.
+        let input = bash("npm");
+        let facts = facts_with_project(&input, pnpm_project());
+        assert!(LockMismatchPnpm.evaluate(&facts, &input).is_none());
+    }
+
     // --- PBT (minimal) -------------------------------------------------
 
     use proptest::prelude::*;

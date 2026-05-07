@@ -391,6 +391,47 @@ mod tests {
     }
 
     #[test]
+    fn restore_one_propagates_remove_file_error_when_path_is_a_directory() {
+        let dir = workdir("restore-remove-dir");
+        let blocker = dir.join("not-a-file");
+        fs::create_dir_all(&blocker).expect("mkdir blocker");
+
+        let snaps = vec![PathSnapshot {
+            path: blocker.clone(),
+            previous: None,
+        }];
+        let err = restore(&snaps).expect_err("remove_file on a dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_atomically_propagates_rename_error_when_target_is_a_directory() {
+        let dir = workdir("atomic-rename-dir");
+        let target = dir.join("target");
+        fs::create_dir_all(&target).expect("mkdir target");
+
+        let err = write_atomically(&target, b"hello").expect_err("rename onto dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_atomically_propagates_write_error_when_temp_path_is_a_directory() {
+        let dir = workdir("atomic-write-collision");
+        let target = dir.join("target.json");
+        let collision = dir.join(format!("target.json.ptuf-snap.{}.tmp", std::process::id()));
+        fs::create_dir_all(&collision).expect("mkdir collision");
+
+        let err = write_atomically(&target, b"hello").expect_err("write onto dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn sibling_temp_path_falls_back_when_path_has_no_parent() {
         // Bare filename: no parent and a usable file_name; we must get
         // a path back (in the cwd) with the snapshot suffix appended.
