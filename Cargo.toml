@@ -55,6 +55,21 @@ tempfile = "3"
 
 [lints.rust]
 unsafe_code = "forbid"
+non_ascii_idents = "deny"
+unused_must_use = "deny"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+trivial_numeric_casts = "warn"
+variant_size_differences = "warn"
+noop_method_call = "warn"
+meta_variable_misuse = "warn"
+# Higher-noise lints (`unused_qualifications`, `trivial_casts`,
+# `missing_debug_implementations`, `missing_copy_implementations`,
+# `single_use_lifetimes`, `unreachable_pub`) are enabled together with their
+# fixes in the follow-up commit so the tree stays green at every step.
+# `missing_docs` and `let_underscore_drop` are intentionally not enabled:
+# the former would require ~700 doc additions across struct fields/variants,
+# the latter flags ~240 deliberate `let _ = writeln!(...)` discards.
 
 [lints.clippy]
 unwrap_used = "warn"
