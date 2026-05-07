@@ -34,23 +34,53 @@ v0.0.1 ships:
 
 ## Install
 
-### Pre-built binaries (recommended)
+### Verified install (recommended)
+
+Set the exact version you want, download the canonical archive for your
+platform, and verify it before extracting:
+
+```bash
+PTUF_VERSION=v0.0.1
+ASSET=ptuf-x86_64-unknown-linux-musl.tar.gz
+BASE_URL=https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION
+
+curl -LsSfO "$BASE_URL/$ASSET"
+curl -LsSfO "$BASE_URL/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS
+tar -xzf "$ASSET" --strip-components=1
+install -m 0755 ptuf ~/.cargo/bin/ptuf
+```
+
+Optional provenance check with the GitHub CLI:
+
+```bash
+gh attestation verify "$ASSET" \
+  --repo watany-dev/ptuf \
+  --signer-workflow watany-dev/ptuf/.github/workflows/release.yml \
+  --source-ref refs/tags/$PTUF_VERSION
+```
+
+Windows users can download `ptuf-x86_64-pc-windows-msvc.zip` and verify it
+against the same `SHA256SUMS` file.
+
+### Installer scripts
 
 Linux / macOS:
 
 ```bash
-curl -LsSf https://github.com/watany-dev/ptuf/releases/latest/download/ptuf-installer.sh | sh
+PTUF_VERSION=v0.0.1
+curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
 ```
 
 Windows (PowerShell):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/latest/download/ptuf-installer.ps1 | iex"
+$env:PTUF_VERSION = "v0.0.1"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/download/$env:PTUF_VERSION/ptuf-installer.ps1 | iex"
 ```
 
-Or download an archive for your platform from
-[GitHub Releases](https://github.com/watany-dev/ptuf/releases) and place the
-`ptuf` binary on your `PATH`.
+Installer scripts remain available for compatibility, but the verified archive
+path above is preferred for pinned installs.
 
 ### From crates.io
 

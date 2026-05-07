@@ -40,16 +40,33 @@
    ```
 
 6. Watch GitHub Actions:
-   - `Release` workflow builds 5 platforms, creates a GitHub Release, attaches
-     archives + `ptuf-installer.sh` + `ptuf-installer.ps1` + checksums.
+   - `Release` workflow builds 6 targets, creates a GitHub Release, attaches
+     cargo-dist archives/installers plus the canonical verified-install assets:
+     `ptuf-x86_64-unknown-linux-musl.tar.gz`,
+     `ptuf-aarch64-apple-darwin.tar.gz`,
+     `ptuf-x86_64-pc-windows-msvc.zip`, `SHA256SUMS`, and
+     `ptuf-sbom.spdx.json`.
+   - The release workflow generates `SHA256SUMS` for the canonical archives,
+     installer scripts, and SBOM, then publishes GitHub artifact attestations
+     using the SPDX JSON SBOM as the predicate.
    - On `release: published`, `Publish to crates.io` runs `cargo publish`
      (skipped automatically for prereleases).
 
 7. Smoke-test post-release:
 
    ```bash
-   curl -LsSf https://github.com/watany-dev/ptuf/releases/latest/download/ptuf-installer.sh | sh
-   ptuf --version
+   PTUF_VERSION=vX.Y.Z
+   ASSET=ptuf-x86_64-unknown-linux-musl.tar.gz
+   BASE_URL=https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION
+   curl -LsSfO "$BASE_URL/$ASSET"
+   curl -LsSfO "$BASE_URL/SHA256SUMS"
+   sha256sum --check --ignore-missing SHA256SUMS
+   tar -xzf "$ASSET" --strip-components=1
+   ./ptuf --version
+   gh attestation verify "$ASSET" \
+     --repo watany-dev/ptuf \
+     --signer-workflow watany-dev/ptuf/.github/workflows/release.yml \
+     --source-ref refs/tags/$PTUF_VERSION
    ptuf doctor
    ```
 
@@ -73,14 +90,17 @@ Whenever you bump cargo-dist or change `dist-workspace.toml`:
 dist generate
 ```
 
-This rewrites `.github/workflows/release.yml`. Do **not** hand-edit that file —
-keep release.yml under cargo-dist control and put any custom CI in
-`publish-crates.yml` or sibling workflows.
+This rewrites `.github/workflows/release.yml`. Do **not** hand-edit that file
+casually. Keep the generated structure under cargo-dist control, then re-apply
+the documented hardening and verified artifact patches listed in
+`CONTRIBUTING.md`.
 
-## Why `lld` is in the apt deps
+## Why `lld` and `musl-tools` are in the apt deps
 
 `.cargo/config.toml` pins the linker for `x86_64-unknown-linux-gnu` to `lld`
 for fast local Linux builds. `dist-workspace.toml` mirrors that as
 `[dist.dependencies.apt] lld = "*"` so the GitHub Linux runners install it
 before invoking `cargo build`. The same dep is installed in
-`publish-crates.yml` for the `cargo publish` verify step.
+`publish-crates.yml` for the `cargo publish` verify step. `musl-tools` is
+installed so the release workflow can build the canonical
+`x86_64-unknown-linux-musl` archive.
