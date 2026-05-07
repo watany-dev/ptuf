@@ -2457,6 +2457,8 @@ rules:
                     root: Some(PathBuf::from("/r")),
                     hooks_path: Some(PathBuf::from("/h.json")),
                     config_path: Some(PathBuf::from("/c.toml")),
+                    verify: false,
+                    json: false,
                 }),
             }
         );
@@ -2601,6 +2603,8 @@ rules:
             dry_run: false,
             options: InitOptions::ClaudeCode(ClaudeInitOptions {
                 settings_path: Some(path.clone()),
+                verify: false,
+                json: false,
             }),
         };
 
