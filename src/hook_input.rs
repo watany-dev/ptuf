@@ -143,7 +143,7 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
             {
                 out.push(path);
             }
-        }
+        },
         name if is_mcp(name) => {
             if let Some(path) = input
                 .tool_input
@@ -176,8 +176,8 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
                     }
                 }
             }
-        }
-        _ => {}
+        },
+        _ => {},
     }
     out
 }
@@ -210,7 +210,6 @@ pub(crate) fn sample(tool: &str) -> HookInput {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::testing::proptest::hook_input;

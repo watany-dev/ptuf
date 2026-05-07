@@ -86,7 +86,7 @@ pub(crate) fn build_engine_or_fail_closed<W: Write>(
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: could not load policy: {err}");
             Err(policy_load_failed_deny())
-        }
+        },
     }
 }
 
@@ -205,17 +205,16 @@ pub fn run<R: Read, W1: Write, W2: Write>(
         Command::Help => {
             let _ = writeln!(stdout, "{HELP}");
             0
-        }
+        },
         Command::Version => {
             let _ = writeln!(stdout, "ptuf {}", env!("CARGO_PKG_VERSION"));
             0
-        }
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::HookAgent;
 

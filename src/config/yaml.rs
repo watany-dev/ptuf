@@ -41,7 +41,6 @@ pub fn load_path(path: &Path) -> Result<RawConfig, ConfigError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::config::Mode;
@@ -163,7 +162,7 @@ audit:
                     message.contains("wat") || message.contains("unknown"),
                     "unexpected message: {message}"
                 );
-            }
+            },
             other => panic!("expected Yaml error, got {other:?}"),
         }
     }
@@ -201,10 +200,7 @@ audit:
         let path = PathBuf::from("/nonexistent/ptuf-load-path-does-not-exist.yaml");
         let err = load_path(&path).expect_err("should fail");
         match err {
-            ConfigError::Io {
-                path: returned,
-                source: _,
-            } => assert_eq!(returned, path),
+            ConfigError::Io { path: returned, .. } => assert_eq!(returned, path),
             other => panic!("expected Io error, got {other:?}"),
         }
     }

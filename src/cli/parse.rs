@@ -51,10 +51,10 @@ where
             "--settings" => {
                 let value = iter.next().ok_or(ParseError::MissingValue("--settings"))?;
                 settings_path = Some(PathBuf::from(value));
-            }
+            },
             other if other.starts_with("--settings=") => {
                 settings_path = Some(PathBuf::from(other.trim_start_matches("--settings=")));
-            }
+            },
             other => return Err(ParseError::UnexpectedArgument(other.to_string())),
         }
     }
@@ -87,24 +87,24 @@ where
             "--root" => {
                 let value = iter.next().ok_or(ParseError::MissingValue("--root"))?;
                 root = Some(PathBuf::from(value));
-            }
+            },
             "--hooks" => {
                 let value = iter.next().ok_or(ParseError::MissingValue("--hooks"))?;
                 hooks_path = Some(PathBuf::from(value));
-            }
+            },
             "--config" => {
                 let value = iter.next().ok_or(ParseError::MissingValue("--config"))?;
                 config_path = Some(PathBuf::from(value));
-            }
+            },
             other if other.starts_with("--root=") => {
                 root = Some(PathBuf::from(other.trim_start_matches("--root=")));
-            }
+            },
             other if other.starts_with("--hooks=") => {
                 hooks_path = Some(PathBuf::from(other.trim_start_matches("--hooks=")));
-            }
+            },
             other if other.starts_with("--config=") => {
                 config_path = Some(PathBuf::from(other.trim_start_matches("--config=")));
-            }
+            },
             other => return Err(ParseError::UnexpectedArgument(other.to_string())),
         }
     }
@@ -165,16 +165,16 @@ where
             "--tool" => {
                 let value = iter.next().ok_or(ParseError::MissingValue("--tool"))?;
                 tool = Some(value.clone());
-            }
+            },
             other if other.starts_with("--tool=") => {
                 tool = Some(other.trim_start_matches("--tool=").to_string());
-            }
+            },
             other if command.is_none() => {
                 command = Some(other.to_string());
-            }
+            },
             other => {
                 return Err(ParseError::UnexpectedArgument(other.to_string()));
-            }
+            },
         }
     }
     let tool = tool.ok_or(ParseError::MissingValue("--tool"))?;
@@ -201,7 +201,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use std::path::PathBuf;
 

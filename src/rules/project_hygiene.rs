@@ -180,7 +180,7 @@ fn is_npm_or_yarn_install(argv: &Argv) -> bool {
         // `yarn` with no subcommand defaults to `yarn install`.
         return matches!(
             first_positional(argv),
-            None | Some("install") | Some("add") | Some("ci")
+            None | Some("install" | "add" | "ci")
         );
     }
     false
@@ -274,7 +274,6 @@ fn first_positional(argv: &Argv) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::facts::project::ProjectFacts;

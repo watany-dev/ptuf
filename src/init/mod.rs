@@ -39,20 +39,20 @@ impl std::fmt::Display for InitError {
             Self::UnknownAgent(a) => write!(f, "unknown agent: {a}"),
             Self::Io { path, source } => {
                 write!(f, "io error at {}: {source}", path.display())
-            }
+            },
             Self::Json { path, message } => {
                 write!(f, "invalid JSON in {}: {message}", path.display())
-            }
+            },
             Self::Toml { path, message } => {
                 write!(f, "invalid TOML in {}: {message}", path.display())
-            }
+            },
             Self::Schema { path, message } => {
                 write!(
                     f,
                     "unexpected settings shape in {}: {message}",
                     path.display()
                 )
-            }
+            },
             Self::HomeNotSet => write!(f, "$HOME is not set; pass --settings <PATH> explicitly"),
             Self::RepoRootNotFound => write!(
                 f,
@@ -124,7 +124,7 @@ pub(crate) fn capture(paths: &[&Path]) -> Result<Vec<PathSnapshot>, InitError> {
                     path: path.to_path_buf(),
                     source: e,
                 });
-            }
+            },
         };
         out.push(PathSnapshot {
             path: path.to_path_buf(),
@@ -189,10 +189,10 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
 }
 
 fn sibling_temp_path(path: &Path) -> PathBuf {
-    let mut name = path
-        .file_name()
-        .map(|s| s.to_os_string())
-        .unwrap_or_else(|| std::ffi::OsString::from("snapshot.tmp"));
+    let mut name = path.file_name().map_or_else(
+        || std::ffi::OsString::from("snapshot.tmp"),
+        std::ffi::OsStr::to_os_string,
+    );
     name.push(format!(".ptuf-snap.{}.tmp", std::process::id()));
     match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.join(name),
@@ -202,7 +202,6 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 
@@ -353,7 +352,7 @@ mod tests {
                         || kind == ErrorKind::Other,
                     "unexpected error kind: {kind:?}",
                 );
-            }
+            },
             other => panic!("expected Io error, got {other:?}"),
         }
 

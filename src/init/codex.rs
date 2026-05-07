@@ -238,7 +238,10 @@ fn ensure_hooks_enabled(doc: &mut DocumentMut) -> bool {
     let Some(features) = doc["features"].as_table_like_mut() else {
         return false;
     };
-    let already_enabled = features.get("codex_hooks").and_then(|item| item.as_bool()) == Some(true);
+    let already_enabled = features
+        .get("codex_hooks")
+        .and_then(toml_edit::Item::as_bool)
+        == Some(true);
     if already_enabled {
         return false;
     }
@@ -295,10 +298,10 @@ fn write_toml_atomically(path: &Path, doc: &DocumentMut) -> Result<(), InitError
 }
 
 fn sibling_temp_path(path: &Path) -> PathBuf {
-    let mut name = path
-        .file_name()
-        .map(|s| s.to_os_string())
-        .unwrap_or_else(|| std::ffi::OsString::from("hooks.json"));
+    let mut name = path.file_name().map_or_else(
+        || std::ffi::OsString::from("hooks.json"),
+        std::ffi::OsStr::to_os_string,
+    );
     name.push(format!(".ptuf.{}.tmp", std::process::id()));
     match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.join(name),
@@ -308,13 +311,11 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
 
 fn sibling_path(path: &Path, file_name: &str) -> PathBuf {
     path.parent()
-        .map(|parent| parent.join(file_name))
-        .unwrap_or_else(|| PathBuf::from(file_name))
+        .map_or_else(|| PathBuf::from(file_name), |parent| parent.join(file_name))
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 
@@ -683,7 +684,7 @@ mod tests {
         match err {
             InitError::Schema { message, .. } => {
                 assert!(message.contains("hooks"), "got: {message}");
-            }
+            },
             other => panic!("unexpected: {other:?}"),
         }
         let _ = fs::remove_dir_all(&dir);
@@ -707,7 +708,7 @@ mod tests {
         match err {
             InitError::Schema { message, .. } => {
                 assert!(message.contains("PreToolUse"), "got: {message}");
-            }
+            },
             other => panic!("unexpected: {other:?}"),
         }
         let _ = fs::remove_dir_all(&dir);

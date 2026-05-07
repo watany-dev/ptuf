@@ -243,10 +243,10 @@ fn write_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
 }
 
 fn sibling_temp_path(path: &Path) -> PathBuf {
-    let mut name = path
-        .file_name()
-        .map(|s| s.to_os_string())
-        .unwrap_or_else(|| std::ffi::OsString::from("settings.json"));
+    let mut name = path.file_name().map_or_else(
+        || std::ffi::OsString::from("settings.json"),
+        std::ffi::OsStr::to_os_string,
+    );
     name.push(format!(".ptuf.{}.tmp", std::process::id()));
     match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.join(name),
@@ -256,7 +256,6 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 
@@ -377,7 +376,7 @@ mod tests {
         fs::write(&path, "{not json").unwrap();
         let err = install(&path, "/x/ptuf", false).unwrap_err();
         match err {
-            InitError::Json { .. } => {}
+            InitError::Json { .. } => {},
             other => panic!("unexpected: {other:?}"),
         }
         assert_eq!(read(&path), "{not json", "file untouched");
@@ -403,7 +402,7 @@ mod tests {
         match err {
             InitError::Schema { message, .. } => {
                 assert!(message.contains("PreToolUse"), "got: {message}");
-            }
+            },
             other => panic!("unexpected: {other:?}"),
         }
         let _ = fs::remove_dir_all(&dir);
@@ -418,7 +417,7 @@ mod tests {
         match err {
             InitError::Schema { message, .. } => {
                 assert!(message.contains("hooks"), "got: {message}");
-            }
+            },
             other => panic!("unexpected: {other:?}"),
         }
         let _ = fs::remove_dir_all(&dir);

@@ -74,7 +74,10 @@ pub struct SensitivePath {
     pub raw: String,
 }
 
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "static pattern literal validated by tests"
+)]
 fn build(pat: &str) -> Regex {
     Regex::new(pat).expect("sensitive variant regex")
 }
@@ -128,7 +131,6 @@ pub fn classify(token: &str) -> Vec<SensitivePath> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 

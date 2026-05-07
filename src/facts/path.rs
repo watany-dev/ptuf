@@ -112,7 +112,7 @@ pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathF
                 .into_iter()
                 .collect();
             (tool, values)
-        }
+        },
         "apply_patch" => {
             let values = input
                 .tool_input
@@ -124,7 +124,7 @@ pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathF
                 .map(|raw| (raw, PathOrigin::ApplyPatch))
                 .collect();
             (PathTool::ApplyPatch, values)
-        }
+        },
         _ if input.is_mcp_tool() => (PathTool::Mcp, collect_mcp_paths(&input.tool_input)),
         _ => return Vec::new(),
     };
@@ -313,7 +313,6 @@ fn expand_home(raw: &str, env: &dyn EnvLookup) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use std::collections::HashMap;

@@ -251,7 +251,6 @@ pub fn render_doctor_json<W: Write>(stdout: &mut W) -> std::io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use std::fs;
     use std::path::PathBuf;

@@ -338,7 +338,6 @@ mod tests {
 
     #[test]
     fn rule_overrides_merge_per_rule_id() {
-        #![allow(clippy::expect_used)]
         use super::super::schema::RawRuleOverride;
         let lower = RawConfig {
             rules: BTreeMap::from([(

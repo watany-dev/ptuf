@@ -74,13 +74,12 @@ impl EngineBuilder {
     /// [`EngineError::Plugin`].
     pub fn build(self) -> Result<Engine, EngineError> {
         let config = self.config.unwrap_or_default();
-        let plugins = match self.plugins {
-            Some(p) => p,
-            None => {
-                let mut set = PluginSet::new();
-                set.load_paths(&config.plugin_paths)?;
-                set
-            }
+        let plugins = if let Some(p) = self.plugins {
+            p
+        } else {
+            let mut set = PluginSet::new();
+            set.load_paths(&config.plugin_paths)?;
+            set
         };
         let protected = ProtectedPaths::collect(self.repo_root.as_deref(), &config);
         let plugin_versions = compute_plugin_versions(&plugins);
@@ -103,7 +102,6 @@ impl EngineBuilder {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use std::path::PathBuf;
     use std::sync::Arc;

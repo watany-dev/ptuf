@@ -273,10 +273,10 @@ impl Report {
                     };
                     writeln!(w, "       {:<60} ({label})", path.display().to_string())?;
                 }
-            }
+            },
             ConfigStatus::Failed(err) => {
                 writeln!(w, "  ✗ config load failed: {err}")?;
-            }
+            },
         }
         writeln!(w)?;
         Ok(())
@@ -290,13 +290,12 @@ impl Report {
                 writeln!(w, "  failClosed:  {}", c.fail_closed)?;
                 let audit_path = crate::config::resolved_audit_path(c)
                     .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "(disabled)".to_string());
+                    .map_or_else(|| "(disabled)".to_string(), |p| p.display().to_string());
                 writeln!(w, "  audit.path:  {audit_path}")?;
-            }
+            },
             ConfigStatus::Failed(_) => {
                 writeln!(w, "  ✗ unavailable (see Project section)")?;
-            }
+            },
         }
         writeln!(w)?;
         Ok(())
@@ -322,7 +321,7 @@ impl Report {
                 )?,
                 PluginStatus::Failed { path, error } => {
                     writeln!(w, "  ✗ {}: {error}", path.display())?;
-                }
+                },
             }
         }
         writeln!(w)?;
@@ -337,14 +336,14 @@ impl Report {
                     w,
                     "  ⚠ $HOME not set; cannot locate ~/.claude/settings.json"
                 )?;
-            }
+            },
             (Some(path), ClaudeState::Missing) => {
                 writeln!(
                     w,
                     "  ⚠ {} not present (run `ptuf init claude-code`)",
                     path.display()
                 )?;
-            }
+            },
             (Some(path), ClaudeState::HookRegistered { matcher }) => {
                 writeln!(w, "  ✓ {} present", path.display())?;
                 let matcher = matcher
@@ -352,20 +351,20 @@ impl Report {
                     .map(|m| format!(" (matcher: {m:?})"))
                     .unwrap_or_default();
                 writeln!(w, "  ✓ ptuf hook registered{matcher}")?;
-            }
+            },
             (Some(path), ClaudeState::HookMissing) => {
                 writeln!(w, "  ✓ {} present", path.display())?;
                 writeln!(
                     w,
                     "  ⚠ no ptuf hook registered (run `ptuf init claude-code`)"
                 )?;
-            }
+            },
             (Some(path), ClaudeState::InvalidJson(msg)) => {
                 writeln!(w, "  ✗ {} invalid JSON: {msg}", path.display())?;
-            }
+            },
             (Some(path), ClaudeState::Io(msg)) => {
                 writeln!(w, "  ✗ {} unreadable: {msg}", path.display())?;
-            }
+            },
         }
         Ok(())
     }
@@ -383,21 +382,21 @@ impl Report {
                     w,
                     "  ⚠ $HOME not set and no repository root detected; cannot locate Codex hook files"
                 )?;
-            }
+            },
             (Some(config_path), _, CodexState::ConfigMissing) => {
                 writeln!(
                     w,
                     "  ⚠ {} not present (run `ptuf init codex`)",
                     config_path.display()
                 )?;
-            }
+            },
             (_, Some(hooks_path), CodexState::HooksMissing) => {
                 writeln!(
                     w,
                     "  ⚠ {} not present (run `ptuf init codex`)",
                     hooks_path.display()
                 )?;
-            }
+            },
             (Some(config_path), Some(hooks_path), CodexState::HooksDisabled) => {
                 writeln!(w, "  ✓ {} present", config_path.display())?;
                 writeln!(w, "  ✓ {} present", hooks_path.display())?;
@@ -405,7 +404,7 @@ impl Report {
                     w,
                     "  ⚠ features.codex_hooks is disabled (run `ptuf init codex`)"
                 )?;
-            }
+            },
             (Some(config_path), Some(hooks_path), CodexState::HookRegistered { matcher }) => {
                 writeln!(w, "  ✓ {} present", config_path.display())?;
                 writeln!(w, "  ✓ {} present", hooks_path.display())?;
@@ -414,25 +413,25 @@ impl Report {
                     .map(|m| format!(" (matcher: {m:?})"))
                     .unwrap_or_default();
                 writeln!(w, "  ✓ ptuf hook registered{matcher}")?;
-            }
+            },
             (Some(config_path), Some(hooks_path), CodexState::HookMissing) => {
                 writeln!(w, "  ✓ {} present", config_path.display())?;
                 writeln!(w, "  ✓ {} present", hooks_path.display())?;
                 writeln!(w, "  ⚠ no ptuf hook registered (run `ptuf init codex`)")?;
-            }
+            },
             (Some(config_path), _, CodexState::InvalidConfig(msg)) => {
                 writeln!(w, "  ✗ {} invalid TOML: {msg}", config_path.display())?;
-            }
+            },
             (_, Some(hooks_path), CodexState::InvalidHooks(msg)) => {
                 writeln!(w, "  ✗ {} invalid JSON: {msg}", hooks_path.display())?;
-            }
+            },
             (Some(config_path), _, CodexState::Io(msg)) => {
                 writeln!(w, "  ✗ {} unreadable: {msg}", config_path.display())?;
-            }
+            },
             (_, Some(hooks_path), CodexState::Io(msg)) => {
                 writeln!(w, "  ✗ {} unreadable: {msg}", hooks_path.display())?;
-            }
-            _ => {}
+            },
+            _ => {},
         }
         Ok(())
     }
@@ -510,7 +509,7 @@ fn build_codex_status(config_path: Option<&Path>, hooks_path: Option<&Path>) -> 
     let hooks_enabled = config_doc["features"]
         .as_table_like()
         .and_then(|table| table.get("codex_hooks"))
-        .and_then(|item| item.as_bool())
+        .and_then(toml_edit::Item::as_bool)
         == Some(true);
     if !hooks_enabled {
         return CodexState::HooksDisabled;
@@ -584,7 +583,6 @@ pub(super) fn gather_live_report() -> Report {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use std::fs;
