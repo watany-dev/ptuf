@@ -603,10 +603,6 @@ fn project_hygiene_denies_destructive_git_on_protected_branch() {
     );
 }
 
-// `ptuf plugin test <PATH>` returns 0 when every embedded `tests:` case
-// matches its rule's evaluation. There was no end-to-end coverage of
-// the binary subprocess for this subcommand before — only the in-crate
-// `run_plugin_test` unit tests.
 #[test]
 fn plugin_test_subcommand_passes_for_valid_plugin_via_binary() {
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -642,8 +638,6 @@ rules:
     assert!(stdout.contains("1 passed"), "stdout: {stdout}");
 }
 
-// A plugin whose embedded `tests.deny` case fails to match must surface
-// exit code 1 and a `FAIL` marker so authors notice mismatches in CI.
 #[test]
 fn plugin_test_subcommand_fails_for_assertion_mismatch_via_binary() {
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -677,10 +671,6 @@ rules:
     assert!(stdout.contains("FAIL"), "stdout: {stdout}");
 }
 
-// `init codex --verify` is the production parallel of the corresponding
-// `init claude-code --verify` smoke test: it must install `hooks.json` +
-// `config.toml`, run the synthetic deny payload through the freshly
-// installed binary, and exit 0 with both files persisted.
 #[test]
 fn init_codex_verify_writes_files_and_passes_synthetic_deny() {
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -715,9 +705,6 @@ fn init_codex_verify_writes_files_and_passes_synthetic_deny() {
     );
 }
 
-// `init codex --verify --json` mirrors the JSON shape exercised by the
-// Claude Code variant and lets CI consumers parse the verify outcome
-// without relying on the freeform text rendering.
 #[test]
 fn init_codex_verify_json_passes_checks() {
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -747,10 +734,8 @@ fn init_codex_verify_json_passes_checks() {
     assert_eq!(value["verify"]["failClosed"]["status"], "passed");
 }
 
-// Running `init claude-code` twice in a row must produce the same
-// settings.json byte-for-byte. A regression that re-encodes the JSON on
-// the second run (different key order, whitespace) would surface as a
-// noisy diff on every install — this test pins the invariant.
+// A second install must not re-encode settings.json (key order /
+// whitespace), so the file remains byte-identical.
 #[test]
 fn init_claude_code_real_install_is_byte_for_byte_idempotent() {
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -774,9 +759,8 @@ fn init_claude_code_real_install_is_byte_for_byte_idempotent() {
     );
 }
 
-// Same idempotency invariant for the Codex install: the second run
-// must leave both `hooks.json` and `config.toml` byte-identical with
-// the first run's output.
+// Same byte-for-byte idempotency invariant for the Codex install
+// (hooks.json and config.toml).
 #[test]
 fn init_codex_real_install_is_byte_for_byte_idempotent() {
     let dir = tempfile::TempDir::new().expect("tempdir");

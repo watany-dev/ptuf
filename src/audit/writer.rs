@@ -143,46 +143,27 @@ mod tests {
         assert!(dyn_err.source().is_none());
     }
 
-    // open_append must surface the underlying io::Error when its
-    // intended parent is a regular file rather than a directory.
-    // create_dir_all returns NotADirectory / AlreadyExists on most
-    // platforms; we accept any error.
     #[test]
     fn open_append_returns_io_error_when_parent_is_a_regular_file() {
         let dir = tempfile::TempDir::new().expect("tempdir");
         let blocker = dir.path().join("audit-not-a-dir");
         std::fs::write(&blocker, b"x").expect("write blocker");
-        // `audit-not-a-dir/audit.jsonl` requires `audit-not-a-dir` to be
-        // a directory, but it's a regular file, so create_dir_all (or
-        // the open call) must fail.
         let path = blocker.join("audit.jsonl");
-        let err = open_append(&path).expect_err("expected io error");
-        // The exact ErrorKind varies (NotADirectory on Unix,
-        // AlreadyExists / Other on some platforms). All we need is
-        // that this returns Err without panicking.
-        let _ = err;
+        open_append(&path).expect_err("expected io error");
     }
 
-    // Empty path component (path == "") is treated as parent-less; we
-    // get an io::Error from the OpenOptions call rather than panicking.
     #[test]
     fn open_append_returns_io_error_for_empty_path() {
-        let path = Path::new("");
-        let err = open_append(path).expect_err("expected io error");
-        let _ = err;
+        open_append(Path::new("")).expect_err("expected io error");
     }
 
-    // A directory whose write/exec bits are cleared should make file
-    // creation fail with PermissionDenied. Skipped under root because
-    // root bypasses the permission check.
+    // Skipped under root because root bypasses the POSIX permission
+    // check, which would yield a false negative.
     #[cfg(unix)]
     #[test]
     fn open_append_returns_permission_denied_for_unwritable_parent() {
         use std::os::unix::fs::PermissionsExt;
 
-        // Skip when running as root — POSIX permission bits are
-        // ineffective and the test would yield a false negative.
-        // Using libc::geteuid via a tiny helper avoids unsafe.
         if euid_is_root() {
             return;
         }
@@ -210,10 +191,10 @@ mod tests {
         );
     }
 
+    // `id -u` avoids touching `unsafe` (the crate forbids it); on
+    // systems without `id` we conservatively return false.
     #[cfg(unix)]
     fn euid_is_root() -> bool {
-        // `id -u` avoids touching `unsafe`; on systems without `id`
-        // we conservatively return false (test runs).
         std::process::Command::new("id")
             .arg("-u")
             .output()

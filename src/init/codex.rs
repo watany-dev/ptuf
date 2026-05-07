@@ -532,10 +532,8 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    // Non-destructive on hooks.json: a malformed file must remain
-    // untouched byte-for-byte after install fails. The same invariant
-    // is asserted for claude_code in
-    // `install_rejects_invalid_json_without_overwriting`.
+    // A malformed hooks.json must remain untouched byte-for-byte after
+    // install fails — the writer does not partially overwrite.
     #[test]
     fn install_does_not_overwrite_invalid_hooks_json() {
         let dir = workdir("bad-hooks-untouched");
@@ -568,8 +566,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    // Non-destructive on config.toml: a malformed config must remain
-    // untouched byte-for-byte after install fails.
+    // Same non-destructive invariant for config.toml.
     #[test]
     fn install_does_not_overwrite_invalid_config_toml() {
         let dir = workdir("bad-config-untouched");

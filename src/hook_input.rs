@@ -584,7 +584,6 @@ mod tests {
         // recognised by `collect_event_paths`.
         #[test]
         fn pbt_mcp_nested_paths_are_extracted_at_supported_depths(
-            depth in 0u8..=2,
             payload in crate::testing::proptest::mcp_nested_input(2),
         ) {
             let input = HookInput {
@@ -592,9 +591,6 @@ mod tests {
                 tool_input: payload.clone(),
             };
             let event = input.event();
-            // The generator at depth ≤ 2 always produces exactly one
-            // recognised key shape, so at least one path must surface.
-            let _ = depth;
             prop_assert!(
                 !event.paths.is_empty(),
                 "expected MCP-nested paths to surface for payload {payload}",
@@ -619,21 +615,14 @@ mod tests {
             prop_assert!(input.event().paths.is_empty());
         }
 
-        // ----- Invalid UTF-8 / malformed payload fail-closed ----------
-
-        // Arbitrary bytes (including invalid UTF-8 / lone surrogates)
-        // fed to `serde_json::from_slice::<RawHookInput>` must never
-        // panic — the engine's hook reader relies on this returning Err
-        // so it can fail-closed with a `core.engine.invalid-payload`
-        // deny.
+        // Arbitrary bytes (incl. invalid UTF-8 / lone surrogates) must
+        // never panic in `serde_json::from_slice`. The contract is
+        // panic-safety, not always-Err — a fuzzed input can happen to
+        // be valid JSON matching `RawHookInput`.
         #[test]
         fn pbt_invalid_utf8_payload_returns_err_or_value(
             bytes in crate::testing::proptest::arbitrary_utf8_bytes(),
         ) {
-            // We deliberately do not assert Err: a fuzzed byte string
-            // can incidentally happen to be a valid JSON object whose
-            // shape matches `RawHookInput`. The contract is panic
-            // safety, not always-Err.
             let _ = serde_json::from_slice::<RawHookInput>(&bytes);
             let _ = serde_json::from_slice::<HookInput>(&bytes);
         }

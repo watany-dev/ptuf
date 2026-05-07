@@ -300,9 +300,11 @@ mod tests {
         }
 
         // Every decision returned by evaluate_all carries a rule_id that
-        // matches one of the static built-in rule ids.
+        // matches one of the static built-in rule ids, and never has the
+        // `Allow` kind (rules return None for "no opinion").
         #[test]
         fn pbt_decision_rule_ids_are_known(input in richer_hook_input()) {
+            use crate::decision::DecisionKind;
             let facts = crate::facts::extract(&input);
             let known: Vec<&str> = RULES.iter().map(|r| r.id()).collect();
             for d in evaluate_all(&facts, &input) {
@@ -310,6 +312,10 @@ mod tests {
                 prop_assert!(
                     known.contains(&id),
                     "unknown rule_id {id:?} (not in built-in slice)",
+                );
+                prop_assert!(
+                    !matches!(d.kind(), DecisionKind::Allow),
+                    "rule emitted Decision::Allow: {d:?}",
                 );
             }
         }

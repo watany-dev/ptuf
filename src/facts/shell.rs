@@ -1179,9 +1179,8 @@ mod tests {
         assert_eq!(heads, vec!["bash", "xargs", "rm"]);
     }
 
-    // Walk the longest `inner_argv` chain reachable from `argv`. The
-    // root command is not counted; the chain length equals the number
-    // of unrolled wrapper hops.
+    // Length of the longest `inner_argv` chain reachable from `argv`.
+    // Root is not counted; equals the number of unrolled wrapper hops.
     fn deepest_inner_chain(argv: &Argv) -> usize {
         argv.inner_argv
             .iter()
@@ -1190,8 +1189,6 @@ mod tests {
             .unwrap_or(0)
     }
 
-    // Boundary: a single `bash -c` produces a chain of length 1 — well
-    // within `nesting_budget = 2`.
     #[test]
     fn inner_argv_chain_length_for_single_wrapper_is_one() {
         let b = parse("bash -c 'rm -rf /'");
@@ -1199,9 +1196,6 @@ mod tests {
         assert_eq!(chain, 1);
     }
 
-    // Boundary: two nested wrappers (`bash -c 'bash -c "..."'`)
-    // produce a chain of length 2 — exactly at the budget. The
-    // innermost `rm` must surface through `commands()` flattening.
     #[test]
     fn inner_argv_chain_at_budget_unrolls_both_layers() {
         let b = parse(r#"bash -c 'bash -c "rm -rf /"'"#);
@@ -1215,9 +1209,6 @@ mod tests {
         assert!(heads.contains(&"rm".to_string()), "got heads: {heads:?}");
     }
 
-    // Boundary: three nested wrappers exceed the budget. The chain
-    // must still be capped at 2 — the parser refuses to descend
-    // further but does not panic.
     #[test]
     fn inner_argv_chain_one_above_budget_is_capped_at_two() {
         let b = parse(r#"bash -c 'bash -c "bash -c \"rm -rf /\""'"#);
@@ -1612,23 +1603,11 @@ mod tests {
         // exceed the static `nesting_budget` (currently 2, see
         // `parse(...)` in this file).
         #[test]
-        fn pbt_inner_argv_chain_is_bounded(
-            depth in 0usize..=4,
-            cmd in bash_wrapper_nested(4)
-        ) {
-            let _ = depth; // keep the strategy paired but sample independently.
+        fn pbt_inner_argv_chain_is_bounded(cmd in bash_wrapper_nested(4)) {
             let b = parse(&cmd);
-            // Walk the deepest `inner_argv` chain reachable from the root.
-            fn deepest(argv: &Argv) -> usize {
-                argv.inner_argv
-                    .iter()
-                    .map(|a| 1 + deepest(a))
-                    .max()
-                    .unwrap_or(0)
-            }
             for pipe in &b.segments {
                 for argv in &pipe.commands {
-                    let chain = deepest(argv);
+                    let chain = deepest_inner_chain(argv);
                     prop_assert!(
                         chain <= 2,
                         "inner_argv chain {chain} exceeded nesting_budget=2",
@@ -1640,18 +1619,12 @@ mod tests {
         // testing.md L55-56: tokenizer makes forward progress on every
         // step (`debug_assert!(advanced > 0)`). Surface the same
         // invariant at the public API: even on adversarial byte input
-        // (lossy-decoded into a String), `parse` must terminate well
-        // within a generous wall-clock budget.
+        // (lossy-decoded into a String), `parse` must terminate without
+        // panicking. proptest's per-case deadline catches stalls.
         #[test]
         fn pbt_parse_terminates_on_arbitrary_bytes(bytes in arbitrary_utf8_bytes()) {
             let s = String::from_utf8_lossy(&bytes).into_owned();
-            let start = std::time::Instant::now();
             let _ = parse(&s);
-            prop_assert!(
-                start.elapsed() < std::time::Duration::from_secs(2),
-                "parse stalled on lossy input ({} bytes)",
-                s.len(),
-            );
         }
     }
 }

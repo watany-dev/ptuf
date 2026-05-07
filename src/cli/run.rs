@@ -1202,11 +1202,6 @@ rules:
         assert!(err_s.contains(INVALID_PAYLOAD_RULE), "stderr: {err_s}");
     }
 
-    // Boundary: a payload exactly at MAX_HOOK_STDIN_BYTES is the
-    // largest legal size — the size check must allow it and the
-    // failure (if any) must come from JSON parsing, not from the size
-    // ceiling. Pads to exactly the limit with spaces wrapping a tiny
-    // valid JSON object.
     #[test]
     fn run_hook_accepts_stdin_payload_exactly_at_the_size_ceiling() {
         let mut out = Vec::new();
@@ -1225,19 +1220,14 @@ rules:
             &mut out,
             &mut err,
         );
-        // The exact decision depends on the engine but must not be the
-        // size-ceiling deny path. Trailing whitespace is valid JSON
-        // padding, so engine evaluation runs as usual on `ls`.
         let err_s = String::from_utf8_lossy(&err);
         assert!(
             !err_s.contains("hook payload exceeds"),
             "size deny fired at exact limit: {err_s}",
         );
-        // Exit code is one of 0 (allow) or 1 (ask/monitor) for `ls`.
         assert!(code == 0 || code == 1, "got exit code {code}: {err_s}");
     }
 
-    // Boundary: MAX - 1 bytes must also be accepted by the size check.
     #[test]
     fn run_hook_accepts_stdin_payload_one_byte_below_the_ceiling() {
         let mut out = Vec::new();
@@ -1263,11 +1253,9 @@ rules:
         assert!(code == 0 || code == 1, "got exit code {code}: {err_s}");
     }
 
-    // The hook reader uses `read_to_string`, which rejects invalid
-    // UTF-8 at the boundary. The deny path is `failed to read stdin`,
-    // not `invalid hook payload`. This is the third byte-level
-    // boundary case the design doc calls out: lone surrogates / bare
-    // 0xFF / truncated multi-byte leads must all fail-closed (exit 2).
+    // `read_to_string` rejects invalid UTF-8, so lone surrogates / bare
+    // 0xFF / truncated multi-byte leads route through `failed to read
+    // stdin` (not `invalid hook payload`) and must fail-closed.
     #[test]
     fn run_hook_fails_closed_for_invalid_utf8_stdin_payload() {
         for bytes in [

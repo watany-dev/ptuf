@@ -123,9 +123,7 @@ mod tests {
         );
     }
 
-    // `+00:00` is the canonical zero offset and must parse to the same
-    // instant as `Z`. The has_canonical_shape branch for length-25
-    // inputs covers this, but we assert the equivalence explicitly so
+    // `+00:00` / `-00:00` must parse to the same instant as `Z` so
     // future authors don't accidentally restrict the parser to `Z`.
     #[test]
     fn parses_explicit_zero_offset_as_utc() {
@@ -139,10 +137,8 @@ mod tests {
         );
     }
 
-    // The widest standard IANA offsets in current use are +14:00
-    // (Pacific/Kiritimati) and -12:00 (US Minor Outlying Islands).
-    // Both must parse correctly so allowlist authors anywhere can
-    // express expiry without converting to UTC themselves.
+    // Extreme IANA offsets (+14:00, -12:00) must parse so allowlist
+    // authors anywhere can express expiry without converting to UTC.
     #[test]
     fn parses_extreme_iana_offsets() {
         // 14:00 +14:00 == 00:00 UTC
@@ -157,8 +153,7 @@ mod tests {
         );
     }
 
-    // Half-hour offsets (Asia/Kolkata = +05:30, Newfoundland = -03:30)
-    // are well-formed RFC 3339 and must round-trip.
+    // Half-hour offsets (e.g. +05:30, -03:30) are valid RFC 3339.
     #[test]
     fn parses_half_hour_offsets() {
         // 05:30 +05:30 == 00:00 UTC
