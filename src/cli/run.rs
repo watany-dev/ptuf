@@ -6,6 +6,7 @@
 //! through [`invalid_payload_deny`] and `policy_load_failed_deny`.
 
 use std::io::{Read, Write};
+use std::path::PathBuf;
 
 use crate::Decision;
 use crate::hook_input::HookInput;
@@ -140,6 +141,18 @@ pub(super) fn run_init<W1: Write, W2: Write>(
     stdout: &mut W1,
     stderr: &mut W2,
 ) -> u8 {
+    let verify_requested = match &options {
+        InitOptions::ClaudeCode(o) => o.verify,
+        InitOptions::Codex(o) => o.verify,
+    };
+    if verify_requested {
+        return match options {
+            InitOptions::ClaudeCode(o) => {
+                run_init_claude_verify(&o, init::verify::run, stdout, stderr)
+            }
+            InitOptions::Codex(o) => run_init_codex_verify(&o, init::verify::run, stdout, stderr),
+        };
+    }
     let outcome = match options {
         InitOptions::ClaudeCode(options) => run_init_claude(&options, dry_run),
         InitOptions::Codex(options) => run_init_codex(&options, dry_run),
@@ -181,10 +194,7 @@ fn run_init_claude(
     options: &ClaudeInitOptions,
     dry_run: bool,
 ) -> Result<init::InstallOutcome, init::InitError> {
-    let resolved_path = match options.settings_path.as_deref() {
-        Some(path) => path.to_path_buf(),
-        None => init::claude_code::default_settings_path().ok_or(init::InitError::HomeNotSet)?,
-    };
+    let resolved_path = resolve_claude_settings_path(options)?;
     let binary = init::claude_code::detect_binary();
     init::claude_code::install(&resolved_path, &binary, dry_run)
 }
@@ -202,6 +212,161 @@ fn run_init_codex(
     )?;
     let binary = init::codex::detect_binary();
     init::codex::install(&targets, &binary, dry_run)
+}
+
+fn resolve_claude_settings_path(options: &ClaudeInitOptions) -> Result<PathBuf, init::InitError> {
+    match options.settings_path.as_deref() {
+        Some(path) => Ok(path.to_path_buf()),
+        None => init::claude_code::default_settings_path().ok_or(init::InitError::HomeNotSet),
+    }
+}
+
+fn run_init_claude_verify<W1, W2, F>(
+    options: &ClaudeInitOptions,
+    runner: F,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8
+where
+    W1: Write,
+    W2: Write,
+    F: FnOnce() -> init::verify::VerifyReport,
+{
+    let resolved_path = match resolve_claude_settings_path(options) {
+        Ok(p) => p,
+        Err(err) => return fail_init(stderr, err),
+    };
+    let snaps = match init::capture(&[resolved_path.as_path()]) {
+        Ok(s) => s,
+        Err(err) => return fail_init(stderr, err),
+    };
+    let binary = init::claude_code::detect_binary();
+    let outcome = match init::claude_code::install(&resolved_path, &binary, false) {
+        Ok(o) => o,
+        Err(err) => return fail_init(stderr, err),
+    };
+    finish_verify(
+        VerifyContext {
+            outcome: &outcome,
+            snaps: &snaps,
+            json: options.json,
+        },
+        runner,
+        stdout,
+        stderr,
+    )
+}
+
+fn run_init_codex_verify<W1, W2, F>(
+    options: &CodexInitOptions,
+    runner: F,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8
+where
+    W1: Write,
+    W2: Write,
+    F: FnOnce() -> init::verify::VerifyReport,
+{
+    let cwd = std::env::current_dir().ok();
+    let targets = match init::codex::resolve_paths(
+        cwd.as_deref(),
+        options.root.as_deref(),
+        options.hooks_path.as_deref(),
+        options.config_path.as_deref(),
+    ) {
+        Ok(t) => t,
+        Err(err) => return fail_init(stderr, err),
+    };
+    let snaps = match init::capture(&[targets.hooks_path.as_path(), targets.config_path.as_path()])
+    {
+        Ok(s) => s,
+        Err(err) => return fail_init(stderr, err),
+    };
+    let binary = init::codex::detect_binary();
+    let outcome = match init::codex::install(&targets, &binary, false) {
+        Ok(o) => o,
+        Err(err) => return fail_init(stderr, err),
+    };
+    finish_verify(
+        VerifyContext {
+            outcome: &outcome,
+            snaps: &snaps,
+            json: options.json,
+        },
+        runner,
+        stdout,
+        stderr,
+    )
+}
+
+fn fail_init<W: Write>(stderr: &mut W, err: impl std::fmt::Display) -> u8 {
+    let _ = writeln!(stderr, "ptuf: init failed: {err}");
+    1
+}
+
+struct VerifyContext<'a> {
+    outcome: &'a init::InstallOutcome,
+    snaps: &'a [init::PathSnapshot],
+    json: bool,
+}
+
+fn finish_verify<W1, W2, F>(
+    ctx: VerifyContext<'_>,
+    runner: F,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8
+where
+    W1: Write,
+    W2: Write,
+    F: FnOnce() -> init::verify::VerifyReport,
+{
+    let report = runner();
+    let mut rolled_back = false;
+    if !report.passed() && matches!(ctx.outcome.status, init::InstallStatus::Installed) {
+        match init::restore(ctx.snaps) {
+            Ok(()) => {
+                rolled_back = true;
+            }
+            Err(err) => {
+                let _ = writeln!(stderr, "ptuf init: rollback failed: {err}");
+            }
+        }
+    }
+    if ctx.json {
+        let value = init::verify::render_json(ctx.outcome, &report, rolled_back);
+        match serde_json::to_string_pretty(&value) {
+            Ok(s) => {
+                let _ = writeln!(stdout, "{s}");
+            }
+            Err(err) => {
+                let _ = writeln!(stderr, "ptuf: failed to render verify JSON: {err}");
+                return 1;
+            }
+        }
+    } else {
+        render_install_outcome(ctx.outcome, false, stdout);
+        let _ = init::verify::render_text(&report, stdout);
+        if rolled_back {
+            for snap in ctx.snaps {
+                let _ = writeln!(
+                    stdout,
+                    "ptuf init: rolled back changes to {}",
+                    snap.path.display()
+                );
+            }
+            let _ = writeln!(stdout, "ptuf init: verification failed; aborting");
+        } else if !report.passed()
+            && matches!(ctx.outcome.status, init::InstallStatus::AlreadyPresent)
+        {
+            let _ = writeln!(
+                stdout,
+                "ptuf init: existing hook entry failed verification; review the file(s) above manually."
+            );
+        }
+    }
+    if report.passed() { 0 } else { 1 }
 }
 
 fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: bool, stdout: &mut W) {
@@ -252,7 +417,10 @@ mod tests {
         ClaudeInitOptions, CodexInitOptions, Command, HookAgent, INVALID_PAYLOAD_RULE, InitOptions,
         POLICY_LOAD_FAILED_RULE, run,
     };
-    use super::{MAX_HOOK_STDIN_BYTES, render_install_outcome, run_doctor, run_plugin_test};
+    use super::{
+        MAX_HOOK_STDIN_BYTES, VerifyContext, finish_verify, render_install_outcome, run_doctor,
+        run_init_claude_verify, run_init_codex_verify, run_plugin_test,
+    };
 
     #[test]
     fn eval_denies_destructive_rm() {
@@ -444,6 +612,7 @@ rules:
                     root: None,
                     hooks_path: Some(hooks_path.clone()),
                     config_path: Some(config_path.clone()),
+                    ..Default::default()
                 }),
             },
             b"" as &[u8],
@@ -470,6 +639,7 @@ rules:
                 dry_run: true,
                 options: InitOptions::ClaudeCode(ClaudeInitOptions {
                     settings_path: Some(path.clone()),
+                    ..Default::default()
                 }),
             },
             b"" as &[u8],
@@ -498,6 +668,7 @@ rules:
                 dry_run: false,
                 options: InitOptions::ClaudeCode(ClaudeInitOptions {
                     settings_path: Some(path.clone()),
+                    ..Default::default()
                 }),
             },
             b"" as &[u8],
@@ -515,6 +686,7 @@ rules:
                 dry_run: false,
                 options: InitOptions::ClaudeCode(ClaudeInitOptions {
                     settings_path: Some(path.clone()),
+                    ..Default::default()
                 }),
             },
             b"" as &[u8],
@@ -545,6 +717,7 @@ rules:
                 dry_run: false,
                 options: InitOptions::ClaudeCode(ClaudeInitOptions {
                     settings_path: Some(path.clone()),
+                    ..Default::default()
                 }),
             },
             b"" as &[u8],
@@ -553,6 +726,403 @@ rules:
         );
         assert_eq!(code, 1);
         assert!(String::from_utf8_lossy(&err).contains("init failed"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_claude_verify_rolls_back_when_synthetic_deny_fails() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-init-rollback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let options = ClaudeInitOptions {
+            settings_path: Some(path.clone()),
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_claude_verify(
+            &options,
+            || init::verify::VerifyReport {
+                synthetic_deny: init::verify::CheckOutcome::Failed {
+                    detail: "engine returned Allow".into(),
+                },
+                fail_closed: init::verify::CheckOutcome::Passed {
+                    rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
+                },
+                warnings: Vec::new(),
+            },
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 1, "verify failure must exit non-zero");
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("FAILED"), "stdout: {stdout}");
+        assert!(
+            stdout.contains("rolled back changes to"),
+            "stdout: {stdout}",
+        );
+        assert!(
+            stdout.contains("verification failed; aborting"),
+            "stdout: {stdout}",
+        );
+        assert!(
+            !path.exists(),
+            "rollback must remove the freshly-created settings file",
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_claude_verify_keeps_already_present_file_when_verify_fails() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-init-already-present-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let preexisting_options = ClaudeInitOptions {
+            settings_path: Some(path.clone()),
+            ..Default::default()
+        };
+        let mut out0 = Vec::new();
+        let mut err0 = Vec::new();
+        assert_eq!(
+            run(
+                Command::Init {
+                    dry_run: false,
+                    options: InitOptions::ClaudeCode(preexisting_options.clone()),
+                },
+                b"" as &[u8],
+                &mut out0,
+                &mut err0,
+            ),
+            0,
+        );
+        let snapshot = std::fs::read(&path).unwrap();
+
+        let verify_options = ClaudeInitOptions {
+            verify: true,
+            ..preexisting_options
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_claude_verify(
+            &verify_options,
+            || init::verify::VerifyReport {
+                synthetic_deny: init::verify::CheckOutcome::Failed {
+                    detail: "synthetic deny did not fire".into(),
+                },
+                fail_closed: init::verify::CheckOutcome::Passed {
+                    rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
+                },
+                warnings: Vec::new(),
+            },
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 1);
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("already contains"), "stdout: {stdout}");
+        assert!(
+            stdout.contains("review the file(s) above manually"),
+            "stdout: {stdout}",
+        );
+        assert!(
+            !stdout.contains("rolled back"),
+            "AlreadyPresent must not roll back: {stdout}",
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            snapshot,
+            "AlreadyPresent file content must be untouched after a verify failure",
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn passing_report() -> init::verify::VerifyReport {
+        init::verify::VerifyReport {
+            synthetic_deny: init::verify::CheckOutcome::Passed {
+                rule_id: "core.filesystem.destructive-rm".into(),
+            },
+            fail_closed: init::verify::CheckOutcome::Passed {
+                rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
+            },
+            warnings: Vec::new(),
+        }
+    }
+
+    fn failing_report() -> init::verify::VerifyReport {
+        init::verify::VerifyReport {
+            synthetic_deny: init::verify::CheckOutcome::Failed {
+                detail: "synthetic deny did not fire".into(),
+            },
+            fail_closed: init::verify::CheckOutcome::Passed {
+                rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
+            },
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn run_init_claude_verify_emits_json_when_requested() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-init-claude-json-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let options = ClaudeInitOptions {
+            settings_path: Some(path.clone()),
+            verify: true,
+            json: true,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_claude_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        let value: serde_json::Value =
+            serde_json::from_str(&stdout).expect("JSON branch must emit valid JSON");
+        assert_eq!(value["installed"], true);
+        assert_eq!(value["rolledBack"], false);
+        assert_eq!(value["verify"]["syntheticDeny"]["status"], "passed");
+        assert!(
+            !stdout.contains("Verify:"),
+            "JSON mode must not emit text section: {stdout}",
+        );
+        assert!(path.exists(), "JSON happy path must keep settings file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_codex_verify_passes_when_checks_succeed() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-init-codex-verify-ok-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks_path = dir.join("hooks.json");
+        let config_path = dir.join("config.toml");
+        let options = CodexInitOptions {
+            root: None,
+            hooks_path: Some(hooks_path.clone()),
+            config_path: Some(config_path.clone()),
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_codex_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("registered hook"), "stdout: {stdout}");
+        assert!(stdout.contains("Verify:"), "stdout: {stdout}");
+        assert!(
+            stdout.contains("Synthetic deny test: passed"),
+            "stdout: {stdout}",
+        );
+        assert!(hooks_path.exists());
+        assert!(config_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_codex_verify_rolls_back_both_paths_when_check_fails() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-init-codex-verify-rollback-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks_path = dir.join("hooks.json");
+        let config_path = dir.join("config.toml");
+        let options = CodexInitOptions {
+            root: None,
+            hooks_path: Some(hooks_path.clone()),
+            config_path: Some(config_path.clone()),
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_codex_verify(&options, failing_report, &mut out, &mut err);
+        assert_eq!(code, 1);
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("FAILED"), "stdout: {stdout}");
+        let rollback_lines = stdout.matches("rolled back changes to").count();
+        assert!(rollback_lines >= 2, "stdout: {stdout}");
+        assert!(
+            stdout.contains("verification failed; aborting"),
+            "stdout: {stdout}",
+        );
+        assert!(
+            !hooks_path.exists(),
+            "rollback must remove freshly-created hooks file"
+        );
+        assert!(
+            !config_path.exists(),
+            "rollback must remove freshly-created config file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_dispatches_to_claude_verify_when_verify_flag_set() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-run-claude-verify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::ClaudeCode(ClaudeInitOptions {
+                    settings_path: Some(path.clone()),
+                    verify: true,
+                    json: false,
+                }),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(
+            stdout.contains("Synthetic deny test: passed"),
+            "stdout: {stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_dispatches_to_codex_verify_when_verify_flag_set() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-run-codex-verify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks = dir.join("hooks.json");
+        let cfg = dir.join("config.toml");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Codex(CodexInitOptions {
+                    root: None,
+                    hooks_path: Some(hooks.clone()),
+                    config_path: Some(cfg.clone()),
+                    verify: true,
+                    json: false,
+                }),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(
+            stdout.contains("Synthetic deny test: passed"),
+            "stdout: {stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_claude_verify_reports_error_when_settings_path_is_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-claude-verify-baddir-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let options = ClaudeInitOptions {
+            settings_path: Some(dir.clone()),
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_claude_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 1, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&err).contains("init failed"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_codex_verify_reports_error_when_hooks_path_is_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-codex-verify-baddir-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bad_hooks = dir.join("hooks-as-dir");
+        std::fs::create_dir_all(&bad_hooks).unwrap();
+        let options = CodexInitOptions {
+            root: None,
+            hooks_path: Some(bad_hooks),
+            config_path: Some(dir.join("config.toml")),
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_codex_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 1, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&err).contains("init failed"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn finish_verify_logs_rollback_failure_when_restore_errors() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-finish-verify-rollback-err-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, b"i am a file").unwrap();
+        let bad_path = blocker.join("nested").join("settings.json");
+
+        let snaps = vec![init::PathSnapshot {
+            path: bad_path,
+            previous: Some(b"original".to_vec()),
+        }];
+        let outcome = init::InstallOutcome {
+            status: init::InstallStatus::Installed,
+            agent: "claude-code",
+            paths: vec![init::InstallPath {
+                label: "settings",
+                path: dir.join("settings.json"),
+            }],
+            matcher: "Bash".into(),
+            command: "ptuf hook claude-code".into(),
+        };
+        let ctx = VerifyContext {
+            outcome: &outcome,
+            snaps: &snaps,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = finish_verify(ctx, failing_report, &mut out, &mut err);
+        assert_eq!(code, 1);
+        let stderr = String::from_utf8_lossy(&err);
+        assert!(stderr.contains("rollback failed"), "stderr: {stderr}");
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(
+            !stdout.contains("rolled back changes to"),
+            "stdout: {stdout}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -823,6 +1393,7 @@ rules:
             dry_run: false,
             options: InitOptions::ClaudeCode(ClaudeInitOptions {
                 settings_path: Some(path.clone()),
+                ..Default::default()
             }),
         };
 

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `ptuf init <agent> --verify [--json]` — after writing the hook
+  configuration, runs a builtin-only Engine against a synthetic
+  `rm -rf /` payload to confirm `core.filesystem.destructive-rm` fires,
+  then forces a plugin-load failure to confirm the
+  `core.engine.policy-load-failed` fail-closed path. If either check
+  fails the install is rolled back to its pre-write state and the
+  command exits `1`. `--json` emits a `schemaVersion: 1` machine-readable
+  report; `--verify` and `--dry-run` are mutually exclusive.
 - `try_decide(&HookInput) -> Result<Decision, EngineError>` — fallible
   variant of `decide()` that surfaces config / plugin load errors instead
   of falling back to a default-configured engine. Embedded callers that

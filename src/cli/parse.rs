@@ -41,9 +41,13 @@ where
 {
     let mut dry_run = false;
     let mut settings_path: Option<PathBuf> = None;
+    let mut verify = false;
+    let mut json = false;
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
+            "--verify" => verify = true,
+            "--json" => json = true,
             "--settings" => {
                 let value = iter.next().ok_or(ParseError::MissingValue("--settings"))?;
                 settings_path = Some(PathBuf::from(value));
@@ -54,9 +58,14 @@ where
             other => return Err(ParseError::UnexpectedArgument(other.to_string())),
         }
     }
+    check_verify_flags(verify, json, dry_run)?;
     Ok(Command::Init {
         dry_run,
-        options: InitOptions::ClaudeCode(ClaudeInitOptions { settings_path }),
+        options: InitOptions::ClaudeCode(ClaudeInitOptions {
+            settings_path,
+            verify,
+            json,
+        }),
     })
 }
 
@@ -68,9 +77,13 @@ where
     let mut root: Option<PathBuf> = None;
     let mut hooks_path: Option<PathBuf> = None;
     let mut config_path: Option<PathBuf> = None;
+    let mut verify = false;
+    let mut json = false;
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
+            "--verify" => verify = true,
+            "--json" => json = true,
             "--root" => {
                 let value = iter.next().ok_or(ParseError::MissingValue("--root"))?;
                 root = Some(PathBuf::from(value));
@@ -95,14 +108,34 @@ where
             other => return Err(ParseError::UnexpectedArgument(other.to_string())),
         }
     }
+    check_verify_flags(verify, json, dry_run)?;
     Ok(Command::Init {
         dry_run,
         options: InitOptions::Codex(CodexInitOptions {
             root,
             hooks_path,
             config_path,
+            verify,
+            json,
         }),
     })
+}
+
+/// Reject `--verify` / `--json` / `--dry-run` combinations that have no
+/// sensible meaning. `--json` only structures verify output, so it must
+/// be paired with `--verify`. `--verify` forces an install + synthetic
+/// payload run, so it cannot be combined with `--dry-run` (which writes
+/// nothing).
+fn check_verify_flags(verify: bool, json: bool, dry_run: bool) -> Result<(), ParseError> {
+    if json && !verify {
+        return Err(ParseError::ConflictingFlags("--json requires --verify"));
+    }
+    if verify && dry_run {
+        return Err(ParseError::ConflictingFlags(
+            "--verify cannot be combined with --dry-run",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn parse_hook<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -329,9 +362,7 @@ mod tests {
             cmd,
             Command::Init {
                 dry_run: false,
-                options: InitOptions::ClaudeCode(ClaudeInitOptions {
-                    settings_path: None,
-                }),
+                options: InitOptions::ClaudeCode(ClaudeInitOptions::default()),
             }
         );
     }
@@ -352,6 +383,7 @@ mod tests {
                 dry_run: true,
                 options: InitOptions::ClaudeCode(ClaudeInitOptions {
                     settings_path: Some(PathBuf::from("/tmp/x.json")),
+                    ..Default::default()
                 }),
             }
         );
@@ -366,6 +398,7 @@ mod tests {
                 dry_run: false,
                 options: InitOptions::ClaudeCode(ClaudeInitOptions {
                     settings_path: Some(PathBuf::from("/tmp/x.json")),
+                    ..Default::default()
                 }),
             }
         );
@@ -392,9 +425,57 @@ mod tests {
                     root: Some(PathBuf::from("/repo")),
                     hooks_path: Some(PathBuf::from("/tmp/hooks.json")),
                     config_path: Some(PathBuf::from("/tmp/config.toml")),
+                    ..Default::default()
                 }),
             }
         );
+    }
+
+    #[test]
+    fn parses_init_with_verify() {
+        let cmd = parse(&s(&["init", "claude-code", "--verify"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::ClaudeCode(ClaudeInitOptions {
+                    verify: true,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_init_with_verify_json() {
+        let cmd = parse(&s(&["init", "codex", "--verify", "--json"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Codex(CodexInitOptions {
+                    verify: true,
+                    json: true,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_json_without_verify() {
+        assert!(matches!(
+            parse(&s(&["init", "claude-code", "--json"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_verify_with_dry_run() {
+        assert!(matches!(
+            parse(&s(&["init", "claude-code", "--verify", "--dry-run"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
     }
 
     #[test]
@@ -475,6 +556,7 @@ mod tests {
                     root: Some(PathBuf::from("/r")),
                     hooks_path: Some(PathBuf::from("/h.json")),
                     config_path: Some(PathBuf::from("/c.toml")),
+                    ..Default::default()
                 }),
             }
         );
@@ -517,5 +599,8 @@ mod tests {
         assert!(format!("{}", ParseError::UnknownAgent("x".into())).contains("unknown agent"));
         assert!(format!("{}", ParseError::MissingValue("x")).contains("missing value"));
         assert!(format!("{}", ParseError::UnexpectedArgument("x".into())).contains("unexpected"));
+        assert!(
+            format!("{}", ParseError::ConflictingFlags("a vs b")).contains("conflicting flags")
+        );
     }
 }

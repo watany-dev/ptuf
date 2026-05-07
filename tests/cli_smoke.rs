@@ -249,6 +249,100 @@ fn init_claude_code_dry_run_is_idempotent() {
 }
 
 #[test]
+fn init_claude_code_verify_writes_settings_and_passes_checks() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("settings.json");
+    let path_str = path.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run(
+        &["init", "claude-code", "--verify", "--settings", &path_str],
+        "",
+    );
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(path.exists(), "verify must persist settings on success");
+    assert!(stdout.contains("Verify:"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("Synthetic deny test: passed (rule: core.filesystem.destructive-rm)"),
+        "stdout: {stdout}",
+    );
+    assert!(
+        stdout.contains(
+            "Fail-closed internal error test: passed (rule: core.engine.policy-load-failed)",
+        ),
+        "stdout: {stdout}",
+    );
+    assert!(stdout.contains("Warnings: none"), "stdout: {stdout}");
+    assert!(
+        !stdout.contains("rolled back"),
+        "happy path must not roll back"
+    );
+}
+
+#[test]
+fn init_claude_code_verify_json_passes_checks() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("settings.json");
+    let path_str = path.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run(
+        &[
+            "init",
+            "claude-code",
+            "--verify",
+            "--json",
+            "--settings",
+            &path_str,
+        ],
+        "",
+    );
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid verify json");
+    assert_eq!(value["installed"], true);
+    assert_eq!(value["rolledBack"], false);
+    assert_eq!(value["verify"]["syntheticDeny"]["status"], "passed");
+    assert_eq!(value["verify"]["failClosed"]["status"], "passed");
+}
+
+#[test]
+fn init_verify_rejects_json_without_verify_flag() {
+    let (code, _stdout, stderr) = run(
+        &[
+            "init",
+            "claude-code",
+            "--json",
+            "--settings",
+            "/tmp/ptuf-no-write.json",
+        ],
+        "",
+    );
+    assert_eq!(code, 1);
+    assert!(
+        stderr.contains("--json requires --verify"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn init_verify_rejects_combination_with_dry_run() {
+    let (code, _stdout, stderr) = run(
+        &[
+            "init",
+            "claude-code",
+            "--verify",
+            "--dry-run",
+            "--settings",
+            "/tmp/ptuf-no-write.json",
+        ],
+        "",
+    );
+    assert_eq!(code, 1);
+    assert!(
+        stderr.contains("--verify cannot be combined with --dry-run"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn init_codex_dry_run_targets_repo_local_files() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let dir_path = dir.path();

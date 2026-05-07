@@ -46,16 +46,20 @@ impl HookAgent {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClaudeInitOptions {
     pub settings_path: Option<PathBuf>,
+    pub verify: bool,
+    pub json: bool,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CodexInitOptions {
     pub root: Option<PathBuf>,
     pub hooks_path: Option<PathBuf>,
     pub config_path: Option<PathBuf>,
+    pub verify: bool,
+    pub json: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -125,6 +129,7 @@ pub enum ParseError {
     UnknownAgent(String),
     MissingValue(&'static str),
     UnexpectedArgument(String),
+    ConflictingFlags(&'static str),
 }
 
 impl std::fmt::Display for ParseError {
@@ -134,6 +139,7 @@ impl std::fmt::Display for ParseError {
             Self::UnknownAgent(a) => write!(f, "unknown agent: {a}"),
             Self::MissingValue(name) => write!(f, "missing value for {name}"),
             Self::UnexpectedArgument(a) => write!(f, "unexpected argument: {a}"),
+            Self::ConflictingFlags(detail) => write!(f, "conflicting flags: {detail}"),
         }
     }
 }
@@ -163,11 +169,14 @@ USAGE:
     ptuf eval --tool <NAME> <COMMAND>            (evaluate a single tool call)
     ptuf plugin test <PATH>                      (run a plugin's deny/allow tests)
     ptuf init claude-code [--dry-run]            (register hook in
-                          [--settings <PATH>]    ~/.claude/settings.json)
+                          [--settings <PATH>]    ~/.claude/settings.json;
+                          [--verify [--json]]    --verify runs synthetic deny +
+                                                  fail-closed checks after install)
     ptuf init codex [--dry-run]                  (register repo-local Codex hook in
                     [--root <PATH>]              <repo>/.codex/{hooks.json,config.toml})
                     [--hooks <PATH>]
                     [--config <PATH>]
+                    [--verify [--json]]
     ptuf doctor [--json]                         (print a diagnostic report)
     ptuf --help | --version
 
