@@ -219,3 +219,50 @@ fn hook_script_contract_blocks_repo_local_hook_edits() {
     assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
     assert!(stderr.contains("core.self_protection.hook-script"));
 }
+
+#[test]
+fn init_verify_json_schema_contract_is_stable() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let settings = dir.path().join("settings.json");
+    let settings_str = settings.to_string_lossy().into_owned();
+    let (code, stdout, stderr) = run(
+        &[
+            "init",
+            "claude-code",
+            "--verify",
+            "--json",
+            "--settings",
+            &settings_str,
+        ],
+        "",
+    );
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid init verify json");
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["agent"], "claude-code");
+    assert_eq!(value["installed"], true);
+    assert_eq!(value["alreadyPresent"], false);
+    assert_eq!(value["rolledBack"], false);
+    assert_eq!(value["verify"]["syntheticDeny"]["status"], "passed");
+    assert_eq!(
+        value["verify"]["syntheticDeny"]["ruleId"],
+        "core.filesystem.destructive-rm"
+    );
+    assert_eq!(value["verify"]["failClosed"]["status"], "passed");
+    assert_eq!(
+        value["verify"]["failClosed"]["ruleId"],
+        "core.engine.policy-load-failed"
+    );
+
+    let expected: BTreeSet<String> =
+        serde_json::from_str(include_str!("contracts/init-verify-schema-keys.json"))
+            .expect("init verify key fixture");
+    let actual: BTreeSet<String> = value
+        .as_object()
+        .expect("init verify json object")
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(actual, expected);
+}

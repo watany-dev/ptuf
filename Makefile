@@ -20,6 +20,7 @@ coverage:
 		--locked \
 		--features testing \
 		--skip-clean \
+		--features testing \
 		--fail-under 95 \
 		--exclude-files "src/main.rs" \
 		--exclude-files "src/**/windows*.rs" \
