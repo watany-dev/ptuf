@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check check clean coverage deny doc pbt tools
+.PHONY: build test lint fmt fmt-check check clean coverage deny doc pbt tools install-hooks
 
 # Keep these aligned with .github/workflows/ci.yml:
 # - CARGO_DENY_VERSION must match the cargo-deny pinned in
@@ -71,6 +71,9 @@ else
 endif
 
 check: tools fmt-check lint test doc deny
+
+install-hooks:
+	bash scripts/install-hooks.sh
 
 clean:
 	cargo clean

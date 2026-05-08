@@ -123,6 +123,51 @@ mod tests {
         );
     }
 
+    // `+00:00` / `-00:00` must parse to the same instant as `Z` so
+    // future authors don't accidentally restrict the parser to `Z`.
+    #[test]
+    fn parses_explicit_zero_offset_as_utc() {
+        assert_eq!(
+            parse_rfc3339_to_secs("2024-01-01T00:00:00+00:00"),
+            parse_rfc3339_to_secs("2024-01-01T00:00:00Z"),
+        );
+        assert_eq!(
+            parse_rfc3339_to_secs("2024-01-01T00:00:00-00:00"),
+            parse_rfc3339_to_secs("2024-01-01T00:00:00Z"),
+        );
+    }
+
+    // Extreme IANA offsets (+14:00, -12:00) must parse so allowlist
+    // authors anywhere can express expiry without converting to UTC.
+    #[test]
+    fn parses_extreme_iana_offsets() {
+        // 14:00 +14:00 == 00:00 UTC
+        assert_eq!(
+            parse_rfc3339_to_secs("2024-01-01T14:00:00+14:00"),
+            Some(1_704_067_200)
+        );
+        // 12:00 prior day -12:00 == 00:00 UTC
+        assert_eq!(
+            parse_rfc3339_to_secs("2023-12-31T12:00:00-12:00"),
+            Some(1_704_067_200)
+        );
+    }
+
+    // Half-hour offsets (e.g. +05:30, -03:30) are valid RFC 3339.
+    #[test]
+    fn parses_half_hour_offsets() {
+        // 05:30 +05:30 == 00:00 UTC
+        assert_eq!(
+            parse_rfc3339_to_secs("2024-01-01T05:30:00+05:30"),
+            Some(1_704_067_200)
+        );
+        // 20:30 prior day -03:30 == 00:00 UTC
+        assert_eq!(
+            parse_rfc3339_to_secs("2023-12-31T20:30:00-03:30"),
+            Some(1_704_067_200)
+        );
+    }
+
     #[test]
     fn rejects_malformed_timestamps() {
         assert!(parse_rfc3339_to_secs("").is_none());

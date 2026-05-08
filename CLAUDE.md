@@ -15,6 +15,10 @@
 (fmt-check / clippy / test / `cargo doc` / cargo-deny) を実行する。手順の
 詳細は README "Develop" と `Makefile` を参照。
 
+初回クローン後に `make install-hooks` を実行すれば、`scripts/hooks/pre-push`
+が `git push` 時に自動で `make check` を走らせ、CI ゲートが落ちる差分の
+push を物理的にブロックする。
+
 `make pbt` (`PROPTEST_CASES=10000 cargo test --features testing`) はリリース直前の深掘り PBT 用。
 
 ## アーキテクチャ規約

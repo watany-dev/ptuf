@@ -141,4 +141,65 @@ mod tests {
         let dyn_err: &dyn std::error::Error = &ser_err;
         assert!(dyn_err.source().is_none());
     }
+
+    #[test]
+    fn open_append_returns_io_error_when_parent_is_a_regular_file() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let blocker = dir.path().join("audit-not-a-dir");
+        std::fs::write(&blocker, b"x").expect("write blocker");
+        let path = blocker.join("audit.jsonl");
+        open_append(&path).expect_err("expected io error");
+    }
+
+    #[test]
+    fn open_append_returns_io_error_for_empty_path() {
+        open_append(Path::new("")).expect_err("expected io error");
+    }
+
+    // Skipped under root because root bypasses the POSIX permission
+    // check, which would yield a false negative.
+    #[cfg(unix)]
+    #[test]
+    fn open_append_returns_permission_denied_for_unwritable_parent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if euid_is_root() {
+            return;
+        }
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).expect("mkdir");
+        let mut perms = std::fs::metadata(&locked).expect("meta").permissions();
+        perms.set_mode(0o444); // r--r--r--, no write/exec.
+        std::fs::set_permissions(&locked, perms.clone()).expect("chmod 0444");
+
+        let path = locked.join("audit.jsonl");
+        let result = open_append(&path);
+
+        // Restore permissions so TempDir can clean up.
+        let mut restore = perms;
+        restore.set_mode(0o755);
+        let _ = std::fs::set_permissions(&locked, restore);
+
+        let err = result.expect_err("expected permission denied");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::PermissionDenied,
+            "unexpected error: {err:?}",
+        );
+    }
+
+    // `id -u` avoids touching `unsafe` (the crate forbids it); on
+    // systems without `id` we conservatively return false.
+    #[cfg(unix)]
+    fn euid_is_root() -> bool {
+        std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            == Some(0)
+    }
 }

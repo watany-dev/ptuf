@@ -331,6 +331,16 @@ surfaces config and plugin load errors rather than silently degrading.
 
 ## Develop
 
+After cloning, install the tracked git hooks once:
+
+```bash
+make install-hooks
+```
+
+This points `core.hooksPath` at `scripts/hooks/`, so `git push` will run
+`make check` automatically and refuse to push when CI gates would fail.
+Bypass with `git push --no-verify` only in true emergencies.
+
 Before pushing, run:
 
 ```bash

@@ -533,6 +533,25 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    // A malformed hooks.json must remain untouched byte-for-byte after
+    // install fails — the writer does not partially overwrite.
+    #[test]
+    fn install_does_not_overwrite_invalid_hooks_json() {
+        let dir = workdir("bad-hooks-untouched");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        let before = "{not json";
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        fs::write(&targets.hooks_path, before).unwrap();
+        let _ = install(&targets, "/x/ptuf", false);
+        let after = fs::read_to_string(&targets.hooks_path).unwrap();
+        assert_eq!(after, before, "hooks.json was modified despite Err");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn install_rejects_invalid_config_toml() {
         let dir = workdir("bad-config");
@@ -545,6 +564,24 @@ mod tests {
         fs::write(&targets.config_path, "[features\ncodex_hooks = true").unwrap();
         let err = install(&targets, "/x/ptuf", false).unwrap_err();
         assert!(matches!(err, InitError::Toml { .. }));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Same non-destructive invariant for config.toml.
+    #[test]
+    fn install_does_not_overwrite_invalid_config_toml() {
+        let dir = workdir("bad-config-untouched");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        let before = "[features\ncodex_hooks = true";
+        fs::create_dir_all(targets.config_path.parent().unwrap()).unwrap();
+        fs::write(&targets.config_path, before).unwrap();
+        let _ = install(&targets, "/x/ptuf", false);
+        let after = fs::read_to_string(&targets.config_path).unwrap();
+        assert_eq!(after, before, "config.toml was modified despite Err");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -880,5 +917,74 @@ mod tests {
         let paths = resolve_paths(None, None, Some(Path::new("hooks.json")), None).unwrap();
         assert_eq!(paths.hooks_path, PathBuf::from("hooks.json"));
         assert_eq!(paths.config_path, PathBuf::from("config.toml"));
+    }
+
+    #[test]
+    fn write_json_atomically_returns_io_err_when_parent_is_a_regular_file() {
+        let dir = workdir("write-json-blocker");
+        let blocker = dir.join("blocker");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&blocker, b"x").unwrap();
+        let path = blocker.join("sub/hooks.json");
+        let err = write_json_atomically(&path, &json!({})).unwrap_err();
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_toml_atomically_returns_io_err_when_parent_is_a_regular_file() {
+        let dir = workdir("write-toml-blocker");
+        let blocker = dir.join("blocker");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&blocker, b"x").unwrap();
+        let path = blocker.join("sub/config.toml");
+        let err = write_toml_atomically(&path, &DocumentMut::new()).unwrap_err();
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_json_atomically_propagates_rename_error_when_target_is_a_directory() {
+        let dir = workdir("write-json-rename-dir");
+        let target = dir.join("hooks.json");
+        fs::create_dir_all(&target).unwrap();
+        let err =
+            write_json_atomically(&target, &json!({})).expect_err("rename onto dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_json_atomically_propagates_write_error_when_temp_path_is_a_directory() {
+        let dir = workdir("write-json-tmp-collision");
+        let target = dir.join("hooks.json");
+        let collision = dir.join(format!("hooks.json.ptuf.{}.tmp", std::process::id()));
+        fs::create_dir_all(&collision).unwrap();
+        let err = write_json_atomically(&target, &json!({})).expect_err("write onto dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_toml_atomically_propagates_rename_error_when_target_is_a_directory() {
+        let dir = workdir("write-toml-rename-dir");
+        let target = dir.join("config.toml");
+        fs::create_dir_all(&target).unwrap();
+        let err = write_toml_atomically(&target, &DocumentMut::new())
+            .expect_err("rename onto dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_toml_atomically_propagates_write_error_when_temp_path_is_a_directory() {
+        let dir = workdir("write-toml-tmp-collision");
+        let target = dir.join("config.toml");
+        let collision = dir.join(format!("config.toml.ptuf.{}.tmp", std::process::id()));
+        fs::create_dir_all(&collision).unwrap();
+        let err = write_toml_atomically(&target, &DocumentMut::new())
+            .expect_err("write onto dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

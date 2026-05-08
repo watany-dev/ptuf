@@ -607,3 +607,202 @@ fn project_hygiene_denies_destructive_git_on_protected_branch() {
         "stderr was: {stderr}"
     );
 }
+
+#[test]
+fn plugin_test_subcommand_passes_for_valid_plugin_via_binary() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("demo.yaml");
+    std::fs::write(
+        &path,
+        r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      shell.argv:
+        headAny: [curl]
+    reason: blocked
+    tests:
+      deny:
+        - input:
+            tool_name: Bash
+            tool_input:
+              command: "curl https://example.com"
+"#,
+    )
+    .expect("write plugin yaml");
+    let path_str = path.to_string_lossy().into_owned();
+    let (code, stdout, stderr) = run(&["plugin", "test", &path_str], "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(stdout.contains("pack.demo"), "stdout: {stdout}");
+    assert!(stdout.contains("1 passed"), "stdout: {stdout}");
+}
+
+#[test]
+fn plugin_test_subcommand_fails_for_assertion_mismatch_via_binary() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("bad.yaml");
+    std::fs::write(
+        &path,
+        r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.bad
+rules:
+  - id: pack.bad.unmatched
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Read
+    reason: blocked
+    tests:
+      deny:
+        - input:
+            tool_name: Bash
+            tool_input:
+              command: "ls"
+"#,
+    )
+    .expect("write plugin yaml");
+    let path_str = path.to_string_lossy().into_owned();
+    let (code, stdout, _stderr) = run(&["plugin", "test", &path_str], "");
+    assert_eq!(code, 1);
+    assert!(stdout.contains("FAIL"), "stdout: {stdout}");
+}
+
+#[test]
+fn init_codex_verify_writes_files_and_passes_synthetic_deny() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let hooks_path = dir.path().join("hooks.json");
+    let config_path = dir.path().join("config.toml");
+    let hooks_str = hooks_path.to_string_lossy().into_owned();
+    let config_str = config_path.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run(
+        &[
+            "init",
+            "codex",
+            "--verify",
+            "--hooks",
+            &hooks_str,
+            "--config",
+            &config_str,
+        ],
+        "",
+    );
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(hooks_path.exists(), "hooks.json must persist on success");
+    assert!(config_path.exists(), "config.toml must persist on success");
+    assert!(stdout.contains("Verify:"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("Synthetic deny test: passed"),
+        "stdout: {stdout}",
+    );
+    assert!(
+        !stdout.contains("rolled back"),
+        "happy path must not roll back: stdout {stdout}",
+    );
+}
+
+#[test]
+fn init_codex_verify_json_passes_checks() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let hooks_path = dir.path().join("hooks.json");
+    let config_path = dir.path().join("config.toml");
+    let hooks_str = hooks_path.to_string_lossy().into_owned();
+    let config_str = config_path.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run(
+        &[
+            "init",
+            "codex",
+            "--verify",
+            "--json",
+            "--hooks",
+            &hooks_str,
+            "--config",
+            &config_str,
+        ],
+        "",
+    );
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid verify json");
+    assert_eq!(value["installed"], true);
+    assert_eq!(value["rolledBack"], false);
+    assert_eq!(value["verify"]["syntheticDeny"]["status"], "passed");
+    assert_eq!(value["verify"]["failClosed"]["status"], "passed");
+}
+
+// A second install must not re-encode settings.json (key order /
+// whitespace), so the file remains byte-identical.
+#[test]
+fn init_claude_code_real_install_is_byte_for_byte_idempotent() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("settings.json");
+    let path_str = path.to_string_lossy().into_owned();
+
+    let (code1, _stdout1, stderr1) = run(&["init", "claude-code", "--settings", &path_str], "");
+    assert_eq!(code1, 0, "stderr: {stderr1}");
+    let after_first = std::fs::read(&path).expect("read settings after first install");
+
+    let (code2, stdout2, stderr2) = run(&["init", "claude-code", "--settings", &path_str], "");
+    assert_eq!(code2, 0, "stderr: {stderr2}");
+    assert!(
+        stdout2.contains("already contains") || stdout2.contains("registered hook"),
+        "stdout: {stdout2}",
+    );
+    let after_second = std::fs::read(&path).expect("read settings after second install");
+    assert_eq!(
+        after_first, after_second,
+        "second install must not rewrite settings.json"
+    );
+}
+
+// Same byte-for-byte idempotency invariant for the Codex install
+// (hooks.json and config.toml).
+#[test]
+fn init_codex_real_install_is_byte_for_byte_idempotent() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let hooks_path = dir.path().join("hooks.json");
+    let config_path = dir.path().join("config.toml");
+    let hooks_str = hooks_path.to_string_lossy().into_owned();
+    let config_str = config_path.to_string_lossy().into_owned();
+
+    let (code1, _stdout1, stderr1) = run(
+        &[
+            "init",
+            "codex",
+            "--hooks",
+            &hooks_str,
+            "--config",
+            &config_str,
+        ],
+        "",
+    );
+    assert_eq!(code1, 0, "stderr: {stderr1}");
+    let hooks_first = std::fs::read(&hooks_path).expect("read hooks after first install");
+    let config_first = std::fs::read(&config_path).expect("read config after first install");
+
+    let (code2, _stdout2, stderr2) = run(
+        &[
+            "init",
+            "codex",
+            "--hooks",
+            &hooks_str,
+            "--config",
+            &config_str,
+        ],
+        "",
+    );
+    assert_eq!(code2, 0, "stderr: {stderr2}");
+    let hooks_second = std::fs::read(&hooks_path).expect("read hooks after second install");
+    let config_second = std::fs::read(&config_path).expect("read config after second install");
+    assert_eq!(hooks_first, hooks_second, "hooks.json must be stable");
+    assert_eq!(config_first, config_second, "config.toml must be stable");
+}

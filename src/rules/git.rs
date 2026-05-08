@@ -1469,4 +1469,63 @@ mod tests {
             prop_assert!(CONFIG_OVERRIDE_BYPASS_RULE.evaluate(&facts, &input).is_none());
         }
     }
+
+    // The static rule slice only uses Deny / Ask, so the Monitor and
+    // Allow arms in `evaluate()` and the `-c`-with-no-value arm of
+    // `config_overrides` are otherwise unreachable. Synthetic specs
+    // exercise them without affecting any production behavior.
+    static MONITOR_FORCE_PUSH_SPEC: RuleSpec = RuleSpec {
+        id: "test.git.monitor",
+        severity: Severity::Low,
+        decision_kind: DecisionKind::Monitor,
+        hard_deny: false,
+        matcher: matches_force_push,
+        problem: "synthetic monitor spec",
+        alternatives: &[],
+    };
+    static ALLOW_FORCE_PUSH_SPEC: RuleSpec = RuleSpec {
+        id: "test.git.allow",
+        severity: Severity::Low,
+        decision_kind: DecisionKind::Allow,
+        hard_deny: false,
+        matcher: matches_force_push,
+        problem: "synthetic allow spec",
+        alternatives: &[],
+    };
+
+    #[test]
+    fn evaluate_emits_monitor_when_decision_kind_is_monitor() {
+        let rule = GitRule {
+            spec: &MONITOR_FORCE_PUSH_SPEC,
+        };
+        let input = bash("git push --force origin main");
+        let facts = crate::facts::extract(&input);
+        match rule.evaluate(&facts, &input) {
+            Some(Decision::Monitor { rule_id }) => assert_eq!(rule_id, "test.git.monitor"),
+            other => panic!("expected Monitor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn evaluate_returns_none_when_decision_kind_is_allow() {
+        let rule = GitRule {
+            spec: &ALLOW_FORCE_PUSH_SPEC,
+        };
+        let input = bash("git push --force origin main");
+        let facts = crate::facts::extract(&input);
+        assert!(rule.evaluate(&facts, &input).is_none());
+    }
+
+    #[test]
+    fn config_overrides_skip_dangling_dash_c_with_no_value() {
+        // `git -c` with no following value would normally be rejected
+        // by git itself, but the override iterator's loop must still
+        // terminate cleanly when `iter.next()` returns None.
+        let input = bash("git -c commit");
+        let facts = crate::facts::extract(&input);
+        // CONFIG_OVERRIDE_BYPASS_RULE inspects the override list; just
+        // confirming evaluate doesn't panic exercises the `iter.next()
+        // returned None` arm of `config_overrides`.
+        let _ = CONFIG_OVERRIDE_BYPASS_RULE.evaluate(&facts, &input);
+    }
 }

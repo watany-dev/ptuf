@@ -433,6 +433,42 @@ rules:
         let _ = fs::remove_dir_all(&dir);
     }
 
+    // A plugin file that exists but is malformed (wrong apiVersion)
+    // surfaces in the JSON report as `loaded: false` with an error
+    // string and the top-level `hasFailure` flag set. This is the
+    // doctor analogue of `plugin::loader::load_str` returning
+    // `PluginError::ApiVersion`.
+    #[test]
+    fn json_report_flags_malformed_plugin_yaml_with_error_string() {
+        let dir = workdir("json-malformed-plugin");
+        let proj = dir.join(".ptuf.yaml");
+        let plugin = dir.join("malformed.yaml");
+        fs::write(
+            &plugin,
+            "apiVersion: foo/v0\nkind: Plugin\nmetadata:\n  name: x\n",
+        )
+        .unwrap();
+        fs::write(&proj, format!("plugins:\n  - path: {}\n", plugin.display())).unwrap();
+        let layout = Layout {
+            system: None,
+            user: None,
+            project: Some(proj),
+            project_local: None,
+        };
+        let report = Report::gather(None, Some(dir.clone()), layout, None);
+        let v = to_json_value(&report);
+        let plugins = v["plugins"].as_array().unwrap();
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0]["loaded"], false);
+        let err_msg = plugins[0]["error"].as_str().expect("error string");
+        assert!(
+            err_msg.contains("apiVersion") || err_msg.contains("foo/v0"),
+            "expected apiVersion mention, got: {err_msg}"
+        );
+        assert_eq!(v["hasFailure"], true);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn json_claude_state_home_not_set_omits_optional_fields() {
         let report = Report::gather(None, None, Layout::default(), None);

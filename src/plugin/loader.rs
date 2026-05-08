@@ -275,4 +275,92 @@ rules:
             assert!(SUPPORTED_FACTS.contains(&f), "missing: {f}");
         }
     }
+
+    // load_path on a non-existent file surfaces as `PluginError::Io`
+    // with the original path preserved, so audit consumers can attribute
+    // the failure to a specific plugin file.
+    #[test]
+    fn load_path_returns_io_error_for_missing_file() {
+        let path = PathBuf::from("/nonexistent/ptuf-plugin-does-not-exist.yaml");
+        let err = load_path(&path).expect_err("should fail");
+        match err {
+            PluginError::Io { path: returned, .. } => assert_eq!(returned, path),
+            other => panic!("expected Io error, got {other:?}"),
+        }
+    }
+
+    // Each error variant must carry the original `path`. This is the
+    // cross-variant invariant relied on by the fail-closed audit
+    // record.
+    #[test]
+    fn yaml_error_path_is_round_tripped() {
+        let path = PathBuf::from("/abs/plugin.yaml");
+        let err = load_str(&path, "::not yaml::").expect_err("yaml err");
+        match err {
+            PluginError::Yaml { path: returned, .. } => assert_eq!(returned, path),
+            other => panic!("expected Yaml error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn api_version_error_path_is_round_tripped() {
+        let path = PathBuf::from("/abs/api.yaml");
+        let yaml = "apiVersion: foo/v0\nkind: Plugin\nmetadata:\n  name: x\n";
+        let err = load_str(&path, yaml).expect_err("api version err");
+        match err {
+            PluginError::ApiVersion {
+                path: returned,
+                found,
+            } => {
+                assert_eq!(returned, path);
+                assert_eq!(found, "foo/v0");
+            },
+            other => panic!("expected ApiVersion error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kind_error_carries_observed_kind() {
+        let yaml = "apiVersion: ptuf.dev/v1\nkind: Bogus\nmetadata:\n  name: x\n";
+        let err = load_str(&p(), yaml).expect_err("kind err");
+        match err {
+            PluginError::Kind { found, .. } => assert_eq!(found, "Bogus"),
+            other => panic!("expected Kind error, got {other:?}"),
+        }
+    }
+
+    // The `Compile` failure path carries the rule id and the original
+    // file path, so a failing plugin can be located even when nested
+    // deep under `all:` / `any:`.
+    #[test]
+    fn compile_error_carries_rule_id_and_path_for_nested_invalid_when() {
+        let path = PathBuf::from("/abs/p.yaml");
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: x
+rules:
+  - id: pack.x.nested-bad
+    severity: low
+    defaultDecision: deny
+    when:
+      all:
+        - any:
+            - shell.argv: 42
+    reason: r
+"#;
+        let err = load_str(&path, yaml).expect_err("nested compile err");
+        match err {
+            PluginError::Compile {
+                path: returned,
+                rule_id,
+                ..
+            } => {
+                assert_eq!(returned, path);
+                assert_eq!(rule_id, "pack.x.nested-bad");
+            },
+            other => panic!("expected Compile error, got {other:?}"),
+        }
+    }
 }

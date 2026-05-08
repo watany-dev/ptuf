@@ -1196,6 +1196,89 @@ rules:
     }
 
     #[test]
+    fn run_hook_accepts_stdin_payload_exactly_at_the_size_ceiling() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let body = br#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let mut payload = Vec::with_capacity(MAX_HOOK_STDIN_BYTES as usize);
+        payload.extend_from_slice(body);
+        payload.resize(MAX_HOOK_STDIN_BYTES as usize, b' ');
+        assert_eq!(payload.len() as u64, MAX_HOOK_STDIN_BYTES);
+
+        let code = run(
+            Command::HookPreToolUse {
+                agent: HookAgent::ClaudeCode,
+            },
+            payload.as_slice(),
+            &mut out,
+            &mut err,
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(
+            !err_s.contains("hook payload exceeds"),
+            "size deny fired at exact limit: {err_s}",
+        );
+        assert!(code == 0 || code == 1, "got exit code {code}: {err_s}");
+    }
+
+    #[test]
+    fn run_hook_accepts_stdin_payload_one_byte_below_the_ceiling() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let body = br#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let mut payload = Vec::with_capacity(MAX_HOOK_STDIN_BYTES as usize - 1);
+        payload.extend_from_slice(body);
+        payload.resize(MAX_HOOK_STDIN_BYTES as usize - 1, b' ');
+
+        let code = run(
+            Command::HookPreToolUse {
+                agent: HookAgent::ClaudeCode,
+            },
+            payload.as_slice(),
+            &mut out,
+            &mut err,
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(
+            !err_s.contains("hook payload exceeds"),
+            "size deny fired below the limit: {err_s}",
+        );
+        assert!(code == 0 || code == 1, "got exit code {code}: {err_s}");
+    }
+
+    // `read_to_string` rejects invalid UTF-8, so lone surrogates / bare
+    // 0xFF / truncated multi-byte leads route through `failed to read
+    // stdin` (not `invalid hook payload`) and must fail-closed.
+    #[test]
+    fn run_hook_fails_closed_for_invalid_utf8_stdin_payload() {
+        for bytes in [
+            &b"\xFF"[..],         // bare 0xFF — never legal in UTF-8
+            &b"\xC2"[..],         // truncated 2-byte lead
+            &b"\xED\xA0\x80"[..], // UTF-8-encoded surrogate U+D800
+        ] {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = run(
+                Command::HookPreToolUse {
+                    agent: HookAgent::ClaudeCode,
+                },
+                bytes,
+                &mut out,
+                &mut err,
+            );
+            assert_eq!(code, 2, "expected fail-closed for bytes {bytes:?}");
+            let out_s = String::from_utf8_lossy(&out);
+            assert!(
+                out_s.contains("\"permissionDecision\":\"deny\""),
+                "stdout: {out_s}",
+            );
+            let err_s = String::from_utf8_lossy(&err);
+            assert!(err_s.contains("failed to read stdin"), "stderr: {err_s}");
+            assert!(err_s.contains(INVALID_PAYLOAD_RULE), "stderr: {err_s}");
+        }
+    }
+
+    #[test]
     fn run_hook_fails_closed_when_stdin_read_fails_under_codex_adapter() {
         let mut out = Vec::new();
         let mut err = Vec::new();

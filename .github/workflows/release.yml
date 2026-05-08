@@ -320,6 +320,7 @@ jobs:
             local matches=()
 
             shopt -s nullglob
+            # shellcheck disable=SC2206 # intentional glob expansion of source_pattern
             matches=(artifacts/$source_pattern)
             shopt -u nullglob
 

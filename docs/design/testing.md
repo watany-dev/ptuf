@@ -16,8 +16,10 @@ ptuf のテスト層は **二段構成** で運用する。判定の正しさは
 example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 `tests/cli_smoke.rs` に存在し続ける。PBT は **同じテストモジュール内** に
 `proptest!` ブロックとして追記する形を取り、各モジュールが自分の不変条件を
-所有する Tidy First 方針に従う。統合層 (engine end-to-end) のみ
-`tests/engine_proptest.rs` に独立して置く。
+所有する Tidy First 方針に従う。複数モジュールにまたがる統合層の PBT のみ
+`tests/` 配下に独立して置く: engine end-to-end は `tests/engine_proptest.rs`、
+全 rule にまたがる否定空間は `tests/rules_proptest.rs`、CLI argv 解析は
+`tests/cli_parse_proptest.rs`。
 
 ## 主要な不変条件
 
@@ -93,10 +95,14 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 ## 戦略 (Strategy) の置き場所
 
 `src/testing/proptest.rs` に共通戦略 (Decision / Severity / HookInput /
-bash_command) を集約し、`#[cfg(any(test, feature = "testing"))] pub mod
-testing` で各モジュールのテストブロックと `tests/engine_proptest.rs` の両方
-から参照する。`testing` feature は optional `proptest` 依存だけを有効化し、
-通常の `cargo build --release` では出荷バイナリに含まれない。
+bash_command / bash_with_quoting / bash_redirects / bash_heredoc /
+bash_process_subst / combined_short_opts / bash_wrapper_nested /
+mcp_nested_input / arbitrary_utf8_bytes / safe_command_string) を集約し、
+`#[cfg(any(test, feature = "testing"))] pub mod testing` で各モジュールの
+テストブロックと `tests/` 配下の統合 PBT (`engine_proptest.rs` /
+`rules_proptest.rs` / `cli_parse_proptest.rs`) の両方から参照する。
+`testing` feature は optional `proptest` 依存だけを有効化し、通常の
+`cargo build --release` では出荷バイナリに含まれない。
 
 ## 契約テスト
 
