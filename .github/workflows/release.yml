@@ -23,10 +23,9 @@
 #   - the `plan` step uses env (IS_PR / REF_NAME) instead of inline
 #     `${{ }}` to keep github.ref_name out of shell template expansion
 #   - third-party actions are SHA-pinned in this file
+#   - host job publishes canonical verified-install archives, SPDX JSON SBOM,
+#     SHA256SUMS, and separate GitHub provenance/SBOM attestations
 # See CONTRIBUTING.md "Regenerating release.yml" for the runbook.
-#
-# SLSA build provenance and sigstore signing will be added later as
-# JOB-LEVEL patches on the `host` job in a separate PR.
 
 name: Release
 # Workflow-level permissions are minimized. Only the `host` job, which calls
@@ -264,6 +263,9 @@ jobs:
     runs-on: "ubuntu-22.04"
     permissions:
       contents: write  # required by `gh release create` in the Create GitHub Release step
+      id-token: write  # required by `actions/attest`
+      attestations: write  # required by `actions/attest`
+      artifact-metadata: write  # required by `actions/attest` storage records
     outputs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
@@ -308,6 +310,90 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
+      - name: Create canonical archives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find_one_artifact() {
+            local source_pattern="$1"
+            local matches=()
+
+            shopt -s nullglob
+            matches=(artifacts/$source_pattern)
+            shopt -u nullglob
+
+            if [ "${#matches[@]}" -ne 1 ]; then
+              printf 'expected exactly one artifact matching %s, found %s\n' "$source_pattern" "${#matches[@]}" >&2
+              printf '%s\n' "${matches[@]}" >&2
+              exit 1
+            fi
+
+            printf '%s\n' "${matches[0]}"
+          }
+
+          canonical_tar_gz() {
+            local source
+            local dest="$2"
+            local tmpdir
+            source="$(find_one_artifact "$1")"
+
+            case "$source" in
+              *.tar.gz)
+                cp "$source" "artifacts/$dest"
+                ;;
+              *.tar.xz)
+                tmpdir="$(mktemp -d)"
+                tar -xJf "$source" -C "$tmpdir"
+                mapfile -t entries < <(find "$tmpdir" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+                if [ "${#entries[@]}" -eq 1 ]; then
+                  tar -C "$tmpdir" -czf "artifacts/$dest" "${entries[0]}"
+                else
+                  tar -C "$tmpdir" -czf "artifacts/$dest" .
+                fi
+                rm -rf "$tmpdir"
+                ;;
+              *)
+                printf 'unsupported Unix archive format: %s\n' "$source" >&2
+                exit 1
+                ;;
+            esac
+          }
+
+          canonical_tar_gz 'ptuf-*x86_64-unknown-linux-musl.tar.*' 'ptuf-x86_64-unknown-linux-musl.tar.gz'
+          canonical_tar_gz 'ptuf-*aarch64-apple-darwin.tar.*' 'ptuf-aarch64-apple-darwin.tar.gz'
+          cp "$(find_one_artifact 'ptuf-*x86_64-pc-windows-msvc.zip')" 'artifacts/ptuf-x86_64-pc-windows-msvc.zip'
+      - name: Generate SPDX JSON SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: artifacts/ptuf-${{ needs.plan.outputs.tag }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Generate SHA256SUMS
+        shell: bash
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum \
+            ptuf-x86_64-unknown-linux-musl.tar.gz \
+            ptuf-aarch64-apple-darwin.tar.gz \
+            ptuf-x86_64-pc-windows-msvc.zip \
+            ptuf-installer.sh \
+            ptuf-installer.ps1 \
+            "ptuf-${TAG}.spdx.json" > SHA256SUMS
+      - name: Attest release provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-checksums: artifacts/SHA256SUMS
+      - name: Attest release SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-checksums: artifacts/SHA256SUMS
+          sbom-path: artifacts/ptuf-${{ needs.plan.outputs.tag }}.spdx.json
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"

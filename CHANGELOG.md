@@ -76,6 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — sibling of `classify_input_with_paths` that classifies the union
   of two `PathFact` slices (tool-input-derived and engine-supplied)
   without forcing the caller to allocate a merged `Vec`.
+- Verified release artifacts with `SHA256SUMS`, GitHub artifact attestations,
+  and SPDX JSON SBOM publication.
+- `x86_64-unknown-linux-musl` release target for portable Linux installs.
 
 ### Changed
 - `tokenize` in `src/facts/shell.rs` now asserts forward progress on
@@ -112,6 +115,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   candidate side at match time. Net effect is a single `canonicalize()`
   per target instead of per match; behaviour is unchanged for files
   whose canonical form is stable across decides (review D8).
+- Unix release archives are published as `.tar.gz` and Windows archives as
+  `.zip`.
+- Installation docs now prefer pinned archive downloads with checksum and
+  attestation verification over installer scripts.
 
 ### BREAKING
 - `Bash` (in `ptuf::facts::shell`) gained a public field

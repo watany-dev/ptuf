@@ -79,8 +79,10 @@ platform-specific code:
 
 1. Bump `version` in `Cargo.toml` and update `CHANGELOG.md`.
 2. `git tag vX.Y.Z && git push --tags`.
-3. The `Release` workflow runs `dist plan` → matrix builds across the 5
-   supported targets → publishes a GitHub Release with installers.
+3. The `Release` workflow runs `dist plan` → matrix builds across the 6
+   supported targets → publishes a GitHub Release with cargo-dist artifacts,
+   canonical verified-install archives, `SHA256SUMS`, an SPDX JSON SBOM, and
+   GitHub artifact attestations.
 4. The `Publish to crates.io` workflow then runs `cargo publish --dry-run --locked`,
    followed by `cargo publish --locked` for non-prerelease tags.
 
@@ -105,11 +107,22 @@ The current hand-patch set:
   expansion (zizmor `template-injection`).
 - Every third-party action is pinned to a full commit SHA with a
   trailing `# vX.Y.Z` comment.
+- The `host` job creates canonical verified-install archives
+  (`ptuf-x86_64-unknown-linux-musl.tar.gz`,
+  `ptuf-aarch64-apple-darwin.tar.gz`,
+  `ptuf-x86_64-pc-windows-msvc.zip`), generates `ptuf-${TAG}.spdx.json` in
+  SPDX JSON format, writes `SHA256SUMS` for canonical archives/installers/SBOM,
+  and runs separate `actions/attest` steps for provenance and SBOM before the
+  GitHub Release is created.
+- The `host` job permissions are limited to `contents: write`,
+  `id-token: write`, `attestations: write`, and `artifact-metadata: write`.
+- The provenance attestation uses only
+  `subject-checksums: artifacts/SHA256SUMS`. The SBOM attestation uses the
+  same `subject-checksums` plus
+  `sbom-path: artifacts/ptuf-${TAG}.spdx.json`.
 
-`zizmor` audit suppressions for cargo-dist patterns that cannot
-currently be patched live in `.github/zizmor.yml`. SLSA build
-provenance and sigstore signing are deferred — they will be added as
-**job-level** patches on the `host` job in a separate PR.
+`zizmor` audit suppressions for cargo-dist patterns that cannot currently be
+patched live in `.github/zizmor.yml`.
 
 ### Bumping cargo-dist
 
@@ -124,9 +137,13 @@ dist init  # answer prompts as before, or `dist generate`
 #    - top-level `concurrency:` block
 #    - `plan` step env-based ref handling
 #    - SHA-pin every third-party action
+#    - host job canonical archives, SPDX JSON SBOM, SHA256SUMS, and
+#      separate provenance/SBOM actions/attest steps
 # 4. Diff against the previous release.yml carefully (the
 #    DO-NOT-REGENERATE header in release.yml lists the patch set).
-# 5. Run the workflow on a tagged PR to validate end-to-end.
+# 5. Run `actionlint .github/workflows/release.yml`, `zizmor
+#    .github/workflows/`, and `dist plan`.
+# 6. Run the workflow on a tagged PR to validate end-to-end.
 ```
 
 ## Reporting Security Issues
