@@ -3,6 +3,11 @@
 //! These exercise the full process boundary: argv parsing, stdin handling,
 //! stdout/stderr separation, and exit codes.
 
+// `clippy.toml`'s `allow-*-in-tests` only matches `#[test]` bodies and
+// `#[cfg(test)]` modules — free helpers at integration-test file scope
+// fall outside both, so relax `unwrap`/`expect` explicitly here.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 

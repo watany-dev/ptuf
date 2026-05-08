@@ -16,9 +16,9 @@ use crate::facts::Facts;
 /// match the YAML keys; the leaves match the supported facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WhenNode {
-    All(Vec<WhenNode>),
-    Any(Vec<WhenNode>),
-    Not(Box<WhenNode>),
+    All(Vec<Self>),
+    Any(Vec<Self>),
+    Not(Box<Self>),
     Event(String),
     Tool(String),
     ToolAny(Vec<String>),
@@ -45,12 +45,12 @@ pub enum CompileError {
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CompileError::UnknownKey(k) => write!(f, "unknown key in when expression: {k}"),
-            CompileError::InvalidShape { key, message } => {
+            Self::UnknownKey(k) => write!(f, "unknown key in when expression: {k}"),
+            Self::InvalidShape { key, message } => {
                 write!(f, "invalid shape for `{key}`: {message}")
-            }
-            CompileError::EmptyMapping => write!(f, "when expression was empty"),
-            CompileError::NotAMapping => write!(f, "when expression must be a mapping"),
+            },
+            Self::EmptyMapping => write!(f, "when expression was empty"),
+            Self::NotAMapping => write!(f, "when expression must be a mapping"),
         }
     }
 }
@@ -138,7 +138,7 @@ fn compile_shell_argv(value: &Value) -> Result<WhenNode, CompileError> {
             "headAny" => head_any = Some(expect_string_list(key, v)?),
             other => {
                 return Err(CompileError::UnknownKey(format!("shell.argv.{other}")));
-            }
+            },
         }
     }
     let head_any = head_any.ok_or_else(|| CompileError::InvalidShape {
@@ -167,7 +167,7 @@ fn compile_shell_pipeline(value: &Value) -> Result<WhenNode, CompileError> {
             "to" => to = Some(parse_endpoint("to", v)?),
             other => {
                 return Err(CompileError::UnknownKey(format!("shell.pipeline.{other}")));
-            }
+            },
         }
     }
     let from = from.ok_or_else(|| CompileError::InvalidShape {
@@ -293,7 +293,7 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
                             .iter()
                             .any(|p| path.raw.starts_with(p) || abs.starts_with(p))
                     })
-            }
+            },
         },
         WhenNode::UrlSchemeAny(schemes) => facts
             .url
@@ -312,7 +312,6 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::facts;
@@ -360,7 +359,7 @@ all:
             WhenNode::All(children) => {
                 assert_eq!(children[0], WhenNode::Tool("Bash".into()));
                 assert_eq!(children[1], WhenNode::Event("PreToolUse".into()));
-            }
+            },
             other => panic!("expected All, got {other:?}"),
         }
     }
@@ -686,7 +685,7 @@ shell.pipeline:
             CompileError::InvalidShape { key, message } => {
                 assert_eq!(key, "all");
                 assert!(message.contains("list"));
-            }
+            },
             other => panic!("unexpected variant: {other:?}"),
         }
     }
@@ -699,7 +698,7 @@ shell.pipeline:
             CompileError::InvalidShape { key, message } => {
                 assert_eq!(key, "all");
                 assert!(message.contains("empty"));
-            }
+            },
             other => panic!("unexpected variant: {other:?}"),
         }
     }
@@ -772,7 +771,7 @@ shell.pipeline:
             CompileError::InvalidShape { key, message } => {
                 assert_eq!(key, "shell.pipeline");
                 assert!(message.contains("from"));
-            }
+            },
             other => panic!("unexpected variant: {other:?}"),
         }
     }
@@ -825,7 +824,7 @@ shell.pipeline:
             CompileError::InvalidShape { key, message } => {
                 assert_eq!(key, "shell.pipeline.from");
                 assert!(message.contains("commandAny"));
-            }
+            },
             other => panic!("unexpected variant: {other:?}"),
         }
     }
@@ -838,7 +837,7 @@ shell.pipeline:
             CompileError::InvalidShape { key, message } => {
                 assert_eq!(key, "tool");
                 assert!(message.contains("string"));
-            }
+            },
             other => panic!("unexpected variant: {other:?}"),
         }
     }
@@ -851,7 +850,7 @@ shell.pipeline:
             CompileError::InvalidShape { key, message } => {
                 assert_eq!(key, "toolAny");
                 assert!(message.contains("sequence"));
-            }
+            },
             other => panic!("unexpected variant: {other:?}"),
         }
     }
@@ -864,7 +863,7 @@ shell.pipeline:
             CompileError::InvalidShape { key, message } => {
                 assert_eq!(key, "toolAny");
                 assert!(message.contains("string"));
-            }
+            },
             other => panic!("unexpected variant: {other:?}"),
         }
     }
@@ -922,7 +921,7 @@ all:
                     children[1],
                     WhenNode::UrlHostAny(vec!["169.254.169.254".into()]),
                 );
-            }
+            },
             other => panic!("expected All, got {other:?}"),
         }
     }

@@ -38,23 +38,85 @@ v0.0.1 ships:
 
 ## Install
 
-### Pre-built binaries (recommended)
+### Verified install (recommended)
 
-Linux / macOS:
+Set the exact version and target you want, download the canonical archive,
+verify its checksum, and verify the GitHub artifact attestation before
+extracting.
+
+Linux:
 
 ```bash
-curl -LsSf https://github.com/watany-dev/ptuf/releases/latest/download/ptuf-installer.sh | sh
+VERSION=v0.0.1
+TARGET=x86_64-unknown-linux-musl
+ARCHIVE=ptuf-$TARGET.tar.gz
+BASE=https://github.com/watany-dev/ptuf/releases/download/$VERSION
+
+curl -LO "$BASE/$ARCHIVE"
+curl -LO "$BASE/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
+gh attestation verify "$ARCHIVE" \
+  --repo watany-dev/ptuf \
+  --source-ref refs/tags/$VERSION
+tar -xzf "$ARCHIVE" --strip-components=1
+install -m 0755 ptuf ~/.cargo/bin/ptuf
+```
+
+macOS:
+
+```bash
+VERSION=v0.0.1
+TARGET=aarch64-apple-darwin
+ARCHIVE=ptuf-$TARGET.tar.gz
+BASE=https://github.com/watany-dev/ptuf/releases/download/$VERSION
+
+curl -LO "$BASE/$ARCHIVE"
+curl -LO "$BASE/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
+gh attestation verify "$ARCHIVE" \
+  --repo watany-dev/ptuf \
+  --source-ref refs/tags/$VERSION
+tar -xzf "$ARCHIVE" --strip-components=1
+install -m 0755 ptuf ~/.cargo/bin/ptuf
 ```
 
 Windows (PowerShell):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/latest/download/ptuf-installer.ps1 | iex"
+$Version = "v0.0.1"
+$Target = "x86_64-pc-windows-msvc"
+$Archive = "ptuf-$Target.zip"
+$Base = "https://github.com/watany-dev/ptuf/releases/download/$Version"
+
+curl.exe -LO "$Base/$Archive"
+curl.exe -LO "$Base/SHA256SUMS"
+$Expected = (Get-Content SHA256SUMS | Where-Object { $_ -match ([regex]::Escape($Archive) + "$") } | ForEach-Object { ($_ -split "\s+")[0] })
+$Actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant()
+if ($Actual -ne $Expected) { throw "checksum mismatch for $Archive" }
+gh attestation verify $Archive `
+  --repo watany-dev/ptuf `
+  --source-ref refs/tags/$Version
+Expand-Archive $Archive -DestinationPath .
 ```
 
-Or download an archive for your platform from
-[GitHub Releases](https://github.com/watany-dev/ptuf/releases) and place the
-`ptuf` binary on your `PATH`.
+### Installer scripts (unverified)
+
+Linux / macOS:
+
+```bash
+PTUF_VERSION=v0.0.1
+curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+$env:PTUF_VERSION = "v0.0.1"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/download/$env:PTUF_VERSION/ptuf-installer.ps1 | iex"
+```
+
+Installer scripts remain available for compatibility, but the verified archive
+path above is preferred for pinned installs.
 
 ### From crates.io
 
@@ -292,12 +354,30 @@ make pbt
   additionally runs `cargo tarpaulin` (95% floor, see `make coverage`),
   an MSRV `cargo check` on Rust 1.93.0, `actionlint`, and `cargo-machete`.
   Daily, `cargo audit` runs as a scheduled workflow.
+- Lint policy: `unsafe_code` is forbidden, and `clippy::pedantic` /
+  `nursery` / `cargo` run as group warnings. A curated `restriction`
+  set is denied (`unwrap_used`, `expect_used`, `panic`, `todo`,
+  `unimplemented`, `dbg_macro`, `print_stdout`, `print_stderr`, `exit`,
+  `mem_forget`, `unreachable`, ...). See `Cargo.toml [lints.*]` and
+  `clippy.toml` for the full matrix; tests are exempted via
+  `clippy.toml`'s `allow-{unwrap,expect,panic,print,dbg}-in-tests`.
 - `make coverage` runs `cargo tarpaulin` with a `95%` floor and excludes
   `src/main.rs` plus Windows-specific files (`*_windows.rs`,
   `windows*.rs`); the Windows code paths are exercised by the
   `windows-latest` test job
 - `make pbt` reruns the property-based test suite at
   `PBT_CASES=10000` by default — run before tagging a release
+
+The first invocation of `make check` or `make coverage` will run a `tools`
+prerequisite that installs missing supply-chain binaries via
+`cargo install --locked` (`cargo-deny` for `make check`, `cargo-tarpaulin`
+for `make coverage`). Pinned versions live in the `Makefile` as
+`CARGO_DENY_VERSION` / `CARGO_TARPAULIN_VERSION` and must stay in sync with
+`.github/workflows/ci.yml`. To skip the auto-install (CI or pre-provisioned
+environments), pass `SKIP_TOOL_INSTALL=1`; missing tools then fail fast
+instead of being installed. To force a reinstall when an older copy is on
+your `PATH`, run e.g.
+`cargo install --locked --force cargo-deny@0.19.2`.
 
 ## Design Docs
 

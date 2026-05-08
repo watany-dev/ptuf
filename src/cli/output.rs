@@ -22,11 +22,11 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         match serde_json::to_string(&response) {
             Ok(body) => {
                 let _ = writeln!(stdout, "{body}");
-            }
+            },
             Err(err) => {
                 let _ = writeln!(stderr, "ptuf: failed to serialise hook response: {err}");
                 return 1;
-            }
+            },
         }
     }
     if let Some(reason) = adapted.reason() {
@@ -74,7 +74,6 @@ pub(super) fn decision_exit_code(agent: HookAgent, decision: &Decision) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use crate::Decision;
 

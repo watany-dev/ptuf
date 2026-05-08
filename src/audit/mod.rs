@@ -37,10 +37,10 @@ pub enum AuditError {
 impl std::fmt::Display for AuditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AuditError::Write(e) => write!(f, "{e}"),
-            AuditError::Open { path, message } => {
+            Self::Write(e) => write!(f, "{e}"),
+            Self::Open { path, message } => {
                 write!(f, "audit: open {}: {message}", path.display())
-            }
+            },
         }
     }
 }
@@ -48,8 +48,8 @@ impl std::fmt::Display for AuditError {
 impl std::error::Error for AuditError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            AuditError::Write(e) => Some(e),
-            AuditError::Open { .. } => None,
+            Self::Write(e) => Some(e),
+            Self::Open { .. } => None,
         }
     }
 }
@@ -145,7 +145,6 @@ impl AuditSink for JsonlSink {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::Decision;
@@ -184,7 +183,7 @@ mod tests {
     #[test]
     fn noop_sink_accepts_any_record() {
         let s = NoopSink;
-        assert!(s.record(&rec()).is_ok());
+        s.record(&rec()).unwrap();
     }
 
     #[test]
@@ -221,11 +220,11 @@ mod tests {
         // synchronously and exercises the `AuditError::Open` arm.
         let bad = std::path::PathBuf::from("/proc/this-cannot-be-created/audit.jsonl");
         match JsonlSink::open(&bad) {
-            Ok(_) => {} // Some sandboxes happily create paths under /proc.
+            Ok(_) => {}, // Some sandboxes happily create paths under /proc.
             Err(AuditError::Open { path, message }) => {
                 assert_eq!(path, bad);
                 assert!(!message.is_empty());
-            }
+            },
             Err(other) => panic!("unexpected variant: {other}"),
         }
     }
@@ -284,7 +283,7 @@ mod tests {
 
         // record() must swallow the poison and return Ok so the engine
         // does not surface audit errors to the agent.
-        assert!(sink.record(&rec()).is_ok());
+        sink.record(&rec()).unwrap();
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);

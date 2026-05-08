@@ -18,7 +18,10 @@
 //! into an audit file. It runs on already-extracted command strings,
 //! never on raw structured input.
 
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "static regex literals validated by tests"
+)]
 
 use std::sync::LazyLock;
 

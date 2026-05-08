@@ -26,8 +26,8 @@ pub enum WriteError {
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WriteError::Io(e) => write!(f, "audit io error: {e}"),
-            WriteError::Serialize(m) => write!(f, "audit serialize error: {m}"),
+            Self::Io(e) => write!(f, "audit io error: {e}"),
+            Self::Serialize(m) => write!(f, "audit serialize error: {m}"),
         }
     }
 }
@@ -35,8 +35,8 @@ impl std::fmt::Display for WriteError {
 impl std::error::Error for WriteError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            WriteError::Io(e) => Some(e),
-            WriteError::Serialize(_) => None,
+            Self::Io(e) => Some(e),
+            Self::Serialize(_) => None,
         }
     }
 }
@@ -65,7 +65,6 @@ pub fn append_record<W: Write>(dst: &mut W, record: &AuditRecord) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::Decision;

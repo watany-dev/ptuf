@@ -9,8 +9,11 @@ cargo-dist-version = "0.31.0"
 ci = "github"
 # The installers to generate for each app
 installers = ["shell", "powershell"]
+# Archive formats to publish for Unix and Windows targets
+unix-archive = ".tar.gz"
+windows-archive = ".zip"
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Where to host releases
@@ -25,6 +28,8 @@ install-updater = false
 allow-dirty = ["ci"]
 
 # Linux build profile uses `lld` (see .cargo/config.toml). Install it on the
-# CI runner so x86_64-unknown-linux-gnu builds succeed.
+# CI runner so x86_64-unknown-linux-gnu builds succeed. musl-tools provides the
+# linker/toolchain needed for x86_64-unknown-linux-musl release archives.
 [dist.dependencies.apt]
 lld = "*"
+musl-tools = "*"

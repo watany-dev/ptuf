@@ -74,7 +74,6 @@ pub use claude_code::from_decision;
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
 
     use super::*;
     use crate::Decision;

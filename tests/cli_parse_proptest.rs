@@ -74,7 +74,7 @@ proptest! {
     #[test]
     fn pbt_parse_eval_total(
         tool in proptest::sample::select(&["Bash", "Read", "Write", "Edit"][..])
-            .prop_map(|s| s.to_string()),
+            .prop_map(std::string::ToString::to_string),
         cmd in arbitrary_command(),
     ) {
         // Skip cases where the command happens to look like a flag —

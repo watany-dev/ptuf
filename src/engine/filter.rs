@@ -74,8 +74,7 @@ fn decision_with_kind(decision: Decision, kind: DecisionKind) -> Decision {
     let rule_id = decision.rule_id().unwrap_or("").to_string();
     let reason = decision
         .reason()
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("Blocked by ptuf rule {rule_id}."));
+        .map_or_else(|| format!("Blocked by ptuf rule {rule_id}."), str::to_owned);
     match kind {
         DecisionKind::Allow => Decision::Allow,
         DecisionKind::Monitor => Decision::Monitor { rule_id },
@@ -167,7 +166,6 @@ pub(super) fn demote_for_mode(decision: Decision, mode: Mode) -> Decision {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use std::sync::Arc;
 
@@ -610,7 +608,7 @@ rules:
         match outcome.decision {
             Decision::Monitor { rule_id } => {
                 assert_eq!(rule_id, "pack.demo.no-curl");
-            }
+            },
             other => panic!("expected Monitor, got {other:?}"),
         }
     }
@@ -632,7 +630,7 @@ rules:
             Decision::Ask { rule_id, reason } => {
                 assert_eq!(rule_id, "pack.demo.no-curl");
                 assert!(reason.contains("nope"));
-            }
+            },
             other => panic!("expected Ask, got {other:?}"),
         }
     }
@@ -769,7 +767,7 @@ rules:
             Decision::Deny { rule_id, reason } => {
                 assert_eq!(rule_id, "pack.demo.ask-curl");
                 assert!(reason.contains("confirm"));
-            }
+            },
             other => panic!("expected Deny, got {other:?}"),
         }
     }

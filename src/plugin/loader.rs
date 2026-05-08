@@ -140,7 +140,6 @@ fn clone_raw_case(c: &super::schema::RawTestCase) -> super::schema::RawTestCase 
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::rules::ConfigRule;

@@ -30,7 +30,12 @@ push を物理的にブロックする。
 ## 技術原則
 
 - **Minimal Dependencies** — 追加クレートは必要性を吟味する
-- **Safety-First** — `#![forbid(unsafe_code)]`、`unwrap()` / `expect()` 禁止 (テスト除く)
+- **Safety-First** — `unsafe_code = "forbid"` (`Cargo.toml [lints.rust]`) でゼロ unsafe を強制。
+  `clippy::pedantic` / `nursery` / `cargo` を group warn、`unwrap_used` / `expect_used` /
+  `panic` / `todo` / `unimplemented` / `dbg_macro` / `print_stdout` / `print_stderr` /
+  `exit` 等の restriction を deny。production で局所的に許可する場合は
+  `#[expect(... reason = "...")]` を使い、テストでは `clippy.toml` の
+  `allow-{unwrap,expect,panic,print,dbg}-in-tests = true` が有効。
 - **Test Coverage** — `cargo-tarpaulin` で 95% 以上を維持
 - **Supply Chain** — `cargo-deny` で advisories / licenses / bans / sources を監査
 

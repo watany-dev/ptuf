@@ -75,7 +75,7 @@ fn split_host_port(authority: &str) -> Option<(&str, Option<u16>)> {
             let host = &authority[..i];
             let port: u16 = authority[i + 1..].parse().ok()?;
             Some((host, Some(port)))
-        }
+        },
         None => Some((authority, None)),
     }
 }
@@ -91,7 +91,6 @@ fn parse_port_suffix(rest: &str) -> Option<Option<u16>> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 
