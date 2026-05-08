@@ -292,12 +292,30 @@ make pbt
   additionally runs `cargo tarpaulin` (95% floor, see `make coverage`),
   an MSRV `cargo check` on Rust 1.93.0, `actionlint`, and `cargo-machete`.
   Daily, `cargo audit` runs as a scheduled workflow.
+- Lint policy: `unsafe_code` is forbidden, and `clippy::pedantic` /
+  `nursery` / `cargo` run as group warnings. A curated `restriction`
+  set is denied (`unwrap_used`, `expect_used`, `panic`, `todo`,
+  `unimplemented`, `dbg_macro`, `print_stdout`, `print_stderr`, `exit`,
+  `mem_forget`, `unreachable`, ...). See `Cargo.toml [lints.*]` and
+  `clippy.toml` for the full matrix; tests are exempted via
+  `clippy.toml`'s `allow-{unwrap,expect,panic,print,dbg}-in-tests`.
 - `make coverage` runs `cargo tarpaulin` with a `95%` floor and excludes
   `src/main.rs` plus Windows-specific files (`*_windows.rs`,
   `windows*.rs`); the Windows code paths are exercised by the
   `windows-latest` test job
 - `make pbt` reruns the property-based test suite at
   `PBT_CASES=10000` by default — run before tagging a release
+
+The first invocation of `make check` or `make coverage` will run a `tools`
+prerequisite that installs missing supply-chain binaries via
+`cargo install --locked` (`cargo-deny` for `make check`, `cargo-tarpaulin`
+for `make coverage`). Pinned versions live in the `Makefile` as
+`CARGO_DENY_VERSION` / `CARGO_TARPAULIN_VERSION` and must stay in sync with
+`.github/workflows/ci.yml`. To skip the auto-install (CI or pre-provisioned
+environments), pass `SKIP_TOOL_INSTALL=1`; missing tools then fail fast
+instead of being installed. To force a reinstall when an older copy is on
+your `PATH`, run e.g.
+`cargo install --locked --force cargo-deny@0.19.2`.
 
 ## Design Docs
 

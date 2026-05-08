@@ -140,7 +140,6 @@ fn clone_raw_case(c: &super::schema::RawTestCase) -> super::schema::RawTestCase 
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::rules::ConfigRule;
@@ -285,10 +284,7 @@ rules:
         let path = PathBuf::from("/nonexistent/ptuf-plugin-does-not-exist.yaml");
         let err = load_path(&path).expect_err("should fail");
         match err {
-            PluginError::Io {
-                path: returned,
-                source: _,
-            } => assert_eq!(returned, path),
+            PluginError::Io { path: returned, .. } => assert_eq!(returned, path),
             other => panic!("expected Io error, got {other:?}"),
         }
     }
@@ -301,10 +297,7 @@ rules:
         let path = PathBuf::from("/abs/plugin.yaml");
         let err = load_str(&path, "::not yaml::").expect_err("yaml err");
         match err {
-            PluginError::Yaml {
-                path: returned,
-                message: _,
-            } => assert_eq!(returned, path),
+            PluginError::Yaml { path: returned, .. } => assert_eq!(returned, path),
             other => panic!("expected Yaml error, got {other:?}"),
         }
     }
@@ -321,7 +314,7 @@ rules:
             } => {
                 assert_eq!(returned, path);
                 assert_eq!(found, "foo/v0");
-            }
+            },
             other => panic!("expected ApiVersion error, got {other:?}"),
         }
     }
@@ -362,11 +355,11 @@ rules:
             PluginError::Compile {
                 path: returned,
                 rule_id,
-                message: _,
+                ..
             } => {
                 assert_eq!(returned, path);
                 assert_eq!(rule_id, "pack.x.nested-bad");
-            }
+            },
             other => panic!("expected Compile error, got {other:?}"),
         }
     }

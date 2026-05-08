@@ -98,7 +98,7 @@ pub struct Argv {
     pub args: Vec<String>,
     /// Inner commands surfaced from wrappers such as `xargs`,
     /// `find -exec`, or `bash -c`.
-    pub inner_argv: Vec<Argv>,
+    pub inner_argv: Vec<Self>,
     /// Inner code blobs carried by dynamic-eval wrappers. Rules that
     /// cannot inspect `inner_argv` directly can still surface these to
     /// users or audit.
@@ -126,7 +126,7 @@ impl Argv {
         self.args.iter().filter(|a| !is_flag(a)).map(String::as_str)
     }
 
-    fn collect_commands<'a>(&'a self, out: &mut Vec<&'a Argv>) {
+    fn collect_commands<'a>(&'a self, out: &mut Vec<&'a Self>) {
         out.push(self);
         for inner in &self.inner_argv {
             inner.collect_commands(out);
@@ -199,7 +199,7 @@ pub(crate) fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
         i += 1;
     }
 
-    let head = argv.args.get(i)?.to_string();
+    let head = argv.args.get(i)?.clone();
     let rest = argv.args.iter().skip(i + 1).cloned().collect();
     Some(Argv {
         env_assignments: Vec::new(),
@@ -591,7 +591,7 @@ fn split_segments(tokens: Vec<Token>) -> Vec<Vec<Token>> {
                 if !current.is_empty() {
                     segments.push(std::mem::take(&mut current));
                 }
-            }
+            },
             other => current.push(other),
         }
     }
@@ -616,13 +616,13 @@ fn parse_pipeline(tokens: Vec<Token>, nesting_budget: usize) -> Pipeline {
                         nesting_budget,
                     ));
                 }
-            }
+            },
             Token::Redirect(op) => {
                 let target = take_redirect_target(&mut iter, op, &mut current_words);
                 redirects.push(Redirect { op, target });
-            }
-            Token::HeredocBody(_) => {}
-            Token::And | Token::Or | Token::Semi => {}
+            },
+            Token::HeredocBody(_) => {},
+            Token::And | Token::Or | Token::Semi => {},
         }
     }
     if !current_words.is_empty() {
@@ -651,7 +651,7 @@ fn take_redirect_target(
         (_, Some(Token::Word(w))) => {
             current_words.push(w);
             String::new()
-        }
+        },
         _ => String::new(),
     }
 }
@@ -666,7 +666,7 @@ fn parse_argv(words: Vec<String>, nesting_budget: usize) -> Argv {
             Some((k, v)) => {
                 env_assignments.push(EnvAssignment { key: k, value: v });
                 words.pop_front();
-            }
+            },
             None => break,
         }
     }
@@ -1582,14 +1582,12 @@ mod tests {
             cmd in combined_short_opts()
         ) {
             let b = parse(&cmd);
-            let Some(outer) = b
+            let outer_opt = b
                 .segments
                 .first()
-                .and_then(|p| p.commands.first())
-            else {
-                prop_assert!(false, "wrapper command did not parse: {cmd}");
-                unreachable!();
-            };
+                .and_then(|p| p.commands.first());
+            prop_assert!(outer_opt.is_some(), "wrapper command did not parse: {cmd}");
+            let outer = outer_opt.expect("Some after prop_assert");
             prop_assert!(
                 !outer.inner_code.is_empty() || !outer.inner_argv.is_empty(),
                 "combined short option failed to surface payload: {:?}",

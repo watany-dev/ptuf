@@ -1,6 +1,3 @@
-#![forbid(unsafe_code)]
-#![warn(clippy::unwrap_used, clippy::expect_used)]
-
 pub mod audit;
 pub mod cli;
 pub mod config;
@@ -69,7 +66,6 @@ pub fn try_decide(input: &HookInput) -> Result<Decision, EngineError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::hook_input::sample;

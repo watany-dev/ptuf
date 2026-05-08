@@ -45,26 +45,26 @@ impl Decision {
     /// Strictness rank used by [`aggregate`].
     pub(crate) fn rank(&self) -> DecisionRank {
         match self {
-            Decision::Allow => DecisionRank::Allow,
-            Decision::Monitor { .. } => DecisionRank::Monitor,
-            Decision::Ask { .. } => DecisionRank::Ask,
-            Decision::Deny { .. } => DecisionRank::Deny,
+            Self::Allow => DecisionRank::Allow,
+            Self::Monitor { .. } => DecisionRank::Monitor,
+            Self::Ask { .. } => DecisionRank::Ask,
+            Self::Deny { .. } => DecisionRank::Deny,
         }
     }
 
     pub fn rule_id(&self) -> Option<&str> {
         match self {
-            Decision::Allow => None,
-            Decision::Monitor { rule_id }
-            | Decision::Ask { rule_id, .. }
-            | Decision::Deny { rule_id, .. } => Some(rule_id.as_str()),
+            Self::Allow => None,
+            Self::Monitor { rule_id } | Self::Ask { rule_id, .. } | Self::Deny { rule_id, .. } => {
+                Some(rule_id.as_str())
+            },
         }
     }
 
     pub fn reason(&self) -> Option<&str> {
         match self {
-            Decision::Ask { reason, .. } | Decision::Deny { reason, .. } => Some(reason.as_str()),
-            Decision::Allow | Decision::Monitor { .. } => None,
+            Self::Ask { reason, .. } | Self::Deny { reason, .. } => Some(reason.as_str()),
+            Self::Allow | Self::Monitor { .. } => None,
         }
     }
 
@@ -72,10 +72,10 @@ impl Decision {
     /// rule's `defaultDecision`.
     pub fn kind(&self) -> DecisionKind {
         match self {
-            Decision::Allow => DecisionKind::Allow,
-            Decision::Monitor { .. } => DecisionKind::Monitor,
-            Decision::Ask { .. } => DecisionKind::Ask,
-            Decision::Deny { .. } => DecisionKind::Deny,
+            Self::Allow => DecisionKind::Allow,
+            Self::Monitor { .. } => DecisionKind::Monitor,
+            Self::Ask { .. } => DecisionKind::Ask,
+            Self::Deny { .. } => DecisionKind::Deny,
         }
     }
 }
@@ -88,13 +88,12 @@ where
 {
     decisions
         .into_iter()
-        .max_by_key(|d| d.rank())
+        .max_by_key(Decision::rank)
         .unwrap_or(Decision::Allow)
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 

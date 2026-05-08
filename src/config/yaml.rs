@@ -41,7 +41,6 @@ pub fn load_path(path: &Path) -> Result<RawConfig, ConfigError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::config::Mode;
@@ -163,7 +162,7 @@ audit:
                     message.contains("wat") || message.contains("unknown"),
                     "unexpected message: {message}"
                 );
-            }
+            },
             other => panic!("expected Yaml error, got {other:?}"),
         }
     }
@@ -201,10 +200,7 @@ audit:
         let path = PathBuf::from("/nonexistent/ptuf-load-path-does-not-exist.yaml");
         let err = load_path(&path).expect_err("should fail");
         match err {
-            ConfigError::Io {
-                path: returned,
-                source: _,
-            } => assert_eq!(returned, path),
+            ConfigError::Io { path: returned, .. } => assert_eq!(returned, path),
             other => panic!("expected Io error, got {other:?}"),
         }
     }
@@ -233,10 +229,7 @@ audit:
         let path = PathBuf::from("syntax-broken.yaml");
         let err = parse_str(&path, yaml).expect_err("syntax error expected");
         match err {
-            ConfigError::Yaml {
-                path: returned,
-                message: _,
-            } => assert_eq!(returned, path),
+            ConfigError::Yaml { path: returned, .. } => assert_eq!(returned, path),
             other => panic!("expected Yaml error, got {other:?}"),
         }
     }
@@ -266,10 +259,7 @@ audit:
         let path = PathBuf::from("/some/where/conf.yaml");
         let err = parse_str(&path, "mode: yolo\n").expect_err("invalid mode");
         match err {
-            ConfigError::Yaml {
-                path: returned,
-                message: _,
-            } => assert_eq!(returned, path),
+            ConfigError::Yaml { path: returned, .. } => assert_eq!(returned, path),
             other => panic!("expected Yaml error, got {other:?}"),
         }
     }
@@ -295,7 +285,7 @@ allowlists:
                     message.contains("my-bad-id"),
                     "expected entry id in message: {message}"
                 );
-            }
+            },
             other => panic!("expected Yaml error, got {other:?}"),
         }
     }
