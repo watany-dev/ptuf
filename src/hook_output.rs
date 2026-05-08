@@ -70,6 +70,51 @@ pub mod codex {
     }
 }
 
+pub mod copilot {
+    use serde::Serialize;
+
+    use crate::Decision;
+
+    /// Note appended to a deny reason whenever a Copilot `Ask` decision
+    /// is demoted to `Deny`. Copilot hooks have no reliable interactive
+    /// confirmation channel, so ptuf surfaces the demotion explicitly.
+    const ASK_UNAVAILABLE_NOTE: &str = "GitHub Copilot hooks do not reliably process interactive ask decisions; ptuf is blocking this request instead.";
+
+    /// Bare deny envelope expected by GitHub Copilot's `preToolUse` hook.
+    /// Unlike Claude Code / Codex, Copilot does **not** wrap the body in
+    /// `hookSpecificOutput` and treats non-zero exit codes as hook
+    /// failures (skipping the response). The CLI therefore writes this
+    /// JSON object directly and uses exit `0`, even for deny.
+    #[derive(Debug, Serialize)]
+    pub struct CopilotResponse {
+        #[serde(rename = "permissionDecision")]
+        pub permission_decision: &'static str,
+        #[serde(rename = "permissionDecisionReason")]
+        pub permission_decision_reason: String,
+    }
+
+    /// Build a Copilot deny envelope from a decision.
+    /// Returns `None` for `Allow` and `Monitor` (Copilot, like the other
+    /// adapters, emits no output for those). `Ask` is demoted to a deny
+    /// because Copilot can't surface an interactive prompt reliably.
+    pub fn from_decision(decision: &Decision) -> Option<CopilotResponse> {
+        let reason = match decision {
+            Decision::Allow | Decision::Monitor { .. } => return None,
+            Decision::Ask { reason, .. } => format!("{reason}\n\n{ASK_UNAVAILABLE_NOTE}"),
+            Decision::Deny { reason, .. } => reason.clone(),
+        };
+
+        Some(CopilotResponse {
+            permission_decision: "deny",
+            permission_decision_reason: reason,
+        })
+    }
+
+    pub fn deny_reason_for_ask(reason: &str) -> String {
+        format!("{reason}\n\n{ASK_UNAVAILABLE_NOTE}")
+    }
+}
+
 pub use claude_code::from_decision;
 
 #[cfg(test)]
@@ -82,6 +127,7 @@ mod tests {
     fn allow_produces_no_response() {
         assert!(claude_code::from_decision(&Decision::Allow).is_none());
         assert!(codex::from_decision(&Decision::Allow).is_none());
+        assert!(copilot::from_decision(&Decision::Allow).is_none());
     }
 
     #[test]
@@ -91,6 +137,35 @@ mod tests {
         };
         assert!(claude_code::from_decision(&d).is_none());
         assert!(codex::from_decision(&d).is_none());
+        assert!(copilot::from_decision(&d).is_none());
+    }
+
+    #[test]
+    fn copilot_deny_serialises_bare_envelope() {
+        let d = Decision::Deny {
+            rule_id: "core.x".into(),
+            reason: "Blocked by ptuf rule core.x.\n".into(),
+        };
+        let resp = copilot::from_decision(&d).expect("response");
+        let json = serde_json::to_string(&resp).expect("serialise");
+        assert!(
+            !json.contains("hookSpecificOutput"),
+            "Copilot must not wrap response: {json}"
+        );
+        assert!(json.contains("\"permissionDecision\":\"deny\""));
+        assert!(json.contains("\"permissionDecisionReason\":\"Blocked by ptuf rule core.x.\\n\""));
+    }
+
+    #[test]
+    fn copilot_ask_serialises_as_deny_with_demote_note() {
+        let d = Decision::Ask {
+            rule_id: "core.a".into(),
+            reason: "confirm please".into(),
+        };
+        let resp = copilot::from_decision(&d).expect("response");
+        let json = serde_json::to_string(&resp).expect("serialise");
+        assert!(json.contains("\"permissionDecision\":\"deny\""));
+        assert!(json.contains("GitHub Copilot hooks do not reliably process interactive ask"));
     }
 
     #[test]
@@ -185,6 +260,29 @@ mod tests {
             let expects_response = matches!(d, Decision::Ask { .. } | Decision::Deny { .. });
             prop_assert_eq!(claude_code::from_decision(&d).is_some(), expects_response);
             prop_assert_eq!(codex::from_decision(&d).is_some(), expects_response);
+            prop_assert_eq!(copilot::from_decision(&d).is_some(), expects_response);
+        }
+
+        #[test]
+        fn pbt_copilot_maps_ask_to_deny(id in rule_id(), reason in reason_text()) {
+            let d = Decision::Ask {
+                rule_id: id,
+                reason: reason.clone(),
+            };
+            let resp = copilot::from_decision(&d).expect("ask emits a response");
+            prop_assert_eq!(resp.permission_decision, "deny");
+            prop_assert!(resp.permission_decision_reason.contains(&reason));
+        }
+
+        #[test]
+        fn pbt_copilot_deny_keeps_reason_verbatim(id in rule_id(), reason in reason_text()) {
+            let d = Decision::Deny {
+                rule_id: id,
+                reason: reason.clone(),
+            };
+            let resp = copilot::from_decision(&d).expect("deny emits a response");
+            prop_assert_eq!(resp.permission_decision, "deny");
+            prop_assert_eq!(resp.permission_decision_reason, reason);
         }
     }
 }

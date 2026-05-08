@@ -14,6 +14,7 @@ use crate::Decision;
 use crate::engine::Engine;
 use crate::reason;
 
+mod copilot_input;
 mod output;
 mod parse;
 mod run;
@@ -35,6 +36,7 @@ pub(crate) const INVALID_PAYLOAD_RULE: &str = "core.engine.invalid-payload";
 pub enum HookAgent {
     ClaudeCode,
     Codex,
+    Copilot,
 }
 
 impl HookAgent {
@@ -42,6 +44,7 @@ impl HookAgent {
         match self {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
+            Self::Copilot => "copilot",
         }
     }
 }
@@ -62,10 +65,27 @@ pub struct CodexInitOptions {
     pub json: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CopilotProfile {
+    #[default]
+    Local,
+    Cloud,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CopilotInitOptions {
+    pub root: Option<PathBuf>,
+    pub hooks_path: Option<PathBuf>,
+    pub profile: CopilotProfile,
+    pub verify: bool,
+    pub json: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum InitOptions {
     ClaudeCode(ClaudeInitOptions),
     Codex(CodexInitOptions),
+    Copilot(CopilotInitOptions),
 }
 
 /// Build the engine for the CWD-derived project scope, or surface a
@@ -165,7 +185,7 @@ const HELP: &str = "ptuf — PreToolUseFilter, a guardrail for coding agents
 
 USAGE:
     ptuf hook <AGENT>                            (run as the agent's PreToolUse hook;
-                                                  AGENT = claude-code | codex)
+                                                  AGENT = claude-code | codex | copilot)
     ptuf eval --tool <NAME> <COMMAND>            (evaluate a single tool call)
     ptuf plugin test <PATH>                      (run a plugin's deny/allow tests)
     ptuf init claude-code [--dry-run]            (register hook in
@@ -177,6 +197,11 @@ USAGE:
                     [--hooks <PATH>]
                     [--config <PATH>]
                     [--verify [--json]]
+    ptuf init copilot [--dry-run]                (register repo-local Copilot hook in
+                      [--root <PATH>]            <repo>/.github/hooks/ptuf.json)
+                      [--hooks <PATH>]
+                      [--profile local|cloud]
+                      [--verify [--json]]
     ptuf doctor [--json]                         (print a diagnostic report)
     ptuf --help | --version
 
@@ -222,5 +247,6 @@ mod tests {
     fn hook_agent_audit_name_distinguishes_variants() {
         assert_eq!(HookAgent::ClaudeCode.audit_name(), "claude-code");
         assert_eq!(HookAgent::Codex.audit_name(), "codex");
+        assert_eq!(HookAgent::Copilot.audit_name(), "copilot");
     }
 }

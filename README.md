@@ -10,7 +10,8 @@ stderr, and agent-specific `hookSpecificOutput` JSON.
 - `1` — internal error such as invalid JSON, bad CLI arguments, or policy load
   failure
 
-`ptuf` currently ships first-class adapters for Claude Code and Codex.
+`ptuf` currently ships first-class adapters for Claude Code, Codex, and
+GitHub Copilot.
 
 ## Status
 
@@ -23,7 +24,8 @@ v0.0.1 ships:
 - Bounded wrapper inspection for `bash -c`, `sh -c`, `eval`, `xargs`, and
   `find -exec`, including wrapped redirect targets for self-protection
 - Layered YAML config and YAML plugins with rule-local `tests:`
-- `ptuf init <agent>` for Claude Code and Codex hook installation
+- `ptuf init <agent>` for Claude Code, Codex, and GitHub Copilot hook
+  installation
 - `ptuf doctor [--json]` for binary/config/plugin/hook diagnostics
 - Audit JSONL with `schemaVersion: 1`, `agent`, `pluginVersions`, and
   `allowlistId`
@@ -139,6 +141,7 @@ ptuf eval --tool <name> <command>
 ptuf plugin test <path>
 ptuf init claude-code [--dry-run] [--settings <path>] [--verify [--json]]
 ptuf init codex [--dry-run] [--root <path>] [--hooks <path>] [--config <path>] [--verify [--json]]
+ptuf init copilot [--dry-run] [--root <path>] [--hooks <path>] [--profile local] [--verify [--json]]
 ptuf doctor [--json]
 ptuf --help
 ptuf --version
@@ -173,11 +176,36 @@ Codex behavior:
   interactively
 - `Deny` — exit `2`, `hookSpecificOutput.permissionDecision = "deny"`
 
-For both adapters, the human-readable reason is also written to stderr for
-`Ask` or `Deny`. Hook stdin payloads are capped at 8 MiB. Unreadable, oversized,
-or invalid-JSON stdin is rejected with `Deny` (exit `2`) under the reserved
-`core.engine.invalid-payload` rule so Claude Code blocks the tool — `exit 1`
-would only surface a non-blocking warning and let the call through.
+GitHub Copilot behavior:
+
+- Copilot's `preToolUse` hook protocol treats non-zero exit as a hook
+  *failure* and may let the tool call proceed. To stay fail-closed, the
+  Copilot adapter always exits `0` and emits a *bare* JSON envelope
+  (no `hookSpecificOutput` wrapper):
+
+  ```json
+  {"permissionDecision":"deny","permissionDecisionReason":"…"}
+  ```
+
+- `Allow` / `Monitor` — exit `0`, empty stdout
+- `Ask` is converted to `Deny` because Copilot's `preToolUse` cannot
+  reliably prompt interactively
+- `Deny` — exit `0`, bare deny JSON
+- Invalid JSON, oversized stdin, and policy-load failures all emit a
+  bare deny JSON at exit `0` under the reserved
+  `core.engine.invalid-payload` / `core.engine.policy-load-failed`
+  rules
+
+Both Claude Code and Codex set the human-readable reason on stderr for
+`Ask` or `Deny`. Copilot likewise writes the reason to stderr alongside
+the bare JSON envelope.
+
+Hook stdin payloads are capped at 8 MiB. For Claude Code and Codex,
+unreadable, oversized, or invalid-JSON stdin is rejected with `Deny`
+(exit `2`) under the reserved `core.engine.invalid-payload` rule so the
+host blocks the tool — `exit 1` would only surface a non-blocking
+warning and let the call through. Copilot uses the same reserved rule
+but at exit `0` (see above).
 
 ## Claude Code
 
@@ -237,6 +265,26 @@ with:
 - matcher: `Bash|apply_patch|mcp__.*`
 - command: `/absolute/path/to/ptuf hook codex`
 - `features.codex_hooks = true`
+
+## GitHub Copilot
+
+The default install target is repo-local:
+
+```bash
+ptuf init copilot --profile local
+ptuf init copilot --profile local --dry-run
+ptuf init copilot --profile local --root /path/to/repo
+ptuf init copilot --profile local --hooks /tmp/ptuf.json
+ptuf init copilot --profile local --verify           # install + run synthetic deny check
+```
+
+That writes `<repo>/.github/hooks/ptuf.json` with a `preToolUse` entry
+containing both `bash` and `powershell` command strings. The installer
+is idempotent — re-running it detects an existing ptuf entry by the
+`hook copilot` command tail.
+
+The `--profile cloud` variant (which also generates wrapper scripts for
+Copilot's cloud agent) is post-MVP and not yet wired up.
 
 ## Configuration
 

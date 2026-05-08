@@ -225,6 +225,183 @@ fn hook_script_contract_blocks_repo_local_hook_edits() {
     assert!(stderr.contains("core.self_protection.hook-script"));
 }
 
+// ---------------------------------------------------------------
+// GitHub Copilot adapter contracts.
+//
+// Copilot's `preToolUse` hook treats a non-zero exit as a hook
+// failure and may skip the response entirely, which would make a
+// deny fail open. The CLI therefore expresses fail-closed via the
+// stdout JSON (`permissionDecision: "deny"`) and keeps the exit
+// code at 0 for *every* Decision under the Copilot adapter —
+// initialisation failures (invalid payload / policy load failure)
+// included.
+// ---------------------------------------------------------------
+
+#[test]
+fn copilot_camel_bash_command_denies_rm_rf_root() {
+    let payload = r#"{"toolName":"bash","toolArgs":"{\"command\":\"rm -rf /\"}"}"#;
+    let (code, stdout, stderr) = run(&["hook", "copilot"], payload);
+    assert_eq!(code, 0, "Copilot must return exit 0 even for deny");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert!(
+        value.get("hookSpecificOutput").is_none(),
+        "Copilot must emit a bare envelope: {stdout}"
+    );
+    assert_eq!(value["permissionDecision"], "deny");
+    assert!(
+        value["permissionDecisionReason"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.filesystem.destructive-rm")),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("core.filesystem.destructive-rm"));
+}
+
+#[test]
+fn copilot_invalid_payload_outputs_deny_and_exit_zero() {
+    let dir = repo();
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "copilot"], "not json");
+    assert_eq!(code, 0, "Copilot fail-closed must keep exit 0");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert!(value.get("hookSpecificOutput").is_none());
+    assert_eq!(value["permissionDecision"], "deny");
+    assert!(
+        value["permissionDecisionReason"]
+            .as_str()
+            .expect("reason string")
+            .contains("core.engine.invalid-payload"),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("invalid hook payload"), "stderr: {stderr}");
+}
+
+#[test]
+fn copilot_policy_load_failure_outputs_deny_and_exit_zero() {
+    let dir = repo();
+    std::fs::write(
+        dir.path().join(".ptuf.yaml"),
+        "plugins:\n  - path: ./missing-plugin.yaml\n",
+    )
+    .expect("write yaml");
+    let payload = r#"{"toolName":"bash","toolArgs":{"command":"ls"}}"#;
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "copilot"], payload);
+    assert_eq!(code, 0, "Copilot policy-load failure must keep exit 0");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert!(value.get("hookSpecificOutput").is_none());
+    assert_eq!(value["permissionDecision"], "deny");
+    assert!(
+        value["permissionDecisionReason"]
+            .as_str()
+            .expect("reason string")
+            .contains("core.engine.policy-load-failed"),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("could not load policy"), "stderr: {stderr}");
+}
+
+#[test]
+fn copilot_ask_demotes_to_deny() {
+    let dir = repo();
+    std::fs::write(
+        dir.path().join(".ptuf.yaml"),
+        "plugins:\n  - path: ./ask-plugin.yaml\n",
+    )
+    .expect("write yaml");
+    std::fs::write(
+        dir.path().join("ask-plugin.yaml"),
+        "apiVersion: ptuf.dev/v1\nkind: Plugin\nmetadata:\n  name: pack.ask\nrules:\n  - id: pack.ask.confirm-curl\n    severity: medium\n    defaultDecision: ask\n    when:\n      shell.argv:\n        headAny: [curl]\n    reason: please confirm\n",
+    )
+    .expect("write plugin");
+
+    let payload = r#"{"toolName":"bash","toolArgs":{"command":"curl https://example.com"}}"#;
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "copilot"], payload);
+    assert_eq!(code, 0, "Copilot Ask demote must keep exit 0");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert!(value.get("hookSpecificOutput").is_none());
+    assert_eq!(
+        value["permissionDecision"], "deny",
+        "Ask must demote to deny under Copilot"
+    );
+    let reason = value["permissionDecisionReason"]
+        .as_str()
+        .expect("reason string");
+    assert!(reason.contains("please confirm"), "stdout: {stdout}");
+    assert!(
+        reason.contains("GitHub Copilot hooks do not reliably process interactive ask"),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("please confirm"), "stderr: {stderr}");
+}
+
+#[test]
+fn copilot_allow_outputs_empty_stdout_and_exit_zero() {
+    let dir = repo();
+    let payload = r#"{"toolName":"bash","toolArgs":{"command":"ls"}}"#;
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "copilot"], payload);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.is_empty(),
+        "Allow must produce no Copilot envelope: {stdout}",
+    );
+    assert!(stderr.is_empty(), "stderr: {stderr}");
+}
+
+#[test]
+fn copilot_snake_case_payload_is_accepted() {
+    let dir = repo();
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
+    let (code, stdout, _stderr) = run_in(dir.path(), &["hook", "copilot"], payload);
+    assert_eq!(code, 0);
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["permissionDecision"], "deny");
+}
+
+#[test]
+fn copilot_view_maps_to_read_path() {
+    let dir = repo();
+    let payload = r#"{"toolName":"view","toolArgs":{"filePath":"~/.ssh/id_rsa"}}"#;
+    let (code, stdout, _stderr) = run_in(dir.path(), &["hook", "copilot"], payload);
+    assert_eq!(code, 0, "Copilot deny still exits 0");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["permissionDecision"], "deny");
+    assert!(
+        value["permissionDecisionReason"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.secrets.sensitive-read")),
+        "stdout: {stdout}",
+    );
+}
+
+#[test]
+fn copilot_create_maps_to_write_content() {
+    let dir = repo();
+    let payload =
+        r#"{"toolName":"create","toolArgs":{"path":"./.claude/settings.json","content":"{}"}}"#;
+    let (code, stdout, _stderr) = run_in(dir.path(), &["hook", "copilot"], payload);
+    assert_eq!(code, 0);
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["permissionDecision"], "deny");
+    // create→Write must reach self_protection — confirms the file_path
+    // shape was preserved through the camel→snake reshape.
+    assert!(
+        value["permissionDecisionReason"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.self_protection.")),
+        "stdout: {stdout}",
+    );
+}
+
+#[test]
+fn copilot_unknown_tool_never_panics() {
+    let dir = repo();
+    let payload = r#"{"toolName":"some-future-tool","toolArgs":{"goal":"x"}}"#;
+    let (code, _stdout, _stderr) = run_in(dir.path(), &["hook", "copilot"], payload);
+    // Unknown tools should pass through to engine (likely Allow,
+    // exit 0, empty stdout). The contract here is only that the CLI
+    // does not crash and stays at exit 0 under Copilot.
+    assert_eq!(code, 0);
+}
+
 #[test]
 fn init_verify_json_schema_contract_is_stable() {
     let dir = tempfile::TempDir::new().expect("tempdir");

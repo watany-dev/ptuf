@@ -14,10 +14,11 @@ use crate::init;
 use crate::plugin::runner as plugin_runner;
 use crate::reason;
 
+use super::copilot_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
 use super::{
-    ClaudeInitOptions, CodexInitOptions, HookAgent, INVALID_PAYLOAD_RULE, InitOptions,
-    build_engine_or_fail_closed,
+    ClaudeInitOptions, CodexInitOptions, CopilotInitOptions, HookAgent, INVALID_PAYLOAD_RULE,
+    InitOptions, build_engine_or_fail_closed,
 };
 
 pub(super) const MAX_HOOK_STDIN_BYTES: u64 = 8 * 1024 * 1024;
@@ -46,11 +47,10 @@ pub(super) fn run_hook<R: Read, W1: Write, W2: Write>(
         let deny = invalid_payload_deny(&problem);
         return emit_decision(agent, &deny, stdout, stderr);
     }
-    let input: HookInput = match serde_json::from_str(&buf) {
+    let input: HookInput = match parse_hook_input_for_agent(agent, &buf) {
         Ok(v) => v,
-        Err(err) => {
-            let _ = writeln!(stderr, "ptuf: invalid hook payload: {err}");
-            let problem = format!("hook payload is not valid JSON ({err})");
+        Err(problem) => {
+            let _ = writeln!(stderr, "ptuf: invalid hook payload: {problem}");
             let deny = invalid_payload_deny(&problem);
             return emit_decision(agent, &deny, stdout, stderr);
         },
@@ -79,6 +79,22 @@ fn invalid_payload_deny(problem: &str) -> Decision {
             problem,
             &["confirm the hook adapter is sending the documented PreToolUse JSON schema"],
         ),
+    }
+}
+
+/// Parse stdin into a [`HookInput`] using the agent-specific schema.
+///
+/// Claude Code and Codex both speak the snake_case
+/// `tool_name`/`tool_input` shape directly. Copilot may send either the
+/// snake_case form or the camelCase `toolName`/`toolArgs` form (with
+/// `toolArgs` either a JSON object or a JSON-encoded string), so its
+/// payload routes through `cli::copilot_input::parse` for normalisation
+/// before the engine sees it.
+fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
+    match agent {
+        HookAgent::ClaudeCode | HookAgent::Codex => serde_json::from_str::<HookInput>(body)
+            .map_err(|err| format!("hook payload is not valid JSON ({err})")),
+        HookAgent::Copilot => copilot_input::parse(body).map_err(|err| err.to_string()),
     }
 }
 
@@ -144,6 +160,7 @@ pub(super) fn run_init<W1: Write, W2: Write>(
     let verify_requested = match &options {
         InitOptions::ClaudeCode(o) => o.verify,
         InitOptions::Codex(o) => o.verify,
+        InitOptions::Copilot(o) => o.verify,
     };
     if verify_requested {
         return match options {
@@ -151,11 +168,15 @@ pub(super) fn run_init<W1: Write, W2: Write>(
                 run_init_claude_verify(&o, init::verify::run, stdout, stderr)
             },
             InitOptions::Codex(o) => run_init_codex_verify(&o, init::verify::run, stdout, stderr),
+            InitOptions::Copilot(o) => {
+                run_init_copilot_verify(&o, init::verify::run, stdout, stderr)
+            },
         };
     }
     let outcome = match options {
         InitOptions::ClaudeCode(options) => run_init_claude(&options, dry_run),
         InitOptions::Codex(options) => run_init_codex(&options, dry_run),
+        InitOptions::Copilot(options) => run_init_copilot(&options, dry_run),
     };
     match outcome {
         Ok(outcome) => {
@@ -203,6 +224,20 @@ fn run_init_codex(
     )?;
     let binary = init::codex::detect_binary();
     init::codex::install(&targets, &binary, dry_run)
+}
+
+fn run_init_copilot(
+    options: &CopilotInitOptions,
+    dry_run: bool,
+) -> Result<init::InstallOutcome, init::InitError> {
+    let cwd = std::env::current_dir().ok();
+    let targets = init::copilot::resolve_paths(
+        cwd.as_deref(),
+        options.root.as_deref(),
+        options.hooks_path.as_deref(),
+    )?;
+    let binary = init::copilot::detect_binary();
+    init::copilot::install(&targets, &binary, options.profile, dry_run)
 }
 
 fn resolve_claude_settings_path(options: &ClaudeInitOptions) -> Result<PathBuf, init::InitError> {
@@ -276,6 +311,47 @@ where
     };
     let binary = init::codex::detect_binary();
     let outcome = match init::codex::install(&targets, &binary, false) {
+        Ok(o) => o,
+        Err(err) => return fail_init(stderr, err),
+    };
+    finish_verify(
+        VerifyContext {
+            outcome: &outcome,
+            snaps: &snaps,
+            json: options.json,
+        },
+        runner,
+        stdout,
+        stderr,
+    )
+}
+
+fn run_init_copilot_verify<W1, W2, F>(
+    options: &CopilotInitOptions,
+    runner: F,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8
+where
+    W1: Write,
+    W2: Write,
+    F: FnOnce() -> init::verify::VerifyReport,
+{
+    let cwd = std::env::current_dir().ok();
+    let targets = match init::copilot::resolve_paths(
+        cwd.as_deref(),
+        options.root.as_deref(),
+        options.hooks_path.as_deref(),
+    ) {
+        Ok(t) => t,
+        Err(err) => return fail_init(stderr, err),
+    };
+    let snaps = match init::capture(&[targets.hooks_path.as_path()]) {
+        Ok(s) => s,
+        Err(err) => return fail_init(stderr, err),
+    };
+    let binary = init::copilot::detect_binary();
+    let outcome = match init::copilot::install(&targets, &binary, options.profile, false) {
         Ok(o) => o,
         Err(err) => return fail_init(stderr, err),
     };

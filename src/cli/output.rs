@@ -18,8 +18,16 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
     stderr: &mut W2,
 ) -> u8 {
     let adapted = adapt_hook_decision(agent, decision);
-    if let Some(response) = render_hook_response(agent, &adapted) {
-        match serde_json::to_string(&response) {
+    let serialised = match agent {
+        HookAgent::Copilot => {
+            hook_output::copilot::from_decision(&adapted).map(|r| serde_json::to_string(&r))
+        },
+        HookAgent::ClaudeCode | HookAgent::Codex => {
+            render_hook_response(agent, &adapted).map(|r| serde_json::to_string(&r))
+        },
+    };
+    if let Some(result) = serialised {
+        match result {
             Ok(body) => {
                 let _ = writeln!(stdout, "{body}");
             },
@@ -51,6 +59,9 @@ pub(super) fn render_hook_response(
     match agent {
         HookAgent::ClaudeCode => hook_output::claude_code::from_decision(decision),
         HookAgent::Codex => hook_output::codex::from_decision(decision),
+        // Copilot uses a bare envelope (no `hookSpecificOutput` wrapper);
+        // `emit_decision` dispatches through `hook_output::copilot` directly.
+        HookAgent::Copilot => None,
     }
 }
 
@@ -60,11 +71,24 @@ pub(super) fn adapt_hook_decision(agent: HookAgent, decision: &Decision) -> Deci
             rule_id: rule_id.clone(),
             reason: hook_output::codex::deny_reason_for_ask(reason),
         },
+        (HookAgent::Copilot, Decision::Ask { rule_id, reason }) => Decision::Deny {
+            rule_id: rule_id.clone(),
+            reason: hook_output::copilot::deny_reason_for_ask(reason),
+        },
         _ => decision.clone(),
     }
 }
 
 pub(super) fn decision_exit_code(agent: HookAgent, decision: &Decision) -> u8 {
+    // Copilot's preToolUse hook treats a non-zero exit as a hook failure
+    // and may skip the response entirely, which would let denies fail
+    // open. We therefore express fail-closed via the stdout JSON
+    // (`permissionDecision: "deny"`) and keep the exit code at 0 for
+    // every Decision under the Copilot adapter — initialisation failures
+    // (invalid payload / policy load failure) included.
+    if matches!(agent, HookAgent::Copilot) {
+        return 0;
+    }
     match (agent, decision) {
         (_, Decision::Deny { .. }) => 2,
         (HookAgent::Codex, Decision::Ask { .. }) => 2,

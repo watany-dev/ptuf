@@ -7,7 +7,10 @@
 
 use std::path::PathBuf;
 
-use super::{ClaudeInitOptions, CodexInitOptions, Command, HookAgent, InitOptions, ParseError};
+use super::{
+    ClaudeInitOptions, CodexInitOptions, Command, CopilotInitOptions, CopilotProfile, HookAgent,
+    InitOptions, ParseError,
+};
 
 pub(super) fn parse_doctor<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
@@ -31,6 +34,7 @@ where
     match agent.as_str() {
         "claude-code" => parse_init_claude(iter),
         "codex" => parse_init_codex(iter),
+        "copilot" => parse_init_copilot(iter),
         _ => Err(ParseError::UnknownAgent(agent.clone())),
     }
 }
@@ -121,6 +125,72 @@ where
     })
 }
 
+pub(super) fn parse_init_copilot<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let mut dry_run = false;
+    let mut root: Option<PathBuf> = None;
+    let mut hooks_path: Option<PathBuf> = None;
+    let mut profile = CopilotProfile::Local;
+    let mut verify = false;
+    let mut json = false;
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--dry-run" => dry_run = true,
+            "--verify" => verify = true,
+            "--json" => json = true,
+            "--root" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--root"))?;
+                root = Some(PathBuf::from(value));
+            },
+            "--hooks" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--hooks"))?;
+                hooks_path = Some(PathBuf::from(value));
+            },
+            "--profile" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--profile"))?;
+                profile = parse_copilot_profile(value)?;
+            },
+            other if other.starts_with("--root=") => {
+                root = Some(PathBuf::from(other.trim_start_matches("--root=")));
+            },
+            other if other.starts_with("--hooks=") => {
+                hooks_path = Some(PathBuf::from(other.trim_start_matches("--hooks=")));
+            },
+            other if other.starts_with("--profile=") => {
+                profile = parse_copilot_profile(other.trim_start_matches("--profile="))?;
+            },
+            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
+        }
+    }
+    check_verify_flags(verify, json, dry_run)?;
+    Ok(Command::Init {
+        dry_run,
+        options: InitOptions::Copilot(CopilotInitOptions {
+            root,
+            hooks_path,
+            profile,
+            verify,
+            json,
+        }),
+    })
+}
+
+fn parse_copilot_profile(value: &str) -> Result<CopilotProfile, ParseError> {
+    match value {
+        "local" => Ok(CopilotProfile::Local),
+        // Phase 4 (post-MVP) will replace this branch with
+        // `Ok(CopilotProfile::Cloud)`. Until then we reject the value
+        // at the parse layer so callers get a clear error instead of a
+        // silent fallback to `local`.
+        "cloud" => Err(ParseError::ConflictingFlags(
+            "--profile cloud is not yet supported (post-MVP)",
+        )),
+        _ => Err(ParseError::UnexpectedArgument(format!("--profile {value}"))),
+    }
+}
+
 /// Reject `--verify` / `--json` / `--dry-run` combinations that have no
 /// sensible meaning. `--json` only structures verify output, so it must
 /// be paired with `--verify`. `--verify` forces an install + synthetic
@@ -146,6 +216,7 @@ where
     let agent = match agent.as_str() {
         "claude-code" => HookAgent::ClaudeCode,
         "codex" => HookAgent::Codex,
+        "copilot" => HookAgent::Copilot,
         _ => return Err(ParseError::UnknownAgent(agent.clone())),
     };
     if let Some(extra) = iter.next() {
