@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Verified release artifacts with `SHA256SUMS`, GitHub artifact attestations,
+  and SPDX JSON SBOM publication.
+- `x86_64-unknown-linux-musl` release target for portable Linux installs.
+
+### Changed
+- Unix release archives are published as `.tar.gz` and Windows archives as
+  `.zip`.
+- Installation docs now prefer pinned archive downloads with checksum and
+  attestation verification over installer scripts.
+
 ## [0.0.1] - 2026-05-05
 
 Initial public release.

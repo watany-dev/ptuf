@@ -110,9 +110,16 @@ The current hand-patch set:
 - The `host` job creates canonical verified-install archives
   (`ptuf-x86_64-unknown-linux-musl.tar.gz`,
   `ptuf-aarch64-apple-darwin.tar.gz`,
-  `ptuf-x86_64-pc-windows-msvc.zip`), generates `ptuf-sbom.spdx.json` in SPDX
-  JSON format, writes `SHA256SUMS` for canonical archives/installers/SBOM, and
-  runs `actions/attest` before the GitHub Release is created.
+  `ptuf-x86_64-pc-windows-msvc.zip`), generates `ptuf-${TAG}.spdx.json` in
+  SPDX JSON format, writes `SHA256SUMS` for canonical archives/installers/SBOM,
+  and runs separate `actions/attest` steps for provenance and SBOM before the
+  GitHub Release is created.
+- The `host` job permissions are limited to `contents: write`,
+  `id-token: write`, `attestations: write`, and `artifact-metadata: write`.
+- The provenance attestation uses only
+  `subject-checksums: artifacts/SHA256SUMS`. The SBOM attestation uses the
+  same `subject-checksums` plus
+  `sbom-path: artifacts/ptuf-${TAG}.spdx.json`.
 
 `zizmor` audit suppressions for cargo-dist patterns that cannot currently be
 patched live in `.github/zizmor.yml`.
@@ -131,7 +138,7 @@ dist init  # answer prompts as before, or `dist generate`
 #    - `plan` step env-based ref handling
 #    - SHA-pin every third-party action
 #    - host job canonical archives, SPDX JSON SBOM, SHA256SUMS, and
-#      actions/attest steps
+#      separate provenance/SBOM actions/attest steps
 # 4. Diff against the previous release.yml carefully (the
 #    DO-NOT-REGENERATE header in release.yml lists the patch set).
 # 5. Run `actionlint .github/workflows/release.yml`, `zizmor

@@ -45,29 +45,48 @@
      `ptuf-x86_64-unknown-linux-musl.tar.gz`,
      `ptuf-aarch64-apple-darwin.tar.gz`,
      `ptuf-x86_64-pc-windows-msvc.zip`, `SHA256SUMS`, and
-     `ptuf-sbom.spdx.json`.
+     `ptuf-vX.Y.Z.spdx.json`.
    - The release workflow generates `SHA256SUMS` for the canonical archives,
-     installer scripts, and SBOM, then publishes GitHub artifact attestations
-     using the SPDX JSON SBOM as the predicate.
+     installer scripts, and SBOM, then publishes separate GitHub artifact
+     attestations for provenance and the SPDX JSON SBOM.
    - On `release: published`, `Publish to crates.io` runs `cargo publish`
      (skipped automatically for prereleases).
 
 7. Smoke-test post-release:
 
    ```bash
-   PTUF_VERSION=vX.Y.Z
-   ASSET=ptuf-x86_64-unknown-linux-musl.tar.gz
-   BASE_URL=https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION
-   curl -LsSfO "$BASE_URL/$ASSET"
-   curl -LsSfO "$BASE_URL/SHA256SUMS"
-   sha256sum --check --ignore-missing SHA256SUMS
-   tar -xzf "$ASSET" --strip-components=1
-   ./ptuf --version
-   gh attestation verify "$ASSET" \
+   VERSION=vX.Y.Z
+   TARGET=x86_64-unknown-linux-musl
+   ARCHIVE=ptuf-$TARGET.tar.gz
+   BASE=https://github.com/watany-dev/ptuf/releases/download/$VERSION
+
+   curl -LO "$BASE/$ARCHIVE"
+   curl -LO "$BASE/SHA256SUMS"
+   sha256sum --ignore-missing -c SHA256SUMS
+   gh attestation verify "$ARCHIVE" \
      --repo watany-dev/ptuf \
-     --signer-workflow watany-dev/ptuf/.github/workflows/release.yml \
-     --source-ref refs/tags/$PTUF_VERSION
+     --source-ref refs/tags/$VERSION
+   tar -xzf "$ARCHIVE" --strip-components=1
+   ./ptuf --version
    ptuf doctor
+   ```
+
+   Before the final tag, run the same check against an RC tag such as
+   `vX.Y.Z-rc.1` and confirm the release also includes `SHA256SUMS`,
+   `ptuf-vX.Y.Z-rc.1.spdx.json`, and a passing attestation verification:
+
+   ```bash
+   VERSION=vX.Y.Z-rc.1
+   TARGET=x86_64-unknown-linux-musl
+   ARCHIVE=ptuf-$TARGET.tar.gz
+   BASE=https://github.com/watany-dev/ptuf/releases/download/$VERSION
+
+   curl -LO "$BASE/$ARCHIVE"
+   curl -LO "$BASE/SHA256SUMS"
+   sha256sum --ignore-missing -c SHA256SUMS
+   gh attestation verify "$ARCHIVE" \
+     --repo watany-dev/ptuf \
+     --source-ref refs/tags/$VERSION
    ```
 
    And separately:

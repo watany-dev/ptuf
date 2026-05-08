@@ -36,34 +36,66 @@ v0.0.1 ships:
 
 ### Verified install (recommended)
 
-Set the exact version you want, download the canonical archive for your
-platform, and verify it before extracting:
+Set the exact version and target you want, download the canonical archive,
+verify its checksum, and verify the GitHub artifact attestation before
+extracting.
+
+Linux:
 
 ```bash
-PTUF_VERSION=v0.0.1
-ASSET=ptuf-x86_64-unknown-linux-musl.tar.gz
-BASE_URL=https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION
+VERSION=v0.0.1
+TARGET=x86_64-unknown-linux-musl
+ARCHIVE=ptuf-$TARGET.tar.gz
+BASE=https://github.com/watany-dev/ptuf/releases/download/$VERSION
 
-curl -LsSfO "$BASE_URL/$ASSET"
-curl -LsSfO "$BASE_URL/SHA256SUMS"
-sha256sum --check --ignore-missing SHA256SUMS
-tar -xzf "$ASSET" --strip-components=1
+curl -LO "$BASE/$ARCHIVE"
+curl -LO "$BASE/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
+gh attestation verify "$ARCHIVE" \
+  --repo watany-dev/ptuf \
+  --source-ref refs/tags/$VERSION
+tar -xzf "$ARCHIVE" --strip-components=1
 install -m 0755 ptuf ~/.cargo/bin/ptuf
 ```
 
-Optional provenance check with the GitHub CLI:
+macOS:
 
 ```bash
-gh attestation verify "$ASSET" \
+VERSION=v0.0.1
+TARGET=aarch64-apple-darwin
+ARCHIVE=ptuf-$TARGET.tar.gz
+BASE=https://github.com/watany-dev/ptuf/releases/download/$VERSION
+
+curl -LO "$BASE/$ARCHIVE"
+curl -LO "$BASE/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
+gh attestation verify "$ARCHIVE" \
   --repo watany-dev/ptuf \
-  --signer-workflow watany-dev/ptuf/.github/workflows/release.yml \
-  --source-ref refs/tags/$PTUF_VERSION
+  --source-ref refs/tags/$VERSION
+tar -xzf "$ARCHIVE" --strip-components=1
+install -m 0755 ptuf ~/.cargo/bin/ptuf
 ```
 
-Windows users can download `ptuf-x86_64-pc-windows-msvc.zip` and verify it
-against the same `SHA256SUMS` file.
+Windows (PowerShell):
 
-### Installer scripts
+```powershell
+$Version = "v0.0.1"
+$Target = "x86_64-pc-windows-msvc"
+$Archive = "ptuf-$Target.zip"
+$Base = "https://github.com/watany-dev/ptuf/releases/download/$Version"
+
+curl.exe -LO "$Base/$Archive"
+curl.exe -LO "$Base/SHA256SUMS"
+$Expected = (Get-Content SHA256SUMS | Where-Object { $_ -match ([regex]::Escape($Archive) + "$") } | ForEach-Object { ($_ -split "\s+")[0] })
+$Actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant()
+if ($Actual -ne $Expected) { throw "checksum mismatch for $Archive" }
+gh attestation verify $Archive `
+  --repo watany-dev/ptuf `
+  --source-ref refs/tags/$Version
+Expand-Archive $Archive -DestinationPath .
+```
+
+### Installer scripts (unverified)
 
 Linux / macOS:
 
