@@ -16,15 +16,19 @@ stderr, and agent-specific `hookSpecificOutput` JSON.
 
 v0.0.1 ships:
 
-- Built-in packs for filesystem, network, secrets, git, self-protection, and
-  opt-in project hygiene
+- Built-in packs for filesystem, network, secrets, git, self-protection, the
+  dynamic-eval engine guard, and opt-in project hygiene
 - Tool-aware fact extraction for `Bash`, `Read`, `Edit`, `Write`, `WebFetch`,
   and generic `mcp__<server>__<tool>` payloads
+- Bounded wrapper inspection for `bash -c`, `sh -c`, `eval`, `xargs`, and
+  `find -exec`, including wrapped redirect targets for self-protection
 - Layered YAML config and YAML plugins with rule-local `tests:`
 - `ptuf init <agent>` for Claude Code and Codex hook installation
 - `ptuf doctor [--json]` for binary/config/plugin/hook diagnostics
 - Audit JSONL with `schemaVersion: 1`, `agent`, `pluginVersions`, and
   `allowlistId`
+- Contract tests for hook JSON, `doctor --json`, audit schema, allowlists, MCP
+  nested paths, and hook-script self-protection
 
 ## Requirements
 
@@ -133,8 +137,8 @@ cargo install --path .
 ptuf hook <agent>
 ptuf eval --tool <name> <command>
 ptuf plugin test <path>
-ptuf init claude-code [--dry-run] [--settings <path>]
-ptuf init codex [--dry-run] [--root <path>] [--hooks <path>] [--config <path>]
+ptuf init claude-code [--dry-run] [--settings <path>] [--verify [--json]]
+ptuf init codex [--dry-run] [--root <path>] [--hooks <path>] [--config <path>] [--verify [--json]]
 ptuf doctor [--json]
 ptuf --help
 ptuf --version
@@ -170,8 +174,10 @@ Codex behavior:
 - `Deny` — exit `2`, `hookSpecificOutput.permissionDecision = "deny"`
 
 For both adapters, the human-readable reason is also written to stderr for
-`Ask` or `Deny`. Hook stdin payloads are capped at 8 MiB; larger payloads exit
-`1` with a stderr error before JSON parsing.
+`Ask` or `Deny`. Hook stdin payloads are capped at 8 MiB. Unreadable, oversized,
+or invalid-JSON stdin is rejected with `Deny` (exit `2`) under the reserved
+`core.engine.invalid-payload` rule so Claude Code blocks the tool — `exit 1`
+would only surface a non-blocking warning and let the call through.
 
 ## Claude Code
 
@@ -180,6 +186,8 @@ The simplest path is:
 ```bash
 ptuf init claude-code
 ptuf init claude-code --dry-run
+ptuf init claude-code --verify           # install + run synthetic deny check
+ptuf init claude-code --verify --json    # machine-readable verify report
 ```
 
 This writes or updates `~/.claude/settings.json` with a `PreToolUse` entry like:
@@ -192,6 +200,7 @@ This writes or updates `~/.claude/settings.json` with a `PreToolUse` entry like:
         "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*",
         "hooks": [
           {
+            "name": "ptuf",
             "type": "command",
             "command": "/absolute/path/to/ptuf hook claude-code"
           }
@@ -202,8 +211,9 @@ This writes or updates `~/.claude/settings.json` with a `PreToolUse` entry like:
 }
 ```
 
-The installer is idempotent. It detects an existing ptuf entry by the command
-tail `hook claude-code`, regardless of the absolute binary path.
+The installer is idempotent. It detects an existing ptuf entry by the
+`name: "ptuf"` marker, and still recognizes the legacy command tail
+`hook claude-code` regardless of the absolute binary path.
 
 ## Codex
 
@@ -214,6 +224,7 @@ ptuf init codex
 ptuf init codex --dry-run
 ptuf init codex --root /path/to/repo
 ptuf init codex --hooks /tmp/hooks.json --config /tmp/config.toml
+ptuf init codex --verify           # install + run synthetic deny check
 ```
 
 That writes:
@@ -290,6 +301,9 @@ ptuf plugin test ./ptuf-plugin.yaml
 
 Plugin tests evaluate the plugin rule itself, not the full built-in engine.
 
+For end-to-end protocol regressions, the repository also keeps
+`tests/contracts.rs` plus JSON fixtures for hook/audit/doctor behavior.
+
 ## Library Use
 
 ```rust
@@ -305,8 +319,15 @@ match decide(&input) {
 ```
 
 `decide()` is intentionally backward-compatible and lenient: it tries
-`Engine::for_cwd()` first and falls back to `Engine::default()` if policy or
-plugin loading fails. The CLI path is stricter and fails closed.
+`Engine::for_cwd()` first and falls back to `Engine::builder().agent(
+"embed-fallback").build()` if policy or plugin loading fails. The fallback
+engine still populates `ProtectedPaths` (running binary, Claude/Codex
+settings) so self-protection guardrails remain in place. The CLI path is
+stricter and fails closed.
+
+For embedded callers that want the same fail-closed contract as the CLI, use
+`try_decide(&HookInput) -> Result<Decision, EngineError>` instead — it
+surfaces config and plugin load errors rather than silently degrading.
 
 ## Develop
 
@@ -323,12 +344,30 @@ make pbt
   additionally runs `cargo tarpaulin` (95% floor, see `make coverage`),
   an MSRV `cargo check` on Rust 1.93.0, `actionlint`, and `cargo-machete`.
   Daily, `cargo audit` runs as a scheduled workflow.
+- Lint policy: `unsafe_code` is forbidden, and `clippy::pedantic` /
+  `nursery` / `cargo` run as group warnings. A curated `restriction`
+  set is denied (`unwrap_used`, `expect_used`, `panic`, `todo`,
+  `unimplemented`, `dbg_macro`, `print_stdout`, `print_stderr`, `exit`,
+  `mem_forget`, `unreachable`, ...). See `Cargo.toml [lints.*]` and
+  `clippy.toml` for the full matrix; tests are exempted via
+  `clippy.toml`'s `allow-{unwrap,expect,panic,print,dbg}-in-tests`.
 - `make coverage` runs `cargo tarpaulin` with a `95%` floor and excludes
   `src/main.rs` plus Windows-specific files (`*_windows.rs`,
   `windows*.rs`); the Windows code paths are exercised by the
   `windows-latest` test job
 - `make pbt` reruns the property-based test suite at
   `PBT_CASES=10000` by default — run before tagging a release
+
+The first invocation of `make check` or `make coverage` will run a `tools`
+prerequisite that installs missing supply-chain binaries via
+`cargo install --locked` (`cargo-deny` for `make check`, `cargo-tarpaulin`
+for `make coverage`). Pinned versions live in the `Makefile` as
+`CARGO_DENY_VERSION` / `CARGO_TARPAULIN_VERSION` and must stay in sync with
+`.github/workflows/ci.yml`. To skip the auto-install (CI or pre-provisioned
+environments), pass `SKIP_TOOL_INSTALL=1`; missing tools then fail fast
+instead of being installed. To force a reinstall when an older copy is on
+your `PATH`, run e.g.
+`cargo install --locked --force cargo-deny@0.19.2`.
 
 ## Design Docs
 

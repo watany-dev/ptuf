@@ -15,7 +15,7 @@
 (fmt-check / clippy / test / `cargo doc` / cargo-deny) を実行する。手順の
 詳細は README "Develop" と `Makefile` を参照。
 
-`make pbt` (`PROPTEST_CASES=10000 cargo test`) はリリース直前の深掘り PBT 用。
+`make pbt` (`PROPTEST_CASES=10000 cargo test --features testing`) はリリース直前の深掘り PBT 用。
 
 ## アーキテクチャ規約
 
@@ -26,7 +26,12 @@
 ## 技術原則
 
 - **Minimal Dependencies** — 追加クレートは必要性を吟味する
-- **Safety-First** — `#![forbid(unsafe_code)]`、`unwrap()` / `expect()` 禁止 (テスト除く)
+- **Safety-First** — `unsafe_code = "forbid"` (`Cargo.toml [lints.rust]`) でゼロ unsafe を強制。
+  `clippy::pedantic` / `nursery` / `cargo` を group warn、`unwrap_used` / `expect_used` /
+  `panic` / `todo` / `unimplemented` / `dbg_macro` / `print_stdout` / `print_stderr` /
+  `exit` 等の restriction を deny。production で局所的に許可する場合は
+  `#[expect(... reason = "...")]` を使い、テストでは `clippy.toml` の
+  `allow-{unwrap,expect,panic,print,dbg}-in-tests = true` が有効。
 - **Test Coverage** — `cargo-tarpaulin` で 95% 以上を維持
 - **Supply Chain** — `cargo-deny` で advisories / licenses / bans / sources を監査
 

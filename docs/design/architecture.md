@@ -5,11 +5,11 @@ ptuf は CLI shim と判定コアを分けた構成を取る。`src/main.rs` は
 
 ## 層構造
 
-- **CLI shim** (`src/main.rs`, `src/io_runner.rs`, `src/cli.rs`)
+- **CLI shim** (`src/main.rs`, `src/io_runner.rs`, `src/cli/`)
   - argv を parse する
   - stdin / stdout / stderr を配線する
   - 終了コードを返す
-- **判定コア** (`src/engine.rs` ほか)
+- **判定コア** (`src/engine/` ほか)
   - config をロードする
   - facts を抽出する
   - built-in rule と plugin rule を評価する
@@ -39,7 +39,11 @@ hook response / eval text / audit JSONL
 ```
 
 `crate::decide()` だけは例外で、`Engine::for_cwd()` 失敗時に
-`Engine::default()` へフォールバックする。
+`Engine::builder().agent("embed-fallback").build()` へフォールバックする。
+builder は `ProtectedPaths::collect_with_env` を必ず通すため、`current_exe()`
+由来の binary や HOME-rooted Claude/Codex settings といった self-protection
+ターゲットは fallback 経路でも populate される (旧 `Engine::default()` シムは
+P1 として削除)。embed 利用者は `Engine::builder()` 直接利用も可能。
 
 ## Facts
 
@@ -47,13 +51,21 @@ hook response / eval text / audit JSONL
 
 | fact | 内容 |
 | --- | --- |
-| `bash` | `Bash` tool の `command` を parse した command / segment / pipeline |
-| `path` | 先頭の file path (`Read` / `Edit` / `Write` / MCP の top-level `path`) |
-| `paths` | 抽出された全 path |
+| `bash` | `Bash` tool の `command` を parse した command / segment / pipeline。`Pipeline.redirects` で `>` / `>>` / `<` / `2>` / `&>` / heredoc の operator と target を保持する。`Bash::has_command_substitution` / `has_redirect` / `has_heredoc` / `has_process_substitution` で `` ` … ` `` / `$(…)` / リダイレクト / heredoc / `<(…)` `>(…)` の存在を surface する。`Argv.inner_argv` / `inner_code` / `inner_redirects` は `bash -c`, `eval`, `xargs`, `find -exec` の内側 command と redirect を bounded depth で再 parse し、既存 rule と self-protection が inspectable な形に連結する |
+| `path` | 先頭の file path (`Read` / `Edit` / `Write` / MCP の top-level `path`)。`PathFact` として `raw` / `expanded` / `absolute` / `canonical_or_raw` / `origin` を保持する |
+| `paths` | tool 入力 (`Read` / `Edit` / `Write` / `apply_patch` / MCP) 由来の全 `PathFact`。Bash redirect target はここには含まれない (engine が self-protection 用に別 slice として供給する) |
 | `url` | `WebFetch` または MCP の top-level `url` |
 | `sensitive` | path / URL / write payload などから検出した機密分類 |
-| `protected` | self-protection 対象との一致。engine 側で補完 |
+| `protected` | self-protection 対象との一致。engine 側で `Facts.paths` と Bash redirect target (`Pipeline.redirects[].target` に加え wrapper 由来の `Argv.inner_redirects[].target`) を `ProtectedPaths::classify_input_with_paths_pair` に二本のスライスとして渡して補完する。戻り値は固定長の `ProtectedKinds` (`[ProtectedKind; 6] + len`) で、中間 path clone や `ProtectedKind` 用 heap allocation は発生させない |
 | `project` | lock file、現在 branch、protected branch 判定。engine 側で補完 |
+
+`PathFact.origin` は `ToolInputDirect` (top-level `file_path` / MCP `path`) /
+`ToolInputNested` (`files[].path` / `paths[]` / `items[].path`) /
+`ApplyPatch` (`*** Add/Update/Delete/Move` 行) / `BashRedirect` (`>` / `>>` /
+`<` / `2>` / `&>` の operand。engine のみが emit する) の 4 種で、書込み先かど
+うかの判定や cross-tool 一貫性の根拠に使う。`canonical_or_raw` は構築時に 1
+回だけ `canonicalize()` を試み、I/O 失敗時は `absolute` に fallback する
+(symlink loop / permission denied / 未存在 path で panic しない不変条件)。
 
 plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に限る:
 
@@ -73,8 +85,10 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 - `claude-code`
 - `codex`
 
-どちらも stdin の JSON payload を `HookInput` として評価するが、hook response の
-扱いが異なる。
+adapter は stdin payload をまず `RawHookInput` として受け、内部では
+normalized `Event { agent, event, tool, inputs, paths, urls, content }`
+ビューへ変換して fact 抽出に渡す。公開 API は後方互換のため `HookInput` を維持
+する。hook response の扱いは agent ごとに次の差分を持つ。
 
 - Claude Code: `Ask` はそのまま `permissionDecision = "ask"`
 - Codex: `Ask` は `Deny` へ変換して block する
@@ -118,11 +132,12 @@ stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit 
 以下は exit `1`:
 
 - argv parse 失敗
-- stdin 読み取り失敗
-- stdin payload 上限超過
-- JSON parse 失敗
-- policy / plugin load 失敗時の hook response 生成失敗
 - `doctor` / `plugin test` の内部エラー
+- `init` の書き込み失敗
+
+`hook` サブコマンドは Claude Code の hook 仕様 (exit 1 は non-blocking warning) に
+追従するため、stdin 系の初期化エラーは exit `1` ではなく exit `2` + deny で扱う。
+詳細は次節を参照。
 
 ## fail-closed
 
@@ -131,10 +146,20 @@ CLI 経路 (`hook`, `eval`) は config / plugin のロードに失敗すると
 `failClosed: false` でも変わらない。設定ファイル自体が読めない状況では、その設定を
 信用できないためである。
 
+`hook` はさらに stdin 読み取り失敗 / 8 MiB 上限超過 / JSON parse 失敗を
+`core.engine.invalid-payload` で deny する (exit `2` + adapter の deny JSON)。
+Claude Code の hook 仕様では exit `1` が non-blocking warning として扱われ
+tool 実行を止めないため、これらの初期化エラーを exit `1` のまま放置すると
+fail-open する。`failClosed: false` でもこの境界は緩めない。
+
 一方、ライブラリ API `decide()` は組み込み呼び出しの後方互換性を優先し、
-default engine にフォールバックする。
+default engine にフォールバックする。`try_decide()` は CLI と同じ
+fail-closed 契約を embed 利用側に提供する並立 API である。
 
 ## audit
 
 判定後、設定に応じて audit JSONL を追記する。詳細は [`audit.md`](audit.md) を
 参照。
+
+timestamp と allowlist expiry の RFC3339 処理は `time` crate に委譲する。
+自前の年月日計算は持たない。

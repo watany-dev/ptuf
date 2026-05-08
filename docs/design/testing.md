@@ -27,13 +27,13 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - `aggregate([d, d, …])` == `d` (冪等律)
 - `aggregate(xs ++ ys)` == `aggregate([aggregate(xs), aggregate(ys)])` (結合律)
 - 並べ替えに対し `severity` が不変 (交換律)
-- 任意の `x ∈ xs` について `aggregate(xs).severity() >= x.severity()` (上界)
+- 任意の `x ∈ xs` について `aggregate(xs).rank() >= x.rank()` (上界)
 
 ### `engine::demote_for_mode`
 
 - `Mode::Enforce` ⇒ 入力をそのまま返す (恒等)
-- `Mode::Monitor | Mode::Observe` で `Allow / Ask / Monitor` ⇒ 不変
-- `Mode::Monitor | Mode::Observe` で `Deny { rule_id, .. }` ⇒
+- `Mode::Monitor` で `Allow / Ask / Monitor` ⇒ 不変
+- `Mode::Monitor` で `Deny { rule_id, .. }` ⇒
   `Monitor { rule_id }` (rule_id を保存)
 - demote は severity を増加させない
 
@@ -43,6 +43,17 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - 空白のみ ⇒ `segments.is_empty()`
 - セパレータをシングルクォートで囲んだ文字列は単一 segment になる
 - `flags()` と `positional()` は `args` の互いに素な分割
+- redirect operator (`>` / `>>` / `<` / `2>` / `&>`) は `Pipeline.redirects`
+  に保存され、続く word が target になる
+- heredoc (`<<TAG` / `<<-TAG`) の body は terminator までを 1 word として
+  `Redirect.target` に保持し、`Bash::has_heredoc` を true にする
+- process substitution (`<(...)` / `>(...)`) は paren-balance で 1 word として
+  吸収され `Bash::has_process_substitution` を true にする
+- `bash -lc`, `sh -ec` のような combined short option でも `-c` / `-e` を認識する
+- `Argv.inner_argv` / `inner_redirects` は wrapper (`bash -c`, `eval`, `xargs`,
+  `find -exec`) の内側 command / redirect を bounded depth で surface する
+- tokenizer は 1 byte 以上前進する (forward-progress;
+  `debug_assert!(advanced > 0)`)
 
 ### 組み込み rule (全件)
 
@@ -67,20 +78,35 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 
 ## ランタイム / CI 構成
 
-- **デフォルト**: `cargo test` (`make check`, CI) は proptest をデフォルト
-  256 ケースで実行。失敗ケースは `proptest-regressions/` に固定化される。
+- **デフォルト**: `cargo test --features testing` (`make check`, CI) は
+  proptest をデフォルト 256 ケースで実行。失敗ケースは
+  `proptest-regressions/` に固定化される。
 - **深掘り**: `make pbt` (デフォルト 10000 ケース、`PBT_CASES=N` で上書き可)
   をローカル / 夜間 / リリース直前に手動実行。
 - **再現性**: `proptest-regressions/` は git 管理。シュリンクで見つかった反例は
   全員のローカルと CI で同じシードで再現される。
-- **依存方針**: `proptest` は `[dev-dependencies]` のみ。出荷バイナリ
-  (`cargo build --release`) には含まれず、配布物の依存ツリーは無変更。
-  CLAUDE.md の "Minimal Dependencies" 原則を満たす。
+- **依存方針**: テスト用クレート (`proptest`, `tempfile`) は
+  `[dev-dependencies]` のみ。出荷バイナリ (`cargo build --release`) には
+  含まれず、配布物の依存ツリーは無変更。CLAUDE.md の "Minimal
+  Dependencies" 原則を満たす。
 
 ## 戦略 (Strategy) の置き場所
 
 `src/testing/proptest.rs` に共通戦略 (Decision / Severity / HookInput /
-bash_command) を集約し、`#[cfg(test)] pub(crate) mod testing` で各モジュールの
-テストブロックから参照する。`tests/engine_proptest.rs` は integration crate
-として独立コンパイルされるため共通戦略は見えず、必要最小限の戦略をローカル
-複製している。
+bash_command) を集約し、`#[cfg(any(test, feature = "testing"))] pub mod
+testing` で各モジュールのテストブロックと `tests/engine_proptest.rs` の両方
+から参照する。`testing` feature は optional `proptest` 依存だけを有効化し、
+通常の `cargo build --release` では出荷バイナリに含まれない。
+
+## 契約テスト
+
+`tests/contracts.rs` と `tests/contracts/*.json` は公開契約を固定する層である。
+ここでは example-based / PBT とは別に、次を regression として保持する。
+
+- hook deny 時の `hookSpecificOutput` JSON shape
+- `doctor --json` の top-level schema
+- audit JSONL の field contract (`schemaVersion`, `agent`, `allowlistId` など)
+- plugin loader error の fail-closed 契約
+- hook stdin の fail-closed 契約 (`core.engine.invalid-payload` での deny)
+- allowlist `when` の suppression 契約
+- MCP nested path と hook script self-protection の end-to-end 契約

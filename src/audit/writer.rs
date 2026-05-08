@@ -1,11 +1,12 @@
 //! JSONL writer used by [`super::JsonlSink`].
 //!
-//! Serialises one [`AuditRecord`] to a single line, then writes the
-//! line in **one** `write_all` call against a file opened with
-//! `O_APPEND`. POSIX guarantees a single `write` shorter than
-//! `PIPE_BUF` is atomic, so concurrent ptuf processes appending to the
-//! same audit file cannot interleave records. Windows lacks the same
-//! guarantee — see `docs/design/audit.md` and the README caveat.
+//! Serialises one [`AuditRecord`] to a single line and appends it to
+//! a file opened with `O_APPEND`. Cross-process atomicity is
+//! guaranteed by the caller: `JsonlSink::record` takes an OS-level
+//! advisory lock (`flock(2)` on Unix, `LockFileEx` on Windows) around
+//! the write so concurrent ptuf processes cannot interleave records
+//! even when a record exceeds a page or `write_all` has to loop on
+//! partial writes.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -25,8 +26,8 @@ pub enum WriteError {
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WriteError::Io(e) => write!(f, "audit io error: {e}"),
-            WriteError::Serialize(m) => write!(f, "audit serialize error: {m}"),
+            Self::Io(e) => write!(f, "audit io error: {e}"),
+            Self::Serialize(m) => write!(f, "audit serialize error: {m}"),
         }
     }
 }
@@ -34,8 +35,8 @@ impl std::fmt::Display for WriteError {
 impl std::error::Error for WriteError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            WriteError::Io(e) => Some(e),
-            WriteError::Serialize(_) => None,
+            Self::Io(e) => Some(e),
+            Self::Serialize(_) => None,
         }
     }
 }
@@ -64,7 +65,6 @@ pub fn append_record<W: Write>(dst: &mut W, record: &AuditRecord) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::Decision;
@@ -108,30 +108,20 @@ mod tests {
 
     #[test]
     fn open_append_creates_missing_parent_dirs() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-audit-writer-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let nested = dir.join("nested/deep/audit.jsonl");
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let nested = dir.path().join("nested/deep/audit.jsonl");
         let mut f = open_append(&nested).expect("open");
         append_record(&mut f, &rec()).expect("write");
         let body = std::fs::read_to_string(&nested).expect("read");
         assert!(body.contains("\"decision\":\"deny\""));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn open_append_with_no_parent_works_for_bare_filename() {
-        // PathBuf::parent() of a single-component path returns Some("")
-        // — exercise the early-return branch in open_append.
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("ptuf-audit-bare-{}.jsonl", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+    fn open_append_works_when_parent_already_exists() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
         let mut f = open_append(&path).expect("open");
         append_record(&mut f, &rec()).expect("write");
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

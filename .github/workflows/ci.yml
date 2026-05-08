@@ -42,7 +42,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --all-targets --locked --features testing -- -D warnings
       - name: Doc warnings
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
 
@@ -68,7 +68,7 @@ jobs:
         with:
           tool: cargo-nextest@0.9.133
       - name: Test
-        run: cargo nextest run --locked --all-targets
+        run: cargo nextest run --locked --all-targets --features testing
       - name: Doctests
         run: cargo test --locked --doc
 
@@ -89,7 +89,9 @@ jobs:
         run: |
           cargo tarpaulin --out json --out html \
             --locked \
+            --features testing \
             --skip-clean \
+            --features testing \
             --fail-under 95 \
             --exclude-files "src/main.rs" \
             --exclude-files "src/**/windows*.rs" \

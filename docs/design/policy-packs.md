@@ -10,6 +10,7 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 | `core.secrets` | enabled | 機密 path の読取 / 外部送信 |
 | `core.git` | enabled | 危険な git 操作と bypass |
 | `core.self_protection` | enabled | ptuf 自身と hook 設定の保護 |
+| `core.engine` | enabled | 動的コード評価 (`bash -c` / `eval` 等) の確認 |
 | `core.project_hygiene` | disabled | lockfile / protected branch 規約 |
 
 ## `core.filesystem`
@@ -36,11 +37,18 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.secrets.sensitive-path-to-network` | deny | true | critical | Bash で機密 path と network sink が同一 command に共存 |
+| `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`scp`/`rsync`/`nc` 等) が共存。pipeline の redirect 先が機密 path の場合も対象 |
 | `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit`、または path を持つ MCP tool で機密 path を直接対象にする |
 
 機密分類は `~/.ssh/**`, `~/.aws/**`, `~/.config/gcloud/**`, `~/.kube/config`,
 `~/.docker/config.json`, `.env*`, `.npmrc`, `.pypirc`, `*.tfstate`, PEM blob など。
+
+`sensitive-path-to-network` は segment (`;` / `&&` / `||` 区切り) ごとに判定する
+ため `ls ~/.ssh; curl https://example.com` のように無関係な segment を並べた
+shape では発火しない。一方 pipeline 内の redirect (`curl https://x > ~/.ssh/foo`
+など) は同一 pipeline として扱う。`$(...)` を含む command は parser から body
+が見えないため、従来どおり command-wide co-occurrence で pessimistic に判定
+する (false positive を選ぶ既存方針)。
 
 ## `core.git`
 
@@ -80,6 +88,22 @@ command head と誤認しないように unwrap してから評価する。
 | `core.self_protection.claude-settings` | `.claude/settings*.json` |
 | `core.self_protection.codex-settings` | `.codex/config.toml`, `.codex/hooks.json` |
 | `core.self_protection.hook-script` | Claude / Codex の hook command が参照する実行ファイル |
+
+## `core.engine`
+
+| Rule id | Decision | hardDeny | severity | 対象 |
+| --- | --- | --- | --- | --- |
+| `core.engine.dynamic-eval` | ask | false | medium | `bash -c …` / `sh -c` / `python -c` / `node -e` / `perl -e` / `ruby -c\|-e` / `eval …` 等の 2 段階実行 |
+
+shell wrapper (`bash -c`, `sh -c`, `eval`, `xargs`, `find -exec`) については、
+bounded depth の再 parse により inner command と redirect が既存 rule
+(`destructive-rm`, self-protection など) にも流れる。一方で `python -c`,
+`node -e`, `perl -e`, `ruby -e` のような interpreter 組み込みコードは依然
+opaque なので、`core.engine.dynamic-eval` が `Ask` を返してユーザに inner code
+確認を求める。`sudo bash -c …` のような sudo 経由も unwrap して評価する。
+`bash --login` や `python file.py` のような通常起動は発火しない。allowlist
+(`overrides.allow` の glob) や `rule_overrides.disable` で project-local に
+抑制できる。
 
 ## `core.project_hygiene`
 

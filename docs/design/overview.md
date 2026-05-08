@@ -11,11 +11,25 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) で次を実�
 - Claude Code / Codex adapter
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
-  `core.self_protection` / `core.project_hygiene` (opt-in)
+  `core.self_protection` / `core.engine` /
+  `core.project_hygiene` (opt-in)
 - facts 抽出:
   `shell.*`, `path`, `url`, `sensitive_path`, `protected`, `project`
+- `bash -c`, `sh -c`, `eval`, `xargs`, `find -exec` に対する bounded wrapper
+  inspection と、wrapped redirect を含む self-protection
 - layered YAML config, YAML plugin, allowlist, audit JSONL
 - `ptuf init <agent>`, `ptuf doctor [--json]`, `ptuf plugin test <path>`
+- `tests/contracts.rs` による hook / audit / `doctor --json` 契約の固定
+
+## ビルド前提と依存
+
+- Rust edition は `2024`
+- MSRV は `1.93.0`
+- 実行時依存は `serde`, `serde_json`, `serde_yaml_ng`, `regex`, `time`,
+  `toml_edit`
+- `time` は audit timestamp と allowlist `expiresAt` の RFC3339
+  formatting / parsing に使う
+- dev 依存は `proptest` と `tempfile`
 
 ## 公開 API
 
@@ -29,11 +43,17 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) で次を実�
 - `Facts`
 - `HookInput`
 - `decide`
+- `try_decide`
 
 `decide(&HookInput) -> Decision` は後方互換用の薄い API であり、まず
 `Engine::for_cwd()` を試し、設定や plugin の読み込みに失敗した場合は
-`Engine::default()` にフォールバックする。CLI 経路はこれと異なり
-fail-closed で動作する。
+`Engine::builder().agent("embed-fallback").build()` にフォールバックする。
+builder は `ProtectedPaths::collect_with_env` を必ず通すため、fallback 経路
+でも binary / Claude / Codex settings の self-protection は populate される。
+CLI 経路はこれと異なり fail-closed で動作する。
+
+`try_decide(&HookInput) -> Result<Decision, EngineError>` は失敗を握り潰さ
+ない並立 API。embed 利用側で CLI と同じ fail-closed 契約が欲しい場合に使う。
 
 ## CLI の現在形
 
@@ -43,8 +63,8 @@ fail-closed で動作する。
 - `ptuf hook codex`
 - `ptuf eval --tool <name> <command>`
 - `ptuf plugin test <path>`
-- `ptuf init claude-code [--dry-run] [--settings <PATH>]`
-- `ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>]`
+- `ptuf init claude-code [--dry-run] [--settings <PATH>] [--verify [--json]]`
+- `ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>] [--verify [--json]]`
 - `ptuf doctor [--json]`
 - `ptuf --help`
 - `ptuf --version`

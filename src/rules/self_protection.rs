@@ -139,15 +139,15 @@ pub static HOOK_SCRIPT_RULE: SelfRule = SelfRule { spec: &HOOK_SCRIPT };
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::facts::Facts;
     use crate::hook_input::sample;
+    use crate::self_paths::ProtectedKinds;
 
     fn facts_with(protected: &[ProtectedKind]) -> Facts {
         Facts {
-            protected: protected.to_vec(),
+            protected: ProtectedKinds::from(protected),
             ..Facts::default()
         }
     }

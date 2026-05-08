@@ -29,16 +29,12 @@ pub mod yaml;
 ///
 /// `Enforce` (default) honours `Decision::Deny` as a blocking deny.
 /// `Monitor` demotes denies to `Monitor` so that the hook never blocks
-/// the agent but still records the event. `Observe` is a v0.3 stretch
-/// goal — for v0.2 it behaves identically to `Monitor` but is
-/// preserved as a distinct variant so that downstream callers can
-/// branch on it.
+/// the agent but still records the event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     #[default]
     Enforce,
     Monitor,
-    Observe,
 }
 
 /// Resolved runtime configuration.
@@ -183,12 +179,12 @@ pub enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConfigError::Io { path, source } => {
+            Self::Io { path, source } => {
                 write!(f, "failed to read {}: {}", path.display(), source)
-            }
-            ConfigError::Yaml { path, message } => {
+            },
+            Self::Yaml { path, message } => {
                 write!(f, "failed to parse {}: {}", path.display(), message)
-            }
+            },
         }
     }
 }
@@ -196,8 +192,8 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ConfigError::Io { source, .. } => Some(source),
-            ConfigError::Yaml { .. } => None,
+            Self::Io { source, .. } => Some(source),
+            Self::Yaml { .. } => None,
         }
     }
 }
@@ -233,7 +229,6 @@ pub fn load_with_layout(layout: scope::Layout) -> Result<Config, ConfigError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 

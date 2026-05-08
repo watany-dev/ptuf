@@ -7,7 +7,10 @@ use std::sync::LazyLock;
 /// Applied to individual shell tokens (heads, args, env values) via
 /// [`facts::shell`](crate::facts::shell), so anchors like `^` align with
 /// token boundaries rather than command-string positions.
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "static pattern literal validated by tests"
+)]
 pub static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(?x)",

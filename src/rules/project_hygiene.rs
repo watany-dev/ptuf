@@ -54,11 +54,7 @@ impl ConfigRule for LockMismatchPnpm {
             return None;
         }
         let bash = facts.bash.as_ref()?;
-        let triggered = bash
-            .segments
-            .iter()
-            .flat_map(|p| p.commands.iter())
-            .any(is_npm_or_yarn_install);
+        let triggered = bash.commands().into_iter().any(is_npm_or_yarn_install);
         if !triggered {
             return None;
         }
@@ -96,11 +92,7 @@ impl ConfigRule for LockMismatchUv {
             return None;
         }
         let bash = facts.bash.as_ref()?;
-        let triggered = bash
-            .segments
-            .iter()
-            .flat_map(|p| p.commands.iter())
-            .any(is_pip_install);
+        let triggered = bash.commands().into_iter().any(is_pip_install);
         if !triggered {
             return None;
         }
@@ -138,11 +130,7 @@ impl ConfigRule for ProtectedBranchDestructiveGit {
             return None;
         }
         let bash = facts.bash.as_ref()?;
-        let triggered = bash
-            .segments
-            .iter()
-            .flat_map(|p| p.commands.iter())
-            .any(invokes_destructive_git);
+        let triggered = bash.commands().into_iter().any(invokes_destructive_git);
         if !triggered {
             return None;
         }
@@ -192,7 +180,7 @@ fn is_npm_or_yarn_install(argv: &Argv) -> bool {
         // `yarn` with no subcommand defaults to `yarn install`.
         return matches!(
             first_positional(argv),
-            None | Some("install") | Some("add") | Some("ci")
+            None | Some("install" | "add" | "ci")
         );
     }
     false
@@ -286,7 +274,6 @@ fn first_positional(argv: &Argv) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::facts::project::ProjectFacts;

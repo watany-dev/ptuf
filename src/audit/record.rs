@@ -43,7 +43,7 @@ pub struct AuditRecord {
     pub project_root: Option<String>,
     pub mode: &'static str,
     /// `true` when the engine demoted a `Deny` decision to `Monitor`
-    /// because the policy mode was `monitor` or `observe`.
+    /// because the policy mode was `monitor`.
     #[serde(rename = "modeDemoted", skip_serializing_if = "is_false")]
     pub mode_demoted: bool,
     /// Allowlist `id` whose suppression turned a would-be Deny / Ask /
@@ -78,7 +78,11 @@ impl AuditRecord {
     /// cached `name@version` list; an empty vec is omitted from JSON.
     /// `allowlist_id` should be `Some` only on `Allow` outcomes that
     /// were produced by a non-expired allowlist hit.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "constructor mirrors the audit JSON schema; collapsing into a builder \
+                  struct is tracked separately"
+    )]
     pub fn build(
         timestamp: SystemTime,
         decision: &Decision,
@@ -125,7 +129,6 @@ fn mode_label(mode: Mode) -> &'static str {
     match mode {
         Mode::Enforce => "enforce",
         Mode::Monitor => "monitor",
-        Mode::Observe => "observe",
     }
 }
 
@@ -141,7 +144,6 @@ fn severity_label(severity: Severity) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use serde_json::json;
@@ -155,6 +157,14 @@ mod tests {
         }
     }
 
+    // `Duration::from_secs(1_704_067_200)` is a Unix timestamp (the
+    // start of 2024 UTC), not a duration in hours; rewriting it as
+    // `from_hours(473352)` would erase the calendar semantics that the
+    // assertion below relies on.
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "value is a Unix timestamp expressed in seconds, not a duration"
+    )]
     #[test]
     fn builds_deny_record_with_severity_and_rule_id() {
         let decision = Decision::Deny {
@@ -237,25 +247,6 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains("\"modeDemoted\":true"));
         assert!(json.contains("\"mode\":\"monitor\""));
-    }
-
-    #[test]
-    fn observe_mode_serialises_as_observe() {
-        let r = AuditRecord::build(
-            UNIX_EPOCH,
-            &Decision::Allow,
-            Mode::Observe,
-            false,
-            &input("Bash", "ls"),
-            None,
-            None,
-            "ls".into(),
-            None,
-            "claude-code",
-            Vec::new(),
-        );
-        let json = serde_json::to_string(&r).unwrap();
-        assert!(json.contains("\"mode\":\"observe\""));
     }
 
     #[test]
@@ -396,11 +387,10 @@ mod tests {
         #[test]
         fn pbt_mode_label_is_lowercase_tag(m in mode()) {
             let label = mode_label(m);
-            prop_assert!(matches!(label, "enforce" | "monitor" | "observe"));
+            prop_assert!(matches!(label, "enforce" | "monitor"));
             let expected = match m {
                 Mode::Enforce => "enforce",
                 Mode::Monitor => "monitor",
-                Mode::Observe => "observe",
             };
             prop_assert_eq!(label, expected);
         }

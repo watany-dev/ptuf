@@ -53,9 +53,8 @@ impl ConfigRule for GitRule {
     fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
         let bash = facts.bash.as_ref()?;
         let triggered = bash
-            .segments
-            .iter()
-            .flat_map(|p| p.commands.iter())
+            .commands()
+            .into_iter()
             .any(|cmd| invokes_matcher(cmd, self.spec.matcher));
         if !triggered {
             return None;
@@ -114,7 +113,7 @@ fn git_subcommand(argv: &Argv) -> Option<&str> {
             | "--exec-path" | "--super-prefix" => {
                 iter.next();
                 continue;
-            }
+            },
             s if s.starts_with("--config=")
                 || s.starts_with("--git-dir=")
                 || s.starts_with("--work-tree=")
@@ -123,7 +122,7 @@ fn git_subcommand(argv: &Argv) -> Option<&str> {
                 || s.starts_with("--super-prefix=") =>
             {
                 continue;
-            }
+            },
             s if s.starts_with('-') => continue,
             s => return Some(s),
         }
@@ -143,7 +142,7 @@ fn args_after_subcommand<'a>(argv: &'a Argv, sub: &str) -> Vec<&'a str> {
 
 /// Gather the values of git's `-c key=val` / `--config key=val` /
 /// `--config=key=val` global options.
-fn config_overrides<'a>(argv: &'a Argv) -> impl Iterator<Item = &'a str> + 'a {
+fn config_overrides(argv: &Argv) -> impl Iterator<Item = &str> + '_ {
     let mut iter = argv.args.iter();
     std::iter::from_fn(move || {
         while let Some(a) = iter.next() {
@@ -152,12 +151,12 @@ fn config_overrides<'a>(argv: &'a Argv) -> impl Iterator<Item = &'a str> + 'a {
                     if let Some(v) = iter.next() {
                         return Some(v.as_str());
                     }
-                }
+                },
                 s => {
                     if let Some(rest) = s.strip_prefix("--config=") {
                         return Some(rest);
                     }
-                }
+                },
             }
         }
         None
@@ -606,7 +605,6 @@ pub static ENV_BYPASS_RULE: GitRule = GitRule { spec: &ENV_BYPASS };
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
     use crate::hook_input::HookInput;
@@ -625,11 +623,11 @@ mod tests {
         match (want, decision) {
             (DecisionKind::Deny, Some(Decision::Deny { rule_id, .. })) => {
                 assert_eq!(rule_id, rule.spec.id, "wrong rule_id for {cmd:?}")
-            }
+            },
             (DecisionKind::Ask, Some(Decision::Ask { rule_id, .. })) => {
                 assert_eq!(rule_id, rule.spec.id, "wrong rule_id for {cmd:?}")
-            }
-            (DecisionKind::Allow, None) => {}
+            },
+            (DecisionKind::Allow, None) => {},
             (other, got) => panic!("for {cmd:?} expected {other:?}, got {got:?}"),
         }
     }
@@ -1287,6 +1285,9 @@ mod tests {
             env_assignments: Vec::new(),
             head: "sudo".into(),
             args: vec!["-u".into(), "alice".into()],
+            inner_argv: Vec::new(),
+            inner_code: Vec::new(),
+            inner_redirects: Vec::new(),
         };
         assert_eq!(unwrap_sudo(&argv), None);
     }
@@ -1298,6 +1299,16 @@ mod tests {
         assert!(matches!(
             FORCE_PUSH_RULE.evaluate(&facts, &input),
             Some(Decision::Deny { .. })
+        ));
+    }
+
+    #[test]
+    fn reset_hard_matches_inside_bash_dash_c() {
+        let input = bash("bash -c 'git reset --hard HEAD~1'");
+        let facts = crate::facts::extract(&input);
+        assert!(matches!(
+            RESET_HARD_RULE.evaluate(&facts, &input),
+            Some(Decision::Ask { .. })
         ));
     }
 

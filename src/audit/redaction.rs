@@ -1,21 +1,27 @@
 //! Strict redaction for audit log entries.
 //!
-//! The redactor masks five categories of value documented in
+//! The redactor masks the categories documented in
 //! `docs/design/audit.md:64-75`:
-//!   1. Environment-variable assignments whose key includes `TOKEN`,
-//!      `KEY`, `SECRET`, `PASSWORD`, `CREDENTIAL`, or `PRIVATE`.
-//!   2. Common token shapes (`ghp_…`, `sk-…`, `AKIA…`, JWT 3-segment).
+//!   1. Sensitive `KEY=VALUE` env assignments and `"key": "value"` JSON
+//!      pairs whose key contains `TOKEN`, `KEY`, `SECRET`, `PASSWORD`,
+//!      `CREDENTIAL`, or `PRIVATE`.
+//!   2. Common token shapes — GitHub classic (`ghp_…`) and fine-grained
+//!      PAT (`github_pat_…`), Slack (`xox[abprs]-…`), Stripe
+//!      (`sk_live_…` / `pk_live_…` / `rk_live_…` / `whsec_…`),
+//!      OpenAI-style (`sk-…`), AWS Access Key ID (`AKIA…`), and JWT.
 //!   3. HTTP basic auth (`https://user:pass@host/…`) — masks the
 //!      password component.
 //!   4. PEM-encoded blobs (`-----BEGIN … PRIVATE KEY-----`).
-//!   5. (Future) project-root substitution — out of scope for v0.2.
 //!
 //! All replacements emit the literal `***`. The redactor is intentionally
 //! conservative: false positives are preferable to leaking a credential
 //! into an audit file. It runs on already-extracted command strings,
 //! never on raw structured input.
 
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "static regex literals validated by tests"
+)]
 
 use std::sync::LazyLock;
 
@@ -39,6 +45,29 @@ static GH_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{10,}\b").expect("gh token")
 });
 
+// GitHub fine-grained PAT — `github_pat_<22 alnum>_<59 alnum>`.
+// Keep the format strict (matches AWS_AKID's fixed-length style) so the
+// regex engine cannot wander into long alphanumeric strings; future GitHub
+// formats falling outside this shape are caught by the SENSITIVE_KEY net
+// when surfaced through env assignments.
+static GH_FINE_GRAINED_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}\b").expect("gh fine-grained pat")
+});
+
+// Slack — `xoxa-` / `xoxb-` / `xoxp-` / `xoxr-` / `xoxs-` followed by a
+// dash-and-alnum payload. The trailing `\b` anchors on a word boundary,
+// so a tail ending in `-` is intentionally left untouched (mirrors the
+// existing OPENAI_KEY caveat).
+static SLACK_TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b").expect("slack token"));
+
+// Stripe — `(sk|pk|rk)_(live|test)_…` API keys plus webhook signing
+// secret `whsec_…`. Underscore-separated, so the prefix never collides
+// with the dash-style OPENAI_KEY (`sk-…`).
+static STRIPE_KEY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(?:(?:sk|pk|rk)_(?:live|test)|whsec)_[A-Za-z0-9]{16,}\b").expect("stripe key")
+});
+
 static OPENAI_KEY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bsk-[A-Za-z0-9_-]{16,}\b").expect("openai key"));
 
@@ -47,6 +76,18 @@ static AWS_AKID: LazyLock<Regex> =
 
 static JWT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b").expect("jwt")
+});
+
+// JSON-style sensitive `"key": "value"` pairs — same keyword set as
+// SENSITIVE_KEY (case-insensitive via explicit char classes). Catches
+// GCP service account JSON (`"private_key"`), OAuth (`"client_secret"`,
+// `"refresh_token"`), and Firebase admin keys without needing one regex
+// per provider.
+static JSON_SENSITIVE_KEY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#""([A-Za-z0-9_]*(?:[Tt][Oo][Kk][Ee][Nn]|[Kk][Ee][Yy]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee])[A-Za-z0-9_]*)"\s*:\s*"((?:\\.|[^"\\])*)""#,
+    )
+    .expect("json sensitive key regex compiles")
 });
 
 static BASIC_AUTH: LazyLock<Regex> = LazyLock::new(|| {
@@ -65,6 +106,12 @@ static PEM_BLOB: LazyLock<Regex> = LazyLock::new(|| {
 pub fn redact_strict(input: &str) -> String {
     let mut out = PEM_BLOB.replace_all(input, PLACEHOLDER).into_owned();
 
+    out = JSON_SENSITIVE_KEY
+        .replace_all(&out, |caps: &regex::Captures| {
+            format!(r#""{}":"{}""#, &caps[1], PLACEHOLDER)
+        })
+        .into_owned();
+
     out = SENSITIVE_KEY
         .replace_all(&out, |caps: &regex::Captures| {
             format!("{}={}", &caps[1], PLACEHOLDER)
@@ -78,6 +125,11 @@ pub fn redact_strict(input: &str) -> String {
         .into_owned();
 
     out = GH_TOKEN.replace_all(&out, PLACEHOLDER).into_owned();
+    out = GH_FINE_GRAINED_TOKEN
+        .replace_all(&out, PLACEHOLDER)
+        .into_owned();
+    out = SLACK_TOKEN.replace_all(&out, PLACEHOLDER).into_owned();
+    out = STRIPE_KEY.replace_all(&out, PLACEHOLDER).into_owned();
     out = OPENAI_KEY.replace_all(&out, PLACEHOLDER).into_owned();
     out = AWS_AKID.replace_all(&out, PLACEHOLDER).into_owned();
     out = JWT.replace_all(&out, PLACEHOLDER).into_owned();
@@ -88,6 +140,11 @@ pub fn redact_strict(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SLACK_PREFIXES: &[&str] = &["xoxa", "xoxb", "xoxp", "xoxr", "xoxs"];
+    const STRIPE_PREFIXES: &[&str] = &[
+        "sk_live", "sk_test", "pk_live", "pk_test", "rk_live", "rk_test", "whsec",
+    ];
 
     #[test]
     fn passes_through_benign_command() {
@@ -175,6 +232,79 @@ mod tests {
         let out = redact_strict(s);
         assert!(out.contains("***"));
         assert!(!out.contains("MIIEow"));
+    }
+
+    #[test]
+    fn redacts_github_fine_grained_pat() {
+        let pat = format!("github_pat_{}_{}", "A".repeat(22), "B".repeat(59));
+        let s = format!("curl -H 'Authorization: token {pat}' https://api.github.com");
+        let out = redact_strict(&s);
+        assert!(!out.contains(&pat), "kept {pat:?} in {out:?}");
+        assert!(out.contains("***"));
+    }
+
+    #[test]
+    fn does_not_touch_short_github_pat_lookalike() {
+        let s = "github_pat_short value";
+        assert_eq!(redact_strict(s), s);
+    }
+
+    #[test]
+    fn redacts_slack_bot_token() {
+        for prefix in SLACK_PREFIXES {
+            let token = format!("{prefix}-1234567890-ABCDEFGHIJ");
+            let s = format!("curl -H 'X-Slack-Token: {token}' https://slack.com/api");
+            let out = redact_strict(&s);
+            assert!(!out.contains(&token), "kept {token} in {out}");
+            assert!(out.contains("***"));
+        }
+    }
+
+    #[test]
+    fn redacts_stripe_live_secret() {
+        let key = "sk_live_AbCdEf0123456789xyzABCD";
+        let s = format!("stripe charges create --api-key {key}");
+        let out = redact_strict(&s);
+        assert!(!out.contains(key), "kept {key} in {out}");
+        assert!(out.contains("***"));
+    }
+
+    #[test]
+    fn redacts_stripe_webhook_signing_secret() {
+        let key = "whsec_AbCdEf0123456789xyzABCD";
+        let s = format!("export WEBHOOK={key} && cmd");
+        let out = redact_strict(&s);
+        assert!(!out.contains(key), "kept {key} in {out}");
+        assert!(out.contains("***"));
+    }
+
+    #[test]
+    fn redacts_json_private_key_block() {
+        let s = r#"echo '{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----\nMIIEow...\n-----END PRIVATE KEY-----","client_email":"x@y"}'"#;
+        let out = redact_strict(s);
+        assert!(!out.contains("MIIEow"));
+        assert!(out.contains(r#""private_key":"***""#));
+    }
+
+    #[test]
+    fn redacts_json_client_secret_without_pem() {
+        let s = r#"curl -d '{"client_secret":"abcdef0123456789"}'"#;
+        let out = redact_strict(s);
+        assert!(!out.contains("abcdef0123456789"));
+        assert!(out.contains(r#""client_secret":"***""#));
+    }
+
+    #[test]
+    fn redacts_json_refresh_token_with_spaces() {
+        let s = r#"{"refresh_token" : "1//abcDEF_xyz-123"}"#;
+        let out = redact_strict(s);
+        assert!(!out.contains("1//abcDEF_xyz-123"));
+    }
+
+    #[test]
+    fn does_not_touch_benign_json_field() {
+        let s = r#"{"name":"alice","age":30}"#;
+        assert_eq!(redact_strict(s), s);
     }
 
     #[test]
@@ -271,7 +401,20 @@ mod tests {
             // Avoid accidental key-shaped substrings.
             prop_assume!(!s.contains("AKIA"));
             prop_assume!(!s.contains("ghp_"));
+            prop_assume!(!s.contains("gho_"));
+            prop_assume!(!s.contains("ghu_"));
+            prop_assume!(!s.contains("ghs_"));
+            prop_assume!(!s.contains("ghr_"));
+            prop_assume!(!s.contains("github_pat_"));
             prop_assume!(!s.contains("sk-"));
+            for prefix in STRIPE_PREFIXES {
+                let needle = format!("{prefix}_");
+                prop_assume!(!s.contains(&needle));
+            }
+            for prefix in SLACK_PREFIXES {
+                let needle = format!("{prefix}-");
+                prop_assume!(!s.contains(&needle));
+            }
             prop_assume!(!s.contains("eyJ"));
             // No `KEY=VALUE` shape with sensitive substrings:
             let lower = s.to_lowercase();
@@ -321,6 +464,73 @@ mod tests {
             // and made of base64-friendly classes, so substring presence
             // means it leaked.
             prop_assert!(!out.contains(&body), "leaked body in {out:?}");
+        }
+
+        // GitHub fine-grained PAT shape `github_pat_<22>_<59>` is always
+        // replaced.
+        #[test]
+        fn pbt_redacts_github_fine_grained_pat(
+            head in "[A-Za-z0-9]{22}",
+            tail in "[A-Za-z0-9]{59}",
+        ) {
+            let token = format!("github_pat_{head}_{tail}");
+            let s = format!("curl -H 'Authorization: token {token}' api");
+            let out = redact_strict(&s);
+            prop_assert!(!out.contains(&token), "kept {token:?} in {out:?}");
+            prop_assert!(out.contains("***"));
+        }
+
+        // Slack token shapes are always replaced. The trailing token must
+        // end on a word character so that `\b` matches; the suffix
+        // generator anchors with `[A-Za-z0-9]` accordingly. Sampling the
+        // prefix as a proptest arg keeps total cases at the default 256
+        // instead of 5×.
+        #[test]
+        fn pbt_redacts_slack_tokens(
+            prefix in proptest::sample::select(SLACK_PREFIXES),
+            suffix in "[A-Za-z0-9-]{9,29}[A-Za-z0-9]",
+        ) {
+            let needle = format!("{prefix}-{suffix}");
+            let s = format!("ENV={needle} cmd");
+            let out = redact_strict(&s);
+            prop_assert!(!out.contains(&needle), "kept {needle:?} in {out:?}");
+        }
+
+        // Stripe API keys (`sk|pk|rk_live|test_…`) and webhook secret
+        // (`whsec_…`) are always replaced.
+        #[test]
+        fn pbt_redacts_stripe_keys(
+            prefix in proptest::sample::select(STRIPE_PREFIXES),
+            suffix in "[A-Za-z0-9]{16,40}",
+        ) {
+            let needle = format!("{prefix}_{suffix}");
+            let s = format!("echo {needle}");
+            let out = redact_strict(&s);
+            prop_assert!(!out.contains(&needle), "kept {needle:?} in {out:?}");
+        }
+
+        // JSON-style `"<sensitive-key>": "<value>"` strips the value
+        // regardless of value content (modulo embedded `"` / `\` which the
+        // generator avoids to keep the JSON well-formed). Presence of the
+        // masked form `"k":"***"` is the canonical witness — checking for
+        // value absence directly is unreliable because short values may
+        // coincide with characters in the key (e.g. `_` appearing in
+        // `client_credential`).
+        #[test]
+        fn pbt_redacts_json_sensitive_values(value in "[A-Za-z0-9/+=.-]{1,40}") {
+            for k in [
+                "token",
+                "secret",
+                "password",
+                "private_key",
+                "api_key",
+                "client_credential",
+            ] {
+                let s = format!(r#"{{"{k}":"{value}"}}"#);
+                let out = redact_strict(&s);
+                let masked = format!(r#""{k}":"***""#);
+                prop_assert!(out.contains(&masked), "missing mask for {k} in {out:?}");
+            }
         }
 
         // Output never contains the literal `***` placeholder more than
