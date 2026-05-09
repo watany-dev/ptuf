@@ -1427,8 +1427,23 @@ rules:
         fs::write(&path, "[1, 2, 3]").unwrap();
         let report = report_with_copilot_path(Some(path));
         assert!(report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("invalid schema"));
         let v = to_json_value(&report);
         assert_eq!(v["copilot"]["state"], "invalidSchema");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copilot_hook_missing_when_pre_tool_use_key_absent() {
+        let dir = workdir("copilot-no-prekey");
+        fs::create_dir_all(dir.join(".github/hooks")).unwrap();
+        let path = dir.join(".github/hooks/ptuf.json");
+        fs::write(&path, r#"{"version":1,"hooks":{"otherKey":"x"}}"#).unwrap();
+        let report = report_with_copilot_path(Some(path));
+        assert!(!report.has_failure());
+        let v = to_json_value(&report);
+        assert_eq!(v["copilot"]["state"], "hookMissing");
         let _ = fs::remove_dir_all(&dir);
     }
 

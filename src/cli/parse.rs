@@ -277,7 +277,8 @@ mod tests {
 
     use super::super::test_support::s;
     use super::super::{
-        ClaudeInitOptions, CodexInitOptions, Command, HookAgent, InitOptions, ParseError, parse,
+        ClaudeInitOptions, CodexInitOptions, Command, CopilotInitOptions, CopilotProfile,
+        HookAgent, InitOptions, ParseError, parse,
     };
 
     #[test]
@@ -660,6 +661,145 @@ mod tests {
         assert!(matches!(
             parse(&s(&["eval", "--tool", "Bash", "ls", "extra"])),
             Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn parses_copilot_init_with_just_agent() {
+        let cmd = parse(&s(&["init", "copilot"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    profile: CopilotProfile::Local,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_copilot_init_flags() {
+        let cmd = parse(&s(&[
+            "init",
+            "copilot",
+            "--dry-run",
+            "--root",
+            "/repo",
+            "--hooks=/tmp/hooks.json",
+            "--profile",
+            "local",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: true,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    root: Some(PathBuf::from("/repo")),
+                    hooks_path: Some(PathBuf::from("/tmp/hooks.json")),
+                    profile: CopilotProfile::Local,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_copilot_init_with_equals_root_and_profile() {
+        let cmd = parse(&s(&["init", "copilot", "--root=/r", "--profile=local"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    root: Some(PathBuf::from("/r")),
+                    profile: CopilotProfile::Local,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_copilot_init_with_verify_and_json() {
+        let cmd = parse(&s(&["init", "copilot", "--verify", "--json"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    profile: CopilotProfile::Local,
+                    verify: true,
+                    json: true,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_copilot_profile_cloud_until_phase_4() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--profile", "cloud"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_copilot_unknown_profile_value() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--profile", "weird"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn copilot_root_flag_requires_value() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--root"])),
+            Err(ParseError::MissingValue("--root"))
+        ));
+    }
+
+    #[test]
+    fn copilot_hooks_flag_requires_value() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--hooks"])),
+            Err(ParseError::MissingValue("--hooks"))
+        ));
+    }
+
+    #[test]
+    fn copilot_profile_flag_requires_value() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--profile"])),
+            Err(ParseError::MissingValue("--profile"))
+        ));
+    }
+
+    #[test]
+    fn copilot_init_rejects_unknown_flag() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--unknown"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn copilot_init_rejects_json_without_verify() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--json"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn copilot_init_rejects_verify_with_dry_run() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--verify", "--dry-run"])),
+            Err(ParseError::ConflictingFlags(_))
         ));
     }
 

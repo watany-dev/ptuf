@@ -480,12 +480,12 @@ mod tests {
         CwdGuard, FailingReader, FailingWriter, make_engine_failing_repo, run_with,
     };
     use super::super::{
-        ClaudeInitOptions, CodexInitOptions, Command, HookAgent, INVALID_PAYLOAD_RULE, InitOptions,
-        POLICY_LOAD_FAILED_RULE, run,
+        ClaudeInitOptions, CodexInitOptions, Command, CopilotInitOptions, CopilotProfile,
+        HookAgent, INVALID_PAYLOAD_RULE, InitOptions, POLICY_LOAD_FAILED_RULE, run,
     };
     use super::{
         MAX_HOOK_STDIN_BYTES, VerifyContext, finish_verify, render_install_outcome, run_doctor,
-        run_init_claude_verify, run_init_codex_verify, run_plugin_test,
+        run_init_claude_verify, run_init_codex_verify, run_init_copilot_verify, run_plugin_test,
     };
 
     #[test]
@@ -660,6 +660,209 @@ rules:
         let code = run(cmd, b"" as &[u8], &mut out, &mut err);
         assert_eq!(code, 1);
         assert!(String::from_utf8_lossy(&err).contains("ptuf:"));
+    }
+
+    #[test]
+    fn run_init_copilot_dry_run_writes_outcome_summary() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-init-copilot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks_path = dir.join(".github/hooks/ptuf.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                dry_run: true,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    root: Some(dir.clone()),
+                    hooks_path: Some(hooks_path.clone()),
+                    profile: CopilotProfile::Local,
+                    ..Default::default()
+                }),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0);
+        assert!(String::from_utf8_lossy(&out).contains("would register hook"));
+        assert!(!hooks_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_copilot_writes_hook_file_on_real_install() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-init-copilot-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks_path = dir.join(".github/hooks/ptuf.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    root: Some(dir.clone()),
+                    hooks_path: Some(hooks_path.clone()),
+                    profile: CopilotProfile::Local,
+                    ..Default::default()
+                }),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out).contains("registered hook"));
+        assert!(hooks_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_copilot_verify_passes_when_checks_succeed() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-init-copilot-verify-ok-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks_path = dir.join(".github/hooks/ptuf.json");
+        let options = CopilotInitOptions {
+            root: Some(dir.clone()),
+            hooks_path: Some(hooks_path.clone()),
+            profile: CopilotProfile::Local,
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_copilot_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("registered hook"), "stdout: {stdout}");
+        assert!(stdout.contains("Verify:"), "stdout: {stdout}");
+        assert!(hooks_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_copilot_verify_rolls_back_when_check_fails() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-init-copilot-verify-rollback-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks_path = dir.join(".github/hooks/ptuf.json");
+        let options = CopilotInitOptions {
+            root: Some(dir.clone()),
+            hooks_path: Some(hooks_path.clone()),
+            profile: CopilotProfile::Local,
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_copilot_verify(&options, failing_report, &mut out, &mut err);
+        assert_eq!(code, 1);
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("FAILED"), "stdout: {stdout}");
+        assert!(stdout.contains("rolled back"), "stdout: {stdout}");
+        assert!(
+            !hooks_path.exists(),
+            "rollback must remove freshly-created hook file",
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_copilot_verify_reports_error_when_no_root() {
+        // No --root and no --hooks: resolve_paths returns RepoRootNotFound.
+        // This works because the test runs in a tempdir without git context,
+        // but to be deterministic we point CWD at a non-repo dir.
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-copilot-verify-noroot-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let options = CopilotInitOptions {
+            root: None,
+            hooks_path: None,
+            profile: CopilotProfile::Local,
+            verify: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_copilot_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 1, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&err).contains("init failed"));
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_dispatches_to_copilot_verify_when_verify_flag_set() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-run-copilot-verify-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hooks_path = dir.join(".github/hooks/ptuf.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    root: Some(dir.clone()),
+                    hooks_path: Some(hooks_path.clone()),
+                    profile: CopilotProfile::Local,
+                    verify: true,
+                    json: false,
+                }),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(
+            String::from_utf8_lossy(&out).contains("Synthetic deny test: passed"),
+            "stdout: {}",
+            String::from_utf8_lossy(&out),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_hook_routes_copilot_payload_through_normaliser() {
+        let payload = r#"{"toolName":"bash","toolArgs":"{\"command\":\"rm -rf /\"}"}"#;
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::HookPreToolUse {
+                agent: HookAgent::Copilot,
+            },
+            payload.as_bytes(),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "Copilot deny must exit 0 to stay fail-closed");
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}",
+        );
+        assert!(
+            !out_s.contains("hookSpecificOutput"),
+            "Copilot must emit a bare envelope: {out_s}",
+        );
     }
 
     #[test]

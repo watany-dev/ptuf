@@ -267,4 +267,62 @@ mod tests {
     fn array_payload_is_rejected() {
         assert!(matches!(parse("[]"), Err(ParseProblem::NotAnObject)));
     }
+
+    #[test]
+    fn parse_problem_display_invalid_json_mentions_json() {
+        let err = serde_json::from_str::<Value>("nope").unwrap_err();
+        let s = format!("{}", ParseProblem::InvalidJson(err));
+        assert!(s.contains("not valid JSON"));
+    }
+
+    #[test]
+    fn parse_problem_display_not_an_object_mentions_object() {
+        let s = format!("{}", ParseProblem::NotAnObject);
+        assert!(s.contains("must be a JSON object"));
+    }
+
+    #[test]
+    fn parse_problem_display_missing_tool_name_mentions_field() {
+        let s = format!("{}", ParseProblem::MissingToolName);
+        assert!(s.contains("missing tool_name"));
+    }
+
+    #[test]
+    fn camel_bash_with_null_args_is_accepted() {
+        let body = r#"{"toolName":"bash","toolArgs":null}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert!(input.tool_input.is_object());
+    }
+
+    #[test]
+    fn camel_bash_with_missing_args_is_accepted() {
+        let body = r#"{"toolName":"bash"}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert!(input.tool_input.is_object());
+    }
+
+    #[test]
+    fn camel_bash_with_bool_args_is_kept_as_raw() {
+        let body = r#"{"toolName":"bash","toolArgs":true}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(
+            input.tool_input.get("raw").and_then(Value::as_bool),
+            Some(true),
+        );
+    }
+
+    #[test]
+    fn view_without_path_field_passes_through_unchanged() {
+        let body = r#"{"toolName":"view","toolArgs":{"other":"x"}}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Read");
+        assert!(input.tool_input.get("file_path").is_none());
+        assert_eq!(
+            input.tool_input.get("other").and_then(Value::as_str),
+            Some("x"),
+        );
+    }
 }

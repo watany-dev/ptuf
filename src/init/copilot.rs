@@ -632,6 +632,23 @@ mod tests {
     }
 
     #[test]
+    fn install_returns_io_error_when_parent_directory_cannot_be_created() {
+        let dir = workdir("io-parent");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, "not a directory").unwrap();
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: blocker.join("ptuf.json"),
+        };
+        let err = install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap_err();
+        assert!(
+            matches!(err, InitError::Io { .. }),
+            "expected IO error when parent path is a regular file, got: {err:?}",
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn sibling_temp_path_falls_back_to_bare_filename_when_no_parent() {
         let bare = Path::new("ptuf.json");
         let tmp = sibling_temp_path(bare);
