@@ -655,49 +655,39 @@ impl Report {
         if let Some(global) = &self.kiro.global_agents_dir {
             writeln!(w, "  global agents dir: {}", global.display())?;
         }
-        match &self.kiro.state {
-            KiroState::NoTargets => {
-                writeln!(
-                    w,
-                    "  ⚠ no repo root and $HOME unset; cannot locate Kiro agents directory"
-                )?;
-            },
-            KiroState::Missing => {
-                writeln!(w, "  ⚠ no agent files present (run `ptuf init kiro`)")?;
-            },
-            KiroState::HookRegistered {
-                config_path,
-                scope,
-                matcher,
-            } => {
-                let scope_label = match scope {
-                    KiroScope::Local => "local",
-                    KiroScope::Global => "global",
-                };
-                writeln!(w, "  ✓ {} present", config_path.display())?;
-                let matcher = matcher
-                    .as_deref()
-                    .map(|m| format!(" (matcher: {m:?})"))
-                    .unwrap_or_default();
-                writeln!(w, "  ✓ ptuf hook registered [{scope_label}]{matcher}")?;
-            },
-            KiroState::HookMissing => {
-                writeln!(
-                    w,
-                    "  ⚠ agent files present but no ptuf hook registered (run `ptuf init kiro`)"
-                )?;
-            },
-            KiroState::InvalidJson {
-                config_path,
-                message,
-            } => {
-                writeln!(w, "  ✗ {} invalid JSON: {message}", config_path.display())?;
-            },
-            KiroState::Io { path, message } => {
-                writeln!(w, "  ✗ {} unreadable: {message}", path.display())?;
-            },
+        if let KiroState::HookRegistered { config_path, .. } = &self.kiro.state {
+            writeln!(w, "  ✓ {} present", config_path.display())?;
         }
+        writeln!(w, "{}", kiro_state_summary(&self.kiro.state))?;
         Ok(())
+    }
+}
+
+fn kiro_state_summary(state: &KiroState) -> String {
+    match state {
+        KiroState::NoTargets => {
+            "  ⚠ no repo root and $HOME unset; cannot locate Kiro agents directory".to_string()
+        },
+        KiroState::Missing => "  ⚠ no agent files present (run `ptuf init kiro`)".to_string(),
+        KiroState::HookRegistered { scope, matcher, .. } => {
+            let scope_label = match scope {
+                KiroScope::Local => "local",
+                KiroScope::Global => "global",
+            };
+            let matcher = matcher
+                .as_deref()
+                .map(|m| format!(" (matcher: {m:?})"))
+                .unwrap_or_default();
+            format!("  ✓ ptuf hook registered [{scope_label}]{matcher}")
+        },
+        KiroState::HookMissing => {
+            "  ⚠ agent files present but no ptuf hook registered (run `ptuf init kiro`)".to_string()
+        },
+        KiroState::InvalidJson {
+            config_path,
+            message,
+        } => format!("  ✗ {} invalid JSON: {message}", config_path.display()),
+        KiroState::Io { path, message } => format!("  ✗ {} unreadable: {message}", path.display()),
     }
 }
 
@@ -1935,6 +1925,53 @@ rules:
         });
         let v = to_json_value(&report);
         assert_eq!(v["kiro"]["state"], "missing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kiro_empty_agent_file_is_treated_as_hook_missing() {
+        let dir = workdir("kiro-empty");
+        let local = dir.join(".kiro/agents");
+        fs::create_dir_all(&local).unwrap();
+        fs::write(local.join("blank.json"), "").unwrap();
+        let report = report_with_kiro_paths(KiroPaths {
+            local_agents_dir: Some(local),
+            global_agents_dir: None,
+        });
+        assert!(!report.has_failure());
+        let v = to_json_value(&report);
+        assert_eq!(v["kiro"]["state"], "hookMissing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kiro_io_failure_when_agents_dir_is_a_regular_file() {
+        let dir = workdir("kiro-dir-is-file");
+        let local = dir.join("not-a-dir");
+        fs::write(&local, "regular file masquerading as agents dir").unwrap();
+        let report = report_with_kiro_paths(KiroPaths {
+            local_agents_dir: Some(local),
+            global_agents_dir: None,
+        });
+        assert!(report.has_failure());
+        let v = to_json_value(&report);
+        assert_eq!(v["kiro"]["state"], "io");
+        assert!(v["kiro"]["error"].is_string());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kiro_agent_without_pre_tool_use_key_is_hook_missing() {
+        let dir = workdir("kiro-no-pretool");
+        let local = dir.join(".kiro/agents");
+        fs::create_dir_all(&local).unwrap();
+        fs::write(local.join("a.json"), r#"{"name":"x","hooks":{}}"#).unwrap();
+        let report = report_with_kiro_paths(KiroPaths {
+            local_agents_dir: Some(local),
+            global_agents_dir: None,
+        });
+        let v = to_json_value(&report);
+        assert_eq!(v["kiro"]["state"], "hookMissing");
         let _ = fs::remove_dir_all(&dir);
     }
 

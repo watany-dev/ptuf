@@ -297,6 +297,38 @@ mod tests {
     }
 
     #[test]
+    fn kiro_mcp_empty_extra_segment_falls_through() {
+        let body = r#"{"tool_name":"@a/b/","tool_input":{}}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "@a/b/");
+    }
+
+    #[test]
+    fn kiro_read_path_field_is_promoted_to_file_path() {
+        let body = r#"{"tool_name":"read","tool_input":{"path":"/tmp/single"}}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Read");
+        assert_eq!(input.file_path(), Some("/tmp/single"));
+    }
+
+    #[test]
+    fn kiro_read_with_no_path_leaves_file_path_unset() {
+        let body = r#"{"tool_name":"read","tool_input":{}}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Read");
+        assert_eq!(input.file_path(), None);
+    }
+
+    #[test]
+    fn kiro_write_uses_paths_array_when_file_path_absent() {
+        let body = r#"{"tool_name":"fs_write","tool_input":{"paths":["/tmp/w"],"text":"hi"}}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Write");
+        assert_eq!(input.file_path(), Some("/tmp/w"));
+        assert_eq!(input.write_payload(), Some("hi"));
+    }
+
+    #[test]
     fn kiro_unknown_tool_passes_through() {
         let body = r#"{"tool_name":"taskRun","tool_input":{"goal":"x"}}"#;
         let input = parse(body).unwrap();

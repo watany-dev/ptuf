@@ -340,6 +340,30 @@ mod tests {
     }
 
     #[test]
+    fn resolve_paths_global_uses_home_when_set() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let paths = resolve_paths(None, None, None, None, KiroScope::Global).unwrap();
+        let expected = PathBuf::from(home).join(".kiro/agents/ptuf-guarded.json");
+        assert_eq!(paths.agent_config_path, expected);
+        assert_eq!(paths.scope, KiroScope::Global);
+        assert!(paths.root.is_none());
+        assert_eq!(paths.agent_name, "ptuf-guarded");
+    }
+
+    #[test]
+    fn resolve_paths_global_honours_custom_agent_name() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let paths = resolve_paths(None, None, Some("guard-bot"), None, KiroScope::Global).unwrap();
+        let expected = PathBuf::from(home).join(".kiro/agents/guard-bot.json");
+        assert_eq!(paths.agent_config_path, expected);
+        assert_eq!(paths.agent_name, "guard-bot");
+    }
+
+    #[test]
     fn resolve_paths_agent_config_overrides_scope_and_root() {
         let explicit = PathBuf::from("/custom/agents/x.json");
         let paths = resolve_paths(None, None, None, Some(&explicit), KiroScope::Global).unwrap();
