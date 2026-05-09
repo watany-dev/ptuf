@@ -48,8 +48,15 @@
   すべての Decision で exit `0`、`Ask` → `Deny` demote)
 - `ptuf init copilot --profile local` (`<repo>/.github/hooks/ptuf.json` を
   idempotent / atomic に書き込む)
+- `ptuf init copilot --profile cloud` (cloud / coding agent runner 向け
+  に `<repo>/.github/hooks/scripts/ptuf-hook-copilot.{sh,ps1}` を
+  生成し、`ptuf.json` から repo-relative に参照する。wrapper は
+  `${PTUF_BINARY:-ptuf}` で binary を探す。3 ファイルとも atomic /
+  idempotent / drift で再書込み)
 - `ptuf doctor` の `GitHub Copilot integration` section と
-  `doctor --json` の `copilot` field
+  `doctor --json` の `copilot` field (local/cloud いずれの entry 形式
+  でも HookRegistered と認識する)
+- self-protection が cloud wrapper script path を保護対象に追加
 - `core.engine.invalid-payload` / `core.engine.policy-load-failed` を
   bare JSON + exit `0` で流用する fail-closed 経路
 - audit `agent: "copilot"` を許容
@@ -75,8 +82,9 @@
 現時点でコードに入っていない候補:
 
 - Cursor / Gemini など追加 adapter
-- `ptuf init copilot --profile cloud` (cloud agent 用 wrapper script
-  + JSON。network egress / firewall / installer 取得経路の整理が必要)
+- Copilot cloud profile 用の bootstrap installer (curl + checksum) と
+  GitHub Action / cargo-install 連携 (現状は wrapper の
+  `${PTUF_BINARY:-ptuf}` を介して repo オーナーが手動で導入する前提)
 - `dataflow.basic` の強化
 - signed / pinned plugin 配布
 - generated file など、project_hygiene の追加 rule

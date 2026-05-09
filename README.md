@@ -143,7 +143,7 @@ ptuf eval --tool <name> <command>
 ptuf plugin test <path>
 ptuf init claude-code [--dry-run] [--settings <path>] [--verify [--json]]
 ptuf init codex [--dry-run] [--root <path>] [--hooks <path>] [--config <path>] [--verify [--json]]
-ptuf init copilot [--dry-run] [--root <path>] [--hooks <path>] [--profile local] [--verify [--json]]
+ptuf init copilot [--dry-run] [--root <path>] [--hooks <path>] [--profile local|cloud] [--verify [--json]]
 ptuf init kiro [--dry-run] [--root <path>] [--agent <name>] [--agent-config <path>]
                [--scope local|global] [--verify [--json]]
 ptuf doctor [--json]
@@ -300,8 +300,22 @@ containing both `bash` and `powershell` command strings. The installer
 is idempotent — re-running it detects an existing ptuf entry by the
 `hook copilot` command tail.
 
-The `--profile cloud` variant (which also generates wrapper scripts for
-Copilot's cloud agent) is post-MVP and not yet wired up.
+For Copilot's cloud / coding agent runners, where the developer's
+absolute binary path is not available, use the `cloud` profile:
+
+```bash
+ptuf init copilot --profile cloud
+ptuf init copilot --profile cloud --verify
+```
+
+This generates wrapper scripts at
+`<repo>/.github/hooks/scripts/ptuf-hook-copilot.{sh,ps1}` and points
+`bash` / `powershell` at *repo-relative* invocations of those scripts.
+Each wrapper invokes `${PTUF_BINARY:-ptuf}` — set `PTUF_BINARY` on the
+runner, or ensure `ptuf` is on `PATH` (e.g. via `cargo install ptuf`
+in a setup step). All three files (the JSON hook + two wrapper
+scripts) are written atomically and can coexist with a `local`
+profile entry in the same `ptuf.json`.
 
 ## Kiro CLI
 

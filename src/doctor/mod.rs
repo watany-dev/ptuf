@@ -827,7 +827,7 @@ fn build_copilot_status(hooks_path: Option<&Path>) -> CopilotState {
         let commands = copilot::entry_commands(entry);
         if commands
             .iter()
-            .any(|cmd| copilot::command_invokes_ptuf_hook(cmd))
+            .any(|cmd| copilot::is_ptuf_hook_command(cmd))
         {
             let matcher = entry
                 .get("matcher")
