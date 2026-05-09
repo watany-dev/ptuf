@@ -213,6 +213,33 @@ impl ProtectedPaths {
             }
         }
 
+        // Copilot cloud profile: probe `<repo>/.github/hooks/ptuf.json`
+        // for entries whose `bash`/`powershell` field references one of
+        // the wrapper scripts we generate. Local profile entries point
+        // at an absolute binary path and are covered by the binary
+        // self-protection below; cloud entries reference scripts that
+        // live in the repo and so must be enrolled here.
+        if let Some(root) = repo_root {
+            let copilot_hooks_path = root.join(crate::init::copilot::DEFAULT_HOOKS_PATH);
+            if let Ok(body) = fs::read_to_string(&copilot_hooks_path)
+                && let Ok(parsed) = serde_json::from_str::<Value>(&body)
+            {
+                for command in crate::init::copilot::pre_tool_use_commands(&parsed) {
+                    let Some(script) = crate::init::copilot::command_script_path(&command) else {
+                        continue;
+                    };
+                    let normalized = crate::facts::path::resolve_with_env(
+                        script,
+                        Some(root).or_else(|| copilot_hooks_path.parent()),
+                        env,
+                    );
+                    if !hook_scripts.contains(&normalized) {
+                        hook_scripts.push(normalized);
+                    }
+                }
+            }
+        }
+
         // Pre-cache `canonical_or_raw` on every target list so
         // `path_matches` only canonicalises the candidate. Symlinks
         // collapse for files that exist; non-existent targets keep
@@ -712,6 +739,51 @@ mod tests {
             p.hook_scripts
                 .iter()
                 .any(|path| path == &PathBuf::from("/repo/./hooks/guard.sh"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_extracts_hook_scripts_from_copilot_cloud_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-copilot-cloud-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(repo.join(".github/hooks/scripts")).expect("mkdir");
+        std::fs::write(
+            repo.join(".github/hooks/ptuf.json"),
+            r#"{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "bash": "bash .github/hooks/scripts/ptuf-hook-copilot.sh",
+        "powershell": "pwsh -File .github/hooks/scripts/ptuf-hook-copilot.ps1",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}"#,
+        )
+        .expect("write hooks");
+        let env = MapEnv::with(&[]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(repo.as_path()), &cfg, &env);
+        assert!(
+            p.hook_scripts
+                .iter()
+                .any(|path| path == &repo.join(".github/hooks/scripts/ptuf-hook-copilot.sh")),
+            "bash wrapper missing from {:?}",
+            p.hook_scripts,
+        );
+        assert!(
+            p.hook_scripts
+                .iter()
+                .any(|path| path == &repo.join(".github/hooks/scripts/ptuf-hook-copilot.ps1")),
+            "powershell wrapper missing from {:?}",
+            p.hook_scripts,
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
