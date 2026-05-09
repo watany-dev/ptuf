@@ -1,0 +1,15 @@
+version: 1
+
+mode: enforce
+failClosed: true
+
+packs:
+  core.project_hygiene:
+    enabled: true
+    protectedBranches:
+      - main
+      - release/*
+
+rules:
+  core.git.reset-hard:
+    decision: deny
