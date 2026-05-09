@@ -68,7 +68,7 @@ CLI 経路はこれと異なり fail-closed で動作する。
 - `ptuf plugin test <path>`
 - `ptuf init claude-code [--dry-run] [--settings <PATH>] [--verify [--json]]`
 - `ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>] [--verify [--json]]`
-- `ptuf init copilot [--dry-run] [--root <PATH>] [--hooks <PATH>] [--profile local] [--verify [--json]]`
+- `ptuf init copilot [--dry-run] [--root <PATH>] [--hooks <PATH>] [--profile local|cloud] [--verify [--json]]`
 - `ptuf init kiro [--dry-run] [--root <PATH>] [--agent <NAME>] [--agent-config <PATH>] [--scope local|global] [--verify [--json]]`
 - `ptuf doctor [--json]`
 - `ptuf --help`

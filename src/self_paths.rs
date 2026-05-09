@@ -213,12 +213,9 @@ impl ProtectedPaths {
             }
         }
 
-        // Copilot cloud profile: probe `<repo>/.github/hooks/ptuf.json`
-        // for entries whose `bash`/`powershell` field references one of
-        // the wrapper scripts we generate. Local profile entries point
-        // at an absolute binary path and are covered by the binary
-        // self-protection below; cloud entries reference scripts that
-        // live in the repo and so must be enrolled here.
+        // Cloud profile entries reference repo-relative wrapper scripts;
+        // local profile entries reference the binary, which is covered
+        // by the `binary` field below.
         if let Some(root) = repo_root {
             let copilot_hooks_path = root.join(crate::init::copilot::DEFAULT_HOOKS_PATH);
             if let Ok(body) = fs::read_to_string(&copilot_hooks_path)
