@@ -25,12 +25,13 @@ runs the call. A few examples of what fires by default:
 - **`core.engine.dynamic-eval`** — asks before opaque interpreter calls
   (`bash -c '…'`, `python -c '…'`, `node -e '…'`, `eval`) where other rules
   cannot inspect what actually runs.
-- **`core.project_hygiene.lock-mismatch-pnpm` / `lock-mismatch-uv`** — blocks
-  `npm install` when `pnpm-lock.yaml` is present (or analogously for `uv`),
-  preventing silent dependency drift.
-- **`core.project_hygiene.protected-branch-destructive-git`** — blocks
-  `git reset --hard`, `git clean -fdx`, `git branch -D`, and `git stash
-  clear` when checked out on a protected branch (default: `main`, `master`).
+- **`core.project_hygiene.lock-mismatch-pnpm` / `lock-mismatch-uv`**
+  *(opt-in)* — blocks `npm install` when `pnpm-lock.yaml` is present (or
+  analogously for `uv`), preventing silent dependency drift.
+- **`core.project_hygiene.protected-branch-destructive-git`** *(opt-in)*
+  — blocks `git reset --hard`, `git clean -fdx`, `git branch -D`, and
+  `git stash clear` when checked out on a protected branch (default:
+  `main`, `master`, `release/*`).
 - **`core.self_protection.*`** — blocks the agent from editing ptuf's own
   binary, config, plugins, hook script, or your `~/.claude/settings.json`
   hook entry. The agent cannot turn ptuf off mid-session.

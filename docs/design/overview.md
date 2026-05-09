@@ -109,5 +109,7 @@ CLI 経路はこれと異なり fail-closed で動作する。
 ## 言語規約
 
 - `README.md` は英語
+- `docs/install.md` / `docs/agents.md` などの user-facing how-to は
+  README からのリンク先として英語で揃える
 - `docs/design/` と `CLAUDE.md` は日本語
 - rule id、型名、CLI 名などの安定識別子は実装と同名を保つ
