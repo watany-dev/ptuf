@@ -1,11 +1,11 @@
 #!/bin/bash
-# Stop hook: Claude が応答を終了する直前に発火し、task-done skill が
+# Stop hook: Claude が応答を終了する直前に発火し、wrapup skill が
 # 実行済みかをマーカーファイルで検査する。未実行なら decision:"block" で
-# Claude に task-done 起動を促す。
+# Claude に wrapup 起動を促す。
 #
 # 設計上の注意:
 #   - `stop_hook_active` は意図的に見ない。user-level git-check hook が
-#     先に block して再帰した場合に短絡してしまい、task-done が起動しない罠
+#     先に block して再帰した場合に短絡してしまい、wrapup が起動しない罠
 #     を回避するため、独自マーカーで状態管理する。
 #   - Q&A 応答での誤発火を避けるため、transcript JSONL の末尾 user turn
 #     以降に Edit/Write/MultiEdit/NotebookEdit の tool_use があったかで判定。
@@ -21,12 +21,12 @@ git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
 session_id=$(echo "$input" | jq -r '.session_id // "default"')
 transcript=$(echo "$input" | jq -r '.transcript_path // ""')
-marker="${TMPDIR:-/tmp}/ptuf-task-done-$session_id"
+marker="${TMPDIR:-/tmp}/ptuf-wrapup-$session_id"
 
 # 編集系 tool_use 名のリスト。SKILL.md の手順で「編集」と扱うものと揃える。
 edit_tools_re='"name":"(Edit|Write|MultiEdit|NotebookEdit)"'
 
-# マーカー存在 = task-done 実行済 → 許可。次の user turn で再ブロックする
+# マーカー存在 = wrapup 実行済 → 許可。次の user turn で再ブロックする
 # ためにマーカーを削除する。
 if [ -f "$marker" ]; then
   rm -f "$marker"
@@ -54,5 +54,5 @@ fi
 # block + 指示。skill が拾えるよう reason に marker 絶対パスを埋め込む。
 jq -n --arg marker "$marker" '{
   decision: "block",
-  reason: ("終了前に task-done skill を実行してください。Skill ツールで `task-done` を呼び出すと simplify と update-docs が順に走り、最後に `/compact` のリマインドが出ます。完了したら最後に `touch " + $marker + "` を必ず実行してください (このマーカーが無いと無限にブロックされます)。git-check hook も同時に block している場合は task-done を先に終えてから commit&push してください。")
+  reason: ("終了前に wrapup skill を実行してください。Skill ツールで `wrapup` を呼び出すと simplify と update-docs が順に走り、最後に `/compact` のリマインドが出ます。完了したら最後に `touch " + $marker + "` を必ず実行してください (このマーカーが無いと無限にブロックされます)。git-check hook も同時に block している場合は wrapup を先に終えてから commit&push してください。")
 }'
