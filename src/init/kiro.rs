@@ -1,6 +1,6 @@
 //! `ptuf init kiro` — idempotently register a `preToolUse` hook entry
-//! in a Kiro CLI agent config (`<repo>/.kiro/agents/<name>.json` for
-//! local scope, `$HOME/.kiro/agents/<name>.json` for global scope).
+//! in a Kiro CLI agent config (`<repo>/.kiro/agents/<name>.json` when
+//! the caller is inside a repo, otherwise `$HOME/.kiro/agents/<name>.json`).
 //!
 //! The Kiro agent file is a JSON document whose `hooks.preToolUse`
 //! array carries `{matcher, command, timeout_ms, cache_ttl_seconds}`
@@ -16,12 +16,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
-use crate::cli::KiroScope;
-
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
-/// Default Kiro agent name when `--agent` is not given. Mirrors the
-/// agent file's `name` field and the file stem (`<name>.json`).
+/// Default Kiro agent name. Mirrors the agent file's `name` field and
+/// the file stem (`<name>.json`).
 pub const DEFAULT_AGENT_NAME: &str = "ptuf-guarded";
 
 /// Matcher recorded in [`InstallOutcome`] and in the appended hook entry.
@@ -41,10 +39,7 @@ pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "kiro"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetPaths {
-    pub root: Option<PathBuf>,
     pub agent_config_path: PathBuf,
-    pub scope: KiroScope,
-    pub agent_name: String,
 }
 
 /// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
@@ -55,67 +50,23 @@ pub fn detect_binary() -> String {
         .unwrap_or_else(|| "ptuf".to_string())
 }
 
-/// Resolve the absolute agent-config path Kiro should be configured
-/// against.
+/// Resolve the agent-config path Kiro should be configured against.
 ///
-/// Priority:
-/// 1. `agent_config_path` is honoured verbatim if given (`scope`/`root`
-///    only feed back into the returned [`TargetPaths`] for diagnostics).
-/// 2. `scope == Global` resolves to `$HOME/.kiro/agents/<agent>.json`;
-///    `$HOME` unset returns [`InitError::HomeNotSet`].
-/// 3. `scope == Local` (default) discovers the repo root from `start`
-///    or `root` and resolves `<root>/.kiro/agents/<agent>.json`. If no
-///    repo root is found, returns [`InitError::RepoRootNotFound`].
-pub fn resolve_paths(
-    start: Option<&Path>,
-    root: Option<&Path>,
-    agent_name: Option<&str>,
-    agent_config_path: Option<&Path>,
-    scope: KiroScope,
-) -> Result<TargetPaths, InitError> {
-    let agent_name = agent_name
-        .filter(|s| !s.is_empty())
-        .unwrap_or(DEFAULT_AGENT_NAME)
-        .to_string();
-    let file_name = format!("{agent_name}.json");
-
-    if let Some(explicit) = agent_config_path {
-        let discovered_root = root
-            .map(Path::to_path_buf)
-            .or_else(|| start.and_then(crate::config::repo::discover));
+/// Prefers the repo-local `<repo>/.kiro/agents/ptuf-guarded.json` when
+/// the caller is inside a git working tree; otherwise falls back to
+/// `$HOME/.kiro/agents/ptuf-guarded.json`. Returns
+/// [`InitError::RepoRootNotFound`] when neither is available.
+pub fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
+    let file_name = format!("{DEFAULT_AGENT_NAME}.json");
+    if let Some(root) = start.and_then(crate::config::repo::discover) {
         return Ok(TargetPaths {
-            root: discovered_root,
-            agent_config_path: explicit.to_path_buf(),
-            scope,
-            agent_name,
+            agent_config_path: root.join(".kiro/agents").join(&file_name),
         });
     }
-
-    match scope {
-        KiroScope::Global => {
-            let home = std::env::var_os("HOME").ok_or(InitError::HomeNotSet)?;
-            let path = PathBuf::from(home).join(".kiro/agents").join(&file_name);
-            Ok(TargetPaths {
-                root: None,
-                agent_config_path: path,
-                scope,
-                agent_name,
-            })
-        },
-        KiroScope::Local => {
-            let discovered_root = root
-                .map(Path::to_path_buf)
-                .or_else(|| start.and_then(crate::config::repo::discover))
-                .ok_or(InitError::RepoRootNotFound)?;
-            let path = discovered_root.join(".kiro/agents").join(&file_name);
-            Ok(TargetPaths {
-                root: Some(discovered_root),
-                agent_config_path: path,
-                scope,
-                agent_name,
-            })
-        },
-    }
+    let home = std::env::var_os("HOME").ok_or(InitError::RepoRootNotFound)?;
+    Ok(TargetPaths {
+        agent_config_path: PathBuf::from(home).join(".kiro/agents").join(&file_name),
+    })
 }
 
 pub fn install(
@@ -124,7 +75,7 @@ pub fn install(
     dry_run: bool,
 ) -> Result<InstallOutcome, InitError> {
     let command = format!("{ptuf_binary} hook kiro");
-    let mut root = read_agent_config(&targets.agent_config_path, &targets.agent_name)?;
+    let mut root = read_agent_config(&targets.agent_config_path)?;
 
     let already_present = has_existing_hook(&root);
     let status = if already_present {
@@ -153,14 +104,14 @@ pub fn install(
 
 /// Read the agent config from disk, or build a fresh default skeleton
 /// when the file is missing / empty.
-fn read_agent_config(path: &Path, agent_name: &str) -> Result<Value, InitError> {
+fn read_agent_config(path: &Path) -> Result<Value, InitError> {
     match fs::read_to_string(path) {
-        Ok(s) if s.trim().is_empty() => Ok(default_agent_skeleton(agent_name)),
+        Ok(s) if s.trim().is_empty() => Ok(default_agent_skeleton()),
         Ok(s) => serde_json::from_str(&s).map_err(|e| InitError::Json {
             path: path.to_path_buf(),
             message: e.to_string(),
         }),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(default_agent_skeleton(agent_name)),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(default_agent_skeleton()),
         Err(e) => Err(InitError::Io {
             path: path.to_path_buf(),
             source: e,
@@ -169,9 +120,9 @@ fn read_agent_config(path: &Path, agent_name: &str) -> Result<Value, InitError> 
 }
 
 /// Default JSON skeleton written when no agent config exists yet.
-fn default_agent_skeleton(agent_name: &str) -> Value {
+fn default_agent_skeleton() -> Value {
     json!({
-        "name": agent_name,
+        "name": DEFAULT_AGENT_NAME,
         "description": "Kiro CLI agent guarded by ptuf PreToolUse policy.",
         "tools": ["*"],
         "includeMcpJson": true,
@@ -188,8 +139,7 @@ pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
 }
 
 /// Read the single `command` field on a Kiro `preToolUse` entry. The
-/// helper exists for symmetry with the other adapters; doctor consumes
-/// it to flag a hook entry as ours.
+/// helper exists for symmetry with the other adapters.
 pub(crate) fn entry_commands(entry: &Value) -> Vec<String> {
     entry
         .get("command")
@@ -310,74 +260,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_paths_local_uses_explicit_root() {
-        let root = PathBuf::from("/repo");
-        let paths = resolve_paths(None, Some(&root), None, None, KiroScope::Local).unwrap();
-        assert_eq!(
-            paths.agent_config_path,
-            PathBuf::from("/repo/.kiro/agents/ptuf-guarded.json")
-        );
-        assert_eq!(paths.scope, KiroScope::Local);
-        assert_eq!(paths.agent_name, "ptuf-guarded");
-    }
-
-    #[test]
-    fn resolve_paths_uses_custom_agent_name() {
-        let root = PathBuf::from("/repo");
-        let paths =
-            resolve_paths(None, Some(&root), Some("guard-bot"), None, KiroScope::Local).unwrap();
-        assert_eq!(
-            paths.agent_config_path,
-            PathBuf::from("/repo/.kiro/agents/guard-bot.json")
-        );
-        assert_eq!(paths.agent_name, "guard-bot");
-    }
-
-    #[test]
-    fn resolve_paths_local_without_repo_root_returns_repo_root_not_found() {
-        let err = resolve_paths(None, None, None, None, KiroScope::Local).unwrap_err();
-        assert!(matches!(err, InitError::RepoRootNotFound));
-    }
-
-    #[test]
-    fn resolve_paths_global_uses_home_when_set() {
-        let Some(home) = std::env::var_os("HOME") else {
-            return;
-        };
-        let paths = resolve_paths(None, None, None, None, KiroScope::Global).unwrap();
-        let expected = PathBuf::from(home).join(".kiro/agents/ptuf-guarded.json");
-        assert_eq!(paths.agent_config_path, expected);
-        assert_eq!(paths.scope, KiroScope::Global);
-        assert!(paths.root.is_none());
-        assert_eq!(paths.agent_name, "ptuf-guarded");
-    }
-
-    #[test]
-    fn resolve_paths_global_honours_custom_agent_name() {
-        let Some(home) = std::env::var_os("HOME") else {
-            return;
-        };
-        let paths = resolve_paths(None, None, Some("guard-bot"), None, KiroScope::Global).unwrap();
-        let expected = PathBuf::from(home).join(".kiro/agents/guard-bot.json");
-        assert_eq!(paths.agent_config_path, expected);
-        assert_eq!(paths.agent_name, "guard-bot");
-    }
-
-    #[test]
-    fn resolve_paths_agent_config_overrides_scope_and_root() {
-        let explicit = PathBuf::from("/custom/agents/x.json");
-        let paths = resolve_paths(None, None, None, Some(&explicit), KiroScope::Global).unwrap();
-        assert_eq!(paths.agent_config_path, explicit);
-    }
-
-    #[test]
     fn install_creates_new_local_config_with_default_template() {
         let dir = workdir("install-local");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
             agent_config_path: dir.join(".kiro/agents/ptuf-guarded.json"),
-            scope: KiroScope::Local,
-            agent_name: "ptuf-guarded".into(),
         };
         let outcome = install(&targets, "/usr/local/bin/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::Installed);
@@ -395,10 +281,7 @@ mod tests {
     fn install_is_idempotent_when_ptuf_hook_already_present() {
         let dir = workdir("idempotent");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
             agent_config_path: dir.join(".kiro/agents/ptuf-guarded.json"),
-            scope: KiroScope::Local,
-            agent_name: "ptuf-guarded".into(),
         };
         fs::create_dir_all(targets.agent_config_path.parent().unwrap()).unwrap();
         let preset = json!({
@@ -429,10 +312,7 @@ mod tests {
     fn install_appends_when_unrelated_entry_exists() {
         let dir = workdir("append");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
             agent_config_path: dir.join(".kiro/agents/ptuf-guarded.json"),
-            scope: KiroScope::Local,
-            agent_name: "ptuf-guarded".into(),
         };
         fs::create_dir_all(targets.agent_config_path.parent().unwrap()).unwrap();
         let preset = json!({
@@ -465,10 +345,7 @@ mod tests {
     fn install_preserves_unknown_top_level_keys() {
         let dir = workdir("preserve-keys");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
             agent_config_path: dir.join(".kiro/agents/ptuf-guarded.json"),
-            scope: KiroScope::Local,
-            agent_name: "ptuf-guarded".into(),
         };
         fs::create_dir_all(targets.agent_config_path.parent().unwrap()).unwrap();
         let preset = json!({
@@ -499,10 +376,7 @@ mod tests {
     fn install_dry_run_returns_would_install_without_creating_file() {
         let dir = workdir("dry-run");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
             agent_config_path: dir.join(".kiro/agents/ptuf-guarded.json"),
-            scope: KiroScope::Local,
-            agent_name: "ptuf-guarded".into(),
         };
         let outcome = install(&targets, "/usr/local/bin/ptuf", true).unwrap();
         assert_eq!(outcome.status, InstallStatus::WouldInstall);
@@ -514,10 +388,7 @@ mod tests {
     fn install_returns_init_error_json_for_invalid_file() {
         let dir = workdir("bad-json");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
             agent_config_path: dir.join(".kiro/agents/ptuf-guarded.json"),
-            scope: KiroScope::Local,
-            agent_name: "ptuf-guarded".into(),
         };
         fs::create_dir_all(targets.agent_config_path.parent().unwrap()).unwrap();
         let before = "{not json";
@@ -533,10 +404,7 @@ mod tests {
     fn install_rejects_when_top_level_is_not_object() {
         let dir = workdir("non-object");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
             agent_config_path: dir.join(".kiro/agents/ptuf-guarded.json"),
-            scope: KiroScope::Local,
-            agent_name: "ptuf-guarded".into(),
         };
         fs::create_dir_all(targets.agent_config_path.parent().unwrap()).unwrap();
         fs::write(&targets.agent_config_path, "[]").unwrap();
@@ -549,10 +417,7 @@ mod tests {
     fn install_rejects_when_hooks_is_wrong_type() {
         let dir = workdir("hooks-wrong-type");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
             agent_config_path: dir.join(".kiro/agents/ptuf-guarded.json"),
-            scope: KiroScope::Local,
-            agent_name: "ptuf-guarded".into(),
         };
         fs::create_dir_all(targets.agent_config_path.parent().unwrap()).unwrap();
         fs::write(&targets.agent_config_path, r#"{"name": "x", "hooks": 42}"#).unwrap();
@@ -570,10 +435,7 @@ mod tests {
     fn install_rejects_when_pre_tool_use_is_wrong_type() {
         let dir = workdir("pretool-wrong-type");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
             agent_config_path: dir.join(".kiro/agents/ptuf-guarded.json"),
-            scope: KiroScope::Local,
-            agent_name: "ptuf-guarded".into(),
         };
         fs::create_dir_all(targets.agent_config_path.parent().unwrap()).unwrap();
         fs::write(
@@ -595,10 +457,7 @@ mod tests {
     fn empty_file_is_treated_as_default_skeleton() {
         let dir = workdir("empty");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
             agent_config_path: dir.join(".kiro/agents/ptuf-guarded.json"),
-            scope: KiroScope::Local,
-            agent_name: "ptuf-guarded".into(),
         };
         fs::create_dir_all(targets.agent_config_path.parent().unwrap()).unwrap();
         fs::write(&targets.agent_config_path, "").unwrap();
@@ -617,10 +476,7 @@ mod tests {
     fn install_reports_io_error_when_path_is_a_directory() {
         let dir = workdir("path-is-dir");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
             agent_config_path: dir.join("agent-as-dir"),
-            scope: KiroScope::Local,
-            agent_name: "ptuf-guarded".into(),
         };
         fs::create_dir_all(&targets.agent_config_path).unwrap();
         let err = install(&targets, "/x/ptuf", false).unwrap_err();

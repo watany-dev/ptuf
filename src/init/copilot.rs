@@ -1,20 +1,11 @@
 //! `ptuf init copilot` — idempotently register a `preToolUse` hook in
 //! GitHub Copilot's repo-local `.github/hooks/ptuf.json` file.
-//!
-//! Phase 2 (`v0.1.0`) implements the `local` profile: each hook entry
-//! points its `bash` / `powershell` field directly at the ptuf binary.
-//! The `cloud` profile (which generates wrapper scripts under
-//! `.github/hooks/scripts/`) is post-MVP and currently rejected at the
-//! parse layer; reaching this module with `CopilotProfile::Cloud` is a
-//! programmer error.
 
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
-
-use crate::cli::CopilotProfile;
 
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
@@ -38,7 +29,7 @@ pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "copilot"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetPaths {
-    pub root: Option<PathBuf>,
+    pub root: PathBuf,
     pub hooks_path: PathBuf,
 }
 
@@ -50,35 +41,22 @@ pub fn detect_binary() -> String {
         .unwrap_or_else(|| "ptuf".to_string())
 }
 
-pub fn resolve_paths(
-    start: Option<&Path>,
-    root: Option<&Path>,
-    hooks_path: Option<&Path>,
-) -> Result<TargetPaths, InitError> {
-    let discovered_root = root
-        .map(Path::to_path_buf)
-        .or_else(|| start.and_then(crate::config::repo::discover));
-
-    let hooks_path = match (hooks_path, discovered_root.as_ref()) {
-        (Some(path), _) => path.to_path_buf(),
-        (None, Some(root)) => root.join(DEFAULT_HOOKS_PATH),
-        (None, None) => return Err(InitError::RepoRootNotFound),
-    };
-
-    Ok(TargetPaths {
-        root: discovered_root,
-        hooks_path,
-    })
+/// Resolve `<repo>/.github/hooks/ptuf.json` from the discovered repo
+/// root. Returns [`InitError::RepoRootNotFound`] when the caller is not
+/// inside a git working tree.
+pub fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
+    let root = start
+        .and_then(crate::config::repo::discover)
+        .ok_or(InitError::RepoRootNotFound)?;
+    let hooks_path = root.join(DEFAULT_HOOKS_PATH);
+    Ok(TargetPaths { root, hooks_path })
 }
 
 pub fn install(
     targets: &TargetPaths,
     ptuf_binary: &str,
-    profile: CopilotProfile,
     dry_run: bool,
 ) -> Result<InstallOutcome, InitError> {
-    debug_assert!(matches!(profile, CopilotProfile::Local));
-
     let command = format!("{ptuf_binary} hook copilot");
     let mut root = read_hooks(&targets.hooks_path)?;
 
@@ -144,8 +122,8 @@ pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
 }
 
 /// Extract every command-string field from a Copilot hook entry. Both
-/// `bash` and `powershell` fields are inspected because doctor / verify
-/// must accept either as evidence of an installed hook.
+/// `bash` and `powershell` fields are inspected because verify must
+/// accept either as evidence of an installed hook.
 pub(crate) fn entry_commands(entry: &Value) -> Vec<String> {
     let mut commands = Vec::new();
     if let Some(s) = entry.get("bash").and_then(Value::as_str) {
@@ -285,24 +263,8 @@ mod tests {
     }
 
     #[test]
-    fn resolve_paths_prefers_root_default() {
-        let root = PathBuf::from("/repo");
-        let paths = resolve_paths(None, Some(&root), None).unwrap();
-        assert_eq!(
-            paths.hooks_path,
-            PathBuf::from("/repo/.github/hooks/ptuf.json")
-        );
-    }
-
-    #[test]
-    fn resolve_paths_uses_explicit_hooks_path() {
-        let paths = resolve_paths(None, None, Some(Path::new("/tmp/x.json"))).unwrap();
-        assert_eq!(paths.hooks_path, PathBuf::from("/tmp/x.json"));
-    }
-
-    #[test]
-    fn resolve_paths_requires_root_or_explicit_target() {
-        let err = resolve_paths(None, None, None).unwrap_err();
+    fn resolve_paths_requires_repo_root() {
+        let err = resolve_paths(None).unwrap_err();
         assert!(matches!(err, InitError::RepoRootNotFound));
     }
 
@@ -310,16 +272,10 @@ mod tests {
     fn installs_missing_hooks_file() {
         let dir = workdir("install");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
-        let outcome = install(
-            &targets,
-            "/usr/local/bin/ptuf",
-            CopilotProfile::Local,
-            false,
-        )
-        .unwrap();
+        let outcome = install(&targets, "/usr/local/bin/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::Installed);
         let body = read(&targets.hooks_path);
         assert!(body.contains("\"preToolUse\""));
@@ -333,7 +289,7 @@ mod tests {
     fn install_is_idempotent_when_hook_already_exists() {
         let dir = workdir("idempotent");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
         fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
@@ -353,7 +309,7 @@ mod tests {
         )
         .unwrap();
         let before = read(&targets.hooks_path);
-        let outcome = install(&targets, "/y/ptuf", CopilotProfile::Local, false).unwrap();
+        let outcome = install(&targets, "/y/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::AlreadyPresent);
         assert_eq!(before, read(&targets.hooks_path));
         let _ = fs::remove_dir_all(&dir);
@@ -363,11 +319,10 @@ mod tests {
     fn install_dry_run_reports_changes_without_writing() {
         let dir = workdir("dry-run");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
-        let outcome =
-            install(&targets, "/usr/local/bin/ptuf", CopilotProfile::Local, true).unwrap();
+        let outcome = install(&targets, "/usr/local/bin/ptuf", true).unwrap();
         assert_eq!(outcome.status, InstallStatus::WouldInstall);
         assert!(!targets.hooks_path.exists());
         let _ = fs::remove_dir_all(&dir);
@@ -377,7 +332,7 @@ mod tests {
     fn install_appends_when_unrelated_entry_exists() {
         let dir = workdir("append");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
         fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
@@ -395,7 +350,7 @@ mod tests {
             serde_json::to_string_pretty(&preset).unwrap(),
         )
         .unwrap();
-        let outcome = install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap();
+        let outcome = install(&targets, "/x/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::Installed);
         let after: Value = serde_json::from_str(&read(&targets.hooks_path)).unwrap();
         let arr = after
@@ -410,7 +365,7 @@ mod tests {
     fn install_preserves_unknown_keys() {
         let dir = workdir("preserve-keys");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
         fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
@@ -423,7 +378,7 @@ mod tests {
             serde_json::to_string_pretty(&preset).unwrap(),
         )
         .unwrap();
-        install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap();
+        install(&targets, "/x/ptuf", false).unwrap();
         let after: Value = serde_json::from_str(&read(&targets.hooks_path)).unwrap();
         assert_eq!(
             after.pointer("/extras/deep/value").and_then(Value::as_i64),
@@ -436,12 +391,12 @@ mod tests {
     fn install_supplies_version_when_missing() {
         let dir = workdir("version-default");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
         fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
         fs::write(&targets.hooks_path, "{}").unwrap();
-        install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap();
+        install(&targets, "/x/ptuf", false).unwrap();
         let after: Value = serde_json::from_str(&read(&targets.hooks_path)).unwrap();
         assert_eq!(after.get("version").and_then(Value::as_i64), Some(1));
         let _ = fs::remove_dir_all(&dir);
@@ -451,12 +406,12 @@ mod tests {
     fn install_rejects_unsupported_version() {
         let dir = workdir("bad-version");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
         fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
         fs::write(&targets.hooks_path, r#"{"version": 2}"#).unwrap();
-        let err = install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap_err();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
         match err {
             InitError::Schema { message, .. } => {
                 assert!(message.contains("version"), "got: {message}");
@@ -470,12 +425,12 @@ mod tests {
     fn install_rejects_invalid_hooks_json() {
         let dir = workdir("bad-hooks");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
         fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
         fs::write(&targets.hooks_path, "{not json").unwrap();
-        let err = install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap_err();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
         assert!(matches!(err, InitError::Json { .. }));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -484,13 +439,13 @@ mod tests {
     fn install_does_not_overwrite_invalid_hooks_json() {
         let dir = workdir("bad-hooks-untouched");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
         let before = "{not json";
         fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
         fs::write(&targets.hooks_path, before).unwrap();
-        let _ = install(&targets, "/x/ptuf", CopilotProfile::Local, false);
+        let _ = install(&targets, "/x/ptuf", false);
         let after = fs::read_to_string(&targets.hooks_path).unwrap();
         assert_eq!(after, before, "ptuf.json was modified despite Err");
         let _ = fs::remove_dir_all(&dir);
@@ -500,12 +455,12 @@ mod tests {
     fn install_rejects_when_top_level_is_not_object() {
         let dir = workdir("non-object");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
         fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
         fs::write(&targets.hooks_path, "[]").unwrap();
-        let err = install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap_err();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
         assert!(matches!(err, InitError::Schema { .. }));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -514,7 +469,7 @@ mod tests {
     fn install_rejects_when_pre_tool_use_is_wrong_type() {
         let dir = workdir("pretool-wrong-type");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
         fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
@@ -523,7 +478,7 @@ mod tests {
             r#"{"version": 1, "hooks": {"preToolUse": "not-an-array"}}"#,
         )
         .unwrap();
-        let err = install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap_err();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
         match err {
             InitError::Schema { message, .. } => {
                 assert!(message.contains("preToolUse"), "got: {message}");
@@ -537,12 +492,12 @@ mod tests {
     fn install_rejects_when_hooks_is_wrong_type() {
         let dir = workdir("hooks-wrong-type");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
         fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
         fs::write(&targets.hooks_path, r#"{"version": 1, "hooks": 42}"#).unwrap();
-        let err = install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap_err();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
         match err {
             InitError::Schema { message, .. } => {
                 assert!(message.contains("hooks"), "got: {message}");
@@ -556,11 +511,11 @@ mod tests {
     fn install_reports_io_error_when_hooks_path_is_a_directory() {
         let dir = workdir("hooks-is-dir");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join("hooks-as-dir"),
         };
         fs::create_dir_all(&targets.hooks_path).unwrap();
-        let err = install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap_err();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
         assert!(matches!(err, InitError::Io { .. }));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -569,12 +524,12 @@ mod tests {
     fn empty_hooks_file_is_treated_as_empty_object() {
         let dir = workdir("empty-hooks");
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: dir.join(".github/hooks/ptuf.json"),
         };
         fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
         fs::write(&targets.hooks_path, "").unwrap();
-        let outcome = install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap();
+        let outcome = install(&targets, "/x/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::Installed);
         let after: Value = serde_json::from_str(&read(&targets.hooks_path)).unwrap();
         assert!(after.pointer("/hooks/preToolUse").is_some());
@@ -633,10 +588,10 @@ mod tests {
         let blocker = dir.join("blocker");
         fs::write(&blocker, "not a directory").unwrap();
         let targets = TargetPaths {
-            root: Some(dir.clone()),
+            root: dir.clone(),
             hooks_path: blocker.join("ptuf.json"),
         };
-        let err = install(&targets, "/x/ptuf", CopilotProfile::Local, false).unwrap_err();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
         assert!(
             matches!(err, InitError::Io { .. }),
             "expected IO error when parent path is a regular file, got: {err:?}",

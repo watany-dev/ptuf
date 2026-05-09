@@ -160,7 +160,8 @@ pub(crate) fn pre_tool_use_hooks(root: &Value) -> Vec<&Value> {
     hooks
 }
 
-pub(crate) fn entry_commands(entry: &Value) -> Vec<String> {
+#[cfg(test)]
+fn entry_commands(entry: &Value) -> Vec<String> {
     entry_hooks(entry)
         .into_iter()
         .filter_map(|hook| hook.get("command").and_then(Value::as_str))

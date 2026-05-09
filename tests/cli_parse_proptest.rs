@@ -13,7 +13,7 @@
 
 use proptest::prelude::*;
 
-use ptuf::cli::{Command, InitOptions, ParseError, parse};
+use ptuf::cli::{Command, ParseError, parse};
 use ptuf::testing::proptest::{arbitrary_command, argv_tokens};
 
 /// Subcommand tokens that `parse` accepts at position 0 (in addition
@@ -22,14 +22,14 @@ use ptuf::testing::proptest::{arbitrary_command, argv_tokens};
 /// set directly to avoid global rejects under high `PROPTEST_CASES`.
 const KNOWN_HEADS: &[&str] = &[
     "hook",
-    "eval",
+    "check",
     "plugin",
     "init",
-    "doctor",
     "-h",
     "--help",
     "-V",
     "--version",
+    "--json",
 ];
 
 /// Strategy producing a non-empty argv whose first token is **not**
@@ -55,24 +55,10 @@ proptest! {
         let _ = parse(&args);
     }
 
-    // Smoke property: the canonical `doctor` invocation yields a
-    // matching Command::Doctor variant. With and without `--json`.
-    #[test]
-    fn pbt_parse_doctor_returns_doctor(json_flag in any::<bool>()) {
-        let mut args = vec!["doctor".to_string()];
-        if json_flag {
-            args.push("--json".into());
-        }
-        match parse(&args) {
-            Ok(Command::Doctor { json }) => prop_assert_eq!(json, json_flag),
-            other => prop_assert!(false, "expected Doctor, got {other:?}"),
-        }
-    }
-
-    // `eval --tool <NAME> <COMMAND>` succeeds for arbitrary command
+    // `check --tool <NAME> <COMMAND>` succeeds for arbitrary command
     // strings and surfaces the original tool / command verbatim.
     #[test]
-    fn pbt_parse_eval_total(
+    fn pbt_parse_check_total(
         tool in proptest::sample::select(&["Bash", "Read", "Write", "Edit"][..])
             .prop_map(std::string::ToString::to_string),
         cmd in arbitrary_command(),
@@ -82,34 +68,50 @@ proptest! {
         // covered by `pbt_parse_is_total`.
         prop_assume!(!cmd.starts_with("--"));
         let args = vec![
-            "eval".into(),
+            "check".into(),
             "--tool".into(),
             tool.clone(),
             cmd.clone(),
         ];
         match parse(&args) {
-            Ok(Command::Eval { tool: got_tool, command: got_cmd }) => {
+            Ok((_, Command::Check { tool: got_tool, command: got_cmd })) => {
                 prop_assert_eq!(got_tool, tool);
                 prop_assert_eq!(got_cmd, cmd);
             }
-            other => prop_assert!(false, "expected Eval, got {other:?}"),
+            other => prop_assert!(false, "expected Check, got {other:?}"),
         }
     }
 
-    // `init claude-code [...flags]` with random argv tails never
-    // panics. Outcome is either Ok(Init { Claude.. }) or a ParseError.
+    // `init [<agent>] [...flags]` with random argv tails never panics.
+    // Outcome is either Ok((_, Init(_))) or a ParseError.
     #[test]
-    fn pbt_parse_init_claude_total(tail in argv_tokens()) {
-        let mut args = vec!["init".to_string(), "claude-code".into()];
+    fn pbt_parse_init_total(
+        agent in proptest::option::of(
+            proptest::sample::select(&["claude-code", "codex", "copilot", "kiro"][..])
+                .prop_map(std::string::ToString::to_string)
+        ),
+        tail in argv_tokens(),
+    ) {
+        let mut args = vec!["init".to_string()];
+        if let Some(a) = agent {
+            args.push(a);
+        }
         args.extend(tail);
         match parse(&args) {
-            Ok(Command::Init { options: InitOptions::ClaudeCode(_), .. })
-            | Err(_) => {}
+            Ok((_, Command::Init(_))) | Err(_) => {}
             other => prop_assert!(
                 false,
-                "init claude-code returned unexpected variant {other:?}",
+                "init returned unexpected variant {other:?}",
             ),
         }
+    }
+
+    // `--json` may appear before any subcommand and should never panic.
+    #[test]
+    fn pbt_parse_global_json_total(tail in argv_tokens()) {
+        let mut args = vec!["--json".to_string()];
+        args.extend(tail);
+        let _ = parse(&args);
     }
 
     // Any first token that is not in the known-head set must surface

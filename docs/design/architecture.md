@@ -147,9 +147,9 @@ stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit 
 | `ptuf hook copilot` | `Deny` のときだけ bare JSON envelope (no `hookSpecificOutput`) | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
 | `ptuf hook kiro` | 常に空 (Kiro hook には JSON envelope が無い) | `Ask` / `Deny` reason | `0` or `2` |
 
-### eval
+### check
 
-`ptuf eval --tool <name> <command>` は stdout に人間可読な判定結果を書き、reason が
+`ptuf check --tool <name> <command>` は stdout に人間可読な判定結果を書き、reason が
 ある場合だけ stderr に出す。
 
 | Decision | exit |
@@ -162,8 +162,8 @@ stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit 
 以下は exit `1`:
 
 - argv parse 失敗
-- `doctor` / `plugin test` の内部エラー
-- `init` の書き込み失敗
+- `plugin check` の内部エラー
+- `init` の書き込み失敗 / verify 失敗
 
 `hook` サブコマンドは Claude Code の hook 仕様 (exit 1 は non-blocking warning) に
 追従するため、stdin 系の初期化エラーは exit `1` ではなく exit `2` + deny で扱う。

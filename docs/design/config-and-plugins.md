@@ -223,7 +223,7 @@ rules:
 | `sensitive.pathKindAny` | `string[]` | 機密分類が一致 |
 | `all` / `any` / `not` | nested | 論理結合 |
 
-## Plugin test
+## Plugin check
 
-`ptuf plugin test <path>` は plugin の `tests.deny` / `tests.allow` を、その rule
+`ptuf plugin check <path>` は plugin の `tests.deny` / `tests.allow` を、その rule
 単体に対して実行する。built-in rule や engine の aggregate までは通さない。

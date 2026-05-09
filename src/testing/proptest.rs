@@ -449,7 +449,6 @@ pub fn richer_hook_input() -> impl Strategy<Value = HookInput> {
 fn argv_token() -> impl Strategy<Value = String> {
     let subcmd = proptest::sample::select(
         &[
-            "doctor",
             "init",
             "hook",
             "eval",

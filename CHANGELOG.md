@@ -7,9 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING
+- **CLI surface — zero-base simplification.** `v0.1.0` rewires the
+  command grammar around auto-detect and a global `--json` flag.
+  Migration guide:
+  - `ptuf eval --tool <name> <command>` → `ptuf check --tool <name> <command>`.
+    Verb is unified across check / plugin check.
+  - `ptuf plugin test <path>` → `ptuf plugin check <path>`. (`test` clashed
+    with the plugin DSL's per-rule `tests:` block.)
+  - `ptuf doctor [--json]` is **removed**. `ptuf init --dry-run` (with
+    optional `--no-verify`) reports the same agent / file state without
+    writing or running the synthetic deny check. The
+    `tests/contracts/doctor-schema-keys.json` fixture is deleted; the
+    `init --json` verify report (`tests/contracts/init-verify-schema-keys.json`)
+    is the supported observability surface going forward.
+  - `--json` moves from per-subcommand to a **global pre-subcommand flag**:
+    `ptuf --json init …` / `ptuf --json check …` / `ptuf --json plugin check …`.
+    Subcommand-position `--json` (e.g. `ptuf init --json`) is rejected as
+    `UnexpectedArgument`. `ptuf hook <agent>` rejects `--json` at parse
+    time because the host's hook envelope is fixed.
+  - `ptuf init` runs **auto-detect by default**. Without an agent argument
+    it scans `$HOME/.claude/`, `<repo>/.codex/` / `$HOME/.codex/`,
+    `<repo>/.github/`, and `<repo>/.kiro/` / `$HOME/.kiro/`, and installs
+    every detected agent. Detection of zero agents exits `1` with
+    `no agent detected`. `ptuf init <agent>` still pins to a single
+    adapter.
+  - **Verify is the new default.** `--verify` is removed; install
+    automatically runs the synthetic deny + fail-closed checks. `--no-verify`
+    opts out, and `--dry-run` (which writes nothing) implicitly disables
+    verify.
+  - All `init` path-override flags are removed: `--root`, `--hooks`,
+    `--config`, `--settings`, `--agent`, `--agent-config`, `--scope`,
+    `--profile`. Adapters now derive their write targets from the same
+    cwd / `$HOME` lookup the auto-detect uses; `init kiro` falls back to
+    `$HOME/.kiro/` when no repo root is found, and `init copilot` requires
+    a repo root (returns `RepoRootNotFound`).
+  - `InitError::HomeNotSet` and `InitError::RepoRootNotFound` Display
+    strings updated to drop references to the removed flags.
+
 ### Added
 - **GitHub Copilot adapter (`v0.1.0` target).** First-class `copilot`
-  agent across hook / init / doctor:
+  agent across hook / init:
   - `ptuf hook copilot` — accepts both snake (`tool_name` / `tool_input`)
     and camel (`toolName` / `toolArgs`) input shapes, applies tool name
     mapping (`bash`→`Bash`, `view`→`Read`, `edit`→`Edit`, `create`→`Write`,
@@ -20,29 +58,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the reserved `core.engine.invalid-payload` and
     `core.engine.policy-load-failed` rules — exits `0` to stay
     fail-closed. `Ask` is demoted to `Deny`.
-  - `ptuf init copilot --profile local` — atomically writes
+  - `ptuf init copilot` — atomically writes
     `<repo>/.github/hooks/ptuf.json` with both `bash` and `powershell`
     command strings on the `preToolUse` array. Idempotent (detects
-    existing entries via the `hook copilot` command tail). `--verify` /
-    `--dry-run` / `--json` follow the same contract as `init claude-code`
-    and `init codex`. `--profile cloud` is reserved for a future release
-    and is rejected at parse time.
-  - `ptuf doctor` — adds a `GitHub Copilot integration` section
-    (`✓` / `⚠` / `✗`). `doctor --json` adds a top-level `copilot` field
-    with state values `repoRootNotFound` / `missing` / `hookRegistered` /
-    `hookMissing` / `invalidJson` / `invalidSchema` / `io`. The schema
-    version stays at `1` (additive). Failures surface only on
-    `invalidJson` / `invalidSchema` / `io`.
+    existing entries via the `hook copilot` command tail).
   - `audit.agent` now accepts `"copilot"` alongside `claude-code` and
     `codex`.
-- `ptuf init <agent> --verify [--json]` — after writing the hook
+- `ptuf init <agent>` install verification — after writing the hook
   configuration, runs a builtin-only Engine against a synthetic
   `rm -rf /` payload to confirm `core.filesystem.destructive-rm` fires,
   then forces a plugin-load failure to confirm the
   `core.engine.policy-load-failed` fail-closed path. If either check
   fails the install is rolled back to its pre-write state and the
-  command exits `1`. `--json` emits a `schemaVersion: 1` machine-readable
-  report; `--verify` and `--dry-run` are mutually exclusive.
+  command exits `1`. `ptuf --json init` emits a `schemaVersion: 1`
+  machine-readable report. `--no-verify` skips the checks; `--dry-run`
+  implicitly disables them.
 - `try_decide(&HookInput) -> Result<Decision, EngineError>` — fallible
   variant of `decide()` that surfaces config / plugin load errors instead
   of falling back to a default-configured engine. Embedded callers that
@@ -55,7 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   need pessimistic handling can opt in by reading this flag (review §3.3).
 - `Engine::drain_audit_write_warnings()` — accumulates per-record audit
   write failures (permission denied, disk full, …). The CLI hook and
-  eval entry points now drain these to stderr after each decision so
+  check entry points now drain these to stderr after each decision so
   silent audit loss is observable. Open failures continue to surface
   through `Engine::audit_warning()` (review D9).
 - `core.engine.dynamic-eval` rule (Ask / Medium / overridable) — flags

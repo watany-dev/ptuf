@@ -5,11 +5,45 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use crate::cli::HookAgent;
+
 pub mod claude_code;
 pub mod codex;
 pub mod copilot;
 pub mod kiro;
 pub mod verify;
+
+/// Auto-detect every agent reachable from the given `cwd` and `$HOME`.
+///
+/// - `ClaudeCode`: requires `$HOME/.claude/` to exist.
+/// - `Codex`: `<repo>/.codex/` or `$HOME/.codex/`.
+/// - `Copilot`: `<repo>/.github/`.
+/// - `Kiro`: `<repo>/.kiro/` or `$HOME/.kiro/`.
+///
+/// Returns agents in a stable order so callers can install / report
+/// deterministically.
+pub fn detect_agents(cwd: Option<&Path>) -> Vec<HookAgent> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let repo = cwd.and_then(crate::config::repo::discover);
+    let mut found = Vec::new();
+    if home.as_ref().is_some_and(|h| h.join(".claude").is_dir()) {
+        found.push(HookAgent::ClaudeCode);
+    }
+    if repo.as_ref().is_some_and(|r| r.join(".codex").is_dir())
+        || home.as_ref().is_some_and(|h| h.join(".codex").is_dir())
+    {
+        found.push(HookAgent::Codex);
+    }
+    if repo.as_ref().is_some_and(|r| r.join(".github").is_dir()) {
+        found.push(HookAgent::Copilot);
+    }
+    if repo.as_ref().is_some_and(|r| r.join(".kiro").is_dir())
+        || home.as_ref().is_some_and(|h| h.join(".kiro").is_dir())
+    {
+        found.push(HookAgent::Kiro);
+    }
+    found
+}
 
 /// Errors surfaced by every `init` adapter.
 #[derive(Debug)]
@@ -55,10 +89,13 @@ impl std::fmt::Display for InitError {
                     path.display()
                 )
             },
-            Self::HomeNotSet => write!(f, "$HOME is not set; pass --settings <PATH> explicitly"),
+            Self::HomeNotSet => write!(
+                f,
+                "$HOME is not set; ptuf init needs HOME to locate the agent's settings file"
+            ),
             Self::RepoRootNotFound => write!(
                 f,
-                "could not discover a repository root; pass --root <PATH> or explicit --hooks/--config paths"
+                "could not discover a repository root; run ptuf init from inside a git working tree"
             ),
         }
     }

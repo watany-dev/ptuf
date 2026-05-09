@@ -60,26 +60,6 @@ fn hook_deny_json_contract_is_stable() {
 }
 
 #[test]
-fn doctor_json_schema_contract_exposes_expected_top_level_keys() {
-    let dir = repo();
-    let (code, stdout, stderr) = run_in(dir.path(), &["doctor", "--json"], "");
-    assert!(code == 0 || code == 1, "stderr: {stderr}");
-    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid doctor json");
-    assert_eq!(value["schemaVersion"], 1);
-
-    let expected: BTreeSet<String> =
-        serde_json::from_str(include_str!("contracts/doctor-schema-keys.json"))
-            .expect("doctor key fixture");
-    let actual: BTreeSet<String> = value
-        .as_object()
-        .expect("doctor json object")
-        .keys()
-        .cloned()
-        .collect();
-    assert_eq!(actual, expected);
-}
-
-#[test]
 fn audit_contract_includes_allowlist_id_for_suppressed_rule() {
     let dir = repo();
     let audit_path = dir.path().join("audit.jsonl");
@@ -94,7 +74,7 @@ fn audit_contract_includes_allowlist_id_for_suppressed_rule() {
 
     let (code, stdout, stderr) = run_in(
         dir.path(),
-        &["eval", "--tool", "Bash", "git reset --hard HEAD~3"],
+        &["check", "--tool", "Bash", "git reset --hard HEAD~3"],
         "",
     );
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
@@ -180,7 +160,7 @@ fn plugin_loader_error_contract_fails_closed() {
     )
     .expect("write yaml");
 
-    let (code, stdout, stderr) = run_in(dir.path(), &["eval", "--tool", "Bash", "ls"], "");
+    let (code, stdout, stderr) = run_in(dir.path(), &["check", "--tool", "Bash", "ls"], "");
     assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
     assert!(stdout.contains("Decision: deny"), "stdout: {stdout}");
     assert!(stdout.contains("core.engine.policy-load-failed"));
@@ -405,19 +385,22 @@ fn copilot_unknown_tool_never_panics() {
 #[test]
 fn init_verify_json_schema_contract_is_stable() {
     let dir = tempfile::TempDir::new().expect("tempdir");
-    let settings = dir.path().join("settings.json");
-    let settings_str = settings.to_string_lossy().into_owned();
-    let (code, stdout, stderr) = run(
-        &[
-            "init",
-            "claude-code",
-            "--verify",
-            "--json",
-            "--settings",
-            &settings_str,
-        ],
-        "",
-    );
+    let home = dir.path();
+    std::fs::create_dir_all(home.join(".claude")).expect("mkdir .claude");
+    let mut child = binary()
+        .args(["--json", "init", "claude-code"])
+        .current_dir(home)
+        .env("HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ptuf");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("wait");
+    let code = output.status.code().expect("exit");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
 
     let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid init verify json");

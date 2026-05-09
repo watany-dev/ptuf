@@ -11,7 +11,7 @@
 
 - `Decision` と `aggregate`
 - `ptuf hook claude-code`
-- `ptuf eval --tool <name> <command>`
+- `ptuf check --tool <name> <command>`
 - `core.filesystem.destructive-rm`
 - `core.network.remote-script-pipe`
 - `core.secrets.sensitive-path-to-network`
@@ -20,7 +20,7 @@
 
 - layered YAML config
 - YAML plugin loader
-- `ptuf plugin test <path>`
+- `ptuf plugin check <path>`
 - audit JSONL
 - `mode`, `failClosed`, allowlist
 
@@ -31,7 +31,6 @@
 - `core.git` 11 rule
 - `core.self_protection` 6 rule
 - `ptuf init claude-code`
-- `ptuf doctor`
 
 ### M4 — adapter / project facts / MCP (実装済み)
 
@@ -46,37 +45,46 @@
 
 - `ptuf hook copilot` (snake/camel 入力正規化、bare JSON envelope、
   すべての Decision で exit `0`、`Ask` → `Deny` demote)
-- `ptuf init copilot --profile local` (`<repo>/.github/hooks/ptuf.json` を
+- `ptuf init copilot` (`<repo>/.github/hooks/ptuf.json` を
   idempotent / atomic に書き込む)
-- `ptuf doctor` の `GitHub Copilot integration` section と
-  `doctor --json` の `copilot` field
 - `core.engine.invalid-payload` / `core.engine.policy-load-failed` を
   bare JSON + exit `0` で流用する fail-closed 経路
 - audit `agent: "copilot"` を許容
 
-### M6 — Kiro CLI adapter (実装中, `v0.1.0` 予定)
+### M6 — Kiro CLI adapter (実装済み, `v0.1.0` 予定)
 
 - `ptuf hook kiro` (Kiro `preToolUse` payload 正規化、tool 名 alias と
   `@server/tool` MCP 化、`Ask` → `Deny` demote、JSON envelope を持たず
   stderr + exit `2` で deny を返す fail-closed 経路、`core.engine.*`
-  reserved rule の流用) — Phase 1 PR で実装済み
-- `ptuf init kiro` (`.kiro/agents/<name>.json` への idempotent 書き込み、
-  `--scope local|global`、`--agent-config`、`--verify [--json]`) — Phase 2
-  PR で実装済み
-- `ptuf doctor` の `Kiro CLI integration` section と `doctor --json` の
-  `kiro` field — Phase 3 PR で実装済み
+  reserved rule の流用)
+- `ptuf init kiro` (`.kiro/agents/ptuf-guarded.json` への idempotent
+  書き込み、repo root が無ければ `$HOME` へ fallback)
 - `Read` / `Edit` / `Write` の `paths[]` / `operations[].path` を core
-  `collect_event_paths` で重複排除しつつ収集する additive 拡張 — Phase 1
-  PR で実装済み
-- audit `agent: "kiro"` を許容 — Phase 1 PR で実装済み
+  `collect_event_paths` で重複排除しつつ収集する additive 拡張
+- audit `agent: "kiro"` を許容
+
+### M7 — CLI ゼロベース簡素化 (実装済み, `v0.1.0` 予定 / breaking)
+
+- `ptuf init` を引数なしで auto-detect (cwd の repo root と `$HOME` から
+  agent 候補を検出して全部 install)
+- per-subcommand `--json` を廃止しトップレベル global flag `--json` へ
+  統合
+- `ptuf init` の path-override flag (`--root` / `--hooks` / `--config` /
+  `--settings` / `--agent` / `--agent-config` / `--scope` / `--profile`)
+  を撤去
+- verify を既定で実行、`--no-verify` で opt-out。`--dry-run` 指定時は
+  verify も自動的に off
+- `ptuf eval` → `ptuf check`、`ptuf plugin test` → `ptuf plugin check`
+  にリネーム
+- `ptuf doctor` を完全に廃止 (代替は `ptuf init --dry-run [--no-verify]`)
 
 ## 今後の候補
 
 現時点でコードに入っていない候補:
 
 - Cursor / Gemini など追加 adapter
-- `ptuf init copilot --profile cloud` (cloud agent 用 wrapper script
-  + JSON。network egress / firewall / installer 取得経路の整理が必要)
+- cloud Copilot agent 向け wrapper script + JSON (network egress /
+  firewall / installer 取得経路の整理が必要)
 - `dataflow.basic` の強化
 - signed / pinned plugin 配布
 - generated file など、project_hygiene の追加 rule
@@ -96,8 +104,8 @@
 - **stdout is protocol-only**  
   hook response 以外を stdout に混ぜない
 - **fail closed in CLI paths**  
-  policy を読めなければ `hook` / `eval` は deny する
+  policy を読めなければ `hook` / `check` は deny する
 - **self-protection is mandatory**  
   guardrail 自体の無効化を block する
 - **plugin rules must be testable**  
-  `tests:` と `ptuf plugin test` を前提にする
+  `tests:` と `ptuf plugin check` を前提にする

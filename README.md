@@ -11,9 +11,11 @@ stderr, and agent-specific `hookSpecificOutput` JSON.
   failure
 
 `ptuf` currently ships first-class adapters for Claude Code, Codex,
-GitHub Copilot, and Kiro CLI. Each adapter has matching `hook`, `init`,
-and `doctor` integration so the same policy engine and YAML plugins
-back every host.
+GitHub Copilot, and Kiro CLI. Each adapter has matching `hook` and
+`init` integration so the same policy engine and YAML plugins back
+every host. `ptuf init` auto-detects every reachable agent under cwd /
+`$HOME` and installs the `PreToolUse` hook into all of them, with
+post-install verify enabled by default.
 
 ## Status
 
@@ -26,12 +28,11 @@ v0.0.1 ships:
 - Bounded wrapper inspection for `bash -c`, `sh -c`, `eval`, `xargs`, and
   `find -exec`, including wrapped redirect targets for self-protection
 - Layered YAML config and YAML plugins with rule-local `tests:`
-- `ptuf init <agent>` for Claude Code, Codex, GitHub Copilot, and Kiro
-  CLI hook installation
-- `ptuf doctor [--json]` for binary/config/plugin/hook diagnostics
+- `ptuf init` auto-detects Claude Code, Codex, GitHub Copilot, and
+  Kiro CLI under cwd / `$HOME` and installs hooks for each
 - Audit JSONL with `schemaVersion: 1`, `agent`, `pluginVersions`, and
   `allowlistId`
-- Contract tests for hook JSON, `doctor --json`, audit schema, allowlists, MCP
+- Contract tests for hook JSON, `init --json`, audit schema, allowlists, MCP
   nested paths, and hook-script self-protection
 
 ## Requirements
@@ -139,20 +140,23 @@ cargo install --path .
 
 ```text
 ptuf hook <agent>
-ptuf eval --tool <name> <command>
-ptuf plugin test <path>
-ptuf init claude-code [--dry-run] [--settings <path>] [--verify [--json]]
-ptuf init codex [--dry-run] [--root <path>] [--hooks <path>] [--config <path>] [--verify [--json]]
-ptuf init copilot [--dry-run] [--root <path>] [--hooks <path>] [--profile local] [--verify [--json]]
-ptuf init kiro [--dry-run] [--root <path>] [--agent <name>] [--agent-config <path>]
-               [--scope local|global] [--verify [--json]]
-ptuf doctor [--json]
+ptuf [--json] check --tool <name> <command>
+ptuf [--json] plugin check <path>
+ptuf [--json] init [<agent>] [--no-verify] [--dry-run]
 ptuf --help
 ptuf --version
 ```
 
-`ptuf hook <agent>` is the hook entry point. `ptuf eval` is the manual,
-one-shot evaluator for shell use and debugging.
+`ptuf hook <agent>` is the hook entry point. `ptuf check` is the manual,
+one-shot evaluator for shell use and debugging. `ptuf init` auto-detects
+every agent reachable from cwd / `$HOME`, or you can pin to one
+adapter (`claude-code` | `codex` | `copilot` | `kiro`).
+
+`--json` is a global, top-level flag; it must appear *before* the
+subcommand. `hook` does not accept `--json` because the hook protocol
+output shape is fixed by the host. `init` runs the post-install verify
+by default; pass `--no-verify` to skip, or `--dry-run` to plan only
+(dry-run implicitly turns verify off because nothing is written).
 
 ## Hook Behavior
 
@@ -224,15 +228,37 @@ so the host blocks the tool — `exit 1` would only surface a non-blocking
 warning and let the call through. Copilot uses the same reserved rule
 but at exit `0` (see above).
 
-## Claude Code
+## Auto-detect
 
-The simplest path is:
+```bash
+ptuf init                  # detect every agent under cwd / $HOME
+ptuf init --dry-run        # show plan only (no writes, no verify)
+ptuf init --no-verify      # install but skip the synthetic deny check
+ptuf --json init           # machine-readable verify report
+```
+
+`ptuf init` checks the following locations and installs into each
+match:
+
+| Agent       | Detection condition                              | Install target                          |
+|-------------|--------------------------------------------------|-----------------------------------------|
+| ClaudeCode  | `$HOME/.claude/`                                 | `$HOME/.claude/settings.json`           |
+| Codex       | `<repo>/.codex/` or `$HOME/.codex/`              | `<repo>/.codex/{hooks.json,config.toml}` |
+| Copilot     | `<repo>/.github/`                                | `<repo>/.github/hooks/ptuf.json`        |
+| Kiro        | `<repo>/.kiro/` or `$HOME/.kiro/`                | `<repo>/.kiro/agents/ptuf-guarded.json`  |
+
+To opt out of any auto-detected target, pass an explicit agent token:
+`ptuf init claude-code` (or `codex` / `copilot` / `kiro`) restricts the
+install to that single adapter. Use `--dry-run` first if you are unsure
+which targets `ptuf init` would touch.
+
+## Claude Code
 
 ```bash
 ptuf init claude-code
 ptuf init claude-code --dry-run
-ptuf init claude-code --verify           # install + run synthetic deny check
-ptuf init claude-code --verify --json    # machine-readable verify report
+ptuf init claude-code --no-verify
+ptuf --json init claude-code     # machine-readable verify report
 ```
 
 This writes or updates `~/.claude/settings.json` with a `PreToolUse` entry like:
@@ -267,9 +293,7 @@ The default install target is repo-local:
 ```bash
 ptuf init codex
 ptuf init codex --dry-run
-ptuf init codex --root /path/to/repo
-ptuf init codex --hooks /tmp/hooks.json --config /tmp/config.toml
-ptuf init codex --verify           # install + run synthetic deny check
+ptuf init codex --no-verify
 ```
 
 That writes:
@@ -288,20 +312,15 @@ with:
 The default install target is repo-local:
 
 ```bash
-ptuf init copilot --profile local
-ptuf init copilot --profile local --dry-run
-ptuf init copilot --profile local --root /path/to/repo
-ptuf init copilot --profile local --hooks /tmp/ptuf.json
-ptuf init copilot --profile local --verify           # install + run synthetic deny check
+ptuf init copilot
+ptuf init copilot --dry-run
+ptuf init copilot --no-verify
 ```
 
 That writes `<repo>/.github/hooks/ptuf.json` with a `preToolUse` entry
 containing both `bash` and `powershell` command strings. The installer
 is idempotent — re-running it detects an existing ptuf entry by the
 `hook copilot` command tail.
-
-The `--profile cloud` variant (which also generates wrapper scripts for
-Copilot's cloud agent) is post-MVP and not yet wired up.
 
 ## Kiro CLI
 
@@ -310,18 +329,15 @@ The default install target is repo-local:
 ```bash
 ptuf init kiro
 ptuf init kiro --dry-run
-ptuf init kiro --root /path/to/repo
-ptuf init kiro --agent guard-bot                  # use a custom file stem
-ptuf init kiro --scope global                     # write to ~/.kiro/agents/<name>.json
-ptuf init kiro --agent-config /tmp/agent.json     # bypass scope/root resolution
-ptuf init kiro --verify                           # install + run synthetic deny check
+ptuf init kiro --no-verify
 ```
 
-That writes `<repo>/.kiro/agents/ptuf-guarded.json` (or, with
-`--scope global`, `~/.kiro/agents/ptuf-guarded.json`) with a
+That writes `<repo>/.kiro/agents/ptuf-guarded.json` with a
 `hooks.preToolUse` entry whose `command` invokes `<ptuf> hook kiro`.
-The installer is idempotent — re-running it detects an existing ptuf
-entry by the `hook kiro` command tail and leaves the file untouched.
+The installer falls back to `~/.kiro/agents/ptuf-guarded.json` when no
+repo root with a `.kiro/` directory is found. The installer is
+idempotent — re-running it detects an existing ptuf entry by the
+`hook kiro` command tail and leaves the file untouched.
 
 Kiro `preToolUse` payloads use a different vocabulary than Claude Code,
 so the adapter normalises tool names and `tool_input` keys before the
@@ -341,9 +357,7 @@ engine sees them:
   generic / MCP extractors handle it best-effort
 
 `hook_event_name` other than `preToolUse` is rejected with
-`core.engine.invalid-payload`. `ptuf doctor` (text and `--json`) reports
-a `Kiro CLI integration` section that scans `<repo>/.kiro/agents/*.json`
-and `~/.kiro/agents/*.json` for ptuf hook entries.
+`core.engine.invalid-payload`.
 
 ## Configuration
 
@@ -403,13 +417,14 @@ Plugin files use `apiVersion: ptuf.dev/v1` and `kind: Plugin`. Each rule can
 include `tests.deny` and `tests.allow`, which are executed with:
 
 ```bash
-ptuf plugin test ./ptuf-plugin.yaml
+ptuf plugin check ./ptuf-plugin.yaml
 ```
 
 Plugin tests evaluate the plugin rule itself, not the full built-in engine.
 
 For end-to-end protocol regressions, the repository also keeps
-`tests/contracts.rs` plus JSON fixtures for hook/audit/doctor behavior.
+`tests/contracts.rs` plus JSON fixtures for hook, audit, and `init --json`
+verify behavior.
 
 ## Library Use
 

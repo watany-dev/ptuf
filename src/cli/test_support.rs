@@ -8,18 +8,18 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use super::{Command, ParseError, parse, run};
+use super::{Command, GlobalFlags, ParseError, parse, run};
 
 pub(super) fn s(v: &[&str]) -> Vec<String> {
     v.iter().map(|x| x.to_string()).collect()
 }
 
 pub(super) fn run_with(args: &[&str], stdin: &str) -> (u8, String, String) {
-    let parsed: Result<Command, ParseError> = parse(&s(args));
-    let parsed = parsed.expect("parse must succeed in run_with");
+    let parsed: Result<(GlobalFlags, Command), ParseError> = parse(&s(args));
+    let (globals, command) = parsed.expect("parse must succeed in run_with");
     let mut out = Vec::new();
     let mut err = Vec::new();
-    let code = run(parsed, stdin.as_bytes(), &mut out, &mut err);
+    let code = run(globals, command, stdin.as_bytes(), &mut out, &mut err);
     (
         code,
         String::from_utf8_lossy(&out).into_owned(),
@@ -39,7 +39,7 @@ impl Read for FailingReader {
 
 /// `Write` impl whose first `budget` bytes are accepted; every byte
 /// after that returns an error. Drives the render-failure arm of
-/// `run_plugin_test` and `run_doctor`.
+/// `run_plugin_test`.
 pub(super) struct FailingWriter {
     pub(super) budget: usize,
 }
