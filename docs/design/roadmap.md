@@ -64,7 +64,7 @@
   `--scope local|global`、`--agent-config`、`--verify [--json]`) — Phase 2
   PR で実装済み
 - `ptuf doctor` の `Kiro CLI integration` section と `doctor --json` の
-  `kiro` field — Phase 3 後続 PR
+  `kiro` field — Phase 3 PR で実装済み
 - `Read` / `Edit` / `Write` の `paths[]` / `operations[].path` を core
   `collect_event_paths` で重複排除しつつ収集する additive 拡張 — Phase 1
   PR で実装済み

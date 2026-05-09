@@ -10,9 +10,10 @@ stderr, and agent-specific `hookSpecificOutput` JSON.
 - `1` — internal error such as invalid JSON, bad CLI arguments, or policy load
   failure
 
-`ptuf` currently ships first-class adapters for Claude Code, Codex, and
-GitHub Copilot. A `ptuf hook kiro` adapter for Kiro CLI is also wired up;
-the matching `init`/`doctor` integration is rolling in across follow-up PRs.
+`ptuf` currently ships first-class adapters for Claude Code, Codex,
+GitHub Copilot, and Kiro CLI. Each adapter has matching `hook`, `init`,
+and `doctor` integration so the same policy engine and YAML plugins
+back every host.
 
 ## Status
 
@@ -25,8 +26,8 @@ v0.0.1 ships:
 - Bounded wrapper inspection for `bash -c`, `sh -c`, `eval`, `xargs`, and
   `find -exec`, including wrapped redirect targets for self-protection
 - Layered YAML config and YAML plugins with rule-local `tests:`
-- `ptuf init <agent>` for Claude Code, Codex, and GitHub Copilot hook
-  installation
+- `ptuf init <agent>` for Claude Code, Codex, GitHub Copilot, and Kiro
+  CLI hook installation
 - `ptuf doctor [--json]` for binary/config/plugin/hook diagnostics
 - Audit JSONL with `schemaVersion: 1`, `agent`, `pluginVersions`, and
   `allowlistId`
@@ -340,8 +341,9 @@ engine sees them:
   generic / MCP extractors handle it best-effort
 
 `hook_event_name` other than `preToolUse` is rejected with
-`core.engine.invalid-payload`. A matching `ptuf doctor` integration is
-tracked under M6 and ships in a follow-up PR.
+`core.engine.invalid-payload`. `ptuf doctor` (text and `--json`) reports
+a `Kiro CLI integration` section that scans `<repo>/.kiro/agents/*.json`
+and `~/.kiro/agents/*.json` for ptuf hook entries.
 
 ## Configuration
 

@@ -187,13 +187,24 @@ pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
     tokens[n - COMMAND_TAIL.len()..] == *COMMAND_TAIL
 }
 
+/// Read the single `command` field on a Kiro `preToolUse` entry. The
+/// helper exists for symmetry with the other adapters; doctor consumes
+/// it to flag a hook entry as ours.
+pub(crate) fn entry_commands(entry: &Value) -> Vec<String> {
+    entry
+        .get("command")
+        .and_then(Value::as_str)
+        .map(|s| vec![s.to_string()])
+        .unwrap_or_default()
+}
+
 fn has_existing_hook(root: &Value) -> bool {
     root.pointer("/hooks/preToolUse")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|entry| entry.get("command").and_then(Value::as_str))
-        .any(command_invokes_ptuf_hook)
+        .flat_map(entry_commands)
+        .any(|cmd| command_invokes_ptuf_hook(&cmd))
 }
 
 fn append_hook(root: &mut Value, agent_path: &Path, command: &str) -> Result<(), InitError> {

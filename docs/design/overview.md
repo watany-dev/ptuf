@@ -9,8 +9,7 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) で次を実�
 
 - `PreToolUse` 向け CLI とライブラリ
 - Claude Code / Codex / GitHub Copilot adapter (frozen)
-- Kiro CLI adapter (`hook` のみ実装済み。`init` / `doctor` 連携は M6 後続 PR で
-  追加予定)
+- Kiro CLI adapter (`hook` / `init` / `doctor` 連携を実装済み)
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
   `core.self_protection` / `core.engine` /
@@ -102,6 +101,7 @@ CLI 経路はこれと異なり fail-closed で動作する。
 | [`policy-packs.md`](policy-packs.md) | 実装済み built-in pack と rule 一覧 |
 | [`config-and-plugins.md`](config-and-plugins.md) | config schema、plugin schema、allowlist |
 | [`cli-and-hooks.md`](cli-and-hooks.md) | `init` / `hook` / `doctor` と agent 統合 |
+| [`kiro-cli.md`](kiro-cli.md) | Kiro CLI adapter の正規化・fail-closed・doctor 統合 |
 | [`audit.md`](audit.md) | audit JSONL schema と redaction |
 | [`testing.md`](testing.md) | example-based test と PBT の役割分担 |
 | [`roadmap.md`](roadmap.md) | M1〜M4 の到達点と今後の候補 |

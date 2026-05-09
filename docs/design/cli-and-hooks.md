@@ -1,9 +1,9 @@
 # CLI と Hook 統合
 
 ptuf は CLI バイナリとして配布され、同時に Claude Code / Codex / GitHub
-Copilot / Kiro CLI の `PreToolUse` hook adapter を提供する。Kiro は現在
-`ptuf hook kiro` のみ実装済みで、`init` / `doctor` 統合は M6 後続 PR で追加
-する予定。
+Copilot / Kiro CLI の `PreToolUse` hook adapter を提供する。Kiro 固有の
+正規化や fail-closed 経路、doctor 統合の詳細は
+[`kiro-cli.md`](kiro-cli.md) を参照。
 
 ## 実装済みサブコマンド
 
