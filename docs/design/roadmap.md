@@ -54,6 +54,22 @@
   bare JSON + exit `0` で流用する fail-closed 経路
 - audit `agent: "copilot"` を許容
 
+### M6 — Kiro CLI adapter (実装中, `v0.1.0` 予定)
+
+- `ptuf hook kiro` (Kiro `preToolUse` payload 正規化、tool 名 alias と
+  `@server/tool` MCP 化、`Ask` → `Deny` demote、JSON envelope を持たず
+  stderr + exit `2` で deny を返す fail-closed 経路、`core.engine.*`
+  reserved rule の流用) — Phase 1 PR で実装済み
+- `ptuf init kiro` (`.kiro/agents/<name>.json` への idempotent 書き込み、
+  `--scope local|global`、`--agent-config`、`--verify [--json]`) — Phase 2
+  後続 PR
+- `ptuf doctor` の `Kiro CLI integration` section と `doctor --json` の
+  `kiro` field — Phase 3 後続 PR
+- `Read` / `Edit` / `Write` の `paths[]` / `operations[].path` を core
+  `collect_event_paths` で重複排除しつつ収集する additive 拡張 — Phase 1
+  PR で実装済み
+- audit `agent: "kiro"` を許容 — Phase 1 PR で実装済み
+
 ## 今後の候補
 
 現時点でコードに入っていない候補:

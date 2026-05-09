@@ -53,7 +53,7 @@ P1 として削除)。embed 利用者は `Engine::builder()` 直接利用も可�
 | --- | --- |
 | `bash` | `Bash` tool の `command` を parse した command / segment / pipeline。`Pipeline.redirects` で `>` / `>>` / `<` / `2>` / `&>` / heredoc の operator と target を保持する。`Bash::has_command_substitution` / `has_redirect` / `has_heredoc` / `has_process_substitution` で `` ` … ` `` / `$(…)` / リダイレクト / heredoc / `<(…)` `>(…)` の存在を surface する。`Argv.inner_argv` / `inner_code` / `inner_redirects` は `bash -c`, `eval`, `xargs`, `find -exec` の内側 command と redirect を bounded depth で再 parse し、既存 rule と self-protection が inspectable な形に連結する |
 | `path` | 先頭の file path (`Read` / `Edit` / `Write` / MCP の top-level `path`)。`PathFact` として `raw` / `expanded` / `absolute` / `canonical_or_raw` / `origin` を保持する |
-| `paths` | tool 入力 (`Read` / `Edit` / `Write` / `apply_patch` / MCP) 由来の全 `PathFact`。Bash redirect target はここには含まれない (engine が self-protection 用に別 slice として供給する) |
+| `paths` | tool 入力 (`Read` / `Edit` / `Write` / `apply_patch` / MCP) 由来の全 `PathFact`。`Read` / `Edit` / `Write` の `paths[]` (string array) と `operations[].path` (object array) も canonical な `file_path` と並んで重複排除しつつ収集する (Kiro batch read/write 経路用)。Bash redirect target はここには含まれない (engine が self-protection 用に別 slice として供給する) |
 | `url` | `WebFetch` または MCP の top-level `url` |
 | `sensitive` | path / URL / write payload などから検出した機密分類 |
 | `protected` | self-protection 対象との一致。engine 側で `Facts.paths` と Bash redirect target (`Pipeline.redirects[].target` に加え wrapper 由来の `Argv.inner_redirects[].target`) を `ProtectedPaths::classify_input_with_paths_pair` に二本のスライスとして渡して補完する。戻り値は固定長の `ProtectedKinds` (`[ProtectedKind; 6] + len`) で、中間 path clone や `ProtectedKind` 用 heap allocation は発生させない |
@@ -80,11 +80,12 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 
 ## Agent adapter
 
-現在の adapter は 3 つ。
+現在の adapter は 4 つ。
 
 - `claude-code`
 - `codex`
 - `copilot` (GitHub Copilot)
+- `kiro` (Kiro CLI)
 
 adapter は stdin payload をまず `RawHookInput` として受け、内部では
 normalized `Event { agent, event, tool, inputs, paths, urls, content }`
@@ -100,12 +101,25 @@ normalized `Event { agent, event, tool, inputs, paths, urls, content }`
   ため、reserved rule (`core.engine.invalid-payload` /
   `core.engine.policy-load-failed`) も exit `0` + bare deny JSON で fail-closed
   する。
+- Kiro: hook protocol が JSON envelope を持たないため、stdout は常に空。
+  `Ask` / `Deny` の reason は stderr に書き、`Deny` (および demote された
+  `Ask`) は exit `2`。reserved rule の fail-closed も同経路で扱う。
 
 Copilot 入力は CLI 層の `src/cli/copilot_input.rs` で snake (`tool_name` /
 `tool_input`) と camel (`toolName` / `toolArgs`) の両形を正規化し、tool 名
 mapping (`bash`→`Bash`, `view`→`Read`, `edit`→`Edit`, `create`→`Write`,
-`web_fetch`→`WebFetch`, `powershell`→`Bash`) を適用する。判定 engine 自体は
-agent 非依存で、adapter 拡張は CLI 層に閉じている。
+`web_fetch`→`WebFetch`, `powershell`→`Bash`) を適用する。
+
+Kiro 入力は CLI 層の `src/cli/kiro_input.rs` で `hook_event_name == "preToolUse"`
+を検証したうえで tool 名を canonical 形へ正規化する
+(`shell` / `execute_bash` / `execute_cmd`→`Bash`、`read` / `fs_read` / `fsRead`
+→`Read`、`write` / `fs_write` / `fsWrite`→`Write`、`web_fetch` / `webFetch`
+→`WebFetch`、`@server/tool`→`mcp__server__tool`)。`tool_input` も
+`command` (`cmd` / `script` をフォールバック)、`file_path` (`path` / `paths[0]`
+/ `operations[0].path` 等をフォールバック)、`content` (`text` / `new_content`
+をフォールバック) のキーに正規化する。
+
+判定 engine 自体は agent 非依存で、adapter 拡張は CLI 層に閉じている。
 
 ## I/O 契約
 
@@ -131,6 +145,7 @@ stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit 
 | `ptuf hook claude-code` | `Ask` / `Deny` のときだけ `hookSpecificOutput` JSON | `Ask` / `Deny` reason | `0` or `2` |
 | `ptuf hook codex` | `Deny` のときだけ `hookSpecificOutput` JSON | deny reason | `0` or `2` |
 | `ptuf hook copilot` | `Deny` のときだけ bare JSON envelope (no `hookSpecificOutput`) | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
+| `ptuf hook kiro` | 常に空 (Kiro hook には JSON envelope が無い) | `Ask` / `Deny` reason | `0` or `2` |
 
 ### eval
 

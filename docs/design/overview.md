@@ -8,7 +8,9 @@
 ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) で次を実装済み:
 
 - `PreToolUse` 向け CLI とライブラリ
-- Claude Code / Codex adapter
+- Claude Code / Codex / GitHub Copilot adapter (frozen)
+- Kiro CLI adapter (`hook` のみ実装済み。`init` / `doctor` 連携は M6 後続 PR で
+  追加予定)
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
   `core.self_protection` / `core.engine` /
@@ -61,6 +63,8 @@ CLI 経路はこれと異なり fail-closed で動作する。
 
 - `ptuf hook claude-code`
 - `ptuf hook codex`
+- `ptuf hook copilot`
+- `ptuf hook kiro`
 - `ptuf eval --tool <name> <command>`
 - `ptuf plugin test <path>`
 - `ptuf init claude-code [--dry-run] [--settings <PATH>] [--verify [--json]]`

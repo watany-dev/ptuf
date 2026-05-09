@@ -22,6 +22,7 @@
 
 use serde_json::{Map, Value};
 
+use super::input_helpers::take_first_string;
 use crate::hook_input::HookInput;
 
 /// Normalise a Kiro stdin body into a [`HookInput`].
@@ -55,7 +56,7 @@ pub(super) fn parse(body: &str) -> Result<HookInput, KiroInputError> {
         },
     };
 
-    let (tool_name, tool_input) = normalize(&raw_name, args);
+    let (tool_name, tool_input) = normalize(raw_name, args);
     Ok(HookInput {
         tool_name,
         tool_input,
@@ -91,17 +92,17 @@ impl std::fmt::Display for KiroInputError {
     }
 }
 
-fn normalize(raw_name: &str, args: Map<String, Value>) -> (String, Value) {
-    match raw_name {
+fn normalize(raw_name: String, args: Map<String, Value>) -> (String, Value) {
+    match raw_name.as_str() {
         "shell" | "execute_bash" | "execute_cmd" => ("Bash".into(), reshape_bash(args)),
         "read" | "fs_read" | "fsRead" => ("Read".into(), reshape_path(args)),
         "write" | "fs_write" | "fsWrite" => ("Write".into(), reshape_write(args)),
         "web_fetch" | "webFetch" => ("WebFetch".into(), Value::Object(args)),
-        other => {
-            if let Some(canonical) = normalize_at_mcp(other) {
+        _ => {
+            if let Some(canonical) = normalize_at_mcp(&raw_name) {
                 (canonical, Value::Object(args))
             } else {
-                (other.to_string(), Value::Object(args))
+                (raw_name, Value::Object(args))
             }
         },
     }
@@ -169,11 +170,8 @@ fn reshape_write(mut args: Map<String, Value>) -> Value {
 }
 
 /// Path lookup priority: `path` → `paths[0]` → `operations[0].path` →
-/// `files[0].path` → `items[0].path`. The plan keeps `file_path` as the
-/// canonical key and drops it into the head of the list ahead of this
-/// helper, so callers must check `file_path` before invoking this.
-/// Non-destructive: the original arrays remain so the core
-/// `collect_event_paths` extension can collect every entry.
+/// `files[0].path` → `items[0].path`. Non-destructive — arrays stay in
+/// place so `collect_event_paths` can iterate them later.
 fn first_path(args: &Map<String, Value>) -> Option<String> {
     if let Some(s) = args.get("path").and_then(Value::as_str) {
         return Some(s.to_string());
@@ -189,15 +187,6 @@ fn first_path(args: &Map<String, Value>) -> Option<String> {
             && let Some(s) = first.as_str()
         {
             return Some(s.to_string());
-        }
-    }
-    None
-}
-
-fn take_first_string(args: &mut Map<String, Value>, keys: &[&str]) -> Option<String> {
-    for key in keys {
-        if let Some(Value::String(s)) = args.remove(*key) {
-            return Some(s);
         }
     }
     None
@@ -256,7 +245,7 @@ mod tests {
         assert_eq!(input.tool_name, "Read");
         assert_eq!(input.file_path(), Some("/tmp/a"));
         let event = input.event();
-        assert_eq!(event.paths, vec!["/tmp/a", "/tmp/a", "/tmp/b"]);
+        assert_eq!(event.paths, vec!["/tmp/a", "/tmp/b"]);
     }
 
     #[test]

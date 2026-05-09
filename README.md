@@ -11,7 +11,8 @@ stderr, and agent-specific `hookSpecificOutput` JSON.
   failure
 
 `ptuf` currently ships first-class adapters for Claude Code, Codex, and
-GitHub Copilot.
+GitHub Copilot. A `ptuf hook kiro` adapter for Kiro CLI is also wired up;
+the matching `init`/`doctor` integration is rolling in across follow-up PRs.
 
 ## Status
 
@@ -196,14 +197,27 @@ GitHub Copilot behavior:
   `core.engine.invalid-payload` / `core.engine.policy-load-failed`
   rules
 
-Both Claude Code and Codex set the human-readable reason on stderr for
+Kiro CLI behavior:
+
+- Kiro's `preToolUse` hook protocol carries no JSON envelope, so the
+  Kiro adapter writes nothing to stdout
+- `Allow` / `Monitor` — exit `0`, empty stdout/stderr
+- `Ask` is converted to `Deny` because Kiro `preToolUse` does not
+  define an interactive prompt channel
+- `Deny` — exit `2`, deny reason on stderr only
+- Invalid JSON, oversized stdin, and policy-load failures all emit a
+  stderr-only deny at exit `2` under the reserved
+  `core.engine.invalid-payload` / `core.engine.policy-load-failed`
+  rules
+
+Claude Code, Codex, and Kiro set the human-readable reason on stderr for
 `Ask` or `Deny`. Copilot likewise writes the reason to stderr alongside
 the bare JSON envelope.
 
-Hook stdin payloads are capped at 8 MiB. For Claude Code and Codex,
-unreadable, oversized, or invalid-JSON stdin is rejected with `Deny`
-(exit `2`) under the reserved `core.engine.invalid-payload` rule so the
-host blocks the tool — `exit 1` would only surface a non-blocking
+Hook stdin payloads are capped at 8 MiB. For Claude Code, Codex, and
+Kiro, unreadable, oversized, or invalid-JSON stdin is rejected with
+`Deny` (exit `2`) under the reserved `core.engine.invalid-payload` rule
+so the host blocks the tool — `exit 1` would only surface a non-blocking
 warning and let the call through. Copilot uses the same reserved rule
 but at exit `0` (see above).
 
@@ -285,6 +299,46 @@ is idempotent — re-running it detects an existing ptuf entry by the
 
 The `--profile cloud` variant (which also generates wrapper scripts for
 Copilot's cloud agent) is post-MVP and not yet wired up.
+
+## Kiro CLI
+
+Phase 1 ships only the hook entry point. Wire it into a Kiro agent
+config (`.kiro/agents/<name>.json`) yourself:
+
+```json
+{
+  "hooks": {
+    "preToolUse": [
+      {
+        "matcher": "*",
+        "command": "/absolute/path/to/ptuf hook kiro",
+        "timeout_ms": 10000
+      }
+    ]
+  }
+}
+```
+
+Kiro `preToolUse` payloads use a different vocabulary than Claude Code,
+so the adapter normalises tool names and `tool_input` keys before the
+engine sees them:
+
+- `shell` / `execute_bash` / `execute_cmd` → `Bash` (`command` falls
+  back to `cmd` → `script`)
+- `read` / `fs_read` / `fsRead` → `Read` (`file_path` falls back to
+  `path` → `paths[0]` → `operations[0].path` → `files[0].path` →
+  `items[0].path`)
+- `write` / `fs_write` / `fsWrite` → `Write` (`file_path` resolved as
+  above; `content` falls back to `text` → `new_content`)
+- `web_fetch` / `webFetch` → `WebFetch`
+- `@server/tool` → `mcp__server__tool` (extra path segments collapse to
+  `_`; empty segments fall through to the raw name)
+- anything else passes through with its raw name and the engine's
+  generic / MCP extractors handle it best-effort
+
+`hook_event_name` other than `preToolUse` is rejected with
+`core.engine.invalid-payload`. A matching `ptuf init kiro` and
+`ptuf doctor` integration are tracked under M6 and ship in follow-up PRs.
 
 ## Configuration
 

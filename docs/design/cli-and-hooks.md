@@ -1,7 +1,9 @@
 # CLI と Hook 統合
 
 ptuf は CLI バイナリとして配布され、同時に Claude Code / Codex / GitHub
-Copilot の `PreToolUse` hook adapter を提供する。
+Copilot / Kiro CLI の `PreToolUse` hook adapter を提供する。Kiro は現在
+`ptuf hook kiro` のみ実装済みで、`init` / `doctor` 統合は M6 後続 PR で追加
+する予定。
 
 ## 実装済みサブコマンド
 
@@ -9,6 +11,7 @@ Copilot の `PreToolUse` hook adapter を提供する。
 ptuf hook claude-code
 ptuf hook codex
 ptuf hook copilot
+ptuf hook kiro
 ptuf eval --tool Bash 'git reset --hard HEAD~1'
 ptuf plugin test ./ptuf-plugin.yaml
 ptuf init claude-code
@@ -31,16 +34,19 @@ ptuf doctor
 | 条件 | exit |
 | --- | --- |
 | `Allow` / `Monitor` / Claude Code の `Ask` | `0` |
-| `Deny` (Claude Code / Codex) | `2` |
+| `Deny` (Claude Code / Codex / Kiro) | `2` |
 | Copilot の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
 | 内部エラー、引数不正、plugin test fail、doctor failure | `1` |
 
-Codex では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
+Codex / Kiro では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
 
 Copilot は protocol 上 non-zero exit が hook failure として扱われ得るため、
 **すべての Decision で exit `0`** に固定する。Deny は bare JSON envelope
 (`hookSpecificOutput` で wrap しない) を stdout に書く。stdout serialize
 失敗のみ exit `1`。詳細は下記「hook response」セクションを参照。
+
+Kiro hook は JSON envelope を持たず、`Ask` / `Deny` の reason は stderr のみで
+通知する。stdout は常に空。
 
 `ptuf hook <agent>` の stdin payload は最大 8 MiB。上限を超えた場合は JSON parse
 に進まず exit `1` とし、stderr に size limit error を出す (Copilot 経路では
@@ -259,7 +265,10 @@ GitHub Copilot (bare envelope, `hookSpecificOutput` wrap なし):
 }
 ```
 
-`Allow` と `Monitor` は hook response を出さない (3 agent 共通)。
+Kiro CLI は JSON envelope を持たない。`Ask` / `Deny` reason は stderr のみで
+通知し、stdout は常に空。`Ask` は `Deny` へ demote する。
+
+`Allow` と `Monitor` は hook response を出さない (4 agent 共通)。
 
 agent 別の Decision → exit / 出力契約:
 
@@ -268,14 +277,21 @@ agent 別の Decision → exit / 出力契約:
 | Claude Code | exit `0`, 空 stdout | exit `0`, `hookSpecificOutput` ask | exit `2`, `hookSpecificOutput` deny | exit `2`, deny |
 | Codex | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `2`) | exit `2`, `hookSpecificOutput` deny | exit `2`, deny |
 | Copilot | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `0`, bare JSON) | exit `0`, bare deny JSON | exit `0`, bare deny JSON |
+| Kiro | exit `0`, 空 stdout / 空 stderr | `Ask` → `Deny` に demote (exit `2`, stderr reason のみ) | exit `2`, stderr reason のみ | exit `2`, stderr reason のみ |
 
 Copilot の `Ask` demote 文言は仕様で固定:
 
 > `GitHub Copilot hooks do not reliably process interactive ask
 > decisions; ptuf is blocking this request instead.`
 
+Kiro の `Ask` demote 文言も仕様で固定:
+
+> `Kiro CLI PreToolUse hooks do not define an interactive ask channel;
+> ptuf is blocking this request instead.`
+
 reserved rule `core.engine.invalid-payload` / `core.engine.policy-load-failed`
-は 3 agent で共通だが、Copilot では bare JSON + exit `0` で出す。
+は 4 agent で共通だが、Copilot では bare JSON + exit `0`、Kiro では stderr +
+exit `2` で出す。
 
 ## MCP fact 抽出
 
@@ -291,6 +307,41 @@ reserved rule `core.engine.invalid-payload` / `core.engine.policy-load-failed`
 
 このため既存の `core.self_protection.*` や
 `core.secrets.sensitive-read` は MCP 経路にもそのまま効く。
+
+`Read` / `Edit` / `Write` でも canonical `file_path` に加えて `paths[]`
+(string array) と `operations[].path` (object array) を `Facts.paths` へ
+収集する。Kiro の batch read/write payload を canonical な `Read` / `Write`
+のままで engine に渡すための拡張で、重複は engine 側で排除する。
+
+## Kiro 入力正規化
+
+Kiro CLI の `preToolUse` payload は `{"hook_event_name":"preToolUse",
+"tool_name":"<name>","tool_input":{...}}` の形を取る。`src/cli/kiro_input.rs`
+が次の正規化を行う。
+
+| Kiro tool 名 | canonical |
+| --- | --- |
+| `shell` / `execute_bash` / `execute_cmd` | `Bash` |
+| `read` / `fs_read` / `fsRead` | `Read` |
+| `write` / `fs_write` / `fsWrite` | `Write` |
+| `web_fetch` / `webFetch` | `WebFetch` |
+| `@<server>/<tool>` | `mcp__<server>__<tool>` |
+| `@<server>/<tool>/<rest>` | `mcp__<server>__<tool>_<rest>` |
+| その他 | そのまま (engine が generic / MCP 抽出) |
+
+`tool_input` の正規化:
+
+- `Bash`: `command` が無ければ `cmd` → `script` の順で先頭 string を
+  `command` に複製する
+- `Read` / `Write`: `file_path` が無ければ `path` → `paths[0]` →
+  `operations[0].path` → `files[0].path` → `items[0].path` の順で先頭
+  string を `file_path` に複製する。元の array は変更せず、core 側の
+  `paths[]` / `operations[]` 抽出と重複排除に任せる
+- `Write`: `content` が無ければ `text` → `new_content` の順で先頭 string を
+  `content` に複製する
+
+`hook_event_name` が `preToolUse` 以外の場合は `core.engine.invalid-payload`
+で fail-closed する。空 payload / 非 object payload / `tool_name` 欠落も同様。
 
 ## `ptuf doctor`
 
@@ -341,3 +392,7 @@ non-zero exit を hook *failure* として扱い tool 実行を止めない可�
 あるため、reserved rule の deny も含めて **すべて exit `0` + bare deny
 JSON** で返す。これにより host 側で「ptuf が落ちたから fail-open」と
 解釈される経路を塞ぐ。
+
+Kiro adapter は Claude / Codex と同じく exit `2` で block するが、JSON
+envelope を持たないため reason は stderr のみで伝える。`Ask` は demote
+されて exit `2` になる。

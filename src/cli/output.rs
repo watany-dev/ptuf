@@ -25,8 +25,6 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         HookAgent::ClaudeCode | HookAgent::Codex => {
             render_hook_response(agent, &adapted).map(|r| serde_json::to_string(&r))
         },
-        // Kiro has no JSON envelope: deny/ask are surfaced via stderr
-        // reason + non-zero exit code only.
         HookAgent::Kiro => None,
     };
     if let Some(result) = serialised {
@@ -65,8 +63,8 @@ pub(super) fn render_hook_response(
         // Copilot uses a bare envelope (no `hookSpecificOutput` wrapper);
         // `emit_decision` dispatches through `hook_output::copilot` directly.
         HookAgent::Copilot => None,
-        // Kiro has no JSON envelope; `emit_decision` skips the
-        // serialisation step entirely.
+        // Kiro emits no JSON envelope at all; deny/ask are surfaced via
+        // stderr reason + non-zero exit only.
         HookAgent::Kiro => None,
     }
 }
@@ -101,9 +99,8 @@ pub(super) fn decision_exit_code(agent: HookAgent, decision: &Decision) -> u8 {
     }
     match (agent, decision) {
         (_, Decision::Deny { .. }) => 2,
-        // Codex Ask is demoted to Deny upstream by `adapt_hook_decision`,
-        // but the exit-code matrix kept for defense-in-depth. Kiro Ask is
-        // demoted similarly; this arm mirrors Codex.
+        // Defense-in-depth: Codex/Kiro Ask is demoted to Deny upstream
+        // by `adapt_hook_decision`, but the matrix mirrors that here.
         (HookAgent::Codex | HookAgent::Kiro, Decision::Ask { .. }) => 2,
         _ => 0,
     }

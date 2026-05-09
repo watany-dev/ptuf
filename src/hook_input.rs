@@ -133,7 +133,7 @@ fn is_mcp(name: &str) -> bool {
 }
 
 fn collect_event_paths(input: &HookInput) -> Vec<&str> {
-    let mut out = Vec::new();
+    let mut out: Vec<&str> = Vec::new();
     match input.tool_name.as_str() {
         "Read" | "Edit" | "Write" => {
             if let Some(path) = input
@@ -141,12 +141,13 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
                 .get("file_path")
                 .and_then(serde_json::Value::as_str)
             {
-                out.push(path);
+                push_unique(&mut out, path);
             }
             // Kiro-shaped batch payloads carry every path in `paths[]`
-            // or `operations[].path`. We collect them so engine rules
-            // (e.g. policy globs) see every target rather than only the
-            // canonical `file_path` head.
+            // or `operations[].path`. The canonical head may already be
+            // duplicated by the kiro_input adapter promoting the first
+            // entry to `file_path`, so push_unique keeps the list unique
+            // while preserving the original order.
             if let Some(paths) = input
                 .tool_input
                 .get("paths")
@@ -154,7 +155,7 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
             {
                 for item in paths {
                     if let Some(path) = item.as_str() {
-                        out.push(path);
+                        push_unique(&mut out, path);
                     }
                 }
             }
@@ -165,7 +166,7 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
             {
                 for item in ops {
                     if let Some(path) = item.get("path").and_then(serde_json::Value::as_str) {
-                        out.push(path);
+                        push_unique(&mut out, path);
                     }
                 }
             }
@@ -176,7 +177,7 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
                 .get("path")
                 .and_then(serde_json::Value::as_str)
             {
-                out.push(path);
+                push_unique(&mut out, path);
             }
             for key in ["files", "items"] {
                 if let Some(items) = input
@@ -186,7 +187,7 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
                 {
                     for item in items {
                         if let Some(path) = item.get("path").and_then(serde_json::Value::as_str) {
-                            out.push(path);
+                            push_unique(&mut out, path);
                         }
                     }
                 }
@@ -198,7 +199,7 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
             {
                 for item in paths {
                     if let Some(path) = item.as_str() {
-                        out.push(path);
+                        push_unique(&mut out, path);
                     }
                 }
             }
@@ -206,6 +207,12 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
         _ => {},
     }
     out
+}
+
+fn push_unique<'a>(out: &mut Vec<&'a str>, path: &'a str) {
+    if !out.contains(&path) {
+        out.push(path);
+    }
 }
 
 fn collect_event_urls(input: &HookInput) -> Vec<&str> {
@@ -438,6 +445,18 @@ mod tests {
         )
         .expect("parse");
         assert_eq!(parsed.event().paths, vec!["/tmp/x", "/tmp/y"]);
+    }
+
+    #[test]
+    fn event_paths_dedupe_preserves_order_when_file_path_repeated() {
+        // Kiro adapter promotes the first batch entry to `file_path` for
+        // canonical access; collect_event_paths must not surface that
+        // first entry twice.
+        let parsed: HookInput = serde_json::from_str(
+            r#"{"tool_name":"Read","tool_input":{"file_path":"/tmp/a","operations":[{"path":"/tmp/a"},{"path":"/tmp/b"}]}}"#,
+        )
+        .expect("parse");
+        assert_eq!(parsed.event().paths, vec!["/tmp/a", "/tmp/b"]);
     }
 
     #[test]

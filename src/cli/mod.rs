@@ -15,6 +15,7 @@ use crate::engine::Engine;
 use crate::reason;
 
 mod copilot_input;
+mod input_helpers;
 mod kiro_input;
 mod output;
 mod parse;
