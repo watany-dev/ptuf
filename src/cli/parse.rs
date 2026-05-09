@@ -180,10 +180,6 @@ where
 fn parse_copilot_profile(value: &str) -> Result<CopilotProfile, ParseError> {
     match value {
         "local" => Ok(CopilotProfile::Local),
-        // Phase 4 (post-MVP) will replace this branch with
-        // `Ok(CopilotProfile::Cloud)`. Until then we reject the value
-        // at the parse layer so callers get a clear error instead of a
-        // silent fallback to `local`.
         "cloud" => Err(ParseError::ConflictingFlags(
             "--profile cloud is not yet supported (post-MVP)",
         )),

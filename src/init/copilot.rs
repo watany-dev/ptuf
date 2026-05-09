@@ -77,10 +77,6 @@ pub fn install(
     profile: CopilotProfile,
     dry_run: bool,
 ) -> Result<InstallOutcome, InitError> {
-    // Phase 4 implements the cloud profile (wrapper scripts under
-    // `.github/hooks/scripts/`). Until then, the parse layer rejects
-    // `--profile cloud`, so this assertion is a defensive guard rather
-    // than a user-facing error.
     debug_assert!(matches!(profile, CopilotProfile::Local));
 
     let command = format!("{ptuf_binary} hook copilot");

@@ -28,21 +28,29 @@ use crate::hook_input::HookInput;
 /// half-populated input.
 pub(super) fn parse(body: &str) -> Result<HookInput, ParseProblem> {
     let value: Value = serde_json::from_str(body).map_err(ParseProblem::InvalidJson)?;
-    let Value::Object(map) = value else {
+    let Value::Object(mut map) = value else {
         return Err(ParseProblem::NotAnObject);
     };
 
-    if let Some(tool_name) = map.get("tool_name").and_then(Value::as_str) {
-        let tool_input = map.get("tool_input").cloned().unwrap_or(Value::Null);
+    if let Some(tool_name) = map
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    {
+        let tool_input = map.remove("tool_input").unwrap_or(Value::Null);
         return Ok(HookInput {
-            tool_name: tool_name.to_string(),
+            tool_name,
             tool_input,
         });
     }
 
-    if let Some(tool_name) = map.get("toolName").and_then(Value::as_str) {
-        let raw_args = map.get("toolArgs").cloned().unwrap_or(Value::Null);
-        let (mapped_name, mapped_args) = map_tool(tool_name, raw_args);
+    if let Some(tool_name) = map
+        .get("toolName")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    {
+        let raw_args = map.remove("toolArgs").unwrap_or(Value::Null);
+        let (mapped_name, mapped_args) = map_tool(&tool_name, raw_args);
         return Ok(HookInput {
             tool_name: mapped_name,
             tool_input: mapped_args,

@@ -779,9 +779,6 @@ rules:
 
     #[test]
     fn run_init_copilot_verify_reports_error_when_no_root() {
-        // No --root and no --hooks: resolve_paths returns RepoRootNotFound.
-        // This works because the test runs in a tempdir without git context,
-        // but to be deterministic we point CWD at a non-repo dir.
         let dir = std::env::temp_dir().join(format!(
             "ptuf-cli-copilot-verify-noroot-{}",
             std::process::id()
