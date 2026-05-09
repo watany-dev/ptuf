@@ -161,9 +161,10 @@ mod tests {
     // start of 2024 UTC), not a duration in hours; rewriting it as
     // `from_hours(473352)` would erase the calendar semantics that the
     // assertion below relies on.
-    #[expect(
+    #[allow(
+        unknown_lints,
         clippy::duration_suboptimal_units,
-        reason = "value is a Unix timestamp expressed in seconds, not a duration"
+        reason = "value is a Unix timestamp expressed in seconds, not a duration; lint name varies across clippy versions"
     )]
     #[test]
     fn builds_deny_record_with_severity_and_rule_id() {

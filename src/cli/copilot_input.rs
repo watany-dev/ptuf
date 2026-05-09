@@ -18,6 +18,7 @@
 
 use serde_json::{Map, Value};
 
+use super::input_helpers::take_first_string;
 use crate::hook_input::HookInput;
 
 /// Normalise a Copilot stdin body into a [`HookInput`].
@@ -153,15 +154,6 @@ fn reshape_create(mut args: Map<String, Value>) -> Value {
         args.insert("content".into(), Value::String(content));
     }
     Value::Object(args)
-}
-
-fn take_first_string(args: &mut Map<String, Value>, keys: &[&str]) -> Option<String> {
-    for key in keys {
-        if let Some(Value::String(s)) = args.remove(*key) {
-            return Some(s);
-        }
-    }
-    None
 }
 
 #[cfg(test)]

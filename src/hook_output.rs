@@ -1,5 +1,13 @@
 use serde::Serialize;
 
+/// Append a per-adapter "Ask is unavailable" note to a deny reason.
+/// Adapters that cannot surface an interactive prompt (Codex, Copilot,
+/// Kiro) demote `Ask` to `Deny` and use this helper to produce a
+/// human-readable explanation.
+fn append_demote_note(reason: &str, note: &str) -> String {
+    format!("{reason}\n\n{note}")
+}
+
 #[derive(Debug, Serialize)]
 pub struct HookResponse {
     #[serde(rename = "hookSpecificOutput")]
@@ -41,7 +49,7 @@ pub mod claude_code {
 }
 
 pub mod codex {
-    use super::{HookResponse, HookSpecificOutput};
+    use super::{HookResponse, HookSpecificOutput, append_demote_note};
     use crate::Decision;
 
     const ASK_UNAVAILABLE_NOTE: &str =
@@ -52,7 +60,7 @@ pub mod codex {
     pub fn from_decision(decision: &Decision) -> Option<HookResponse> {
         let reason = match decision {
             Decision::Allow | Decision::Monitor { .. } => return None,
-            Decision::Ask { reason, .. } => format!("{reason}\n\n{ASK_UNAVAILABLE_NOTE}"),
+            Decision::Ask { reason, .. } => deny_reason_for_ask(reason),
             Decision::Deny { reason, .. } => reason.clone(),
         };
 
@@ -66,13 +74,14 @@ pub mod codex {
     }
 
     pub fn deny_reason_for_ask(reason: &str) -> String {
-        format!("{reason}\n\n{ASK_UNAVAILABLE_NOTE}")
+        append_demote_note(reason, ASK_UNAVAILABLE_NOTE)
     }
 }
 
 pub mod copilot {
     use serde::Serialize;
 
+    use super::append_demote_note;
     use crate::Decision;
 
     /// Note appended to a deny reason whenever a Copilot `Ask` decision
@@ -100,7 +109,7 @@ pub mod copilot {
     pub fn from_decision(decision: &Decision) -> Option<CopilotResponse> {
         let reason = match decision {
             Decision::Allow | Decision::Monitor { .. } => return None,
-            Decision::Ask { reason, .. } => format!("{reason}\n\n{ASK_UNAVAILABLE_NOTE}"),
+            Decision::Ask { reason, .. } => deny_reason_for_ask(reason),
             Decision::Deny { reason, .. } => reason.clone(),
         };
 
@@ -111,7 +120,21 @@ pub mod copilot {
     }
 
     pub fn deny_reason_for_ask(reason: &str) -> String {
-        format!("{reason}\n\n{ASK_UNAVAILABLE_NOTE}")
+        append_demote_note(reason, ASK_UNAVAILABLE_NOTE)
+    }
+}
+
+pub mod kiro {
+    use super::append_demote_note;
+
+    /// Note appended to a deny reason whenever a Kiro `Ask` decision is
+    /// demoted to `Deny`. Kiro's `preToolUse` hook protocol does not
+    /// expose an interactive ask channel, so ptuf surfaces the demotion
+    /// explicitly on stderr.
+    const ASK_UNAVAILABLE_NOTE: &str = "Kiro CLI PreToolUse hooks do not define an interactive ask channel; ptuf is blocking this request instead.";
+
+    pub fn deny_reason_for_ask(reason: &str) -> String {
+        append_demote_note(reason, ASK_UNAVAILABLE_NOTE)
     }
 }
 
@@ -192,6 +215,13 @@ mod tests {
         let json = serde_json::to_string(&resp).expect("serialise");
         assert!(json.contains("\"permissionDecision\":\"ask\""));
         assert!(json.contains("\"permissionDecisionReason\":\"confirm please\""));
+    }
+
+    #[test]
+    fn kiro_deny_reason_for_ask_appends_note() {
+        let s = kiro::deny_reason_for_ask("please confirm");
+        assert!(s.starts_with("please confirm"));
+        assert!(s.contains("Kiro CLI PreToolUse hooks do not define an interactive ask channel"));
     }
 
     #[test]

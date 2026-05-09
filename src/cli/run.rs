@@ -15,10 +15,11 @@ use crate::plugin::runner as plugin_runner;
 use crate::reason;
 
 use super::copilot_input;
+use super::kiro_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
 use super::{
     ClaudeInitOptions, CodexInitOptions, CopilotInitOptions, HookAgent, INVALID_PAYLOAD_RULE,
-    InitOptions, build_engine_or_fail_closed,
+    InitOptions, KiroInitOptions, build_engine_or_fail_closed,
 };
 
 pub(super) const MAX_HOOK_STDIN_BYTES: u64 = 8 * 1024 * 1024;
@@ -89,12 +90,15 @@ fn invalid_payload_deny(problem: &str) -> Decision {
 /// snake_case form or the camelCase `toolName`/`toolArgs` form (with
 /// `toolArgs` either a JSON object or a JSON-encoded string), so its
 /// payload routes through `cli::copilot_input::parse` for normalisation
-/// before the engine sees it.
+/// before the engine sees it. Kiro uses a snake_case shape but with its
+/// own tool-name vocabulary (`shell`, `read`, `write`, `@server/tool`,
+/// etc.), so its payload routes through `cli::kiro_input::parse`.
 fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
     match agent {
         HookAgent::ClaudeCode | HookAgent::Codex => serde_json::from_str::<HookInput>(body)
             .map_err(|err| format!("hook payload is not valid JSON ({err})")),
         HookAgent::Copilot => copilot_input::parse(body).map_err(|err| err.to_string()),
+        HookAgent::Kiro => kiro_input::parse(body).map_err(|err| err.to_string()),
     }
 }
 
@@ -161,6 +165,7 @@ pub(super) fn run_init<W1: Write, W2: Write>(
         InitOptions::ClaudeCode(o) => o.verify,
         InitOptions::Codex(o) => o.verify,
         InitOptions::Copilot(o) => o.verify,
+        InitOptions::Kiro(o) => o.verify,
     };
     if verify_requested {
         return match options {
@@ -171,12 +176,14 @@ pub(super) fn run_init<W1: Write, W2: Write>(
             InitOptions::Copilot(o) => {
                 run_init_copilot_verify(&o, init::verify::run, stdout, stderr)
             },
+            InitOptions::Kiro(o) => run_init_kiro_verify(&o, init::verify::run, stdout, stderr),
         };
     }
     let outcome = match options {
         InitOptions::ClaudeCode(options) => run_init_claude(&options, dry_run),
         InitOptions::Codex(options) => run_init_codex(&options, dry_run),
         InitOptions::Copilot(options) => run_init_copilot(&options, dry_run),
+        InitOptions::Kiro(options) => run_init_kiro(&options, dry_run),
     };
     match outcome {
         Ok(outcome) => {
@@ -238,6 +245,22 @@ fn run_init_copilot(
     )?;
     let binary = init::copilot::detect_binary();
     init::copilot::install(&targets, &binary, options.profile, dry_run)
+}
+
+fn run_init_kiro(
+    options: &KiroInitOptions,
+    dry_run: bool,
+) -> Result<init::InstallOutcome, init::InitError> {
+    let cwd = std::env::current_dir().ok();
+    let targets = init::kiro::resolve_paths(
+        cwd.as_deref(),
+        options.root.as_deref(),
+        options.agent.as_deref(),
+        options.agent_config_path.as_deref(),
+        options.scope,
+    )?;
+    let binary = init::kiro::detect_binary();
+    init::kiro::install(&targets, &binary, dry_run)
 }
 
 fn resolve_claude_settings_path(options: &ClaudeInitOptions) -> Result<PathBuf, init::InitError> {
@@ -367,6 +390,49 @@ where
     )
 }
 
+fn run_init_kiro_verify<W1, W2, F>(
+    options: &KiroInitOptions,
+    runner: F,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8
+where
+    W1: Write,
+    W2: Write,
+    F: FnOnce() -> init::verify::VerifyReport,
+{
+    let cwd = std::env::current_dir().ok();
+    let targets = match init::kiro::resolve_paths(
+        cwd.as_deref(),
+        options.root.as_deref(),
+        options.agent.as_deref(),
+        options.agent_config_path.as_deref(),
+        options.scope,
+    ) {
+        Ok(t) => t,
+        Err(err) => return fail_init(stderr, err),
+    };
+    let snaps = match init::capture(&[targets.agent_config_path.as_path()]) {
+        Ok(s) => s,
+        Err(err) => return fail_init(stderr, err),
+    };
+    let binary = init::kiro::detect_binary();
+    let outcome = match init::kiro::install(&targets, &binary, false) {
+        Ok(o) => o,
+        Err(err) => return fail_init(stderr, err),
+    };
+    finish_verify(
+        VerifyContext {
+            outcome: &outcome,
+            snaps: &snaps,
+            json: options.json,
+        },
+        runner,
+        stdout,
+        stderr,
+    )
+}
+
 fn fail_init<W: Write>(stderr: &mut W, err: impl std::fmt::Display) -> u8 {
     let _ = writeln!(stderr, "ptuf: init failed: {err}");
     1
@@ -481,11 +547,13 @@ mod tests {
     };
     use super::super::{
         ClaudeInitOptions, CodexInitOptions, Command, CopilotInitOptions, CopilotProfile,
-        HookAgent, INVALID_PAYLOAD_RULE, InitOptions, POLICY_LOAD_FAILED_RULE, run,
+        HookAgent, INVALID_PAYLOAD_RULE, InitOptions, KiroInitOptions, KiroScope,
+        POLICY_LOAD_FAILED_RULE, run,
     };
     use super::{
         MAX_HOOK_STDIN_BYTES, VerifyContext, finish_verify, render_install_outcome, run_doctor,
-        run_init_claude_verify, run_init_codex_verify, run_init_copilot_verify, run_plugin_test,
+        run_init_claude_verify, run_init_codex_verify, run_init_copilot_verify,
+        run_init_kiro_verify, run_plugin_test,
     };
 
     #[test]
@@ -1826,6 +1894,172 @@ rules:
         let err_s = String::from_utf8_lossy(&err);
         assert!(err_s.contains("could not load policy"), "stderr: {err_s}");
         drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_kiro_dry_run_writes_outcome_summary() {
+        let dir = std::env::temp_dir().join(format!("ptuf-cli-init-kiro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                dry_run: true,
+                options: InitOptions::Kiro(KiroInitOptions {
+                    root: Some(dir.clone()),
+                    scope: KiroScope::Local,
+                    ..Default::default()
+                }),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out).contains("would register hook"));
+        assert!(!agent_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_kiro_writes_agent_file_on_real_install() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-init-kiro-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Kiro(KiroInitOptions {
+                    root: Some(dir.clone()),
+                    scope: KiroScope::Local,
+                    ..Default::default()
+                }),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out).contains("registered hook"));
+        assert!(agent_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_kiro_verify_passes_when_checks_succeed() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-init-kiro-verify-ok-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
+        let options = KiroInitOptions {
+            root: Some(dir.clone()),
+            scope: KiroScope::Local,
+            verify: true,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_kiro_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("registered hook"), "stdout: {stdout}");
+        assert!(stdout.contains("Verify:"), "stdout: {stdout}");
+        assert!(agent_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_kiro_verify_rolls_back_when_check_fails() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-init-kiro-verify-rollback-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
+        let options = KiroInitOptions {
+            root: Some(dir.clone()),
+            scope: KiroScope::Local,
+            verify: true,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_kiro_verify(&options, failing_report, &mut out, &mut err);
+        assert_eq!(code, 1);
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("FAILED"), "stdout: {stdout}");
+        assert!(stdout.contains("rolled back"), "stdout: {stdout}");
+        assert!(
+            !agent_path.exists(),
+            "rollback must remove freshly-created agent file",
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_kiro_verify_reports_error_when_no_root() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-kiro-verify-noroot-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let options = KiroInitOptions {
+            scope: KiroScope::Local,
+            verify: true,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_kiro_verify(&options, passing_report, &mut out, &mut err);
+        assert_eq!(code, 1, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&err).contains("init failed"));
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_dispatches_to_kiro_verify_when_verify_flag_set() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-cli-run-kiro-verify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Kiro(KiroInitOptions {
+                    root: Some(dir.clone()),
+                    scope: KiroScope::Local,
+                    verify: true,
+                    ..Default::default()
+                }),
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(
+            String::from_utf8_lossy(&out).contains("Synthetic deny test: passed"),
+            "stdout: {}",
+            String::from_utf8_lossy(&out),
+        );
+        assert!(agent_path.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

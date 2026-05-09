@@ -10,8 +10,10 @@ stderr, and agent-specific `hookSpecificOutput` JSON.
 - `1` — internal error such as invalid JSON, bad CLI arguments, or policy load
   failure
 
-`ptuf` currently ships first-class adapters for Claude Code, Codex, and
-GitHub Copilot.
+`ptuf` currently ships first-class adapters for Claude Code, Codex,
+GitHub Copilot, and Kiro CLI. Each adapter has matching `hook`, `init`,
+and `doctor` integration so the same policy engine and YAML plugins
+back every host.
 
 ## Status
 
@@ -24,8 +26,8 @@ v0.0.1 ships:
 - Bounded wrapper inspection for `bash -c`, `sh -c`, `eval`, `xargs`, and
   `find -exec`, including wrapped redirect targets for self-protection
 - Layered YAML config and YAML plugins with rule-local `tests:`
-- `ptuf init <agent>` for Claude Code, Codex, and GitHub Copilot hook
-  installation
+- `ptuf init <agent>` for Claude Code, Codex, GitHub Copilot, and Kiro
+  CLI hook installation
 - `ptuf doctor [--json]` for binary/config/plugin/hook diagnostics
 - Audit JSONL with `schemaVersion: 1`, `agent`, `pluginVersions`, and
   `allowlistId`
@@ -142,6 +144,8 @@ ptuf plugin test <path>
 ptuf init claude-code [--dry-run] [--settings <path>] [--verify [--json]]
 ptuf init codex [--dry-run] [--root <path>] [--hooks <path>] [--config <path>] [--verify [--json]]
 ptuf init copilot [--dry-run] [--root <path>] [--hooks <path>] [--profile local] [--verify [--json]]
+ptuf init kiro [--dry-run] [--root <path>] [--agent <name>] [--agent-config <path>]
+               [--scope local|global] [--verify [--json]]
 ptuf doctor [--json]
 ptuf --help
 ptuf --version
@@ -196,14 +200,27 @@ GitHub Copilot behavior:
   `core.engine.invalid-payload` / `core.engine.policy-load-failed`
   rules
 
-Both Claude Code and Codex set the human-readable reason on stderr for
+Kiro CLI behavior:
+
+- Kiro's `preToolUse` hook protocol carries no JSON envelope, so the
+  Kiro adapter writes nothing to stdout
+- `Allow` / `Monitor` — exit `0`, empty stdout/stderr
+- `Ask` is converted to `Deny` because Kiro `preToolUse` does not
+  define an interactive prompt channel
+- `Deny` — exit `2`, deny reason on stderr only
+- Invalid JSON, oversized stdin, and policy-load failures all emit a
+  stderr-only deny at exit `2` under the reserved
+  `core.engine.invalid-payload` / `core.engine.policy-load-failed`
+  rules
+
+Claude Code, Codex, and Kiro set the human-readable reason on stderr for
 `Ask` or `Deny`. Copilot likewise writes the reason to stderr alongside
 the bare JSON envelope.
 
-Hook stdin payloads are capped at 8 MiB. For Claude Code and Codex,
-unreadable, oversized, or invalid-JSON stdin is rejected with `Deny`
-(exit `2`) under the reserved `core.engine.invalid-payload` rule so the
-host blocks the tool — `exit 1` would only surface a non-blocking
+Hook stdin payloads are capped at 8 MiB. For Claude Code, Codex, and
+Kiro, unreadable, oversized, or invalid-JSON stdin is rejected with
+`Deny` (exit `2`) under the reserved `core.engine.invalid-payload` rule
+so the host blocks the tool — `exit 1` would only surface a non-blocking
 warning and let the call through. Copilot uses the same reserved rule
 but at exit `0` (see above).
 
@@ -285,6 +302,48 @@ is idempotent — re-running it detects an existing ptuf entry by the
 
 The `--profile cloud` variant (which also generates wrapper scripts for
 Copilot's cloud agent) is post-MVP and not yet wired up.
+
+## Kiro CLI
+
+The default install target is repo-local:
+
+```bash
+ptuf init kiro
+ptuf init kiro --dry-run
+ptuf init kiro --root /path/to/repo
+ptuf init kiro --agent guard-bot                  # use a custom file stem
+ptuf init kiro --scope global                     # write to ~/.kiro/agents/<name>.json
+ptuf init kiro --agent-config /tmp/agent.json     # bypass scope/root resolution
+ptuf init kiro --verify                           # install + run synthetic deny check
+```
+
+That writes `<repo>/.kiro/agents/ptuf-guarded.json` (or, with
+`--scope global`, `~/.kiro/agents/ptuf-guarded.json`) with a
+`hooks.preToolUse` entry whose `command` invokes `<ptuf> hook kiro`.
+The installer is idempotent — re-running it detects an existing ptuf
+entry by the `hook kiro` command tail and leaves the file untouched.
+
+Kiro `preToolUse` payloads use a different vocabulary than Claude Code,
+so the adapter normalises tool names and `tool_input` keys before the
+engine sees them:
+
+- `shell` / `execute_bash` / `execute_cmd` → `Bash` (`command` falls
+  back to `cmd` → `script`)
+- `read` / `fs_read` / `fsRead` → `Read` (`file_path` falls back to
+  `path` → `paths[0]` → `operations[0].path` → `files[0].path` →
+  `items[0].path`)
+- `write` / `fs_write` / `fsWrite` → `Write` (`file_path` resolved as
+  above; `content` falls back to `text` → `new_content`)
+- `web_fetch` / `webFetch` → `WebFetch`
+- `@server/tool` → `mcp__server__tool` (extra path segments collapse to
+  `_`; empty segments fall through to the raw name)
+- anything else passes through with its raw name and the engine's
+  generic / MCP extractors handle it best-effort
+
+`hook_event_name` other than `preToolUse` is rejected with
+`core.engine.invalid-payload`. `ptuf doctor` (text and `--json`) reports
+a `Kiro CLI integration` section that scans `<repo>/.kiro/agents/*.json`
+and `~/.kiro/agents/*.json` for ptuf hook entries.
 
 ## Configuration
 

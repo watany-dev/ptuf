@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use super::{
     ClaudeInitOptions, CodexInitOptions, Command, CopilotInitOptions, CopilotProfile, HookAgent,
-    InitOptions, ParseError,
+    InitOptions, KiroInitOptions, KiroScope, ParseError,
 };
 
 pub(super) fn parse_doctor<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -35,6 +35,7 @@ where
         "claude-code" => parse_init_claude(iter),
         "codex" => parse_init_codex(iter),
         "copilot" => parse_init_copilot(iter),
+        "kiro" => parse_init_kiro(iter),
         _ => Err(ParseError::UnknownAgent(agent.clone())),
     }
 }
@@ -177,6 +178,78 @@ where
     })
 }
 
+pub(super) fn parse_init_kiro<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let mut dry_run = false;
+    let mut root: Option<PathBuf> = None;
+    let mut agent: Option<String> = None;
+    let mut agent_config_path: Option<PathBuf> = None;
+    let mut scope = KiroScope::Local;
+    let mut verify = false;
+    let mut json = false;
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--dry-run" => dry_run = true,
+            "--verify" => verify = true,
+            "--json" => json = true,
+            "--root" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--root"))?;
+                root = Some(PathBuf::from(value));
+            },
+            "--agent" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--agent"))?;
+                agent = Some(value.clone());
+            },
+            "--agent-config" => {
+                let value = iter
+                    .next()
+                    .ok_or(ParseError::MissingValue("--agent-config"))?;
+                agent_config_path = Some(PathBuf::from(value));
+            },
+            "--scope" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--scope"))?;
+                scope = parse_kiro_scope(value)?;
+            },
+            other if other.starts_with("--root=") => {
+                root = Some(PathBuf::from(other.trim_start_matches("--root=")));
+            },
+            other if other.starts_with("--agent=") => {
+                agent = Some(other.trim_start_matches("--agent=").to_string());
+            },
+            other if other.starts_with("--agent-config=") => {
+                agent_config_path =
+                    Some(PathBuf::from(other.trim_start_matches("--agent-config=")));
+            },
+            other if other.starts_with("--scope=") => {
+                scope = parse_kiro_scope(other.trim_start_matches("--scope="))?;
+            },
+            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
+        }
+    }
+    check_verify_flags(verify, json, dry_run)?;
+    Ok(Command::Init {
+        dry_run,
+        options: InitOptions::Kiro(KiroInitOptions {
+            root,
+            agent,
+            agent_config_path,
+            scope,
+            verify,
+            json,
+        }),
+    })
+}
+
+fn parse_kiro_scope(value: &str) -> Result<KiroScope, ParseError> {
+    match value {
+        "local" => Ok(KiroScope::Local),
+        "global" => Ok(KiroScope::Global),
+        _ => Err(ParseError::UnexpectedArgument(format!("--scope {value}"))),
+    }
+}
+
 fn parse_copilot_profile(value: &str) -> Result<CopilotProfile, ParseError> {
     match value {
         "local" => Ok(CopilotProfile::Local),
@@ -213,6 +286,7 @@ where
         "claude-code" => HookAgent::ClaudeCode,
         "codex" => HookAgent::Codex,
         "copilot" => HookAgent::Copilot,
+        "kiro" => HookAgent::Kiro,
         _ => return Err(ParseError::UnknownAgent(agent.clone())),
     };
     if let Some(extra) = iter.next() {
@@ -274,7 +348,7 @@ mod tests {
     use super::super::test_support::s;
     use super::super::{
         ClaudeInitOptions, CodexInitOptions, Command, CopilotInitOptions, CopilotProfile,
-        HookAgent, InitOptions, ParseError, parse,
+        HookAgent, InitOptions, KiroInitOptions, KiroScope, ParseError, parse,
     };
 
     #[test]
@@ -307,6 +381,17 @@ mod tests {
             codex,
             Command::HookPreToolUse {
                 agent: HookAgent::Codex
+            }
+        );
+    }
+
+    #[test]
+    fn parses_kiro_hook_subcommand() {
+        let cmd = parse(&s(&["hook", "kiro"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::HookPreToolUse {
+                agent: HookAgent::Kiro
             }
         );
     }
@@ -796,6 +881,148 @@ mod tests {
         assert!(matches!(
             parse(&s(&["init", "copilot", "--verify", "--dry-run"])),
             Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn parses_kiro_init_with_defaults() {
+        let cmd = parse(&s(&["init", "kiro"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Kiro(KiroInitOptions {
+                    scope: KiroScope::Local,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_kiro_init_flags_root_agent_scope() {
+        let cmd = parse(&s(&[
+            "init", "kiro", "--root", "/repo", "--agent", "guarded", "--scope", "global",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Kiro(KiroInitOptions {
+                    root: Some(PathBuf::from("/repo")),
+                    agent: Some("guarded".into()),
+                    scope: KiroScope::Global,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_kiro_init_agent_config() {
+        let cmd = parse(&s(&["init", "kiro", "--agent-config=/tmp/agents/x.json"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Kiro(KiroInitOptions {
+                    agent_config_path: Some(PathBuf::from("/tmp/agents/x.json")),
+                    scope: KiroScope::Local,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_kiro_init_dry_run() {
+        let cmd = parse(&s(&["init", "kiro", "--dry-run"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: true,
+                options: InitOptions::Kiro(KiroInitOptions {
+                    scope: KiroScope::Local,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_kiro_init_with_equals_forms() {
+        let cmd = parse(&s(&[
+            "init",
+            "kiro",
+            "--root=/r",
+            "--agent=name",
+            "--scope=local",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Kiro(KiroInitOptions {
+                    root: Some(PathBuf::from("/r")),
+                    agent: Some("name".into()),
+                    scope: KiroScope::Local,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn kiro_init_rejects_json_without_verify() {
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--json"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn kiro_init_rejects_verify_with_dry_run() {
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--verify", "--dry-run"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn kiro_init_rejects_unknown_scope_value() {
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--scope", "weird"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn kiro_init_flags_require_values() {
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--root"])),
+            Err(ParseError::MissingValue("--root"))
+        ));
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--agent"])),
+            Err(ParseError::MissingValue("--agent"))
+        ));
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--agent-config"])),
+            Err(ParseError::MissingValue("--agent-config"))
+        ));
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--scope"])),
+            Err(ParseError::MissingValue("--scope"))
+        ));
+    }
+
+    #[test]
+    fn kiro_init_rejects_unknown_flag() {
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--bogus"])),
+            Err(ParseError::UnexpectedArgument(_))
         ));
     }
 

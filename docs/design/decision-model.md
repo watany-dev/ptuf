@@ -31,14 +31,15 @@ deny > ask > monitor > allow
 
 ## CLI / hook との対応
 
-| 条件 | Claude Code | Codex |
-| --- | --- | --- |
-| `Allow` | exit `0` | exit `0` |
-| `Monitor` | exit `0` | exit `0` |
-| `Ask` | exit `0` + hook response `ask` | adapter で `Deny` に変換され exit `2` |
-| `Deny` | exit `2` | exit `2` |
+| 条件 | Claude Code | Codex | Copilot | Kiro |
+| --- | --- | --- | --- | --- |
+| `Allow` | exit `0` | exit `0` | exit `0` | exit `0` |
+| `Monitor` | exit `0` | exit `0` | exit `0` | exit `0` |
+| `Ask` | exit `0` + hook response `ask` | adapter で `Deny` に変換され exit `2` | adapter で `Deny` に変換され exit `0` (bare JSON) | adapter で `Deny` に変換され exit `2` (stderr のみ) |
+| `Deny` | exit `2` | exit `2` | exit `0` (bare deny JSON) | exit `2` (stderr のみ) |
 
-`Ask` / `Deny` は reason を stderr にも書く。
+`Ask` / `Deny` は reason を stderr にも書く。Kiro は JSON envelope を持たないため
+stderr のみで通知する。
 
 ## mode
 
