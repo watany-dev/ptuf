@@ -206,7 +206,7 @@ where
     let mut json_results: Vec<serde_json::Value> = Vec::new();
 
     for agent in agents {
-        let result = install_one(agent, options.verify, options.dry_run, &mut runner, stderr);
+        let result = install_one(agent, cwd.as_deref(), &options, &mut runner, stderr);
         match result {
             Ok(InstallStep {
                 outcome,
@@ -284,27 +284,28 @@ struct InstallStep {
 
 fn install_one<F, W: Write>(
     agent: HookAgent,
-    verify: bool,
-    dry_run: bool,
+    cwd: Option<&std::path::Path>,
+    options: &InitOptions,
     runner: &mut F,
     stderr: &mut W,
 ) -> Result<InstallStep, init::InitError>
 where
     F: FnMut() -> init::verify::VerifyReport,
 {
-    let cwd = std::env::current_dir().ok();
-    let snap_paths = snapshot_paths(agent, cwd.as_deref())?;
-    // If we're going to run verify, take a snapshot first so a failed
-    // verify can be rolled back.
-    let snaps = if verify {
+    let plan = AgentPlan::resolve(agent, cwd)?;
+    let snaps = if options.verify {
         Some(init::capture(
-            &snap_paths.iter().map(PathBuf::as_path).collect::<Vec<_>>(),
+            &plan
+                .snapshot_paths
+                .iter()
+                .map(PathBuf::as_path)
+                .collect::<Vec<_>>(),
         )?)
     } else {
         None
     };
-    let outcome = install_for_agent(agent, cwd.as_deref(), dry_run)?;
-    if !verify {
+    let outcome = (plan.install)(options.dry_run)?;
+    if !options.verify {
         return Ok(InstallStep {
             outcome,
             report: None,
@@ -333,58 +334,57 @@ where
     })
 }
 
-fn snapshot_paths(
-    agent: HookAgent,
-    cwd: Option<&std::path::Path>,
-) -> Result<Vec<PathBuf>, init::InitError> {
-    Ok(match agent {
-        HookAgent::ClaudeCode => {
-            let path =
-                init::claude_code::default_settings_path().ok_or(init::InitError::HomeNotSet)?;
-            vec![path]
-        },
-        HookAgent::Codex => {
-            let t = init::codex::resolve_paths(cwd)?;
-            vec![t.hooks_path, t.config_path]
-        },
-        HookAgent::Copilot => {
-            let t = init::copilot::resolve_paths(cwd)?;
-            vec![t.hooks_path]
-        },
-        HookAgent::Kiro => {
-            let t = init::kiro::resolve_paths(cwd)?;
-            vec![t.agent_config_path]
-        },
-    })
+struct AgentPlan {
+    snapshot_paths: Vec<PathBuf>,
+    install: Box<dyn FnOnce(bool) -> Result<init::InstallOutcome, init::InitError>>,
 }
 
-fn install_for_agent(
-    agent: HookAgent,
-    cwd: Option<&std::path::Path>,
-    dry_run: bool,
-) -> Result<init::InstallOutcome, init::InitError> {
-    match agent {
-        HookAgent::ClaudeCode => {
-            let path =
-                init::claude_code::default_settings_path().ok_or(init::InitError::HomeNotSet)?;
-            let binary = init::claude_code::detect_binary();
-            init::claude_code::install(&path, &binary, dry_run)
-        },
-        HookAgent::Codex => {
-            let targets = init::codex::resolve_paths(cwd)?;
-            let binary = init::codex::detect_binary();
-            init::codex::install(&targets, &binary, dry_run)
-        },
-        HookAgent::Copilot => {
-            let targets = init::copilot::resolve_paths(cwd)?;
-            let binary = init::copilot::detect_binary();
-            init::copilot::install(&targets, &binary, dry_run)
-        },
-        HookAgent::Kiro => {
-            let targets = init::kiro::resolve_paths(cwd)?;
-            let binary = init::kiro::detect_binary();
-            init::kiro::install(&targets, &binary, dry_run)
-        },
+impl AgentPlan {
+    fn resolve(agent: HookAgent, cwd: Option<&std::path::Path>) -> Result<Self, init::InitError> {
+        match agent {
+            HookAgent::ClaudeCode => {
+                let path = init::claude_code::default_settings_path()
+                    .ok_or(init::InitError::HomeNotSet)?;
+                let install_path = path.clone();
+                Ok(Self {
+                    snapshot_paths: vec![path],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::claude_code::detect_binary();
+                        init::claude_code::install(&install_path, &binary, dry_run)
+                    }),
+                })
+            },
+            HookAgent::Codex => {
+                let targets = init::codex::resolve_paths(cwd)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.hooks_path.clone(), targets.config_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::codex::detect_binary();
+                        init::codex::install(&targets, &binary, dry_run)
+                    }),
+                })
+            },
+            HookAgent::Copilot => {
+                let targets = init::copilot::resolve_paths(cwd)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.hooks_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::copilot::detect_binary();
+                        init::copilot::install(&targets, &binary, dry_run)
+                    }),
+                })
+            },
+            HookAgent::Kiro => {
+                let targets = init::kiro::resolve_paths(cwd)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.agent_config_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::kiro::detect_binary();
+                        init::kiro::install(&targets, &binary, dry_run)
+                    }),
+                })
+            },
+        }
     }
 }
 

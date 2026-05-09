@@ -304,12 +304,6 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
-fn sibling_path(path: &Path, file_name: &str) -> PathBuf {
-    path.parent()
-        .map_or_else(|| PathBuf::from(file_name), |parent| parent.join(file_name))
-}
-
-#[cfg(test)]
 mod tests {
 
     use super::*;
@@ -893,13 +887,6 @@ mod tests {
             tmp.to_string_lossy().contains("hooks.json.ptuf."),
             "missing file_name must default to hooks.json: {tmp:?}"
         );
-    }
-
-    #[test]
-    fn sibling_path_falls_back_to_bare_filename_when_no_parent() {
-        let bare = Path::new("hooks.json");
-        let other = sibling_path(bare, "config.toml");
-        assert_eq!(other, PathBuf::from("config.toml"));
     }
 
     #[test]

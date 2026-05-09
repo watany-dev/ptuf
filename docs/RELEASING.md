@@ -68,7 +68,7 @@
      --source-ref refs/tags/$VERSION
    tar -xzf "$ARCHIVE" --strip-components=1
    ./ptuf --version
-   ptuf doctor
+   ./ptuf init --dry-run
    ```
 
    Before the final tag, run the same check against an RC tag such as
