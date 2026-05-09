@@ -44,7 +44,7 @@ redaction を通してから書き込む。
 | `mode` | string | `enforce` / `monitor` |
 | `modeDemoted` | bool | deny が monitor に降格された場合のみ `true` で出力 |
 | `allowlistId` | string \| null | allowlist suppression で `Allow` になった場合のみ |
-| `agent` | string | `claude-code` / `codex` / `cli` / `unknown` |
+| `agent` | string | `claude-code` / `codex` / `copilot` / `kiro` / `cli` / `unknown` |
 | `pluginVersions` | string[] | 読み込んだ plugin の `name@version`。空なら省略 |
 
 ## 記録条件

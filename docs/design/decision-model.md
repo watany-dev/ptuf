@@ -31,19 +31,19 @@ deny > ask > monitor > allow
 
 ## CLI / hook との対応
 
-| 条件 | Claude Code | Codex | GitHub Copilot |
-| --- | --- | --- | --- |
-| `Allow` | exit `0` | exit `0` | exit `0`、stdout 空 |
-| `Monitor` | exit `0` | exit `0` | exit `0`、stdout 空 |
-| `Ask` | exit `0` + hook response `ask` | adapter で `Deny` に変換され exit `2` | adapter で `Deny` に変換、bare JSON envelope を stdout、exit `0` |
-| `Deny` | exit `2` | exit `2` | bare JSON envelope を stdout、exit `0` |
+| 条件 | Claude Code | Codex | GitHub Copilot | Kiro |
+| --- | --- | --- | --- | --- |
+| `Allow` | exit `0` | exit `0` | exit `0`、stdout 空 | exit `0` |
+| `Monitor` | exit `0` | exit `0` | exit `0`、stdout 空 | exit `0` |
+| `Ask` | exit `0` + hook response `ask` | adapter で `Deny` に変換され exit `2` | adapter で `Deny` に変換、bare JSON envelope を stdout、exit `0` | adapter で `Deny` に変換され exit `2` (stderr のみ) |
+| `Deny` | exit `2` | exit `2` | bare JSON envelope を stdout、exit `0` | exit `2` (stderr のみ) |
 
 `Ask` / `Deny` は reason を stderr にも書く。GitHub Copilot は preToolUse
 hook の非ゼロ exit を hook 失敗として扱うため、`Deny` / `Ask` でも exit
 code は `0` のままで、判定は stdout の bare JSON envelope
 (`hookSpecificOutput` ラッパなし) で伝える。fail-closed 経路
 (`core.engine.invalid-payload` / `core.engine.policy-load-failed`) も同じ
-contract に従う。
+contract に従う。Kiro は JSON envelope を持たないため stderr のみで通知する。
 
 ## mode
 

@@ -161,6 +161,36 @@ fn codex_hook_maps_ask_to_deny() {
 }
 
 #[test]
+fn kiro_hook_denies_destructive_rm_with_stderr_only() {
+    let payload = r#"{"hook_event_name":"preToolUse","tool_name":"shell","tool_input":{"command":"rm -rf /"}}"#;
+    let (code, stdout, stderr) = run(&["hook", "kiro"], payload);
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty(), "Kiro must not write stdout: {stdout}");
+    assert!(stderr.contains("core.filesystem.destructive-rm"));
+}
+
+#[test]
+fn kiro_hook_allows_safe_read_payload_with_empty_streams() {
+    let payload = r#"{"tool_name":"read","tool_input":{"operations":[{"path":"README.md"}]}}"#;
+    let (code, stdout, stderr) = run(&["hook", "kiro"], payload);
+    assert_eq!(code, 0);
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn kiro_hook_invalid_json_fails_closed_with_stderr_only() {
+    let (code, stdout, stderr) = run(&["hook", "kiro"], "not json");
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty(), "Kiro must not write stdout: {stdout}");
+    assert!(
+        stderr.contains("core.engine.invalid-payload"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("invalid hook payload"), "stderr: {stderr}");
+}
+
+#[test]
 fn no_args_returns_one_with_missing_subcommand_error() {
     let (code, stdout, stderr) = run(&[], "");
     assert_eq!(code, 1);
@@ -897,29 +927,5 @@ fn init_copilot_real_install_is_byte_for_byte_idempotent() {
     assert_eq!(
         after_first, after_second,
         "second install must not rewrite hooks.json"
-    );
-}
-
-#[test]
-fn init_copilot_profile_cloud_is_rejected_post_mvp() {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let path = dir.path().join("hooks.json");
-    let path_str = path.to_string_lossy().into_owned();
-
-    let (code, _stdout, stderr) = run(
-        &[
-            "init",
-            "copilot",
-            "--profile",
-            "cloud",
-            "--hooks",
-            &path_str,
-        ],
-        "",
-    );
-    assert_eq!(code, 1);
-    assert!(
-        stderr.contains("--profile cloud is not yet supported (post-MVP)"),
-        "stderr: {stderr}",
     );
 }

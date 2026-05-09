@@ -15,6 +15,8 @@ use crate::engine::Engine;
 use crate::reason;
 
 mod copilot_input;
+mod input_helpers;
+mod kiro_input;
 mod output;
 mod parse;
 mod run;
@@ -37,6 +39,7 @@ pub enum HookAgent {
     ClaudeCode,
     Codex,
     Copilot,
+    Kiro,
 }
 
 impl HookAgent {
@@ -45,6 +48,7 @@ impl HookAgent {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::Copilot => "copilot",
+            Self::Kiro => "kiro",
         }
     }
 }
@@ -81,11 +85,29 @@ pub struct CopilotInitOptions {
     pub json: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KiroScope {
+    #[default]
+    Local,
+    Global,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KiroInitOptions {
+    pub root: Option<PathBuf>,
+    pub agent: Option<String>,
+    pub agent_config_path: Option<PathBuf>,
+    pub scope: KiroScope,
+    pub verify: bool,
+    pub json: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum InitOptions {
     ClaudeCode(ClaudeInitOptions),
     Codex(CodexInitOptions),
     Copilot(CopilotInitOptions),
+    Kiro(KiroInitOptions),
 }
 
 /// Build the engine for the CWD-derived project scope, or surface a
@@ -185,7 +207,7 @@ const HELP: &str = "ptuf — PreToolUseFilter, a guardrail for coding agents
 
 USAGE:
     ptuf hook <AGENT>                            (run as the agent's PreToolUse hook;
-                                                  AGENT = claude-code | codex | copilot)
+                                                  AGENT = claude-code | codex | copilot | kiro)
     ptuf eval --tool <NAME> <COMMAND>            (evaluate a single tool call)
     ptuf plugin test <PATH>                      (run a plugin's deny/allow tests)
     ptuf init claude-code [--dry-run]            (register hook in
@@ -202,6 +224,12 @@ USAGE:
                       [--hooks <PATH>]
                       [--profile local|cloud]
                       [--verify [--json]]
+    ptuf init kiro [--dry-run]                   (register Kiro CLI preToolUse hook in
+                   [--root <PATH>]               <repo>/.kiro/agents/<name>.json or
+                   [--agent <NAME>]              ~/.kiro/agents/<name>.json)
+                   [--agent-config <PATH>]
+                   [--scope local|global]
+                   [--verify [--json]]
     ptuf doctor [--json]                         (print a diagnostic report)
     ptuf --help | --version
 
@@ -248,5 +276,6 @@ mod tests {
         assert_eq!(HookAgent::ClaudeCode.audit_name(), "claude-code");
         assert_eq!(HookAgent::Codex.audit_name(), "codex");
         assert_eq!(HookAgent::Copilot.audit_name(), "copilot");
+        assert_eq!(HookAgent::Kiro.audit_name(), "kiro");
     }
 }

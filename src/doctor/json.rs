@@ -14,8 +14,10 @@ use crate::config::scope::Layout;
 
 use super::{
     ClaudeState, ClaudeStatus, CodexState, CodexStatus, ConfigStatus, CopilotState, CopilotStatus,
-    DOCTOR_JSON_SCHEMA_VERSION, PluginStatus, Report, gather_live_report, mode_label,
+    DOCTOR_JSON_SCHEMA_VERSION, KiroState, KiroStatus, PluginStatus, Report, gather_live_report,
+    mode_label,
 };
+use crate::cli::KiroScope;
 
 #[derive(Debug, Serialize)]
 pub struct JsonReport {
@@ -30,6 +32,7 @@ pub struct JsonReport {
     pub claude: JsonClaude,
     pub codex: JsonCodex,
     pub copilot: JsonCopilot,
+    pub kiro: JsonKiro,
     #[serde(rename = "hasFailure")]
     pub has_failure: bool,
 }
@@ -123,6 +126,23 @@ pub struct JsonCopilot {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct JsonKiro {
+    #[serde(rename = "localAgentsDir")]
+    pub local_agents_dir: Option<String>,
+    #[serde(rename = "globalAgentsDir")]
+    pub global_agents_dir: Option<String>,
+    pub state: &'static str,
+    #[serde(rename = "configPath", skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 impl Report {
     /// Build the JSON projection of this report. Pure transformation;
     /// no I/O, no environment lookups.
@@ -182,6 +202,7 @@ impl Report {
             claude: build_json_claude(&self.claude),
             codex: build_json_codex(&self.codex),
             copilot: build_json_copilot(&self.copilot),
+            kiro: build_json_kiro(&self.kiro),
             has_failure,
         }
     }
@@ -242,6 +263,62 @@ fn build_json_copilot(status: &CopilotStatus) -> JsonCopilot {
     JsonCopilot {
         hooks_path,
         state,
+        matcher,
+        error,
+    }
+}
+
+fn build_json_kiro(status: &KiroStatus) -> JsonKiro {
+    let local_agents_dir = status
+        .local_agents_dir
+        .as_ref()
+        .map(|p| p.display().to_string());
+    let global_agents_dir = status
+        .global_agents_dir
+        .as_ref()
+        .map(|p| p.display().to_string());
+    let (state, config_path, scope, matcher, error) = match &status.state {
+        KiroState::NoTargets => ("noTargets", None, None, None, None),
+        KiroState::Missing => ("missing", None, None, None, None),
+        KiroState::HookRegistered {
+            config_path,
+            scope,
+            matcher,
+        } => (
+            "hookRegistered",
+            Some(config_path.display().to_string()),
+            Some(match scope {
+                KiroScope::Local => "local",
+                KiroScope::Global => "global",
+            }),
+            matcher.clone(),
+            None,
+        ),
+        KiroState::HookMissing => ("hookMissing", None, None, None, None),
+        KiroState::InvalidJson {
+            config_path,
+            message,
+        } => (
+            "invalidJson",
+            Some(config_path.display().to_string()),
+            None,
+            None,
+            Some(message.clone()),
+        ),
+        KiroState::Io { path, message } => (
+            "io",
+            Some(path.display().to_string()),
+            None,
+            None,
+            Some(message.clone()),
+        ),
+    };
+    JsonKiro {
+        local_agents_dir,
+        global_agents_dir,
+        state,
+        config_path,
+        scope,
         matcher,
         error,
     }
@@ -628,6 +705,14 @@ rules:
         assert!(v["codex"]["error"].is_string());
         assert_eq!(v["hasFailure"], true);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn json_report_includes_kiro_block_with_no_targets_default() {
+        let report = Report::gather(None, None, Layout::default(), None);
+        let v = to_json_value(&report);
+        assert!(v["kiro"].is_object(), "kiro block must be present");
+        assert!(v["kiro"]["state"].is_string());
     }
 
     #[test]

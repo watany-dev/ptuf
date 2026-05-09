@@ -10,6 +10,7 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) と `v0.1.0` (
 
 - `PreToolUse` 向け CLI とライブラリ
 - Claude Code / Codex / GitHub Copilot adapter
+- Kiro CLI adapter (`hook` / `init` / `doctor` 連携を実装済み)
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
   `core.self_protection` / `core.engine` /
@@ -63,11 +64,13 @@ CLI 経路はこれと異なり fail-closed で動作する。
 - `ptuf hook claude-code`
 - `ptuf hook codex`
 - `ptuf hook copilot`
+- `ptuf hook kiro`
 - `ptuf eval --tool <name> <command>`
 - `ptuf plugin test <path>`
 - `ptuf init claude-code [--dry-run] [--settings <PATH>] [--verify [--json]]`
 - `ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>] [--verify [--json]]`
-- `ptuf init copilot [--dry-run] [--root <PATH>] [--hooks <PATH>] [--profile local] [--verify [--json]]`
+- `ptuf init copilot [--dry-run] [--root <PATH>] [--hooks <PATH>] [--profile local|cloud] [--verify [--json]]`
+- `ptuf init kiro [--dry-run] [--root <PATH>] [--agent <NAME>] [--agent-config <PATH>] [--scope local|global] [--verify [--json]]`
 - `ptuf doctor [--json]`
 - `ptuf --help`
 - `ptuf --version`
@@ -99,6 +102,7 @@ CLI 経路はこれと異なり fail-closed で動作する。
 | [`policy-packs.md`](policy-packs.md) | 実装済み built-in pack と rule 一覧 |
 | [`config-and-plugins.md`](config-and-plugins.md) | config schema、plugin schema、allowlist |
 | [`cli-and-hooks.md`](cli-and-hooks.md) | `init` / `hook` / `doctor` と agent 統合 |
+| [`kiro-cli.md`](kiro-cli.md) | Kiro CLI adapter の正規化・fail-closed・doctor 統合 |
 | [`audit.md`](audit.md) | audit JSONL schema と redaction |
 | [`testing.md`](testing.md) | example-based test と PBT の役割分担 |
 | [`roadmap.md`](roadmap.md) | M1〜M5 の到達点と今後の候補 |
