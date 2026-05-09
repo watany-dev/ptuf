@@ -15,6 +15,7 @@ use crate::plugin::runner as plugin_runner;
 use crate::reason;
 
 use super::copilot_input;
+use super::kiro_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
 use super::{
     ClaudeInitOptions, CodexInitOptions, CopilotInitOptions, HookAgent, INVALID_PAYLOAD_RULE,
@@ -89,12 +90,15 @@ fn invalid_payload_deny(problem: &str) -> Decision {
 /// snake_case form or the camelCase `toolName`/`toolArgs` form (with
 /// `toolArgs` either a JSON object or a JSON-encoded string), so its
 /// payload routes through `cli::copilot_input::parse` for normalisation
-/// before the engine sees it.
+/// before the engine sees it. Kiro uses a snake_case shape but with its
+/// own tool-name vocabulary (`shell`, `read`, `write`, `@server/tool`,
+/// etc.), so its payload routes through `cli::kiro_input::parse`.
 fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
     match agent {
         HookAgent::ClaudeCode | HookAgent::Codex => serde_json::from_str::<HookInput>(body)
             .map_err(|err| format!("hook payload is not valid JSON ({err})")),
         HookAgent::Copilot => copilot_input::parse(body).map_err(|err| err.to_string()),
+        HookAgent::Kiro => kiro_input::parse(body).map_err(|err| err.to_string()),
     }
 }
 

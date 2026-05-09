@@ -25,6 +25,9 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         HookAgent::ClaudeCode | HookAgent::Codex => {
             render_hook_response(agent, &adapted).map(|r| serde_json::to_string(&r))
         },
+        // Kiro has no JSON envelope: deny/ask are surfaced via stderr
+        // reason + non-zero exit code only.
+        HookAgent::Kiro => None,
     };
     if let Some(result) = serialised {
         match result {
@@ -62,6 +65,9 @@ pub(super) fn render_hook_response(
         // Copilot uses a bare envelope (no `hookSpecificOutput` wrapper);
         // `emit_decision` dispatches through `hook_output::copilot` directly.
         HookAgent::Copilot => None,
+        // Kiro has no JSON envelope; `emit_decision` skips the
+        // serialisation step entirely.
+        HookAgent::Kiro => None,
     }
 }
 
@@ -74,6 +80,10 @@ pub(super) fn adapt_hook_decision(agent: HookAgent, decision: &Decision) -> Deci
         (HookAgent::Copilot, Decision::Ask { rule_id, reason }) => Decision::Deny {
             rule_id: rule_id.clone(),
             reason: hook_output::copilot::deny_reason_for_ask(reason),
+        },
+        (HookAgent::Kiro, Decision::Ask { rule_id, reason }) => Decision::Deny {
+            rule_id: rule_id.clone(),
+            reason: hook_output::kiro::deny_reason_for_ask(reason),
         },
         _ => decision.clone(),
     }
@@ -91,7 +101,10 @@ pub(super) fn decision_exit_code(agent: HookAgent, decision: &Decision) -> u8 {
     }
     match (agent, decision) {
         (_, Decision::Deny { .. }) => 2,
-        (HookAgent::Codex, Decision::Ask { .. }) => 2,
+        // Codex Ask is demoted to Deny upstream by `adapt_hook_decision`,
+        // but the exit-code matrix kept for defense-in-depth. Kiro Ask is
+        // demoted similarly; this arm mirrors Codex.
+        (HookAgent::Codex | HookAgent::Kiro, Decision::Ask { .. }) => 2,
         _ => 0,
     }
 }
@@ -221,6 +234,105 @@ mod tests {
         assert_eq!(
             decision_exit_code(
                 HookAgent::ClaudeCode,
+                &Decision::Deny {
+                    rule_id: "x".into(),
+                    reason: "r".into()
+                }
+            ),
+            2
+        );
+    }
+
+    #[test]
+    fn kiro_deny_uses_exit_2_and_stderr_only() {
+        let decision = Decision::Deny {
+            rule_id: "core.filesystem.destructive-rm".into(),
+            reason: "blocked".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Kiro, &decision, &mut out, &mut err);
+        assert_eq!(code, 2);
+        assert!(out.is_empty(), "Kiro must not write stdout, got: {out:?}");
+        assert!(String::from_utf8_lossy(&err).contains("blocked"));
+    }
+
+    #[test]
+    fn kiro_ask_is_demoted_to_deny() {
+        let decision = Decision::Ask {
+            rule_id: "core.test.ask".into(),
+            reason: "please confirm".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Kiro, &decision, &mut out, &mut err);
+        assert_eq!(code, 2, "Kiro must demote Ask to deny exit code");
+        assert!(out.is_empty());
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("please confirm"), "stderr: {err_s}");
+        assert!(
+            err_s.contains("Kiro CLI PreToolUse hooks do not define an interactive ask channel"),
+            "stderr should explain Kiro demotion: {err_s}"
+        );
+    }
+
+    #[test]
+    fn kiro_allow_writes_nothing_and_exits_zero() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Kiro, &Decision::Allow, &mut out, &mut err);
+        assert_eq!(code, 0);
+        assert!(out.is_empty());
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn kiro_monitor_writes_nothing_and_exits_zero() {
+        let monitor = Decision::Monitor {
+            rule_id: "core.test.monitor".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Kiro, &monitor, &mut out, &mut err);
+        assert_eq!(code, 0);
+        assert!(out.is_empty());
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn render_hook_response_is_none_for_kiro() {
+        let decision = Decision::Deny {
+            rule_id: "core.x".into(),
+            reason: "r".into(),
+        };
+        assert!(render_hook_response(HookAgent::Kiro, &decision).is_none());
+    }
+
+    #[test]
+    fn decision_exit_code_kiro_matrix() {
+        assert_eq!(decision_exit_code(HookAgent::Kiro, &Decision::Allow), 0);
+        assert_eq!(
+            decision_exit_code(
+                HookAgent::Kiro,
+                &Decision::Monitor {
+                    rule_id: "x".into()
+                }
+            ),
+            0
+        );
+        assert_eq!(
+            decision_exit_code(
+                HookAgent::Kiro,
+                &Decision::Ask {
+                    rule_id: "x".into(),
+                    reason: "r".into()
+                }
+            ),
+            2
+        );
+        assert_eq!(
+            decision_exit_code(
+                HookAgent::Kiro,
                 &Decision::Deny {
                     rule_id: "x".into(),
                     reason: "r".into()

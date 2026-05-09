@@ -15,6 +15,7 @@ use crate::engine::Engine;
 use crate::reason;
 
 mod copilot_input;
+mod kiro_input;
 mod output;
 mod parse;
 mod run;
@@ -37,6 +38,7 @@ pub enum HookAgent {
     ClaudeCode,
     Codex,
     Copilot,
+    Kiro,
 }
 
 impl HookAgent {
@@ -45,6 +47,7 @@ impl HookAgent {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::Copilot => "copilot",
+            Self::Kiro => "kiro",
         }
     }
 }
@@ -185,7 +188,7 @@ const HELP: &str = "ptuf — PreToolUseFilter, a guardrail for coding agents
 
 USAGE:
     ptuf hook <AGENT>                            (run as the agent's PreToolUse hook;
-                                                  AGENT = claude-code | codex | copilot)
+                                                  AGENT = claude-code | codex | copilot | kiro)
     ptuf eval --tool <NAME> <COMMAND>            (evaluate a single tool call)
     ptuf plugin test <PATH>                      (run a plugin's deny/allow tests)
     ptuf init claude-code [--dry-run]            (register hook in
@@ -248,5 +251,6 @@ mod tests {
         assert_eq!(HookAgent::ClaudeCode.audit_name(), "claude-code");
         assert_eq!(HookAgent::Codex.audit_name(), "codex");
         assert_eq!(HookAgent::Copilot.audit_name(), "copilot");
+        assert_eq!(HookAgent::Kiro.audit_name(), "kiro");
     }
 }

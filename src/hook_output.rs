@@ -115,6 +115,18 @@ pub mod copilot {
     }
 }
 
+pub mod kiro {
+    /// Note appended to a deny reason whenever a Kiro `Ask` decision is
+    /// demoted to `Deny`. Kiro's `preToolUse` hook protocol does not
+    /// expose an interactive ask channel, so ptuf surfaces the demotion
+    /// explicitly on stderr.
+    const ASK_UNAVAILABLE_NOTE: &str = "Kiro CLI PreToolUse hooks do not define an interactive ask channel; ptuf is blocking this request instead.";
+
+    pub fn deny_reason_for_ask(reason: &str) -> String {
+        format!("{reason}\n\n{ASK_UNAVAILABLE_NOTE}")
+    }
+}
+
 pub use claude_code::from_decision;
 
 #[cfg(test)]
@@ -192,6 +204,13 @@ mod tests {
         let json = serde_json::to_string(&resp).expect("serialise");
         assert!(json.contains("\"permissionDecision\":\"ask\""));
         assert!(json.contains("\"permissionDecisionReason\":\"confirm please\""));
+    }
+
+    #[test]
+    fn kiro_deny_reason_for_ask_appends_note() {
+        let s = kiro::deny_reason_for_ask("please confirm");
+        assert!(s.starts_with("please confirm"));
+        assert!(s.contains("Kiro CLI PreToolUse hooks do not define an interactive ask channel"));
     }
 
     #[test]

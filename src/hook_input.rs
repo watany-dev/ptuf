@@ -143,6 +143,32 @@ fn collect_event_paths(input: &HookInput) -> Vec<&str> {
             {
                 out.push(path);
             }
+            // Kiro-shaped batch payloads carry every path in `paths[]`
+            // or `operations[].path`. We collect them so engine rules
+            // (e.g. policy globs) see every target rather than only the
+            // canonical `file_path` head.
+            if let Some(paths) = input
+                .tool_input
+                .get("paths")
+                .and_then(serde_json::Value::as_array)
+            {
+                for item in paths {
+                    if let Some(path) = item.as_str() {
+                        out.push(path);
+                    }
+                }
+            }
+            if let Some(ops) = input
+                .tool_input
+                .get("operations")
+                .and_then(serde_json::Value::as_array)
+            {
+                for item in ops {
+                    if let Some(path) = item.get("path").and_then(serde_json::Value::as_str) {
+                        out.push(path);
+                    }
+                }
+            }
         },
         name if is_mcp(name) => {
             if let Some(path) = input
@@ -392,6 +418,26 @@ mod tests {
         let parsed = HookInput::from(raw);
         assert_eq!(parsed.tool_name, "Bash");
         assert_eq!(parsed.bash_command(), Some("ls"));
+    }
+
+    #[test]
+    fn event_normalizes_nested_paths_for_read() {
+        let parsed: HookInput = serde_json::from_str(
+            r#"{"tool_name":"Read","tool_input":{"file_path":"/tmp/head","paths":["/tmp/a"],"operations":[{"path":"/tmp/b"},{"path":"/tmp/c"}]}}"#,
+        )
+        .expect("parse");
+        let event = parsed.event();
+        assert_eq!(event.tool, "Read");
+        assert_eq!(event.paths, vec!["/tmp/head", "/tmp/a", "/tmp/b", "/tmp/c"]);
+    }
+
+    #[test]
+    fn event_normalizes_nested_paths_for_write_without_file_path() {
+        let parsed: HookInput = serde_json::from_str(
+            r#"{"tool_name":"Write","tool_input":{"paths":["/tmp/x","/tmp/y"]}}"#,
+        )
+        .expect("parse");
+        assert_eq!(parsed.event().paths, vec!["/tmp/x", "/tmp/y"]);
     }
 
     #[test]

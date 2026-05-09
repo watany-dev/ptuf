@@ -213,6 +213,7 @@ where
         "claude-code" => HookAgent::ClaudeCode,
         "codex" => HookAgent::Codex,
         "copilot" => HookAgent::Copilot,
+        "kiro" => HookAgent::Kiro,
         _ => return Err(ParseError::UnknownAgent(agent.clone())),
     };
     if let Some(extra) = iter.next() {
@@ -307,6 +308,17 @@ mod tests {
             codex,
             Command::HookPreToolUse {
                 agent: HookAgent::Codex
+            }
+        );
+    }
+
+    #[test]
+    fn parses_kiro_hook_subcommand() {
+        let cmd = parse(&s(&["hook", "kiro"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::HookPreToolUse {
+                agent: HookAgent::Kiro
             }
         );
     }
