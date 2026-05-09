@@ -17,6 +17,7 @@ ptuf plugin test ./ptuf-plugin.yaml
 ptuf init claude-code
 ptuf init codex
 ptuf init copilot --profile local
+ptuf init kiro
 ptuf doctor
 ```
 
@@ -155,6 +156,46 @@ codex_hooks = true
 
 `--profile cloud` (cloud agent 用 wrapper script + JSON) は post-MVP。
 v0.1.0 では parse 段で reject される。
+
+## Kiro CLI への登録
+
+`ptuf init kiro` は既定で repo-local な
+`<repo>/.kiro/agents/ptuf-guarded.json` を更新する。`--scope global` を指定
+すると `~/.kiro/agents/ptuf-guarded.json` を更新し、`--agent <name>` で
+ファイル stem (および JSON の `name`) を上書きできる。`--agent-config <path>`
+を指定した場合は scope と root の解決を完全に bypass し、その path を直接
+使う。
+
+```json
+{
+  "name": "ptuf-guarded",
+  "description": "Kiro CLI agent guarded by ptuf PreToolUse policy.",
+  "tools": ["*"],
+  "includeMcpJson": true,
+  "hooks": {
+    "preToolUse": [
+      {
+        "matcher": "*",
+        "command": "/usr/local/bin/ptuf hook kiro",
+        "timeout_ms": 10000,
+        "cache_ttl_seconds": 0
+      }
+    ]
+  }
+}
+```
+
+実装上の契約:
+
+- `--scope local` (既定) で repo root が見つからない場合は `--root` または
+  `--agent-config` が必要
+- `--scope global` で `$HOME` が unset な場合は `InitError::HomeNotSet`
+- ファイルは JSON object、新規生成時は default skeleton (`name`,
+  `description`, `tools`, `includeMcpJson`, `hooks.preToolUse`) を書く
+- 既存 entry の検出は `hooks.preToolUse[].command` 末尾 `hook kiro` で行う
+- 既存ファイル中の未知 key (`model` / `temperature` / `prompt` /
+  `allowedTools` / `resources` 等) は `serde_json::Value` のまま保持される
+- 書き込みは temp file + rename の原子的更新
 
 ## install verification (`--verify`)
 

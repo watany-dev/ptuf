@@ -85,11 +85,29 @@ pub struct CopilotInitOptions {
     pub json: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KiroScope {
+    #[default]
+    Local,
+    Global,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KiroInitOptions {
+    pub root: Option<PathBuf>,
+    pub agent: Option<String>,
+    pub agent_config_path: Option<PathBuf>,
+    pub scope: KiroScope,
+    pub verify: bool,
+    pub json: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum InitOptions {
     ClaudeCode(ClaudeInitOptions),
     Codex(CodexInitOptions),
     Copilot(CopilotInitOptions),
+    Kiro(KiroInitOptions),
 }
 
 /// Build the engine for the CWD-derived project scope, or surface a
@@ -206,6 +224,12 @@ USAGE:
                       [--hooks <PATH>]
                       [--profile local|cloud]
                       [--verify [--json]]
+    ptuf init kiro [--dry-run]                   (register Kiro CLI preToolUse hook in
+                   [--root <PATH>]               <repo>/.kiro/agents/<name>.json or
+                   [--agent <NAME>]              ~/.kiro/agents/<name>.json)
+                   [--agent-config <PATH>]
+                   [--scope local|global]
+                   [--verify [--json]]
     ptuf doctor [--json]                         (print a diagnostic report)
     ptuf --help | --version
 

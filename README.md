@@ -143,6 +143,8 @@ ptuf plugin test <path>
 ptuf init claude-code [--dry-run] [--settings <path>] [--verify [--json]]
 ptuf init codex [--dry-run] [--root <path>] [--hooks <path>] [--config <path>] [--verify [--json]]
 ptuf init copilot [--dry-run] [--root <path>] [--hooks <path>] [--profile local] [--verify [--json]]
+ptuf init kiro [--dry-run] [--root <path>] [--agent <name>] [--agent-config <path>]
+               [--scope local|global] [--verify [--json]]
 ptuf doctor [--json]
 ptuf --help
 ptuf --version
@@ -302,22 +304,23 @@ Copilot's cloud agent) is post-MVP and not yet wired up.
 
 ## Kiro CLI
 
-Phase 1 ships only the hook entry point. Wire it into a Kiro agent
-config (`.kiro/agents/<name>.json`) yourself:
+The default install target is repo-local:
 
-```json
-{
-  "hooks": {
-    "preToolUse": [
-      {
-        "matcher": "*",
-        "command": "/absolute/path/to/ptuf hook kiro",
-        "timeout_ms": 10000
-      }
-    ]
-  }
-}
+```bash
+ptuf init kiro
+ptuf init kiro --dry-run
+ptuf init kiro --root /path/to/repo
+ptuf init kiro --agent guard-bot                  # use a custom file stem
+ptuf init kiro --scope global                     # write to ~/.kiro/agents/<name>.json
+ptuf init kiro --agent-config /tmp/agent.json     # bypass scope/root resolution
+ptuf init kiro --verify                           # install + run synthetic deny check
 ```
+
+That writes `<repo>/.kiro/agents/ptuf-guarded.json` (or, with
+`--scope global`, `~/.kiro/agents/ptuf-guarded.json`) with a
+`hooks.preToolUse` entry whose `command` invokes `<ptuf> hook kiro`.
+The installer is idempotent — re-running it detects an existing ptuf
+entry by the `hook kiro` command tail and leaves the file untouched.
 
 Kiro `preToolUse` payloads use a different vocabulary than Claude Code,
 so the adapter normalises tool names and `tool_input` keys before the
@@ -337,8 +340,8 @@ engine sees them:
   generic / MCP extractors handle it best-effort
 
 `hook_event_name` other than `preToolUse` is rejected with
-`core.engine.invalid-payload`. A matching `ptuf init kiro` and
-`ptuf doctor` integration are tracked under M6 and ship in follow-up PRs.
+`core.engine.invalid-payload`. A matching `ptuf doctor` integration is
+tracked under M6 and ships in a follow-up PR.
 
 ## Configuration
 
