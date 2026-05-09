@@ -5,10 +5,11 @@
 
 ## 現在の実装スコープ
 
-ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) で次を実装済み:
+ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) と `v0.1.0` (M5) で
+次を実装済み:
 
 - `PreToolUse` 向け CLI とライブラリ
-- Claude Code / Codex adapter
+- Claude Code / Codex / GitHub Copilot adapter
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
   `core.self_protection` / `core.engine` /
@@ -61,10 +62,12 @@ CLI 経路はこれと異なり fail-closed で動作する。
 
 - `ptuf hook claude-code`
 - `ptuf hook codex`
+- `ptuf hook copilot`
 - `ptuf eval --tool <name> <command>`
 - `ptuf plugin test <path>`
 - `ptuf init claude-code [--dry-run] [--settings <PATH>] [--verify [--json]]`
 - `ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>] [--verify [--json]]`
+- `ptuf init copilot [--dry-run] [--root <PATH>] [--hooks <PATH>] [--profile local] [--verify [--json]]`
 - `ptuf doctor [--json]`
 - `ptuf --help`
 - `ptuf --version`
@@ -98,7 +101,7 @@ CLI 経路はこれと異なり fail-closed で動作する。
 | [`cli-and-hooks.md`](cli-and-hooks.md) | `init` / `hook` / `doctor` と agent 統合 |
 | [`audit.md`](audit.md) | audit JSONL schema と redaction |
 | [`testing.md`](testing.md) | example-based test と PBT の役割分担 |
-| [`roadmap.md`](roadmap.md) | M1〜M4 の到達点と今後の候補 |
+| [`roadmap.md`](roadmap.md) | M1〜M5 の到達点と今後の候補 |
 
 ## 言語規約
 

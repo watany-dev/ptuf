@@ -31,14 +31,19 @@ deny > ask > monitor > allow
 
 ## CLI / hook との対応
 
-| 条件 | Claude Code | Codex |
-| --- | --- | --- |
-| `Allow` | exit `0` | exit `0` |
-| `Monitor` | exit `0` | exit `0` |
-| `Ask` | exit `0` + hook response `ask` | adapter で `Deny` に変換され exit `2` |
-| `Deny` | exit `2` | exit `2` |
+| 条件 | Claude Code | Codex | GitHub Copilot |
+| --- | --- | --- | --- |
+| `Allow` | exit `0` | exit `0` | exit `0`、stdout 空 |
+| `Monitor` | exit `0` | exit `0` | exit `0`、stdout 空 |
+| `Ask` | exit `0` + hook response `ask` | adapter で `Deny` に変換され exit `2` | adapter で `Deny` に変換、bare JSON envelope を stdout、exit `0` |
+| `Deny` | exit `2` | exit `2` | bare JSON envelope を stdout、exit `0` |
 
-`Ask` / `Deny` は reason を stderr にも書く。
+`Ask` / `Deny` は reason を stderr にも書く。GitHub Copilot は preToolUse
+hook の非ゼロ exit を hook 失敗として扱うため、`Deny` / `Ask` でも exit
+code は `0` のままで、判定は stdout の bare JSON envelope
+(`hookSpecificOutput` ラッパなし) で伝える。fail-closed 経路
+(`core.engine.invalid-payload` / `core.engine.policy-load-failed`) も同じ
+contract に従う。
 
 ## mode
 
@@ -56,7 +61,9 @@ deny > ask > monitor > allow
   `core.engine.policy-load-failed` で deny する
 - `hook` は stdin 読み取り失敗 / 8 MiB 超過 / JSON parse 失敗を
   `core.engine.invalid-payload` で deny する (Claude Code は exit 1 を
-  non-blocking warning と解釈するため deny + exit 2 が必須)
+  non-blocking warning と解釈するため deny + exit 2 が必須。GitHub Copilot
+  は逆に非ゼロ exit を hook 失敗扱いにするため deny + exit `0` + stdout に
+  bare JSON envelope で伝える)
 - これらは `failClosed: false` でも変わらない
 - ライブラリ API `decide()` は後方互換のため default engine にフォールバックする
 

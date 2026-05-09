@@ -116,3 +116,7 @@ mcp_nested_input / arbitrary_utf8_bytes / safe_command_string) を集約し、
 - hook stdin の fail-closed 契約 (`core.engine.invalid-payload` での deny)
 - allowlist `when` の suppression 契約
 - MCP nested path と hook script self-protection の end-to-end 契約
+- GitHub Copilot adapter の bare JSON envelope / `Ask` → `Deny` demote /
+  全 Decision exit `0` / fail-closed (`core.engine.invalid-payload` /
+  `core.engine.policy-load-failed`) を 9 ケースで固定
+  (`tests/contracts.rs` の `copilot_*` 群)
