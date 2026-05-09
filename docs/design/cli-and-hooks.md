@@ -1,17 +1,19 @@
 # CLI と Hook 統合
 
-ptuf は CLI バイナリとして配布され、同時に Claude Code / Codex の
-`PreToolUse` hook adapter を提供する。
+ptuf は CLI バイナリとして配布され、同時に Claude Code / Codex / GitHub
+Copilot の `PreToolUse` hook adapter を提供する。
 
 ## 実装済みサブコマンド
 
 ```bash
 ptuf hook claude-code
 ptuf hook codex
+ptuf hook copilot
 ptuf eval --tool Bash 'git reset --hard HEAD~1'
 ptuf plugin test ./ptuf-plugin.yaml
 ptuf init claude-code
 ptuf init codex
+ptuf init copilot --profile local
 ptuf doctor
 ```
 
@@ -29,13 +31,21 @@ ptuf doctor
 | 条件 | exit |
 | --- | --- |
 | `Allow` / `Monitor` / Claude Code の `Ask` | `0` |
-| `Deny` | `2` |
+| `Deny` (Claude Code / Codex) | `2` |
+| Copilot の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
 | 内部エラー、引数不正、plugin test fail、doctor failure | `1` |
 
 Codex では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
 
+Copilot は protocol 上 non-zero exit が hook failure として扱われ得るため、
+**すべての Decision で exit `0`** に固定する。Deny は bare JSON envelope
+(`hookSpecificOutput` で wrap しない) を stdout に書く。stdout serialize
+失敗のみ exit `1`。詳細は下記「hook response」セクションを参照。
+
 `ptuf hook <agent>` の stdin payload は最大 8 MiB。上限を超えた場合は JSON parse
-に進まず exit `1` とし、stderr に size limit error を出す。
+に進まず exit `1` とし、stderr に size limit error を出す (Copilot 経路では
+exit `0` + `core.engine.invalid-payload` の bare deny JSON にフォールバック
+する — fail-open を避けるため)。
 
 ## Claude Code への登録
 
@@ -106,6 +116,39 @@ codex_hooks = true
   `--config` が必要
 - `hooks.json` は JSON object、`config.toml` は valid TOML である必要がある
 - 既存 entry の検出は command 末尾 `hook codex` で行う
+
+## GitHub Copilot への登録
+
+`ptuf init copilot --profile local` は repo-local な
+`<repo>/.github/hooks/ptuf.json` を更新する。
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "matcher": "*",
+        "bash": "/usr/local/bin/ptuf hook copilot",
+        "powershell": "/usr/local/bin/ptuf hook copilot",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
+```
+
+実装上の契約:
+
+- repo root が見つからない場合は `--root` または明示的な `--hooks` が必要
+- ファイルは JSON object、`version` は `1` (欠落時は `1` で補完)
+- 既存 entry の検出は `bash` / `powershell` field の command 末尾
+  `hook copilot` で行う
+- entry には `bash` と `powershell` の両方を書く (cross-platform)
+- 書き込みは temp file + rename の原子的更新
+
+`--profile cloud` (cloud agent 用 wrapper script + JSON) は post-MVP。
+v0.1.0 では parse 段で reject される。
 
 ## install verification (`--verify`)
 
@@ -207,7 +250,32 @@ Codex:
 }
 ```
 
-`Allow` と `Monitor` は hook response を出さない。
+GitHub Copilot (bare envelope, `hookSpecificOutput` wrap なし):
+
+```json
+{
+  "permissionDecision": "deny",
+  "permissionDecisionReason": "..."
+}
+```
+
+`Allow` と `Monitor` は hook response を出さない (3 agent 共通)。
+
+agent 別の Decision → exit / 出力契約:
+
+| Agent | Allow / Monitor | Ask | Deny | invalid payload / policy load fail |
+| --- | --- | --- | --- | --- |
+| Claude Code | exit `0`, 空 stdout | exit `0`, `hookSpecificOutput` ask | exit `2`, `hookSpecificOutput` deny | exit `2`, deny |
+| Codex | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `2`) | exit `2`, `hookSpecificOutput` deny | exit `2`, deny |
+| Copilot | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `0`, bare JSON) | exit `0`, bare deny JSON | exit `0`, bare deny JSON |
+
+Copilot の `Ask` demote 文言は仕様で固定:
+
+> `GitHub Copilot hooks do not reliably process interactive ask
+> decisions; ptuf is blocking this request instead.`
+
+reserved rule `core.engine.invalid-payload` / `core.engine.policy-load-failed`
+は 3 agent で共通だが、Copilot では bare JSON + exit `0` で出す。
 
 ## MCP fact 抽出
 
@@ -234,6 +302,7 @@ Codex:
 - 読み込んだ plugin
 - Claude Code integration
 - Codex integration
+- GitHub Copilot integration
 
 text 版はセクションごとに `✓`, `⚠`, `✗` を表示する。ひとつでも `✗` があれば
 exit `1`、それ以外は `0`。
@@ -247,7 +316,13 @@ JSON 版は `schemaVersion: 1` に加えて、少なくとも次の top-level ke
 - `plugins`
 - `claude`
 - `codex`
+- `copilot`
 - `hasFailure`
+
+`copilot.state` の値は次のいずれか: `repoRootNotFound`, `missing`,
+`hookRegistered`, `hookMissing`, `invalidJson`, `invalidSchema`, `io`。
+失敗扱い (`hasFailure: true`) になるのは `invalidJson` / `invalidSchema` /
+`io` のみ。
 
 ## fail-closed
 
@@ -260,3 +335,9 @@ parse 失敗) を `core.engine.invalid-payload` で deny する。Claude Code �
 hook 仕様では `exit 1` は **non-blocking warning** として扱われ tool 実行を
 止めないため、これらは必ず exit `2` + adapter の deny JSON で返さなければ
 fail-open になる。`failClosed: false` でもこの境界は緩めない。
+
+Copilot adapter は同じ理由付けの裏返しを取る — Copilot protocol は
+non-zero exit を hook *failure* として扱い tool 実行を止めない可能性が
+あるため、reserved rule の deny も含めて **すべて exit `0` + bare deny
+JSON** で返す。これにより host 側で「ptuf が落ちたから fail-open」と
+解釈される経路を塞ぐ。

@@ -80,18 +80,32 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 
 ## Agent adapter
 
-現在の adapter は 2 つ。
+現在の adapter は 3 つ。
 
 - `claude-code`
 - `codex`
+- `copilot` (GitHub Copilot)
 
 adapter は stdin payload をまず `RawHookInput` として受け、内部では
 normalized `Event { agent, event, tool, inputs, paths, urls, content }`
 ビューへ変換して fact 抽出に渡す。公開 API は後方互換のため `HookInput` を維持
 する。hook response の扱いは agent ごとに次の差分を持つ。
 
-- Claude Code: `Ask` はそのまま `permissionDecision = "ask"`
-- Codex: `Ask` は `Deny` へ変換して block する
+- Claude Code: `Ask` はそのまま `permissionDecision = "ask"`、`Deny` は exit `2`
+- Codex: `Ask` は `Deny` へ変換して block (exit `2`)
+- Copilot: `Ask` は `Deny` へ demote。すべての Decision で exit `0` を返し、
+  `Deny` は `hookSpecificOutput` で wrap せず *bare* JSON envelope
+  (`{"permissionDecision":"deny","permissionDecisionReason":"…"}`) を stdout
+  に書く。Copilot protocol が non-zero exit を hook *failure* として扱い得る
+  ため、reserved rule (`core.engine.invalid-payload` /
+  `core.engine.policy-load-failed`) も exit `0` + bare deny JSON で fail-closed
+  する。
+
+Copilot 入力は CLI 層の `src/cli/copilot_input.rs` で snake (`tool_name` /
+`tool_input`) と camel (`toolName` / `toolArgs`) の両形を正規化し、tool 名
+mapping (`bash`→`Bash`, `view`→`Read`, `edit`→`Edit`, `create`→`Write`,
+`web_fetch`→`WebFetch`, `powershell`→`Bash`) を適用する。判定 engine 自体は
+agent 非依存で、adapter 拡張は CLI 層に閉じている。
 
 ## I/O 契約
 
@@ -116,6 +130,7 @@ stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit 
 | --- | --- | --- | --- |
 | `ptuf hook claude-code` | `Ask` / `Deny` のときだけ `hookSpecificOutput` JSON | `Ask` / `Deny` reason | `0` or `2` |
 | `ptuf hook codex` | `Deny` のときだけ `hookSpecificOutput` JSON | deny reason | `0` or `2` |
+| `ptuf hook copilot` | `Deny` のときだけ bare JSON envelope (no `hookSpecificOutput`) | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
 
 ### eval
 

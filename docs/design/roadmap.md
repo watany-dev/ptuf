@@ -42,11 +42,25 @@
 - `core.project_hygiene` v1
 - audit schema v1 拡張 (`agent`, `pluginVersions`, `allowlistId`)
 
+### M5 — GitHub Copilot adapter (実装済み, `v0.1.0` 予定)
+
+- `ptuf hook copilot` (snake/camel 入力正規化、bare JSON envelope、
+  すべての Decision で exit `0`、`Ask` → `Deny` demote)
+- `ptuf init copilot --profile local` (`<repo>/.github/hooks/ptuf.json` を
+  idempotent / atomic に書き込む)
+- `ptuf doctor` の `GitHub Copilot integration` section と
+  `doctor --json` の `copilot` field
+- `core.engine.invalid-payload` / `core.engine.policy-load-failed` を
+  bare JSON + exit `0` で流用する fail-closed 経路
+- audit `agent: "copilot"` を許容
+
 ## 今後の候補
 
 現時点でコードに入っていない候補:
 
 - Cursor / Gemini など追加 adapter
+- `ptuf init copilot --profile cloud` (cloud agent 用 wrapper script
+  + JSON。network egress / firewall / installer 取得経路の整理が必要)
 - `dataflow.basic` の強化
 - signed / pinned plugin 配布
 - generated file など、project_hygiene の追加 rule

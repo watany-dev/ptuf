@@ -7,7 +7,10 @@
 
 use std::path::PathBuf;
 
-use super::{ClaudeInitOptions, CodexInitOptions, Command, HookAgent, InitOptions, ParseError};
+use super::{
+    ClaudeInitOptions, CodexInitOptions, Command, CopilotInitOptions, CopilotProfile, HookAgent,
+    InitOptions, ParseError,
+};
 
 pub(super) fn parse_doctor<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
@@ -31,6 +34,7 @@ where
     match agent.as_str() {
         "claude-code" => parse_init_claude(iter),
         "codex" => parse_init_codex(iter),
+        "copilot" => parse_init_copilot(iter),
         _ => Err(ParseError::UnknownAgent(agent.clone())),
     }
 }
@@ -121,6 +125,68 @@ where
     })
 }
 
+pub(super) fn parse_init_copilot<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let mut dry_run = false;
+    let mut root: Option<PathBuf> = None;
+    let mut hooks_path: Option<PathBuf> = None;
+    let mut profile = CopilotProfile::Local;
+    let mut verify = false;
+    let mut json = false;
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--dry-run" => dry_run = true,
+            "--verify" => verify = true,
+            "--json" => json = true,
+            "--root" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--root"))?;
+                root = Some(PathBuf::from(value));
+            },
+            "--hooks" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--hooks"))?;
+                hooks_path = Some(PathBuf::from(value));
+            },
+            "--profile" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--profile"))?;
+                profile = parse_copilot_profile(value)?;
+            },
+            other if other.starts_with("--root=") => {
+                root = Some(PathBuf::from(other.trim_start_matches("--root=")));
+            },
+            other if other.starts_with("--hooks=") => {
+                hooks_path = Some(PathBuf::from(other.trim_start_matches("--hooks=")));
+            },
+            other if other.starts_with("--profile=") => {
+                profile = parse_copilot_profile(other.trim_start_matches("--profile="))?;
+            },
+            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
+        }
+    }
+    check_verify_flags(verify, json, dry_run)?;
+    Ok(Command::Init {
+        dry_run,
+        options: InitOptions::Copilot(CopilotInitOptions {
+            root,
+            hooks_path,
+            profile,
+            verify,
+            json,
+        }),
+    })
+}
+
+fn parse_copilot_profile(value: &str) -> Result<CopilotProfile, ParseError> {
+    match value {
+        "local" => Ok(CopilotProfile::Local),
+        "cloud" => Err(ParseError::ConflictingFlags(
+            "--profile cloud is not yet supported (post-MVP)",
+        )),
+        _ => Err(ParseError::UnexpectedArgument(format!("--profile {value}"))),
+    }
+}
+
 /// Reject `--verify` / `--json` / `--dry-run` combinations that have no
 /// sensible meaning. `--json` only structures verify output, so it must
 /// be paired with `--verify`. `--verify` forces an install + synthetic
@@ -146,6 +212,7 @@ where
     let agent = match agent.as_str() {
         "claude-code" => HookAgent::ClaudeCode,
         "codex" => HookAgent::Codex,
+        "copilot" => HookAgent::Copilot,
         _ => return Err(ParseError::UnknownAgent(agent.clone())),
     };
     if let Some(extra) = iter.next() {
@@ -206,7 +273,8 @@ mod tests {
 
     use super::super::test_support::s;
     use super::super::{
-        ClaudeInitOptions, CodexInitOptions, Command, HookAgent, InitOptions, ParseError, parse,
+        ClaudeInitOptions, CodexInitOptions, Command, CopilotInitOptions, CopilotProfile,
+        HookAgent, InitOptions, ParseError, parse,
     };
 
     #[test]
@@ -589,6 +657,145 @@ mod tests {
         assert!(matches!(
             parse(&s(&["eval", "--tool", "Bash", "ls", "extra"])),
             Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn parses_copilot_init_with_just_agent() {
+        let cmd = parse(&s(&["init", "copilot"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    profile: CopilotProfile::Local,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_copilot_init_flags() {
+        let cmd = parse(&s(&[
+            "init",
+            "copilot",
+            "--dry-run",
+            "--root",
+            "/repo",
+            "--hooks=/tmp/hooks.json",
+            "--profile",
+            "local",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: true,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    root: Some(PathBuf::from("/repo")),
+                    hooks_path: Some(PathBuf::from("/tmp/hooks.json")),
+                    profile: CopilotProfile::Local,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_copilot_init_with_equals_root_and_profile() {
+        let cmd = parse(&s(&["init", "copilot", "--root=/r", "--profile=local"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    root: Some(PathBuf::from("/r")),
+                    profile: CopilotProfile::Local,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_copilot_init_with_verify_and_json() {
+        let cmd = parse(&s(&["init", "copilot", "--verify", "--json"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    profile: CopilotProfile::Local,
+                    verify: true,
+                    json: true,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_copilot_profile_cloud_until_phase_4() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--profile", "cloud"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_copilot_unknown_profile_value() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--profile", "weird"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn copilot_root_flag_requires_value() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--root"])),
+            Err(ParseError::MissingValue("--root"))
+        ));
+    }
+
+    #[test]
+    fn copilot_hooks_flag_requires_value() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--hooks"])),
+            Err(ParseError::MissingValue("--hooks"))
+        ));
+    }
+
+    #[test]
+    fn copilot_profile_flag_requires_value() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--profile"])),
+            Err(ParseError::MissingValue("--profile"))
+        ));
+    }
+
+    #[test]
+    fn copilot_init_rejects_unknown_flag() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--unknown"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn copilot_init_rejects_json_without_verify() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--json"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn copilot_init_rejects_verify_with_dry_run() {
+        assert!(matches!(
+            parse(&s(&["init", "copilot", "--verify", "--dry-run"])),
+            Err(ParseError::ConflictingFlags(_))
         ));
     }
 

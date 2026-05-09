@@ -13,8 +13,8 @@ use serde::Serialize;
 use crate::config::scope::Layout;
 
 use super::{
-    ClaudeState, ClaudeStatus, CodexState, CodexStatus, ConfigStatus, DOCTOR_JSON_SCHEMA_VERSION,
-    PluginStatus, Report, gather_live_report, mode_label,
+    ClaudeState, ClaudeStatus, CodexState, CodexStatus, ConfigStatus, CopilotState, CopilotStatus,
+    DOCTOR_JSON_SCHEMA_VERSION, PluginStatus, Report, gather_live_report, mode_label,
 };
 
 #[derive(Debug, Serialize)]
@@ -29,6 +29,7 @@ pub struct JsonReport {
     pub plugins: Vec<JsonPlugin>,
     pub claude: JsonClaude,
     pub codex: JsonCodex,
+    pub copilot: JsonCopilot,
     #[serde(rename = "hasFailure")]
     pub has_failure: bool,
 }
@@ -111,6 +112,17 @@ pub struct JsonCodex {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct JsonCopilot {
+    #[serde(rename = "hooksPath")]
+    pub hooks_path: Option<String>,
+    pub state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 impl Report {
     /// Build the JSON projection of this report. Pure transformation;
     /// no I/O, no environment lookups.
@@ -169,6 +181,7 @@ impl Report {
                 .collect(),
             claude: build_json_claude(&self.claude),
             codex: build_json_codex(&self.codex),
+            copilot: build_json_copilot(&self.copilot),
             has_failure,
         }
     }
@@ -209,6 +222,25 @@ fn build_json_claude(status: &ClaudeStatus) -> JsonClaude {
     };
     JsonClaude {
         settings_path,
+        state,
+        matcher,
+        error,
+    }
+}
+
+fn build_json_copilot(status: &CopilotStatus) -> JsonCopilot {
+    let hooks_path = status.hooks_path.as_ref().map(|p| p.display().to_string());
+    let (state, matcher, error) = match &status.state {
+        CopilotState::RepoRootNotFound => ("repoRootNotFound", None, None),
+        CopilotState::Missing => ("missing", None, None),
+        CopilotState::HookRegistered { matcher } => ("hookRegistered", matcher.clone(), None),
+        CopilotState::HookMissing => ("hookMissing", None, None),
+        CopilotState::InvalidJson(msg) => ("invalidJson", None, Some(msg.clone())),
+        CopilotState::InvalidSchema(msg) => ("invalidSchema", None, Some(msg.clone())),
+        CopilotState::Io(msg) => ("io", None, Some(msg.clone())),
+    };
+    JsonCopilot {
+        hooks_path,
         state,
         matcher,
         error,

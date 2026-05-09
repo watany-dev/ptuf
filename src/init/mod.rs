@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 pub mod claude_code;
 pub mod codex;
+pub mod copilot;
 pub mod verify;
 
 /// Errors surfaced by every `init` adapter.

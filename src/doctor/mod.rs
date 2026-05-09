@@ -20,14 +20,14 @@ use serde_json::Value;
 
 use crate::config::scope::Layout;
 use crate::config::{self, Config, ConfigError};
-use crate::init::{claude_code, codex};
+use crate::init::{claude_code, codex, copilot};
 use crate::plugin::{self, PluginError};
 
 mod json;
 
 pub use json::{
-    JsonBinary, JsonClaude, JsonCodex, JsonConfig, JsonConfigLayer, JsonPlugin, JsonProject,
-    JsonReport, render_doctor_json,
+    JsonBinary, JsonClaude, JsonCodex, JsonConfig, JsonConfigLayer, JsonCopilot, JsonPlugin,
+    JsonProject, JsonReport, render_doctor_json,
 };
 
 /// Schema version for `doctor --json` output. Bumped only on
@@ -43,6 +43,7 @@ pub struct Report {
     pub plugins: Vec<PluginStatus>,
     pub claude: ClaudeStatus,
     pub codex: CodexStatus,
+    pub copilot: CopilotStatus,
 }
 
 /// Information about the running binary.
@@ -95,6 +96,14 @@ pub struct CodexPaths {
     pub hooks_path: Option<PathBuf>,
 }
 
+/// GitHub Copilot integration check.
+pub struct CopilotStatus {
+    /// The hooks JSON path we inspected (`None` when no repo root was
+    /// detected and no override was supplied).
+    pub hooks_path: Option<PathBuf>,
+    pub state: CopilotState,
+}
+
 pub enum ClaudeState {
     /// `$HOME` is unset, so we never tried to read any path.
     HomeNotSet,
@@ -119,6 +128,24 @@ pub enum CodexState {
     HookMissing,
     InvalidConfig(String),
     InvalidHooks(String),
+    Io(String),
+}
+
+pub enum CopilotState {
+    /// No repository root was discovered, so we cannot locate
+    /// `.github/hooks/ptuf.json`.
+    RepoRootNotFound,
+    /// File does not exist on disk.
+    Missing,
+    /// File present, parses, ptuf hook entry registered.
+    HookRegistered { matcher: Option<String> },
+    /// File present and parses but no ptuf hook is registered.
+    HookMissing,
+    /// File present but JSON is invalid.
+    InvalidJson(String),
+    /// JSON parses but does not match the Copilot hooks schema.
+    InvalidSchema(String),
+    /// I/O error reading the file.
     Io(String),
 }
 
@@ -160,6 +187,31 @@ impl Report {
         claude_settings_path: Option<PathBuf>,
         codex_paths: CodexPaths,
     ) -> Self {
+        let copilot_hooks_path = repo_root
+            .as_ref()
+            .map(|root| root.join(copilot::DEFAULT_HOOKS_PATH));
+        Self::gather_with_codex_and_copilot(
+            binary_path,
+            repo_root,
+            layout,
+            claude_settings_path,
+            codex_paths,
+            copilot_hooks_path,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "explicit doctor entry point that lets tests inject every adapter path independently; collapsing into a struct would obscure intent"
+    )]
+    pub fn gather_with_codex_and_copilot(
+        binary_path: Option<PathBuf>,
+        repo_root: Option<PathBuf>,
+        layout: Layout,
+        claude_settings_path: Option<PathBuf>,
+        codex_paths: CodexPaths,
+        copilot_hooks_path: Option<PathBuf>,
+    ) -> Self {
         let config_status = match config::load_with_layout(layout.clone()) {
             Ok(c) => ConfigStatus::Loaded(c),
             Err(e) => ConfigStatus::Failed(e),
@@ -176,6 +228,7 @@ impl Report {
             codex_paths.config_path.as_deref(),
             codex_paths.hooks_path.as_deref(),
         );
+        let copilot_state = build_copilot_status(copilot_hooks_path.as_deref());
 
         Self {
             binary: BinaryInfo {
@@ -194,6 +247,10 @@ impl Report {
                 config_path: codex_paths.config_path,
                 hooks_path: codex_paths.hooks_path,
                 state: codex,
+            },
+            copilot: CopilotStatus {
+                hooks_path: copilot_hooks_path,
+                state: copilot_state,
             },
         }
     }
@@ -216,6 +273,9 @@ impl Report {
         ) || matches!(
             self.codex.state,
             CodexState::InvalidConfig(_) | CodexState::InvalidHooks(_) | CodexState::Io(_)
+        ) || matches!(
+            self.copilot.state,
+            CopilotState::InvalidJson(_) | CopilotState::InvalidSchema(_) | CopilotState::Io(_)
         )
     }
 
@@ -231,6 +291,7 @@ impl Report {
         self.render_plugins(w)?;
         self.render_claude(w)?;
         self.render_codex(w)?;
+        self.render_copilot(w)?;
         Ok(())
     }
 
@@ -435,6 +496,51 @@ impl Report {
         }
         Ok(())
     }
+
+    fn render_copilot<W: Write>(&self, w: &mut W) -> std::io::Result<()> {
+        writeln!(w)?;
+        writeln!(w, "GitHub Copilot integration")?;
+        match (&self.copilot.hooks_path, &self.copilot.state) {
+            (None, _) | (_, CopilotState::RepoRootNotFound) => {
+                writeln!(
+                    w,
+                    "  ⚠ no repository root detected; cannot locate .github/hooks/ptuf.json"
+                )?;
+            },
+            (Some(path), CopilotState::Missing) => {
+                writeln!(
+                    w,
+                    "  ⚠ {} not present (run `ptuf init copilot --profile local`)",
+                    path.display()
+                )?;
+            },
+            (Some(path), CopilotState::HookRegistered { matcher }) => {
+                writeln!(w, "  ✓ {} present", path.display())?;
+                let matcher = matcher
+                    .as_deref()
+                    .map(|m| format!(" (matcher: {m:?})"))
+                    .unwrap_or_default();
+                writeln!(w, "  ✓ ptuf hook registered{matcher}")?;
+            },
+            (Some(path), CopilotState::HookMissing) => {
+                writeln!(w, "  ✓ {} present", path.display())?;
+                writeln!(
+                    w,
+                    "  ⚠ no ptuf hook registered (run `ptuf init copilot --profile local`)"
+                )?;
+            },
+            (Some(path), CopilotState::InvalidJson(msg)) => {
+                writeln!(w, "  ✗ {} invalid JSON: {msg}", path.display())?;
+            },
+            (Some(path), CopilotState::InvalidSchema(msg)) => {
+                writeln!(w, "  ✗ {} invalid schema: {msg}", path.display())?;
+            },
+            (Some(path), CopilotState::Io(msg)) => {
+                writeln!(w, "  ✗ {} unreadable: {msg}", path.display())?;
+            },
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn mode_label(mode: config::Mode) -> &'static str {
@@ -545,6 +651,44 @@ fn build_codex_status(config_path: Option<&Path>, hooks_path: Option<&Path>) -> 
         }
     }
     CodexState::HookMissing
+}
+
+fn build_copilot_status(hooks_path: Option<&Path>) -> CopilotState {
+    let Some(path) = hooks_path else {
+        return CopilotState::RepoRootNotFound;
+    };
+    let body = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return CopilotState::Missing,
+        Err(e) => return CopilotState::Io(e.to_string()),
+    };
+    if body.trim().is_empty() {
+        return CopilotState::HookMissing;
+    }
+    let value: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => return CopilotState::InvalidJson(e.to_string()),
+    };
+    if !value.is_object() {
+        return CopilotState::InvalidSchema("top-level value is not an object".to_string());
+    }
+    let Some(arr) = value.pointer("/hooks/preToolUse").and_then(Value::as_array) else {
+        return CopilotState::HookMissing;
+    };
+    for entry in arr {
+        let commands = copilot::entry_commands(entry);
+        if commands
+            .iter()
+            .any(|cmd| copilot::command_invokes_ptuf_hook(cmd))
+        {
+            let matcher = entry
+                .get("matcher")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            return CopilotState::HookRegistered { matcher };
+        }
+    }
+    CopilotState::HookMissing
 }
 
 /// Production entry point: discover everything from the live process
@@ -1165,6 +1309,179 @@ rules:
         assert!(s.contains("unreadable"));
         let v = to_json_value(&report);
         assert_eq!(v["codex"]["state"], "io");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn report_with_copilot_path(copilot_hooks_path: Option<PathBuf>) -> Report {
+        Report::gather_with_codex_and_copilot(
+            None,
+            None,
+            Layout::default(),
+            None,
+            CodexPaths {
+                config_path: None,
+                hooks_path: None,
+            },
+            copilot_hooks_path,
+        )
+    }
+
+    #[test]
+    fn copilot_repo_root_not_found_warns() {
+        let report = report_with_copilot_path(None);
+        assert!(!report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("GitHub Copilot integration"));
+        assert!(s.contains("no repository root detected"));
+        let v = to_json_value(&report);
+        assert_eq!(v["copilot"]["state"], "repoRootNotFound");
+    }
+
+    #[test]
+    fn copilot_missing_warns_but_does_not_fail() {
+        let dir = workdir("copilot-missing");
+        let path = dir.join(".github/hooks/ptuf.json");
+        let report = report_with_copilot_path(Some(path));
+        assert!(!report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("not present"));
+        assert!(s.contains("ptuf init copilot"));
+        let v = to_json_value(&report);
+        assert_eq!(v["copilot"]["state"], "missing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copilot_hook_registered_state_is_detected_with_matcher() {
+        let dir = workdir("copilot-registered");
+        fs::create_dir_all(dir.join(".github/hooks")).unwrap();
+        let path = dir.join(".github/hooks/ptuf.json");
+        fs::write(
+            &path,
+            r#"{"hooks":{"preToolUse":[{"matcher":"*","bash":"ptuf hook copilot","powershell":"ptuf hook copilot","timeoutSec":10}]}}"#,
+        )
+        .unwrap();
+        let report = report_with_copilot_path(Some(path));
+        assert!(!report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("ptuf hook registered"));
+        assert!(s.contains("matcher:"));
+        let v = to_json_value(&report);
+        assert_eq!(v["copilot"]["state"], "hookRegistered");
+        assert_eq!(v["copilot"]["matcher"], "*");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copilot_hook_missing_state_is_detected_when_array_empty() {
+        let dir = workdir("copilot-no-hook");
+        fs::create_dir_all(dir.join(".github/hooks")).unwrap();
+        let path = dir.join(".github/hooks/ptuf.json");
+        fs::write(&path, r#"{"hooks":{"preToolUse":[]}}"#).unwrap();
+        let report = report_with_copilot_path(Some(path));
+        assert!(!report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("no ptuf hook registered"));
+        let v = to_json_value(&report);
+        assert_eq!(v["copilot"]["state"], "hookMissing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copilot_hook_missing_when_other_command_present() {
+        let dir = workdir("copilot-other-cmd");
+        fs::create_dir_all(dir.join(".github/hooks")).unwrap();
+        let path = dir.join(".github/hooks/ptuf.json");
+        fs::write(
+            &path,
+            r#"{"hooks":{"preToolUse":[{"matcher":"*","bash":"echo hi","timeoutSec":10}]}}"#,
+        )
+        .unwrap();
+        let report = report_with_copilot_path(Some(path));
+        let v = to_json_value(&report);
+        assert_eq!(v["copilot"]["state"], "hookMissing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copilot_invalid_json_is_failure() {
+        let dir = workdir("copilot-bad");
+        fs::create_dir_all(dir.join(".github/hooks")).unwrap();
+        let path = dir.join(".github/hooks/ptuf.json");
+        fs::write(&path, "{not json").unwrap();
+        let report = report_with_copilot_path(Some(path));
+        assert!(report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("invalid JSON"));
+        let v = to_json_value(&report);
+        assert_eq!(v["copilot"]["state"], "invalidJson");
+        assert_eq!(v["hasFailure"], true);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copilot_invalid_schema_is_failure_when_top_level_not_object() {
+        let dir = workdir("copilot-array");
+        fs::create_dir_all(dir.join(".github/hooks")).unwrap();
+        let path = dir.join(".github/hooks/ptuf.json");
+        fs::write(&path, "[1, 2, 3]").unwrap();
+        let report = report_with_copilot_path(Some(path));
+        assert!(report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("invalid schema"));
+        let v = to_json_value(&report);
+        assert_eq!(v["copilot"]["state"], "invalidSchema");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copilot_hook_missing_when_pre_tool_use_key_absent() {
+        let dir = workdir("copilot-no-prekey");
+        fs::create_dir_all(dir.join(".github/hooks")).unwrap();
+        let path = dir.join(".github/hooks/ptuf.json");
+        fs::write(&path, r#"{"version":1,"hooks":{"otherKey":"x"}}"#).unwrap();
+        let report = report_with_copilot_path(Some(path));
+        assert!(!report.has_failure());
+        let v = to_json_value(&report);
+        assert_eq!(v["copilot"]["state"], "hookMissing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copilot_io_state_when_path_is_a_directory() {
+        let dir = workdir("copilot-io");
+        let path = dir.join(".github/hooks/ptuf.json");
+        fs::create_dir_all(&path).unwrap();
+        let report = report_with_copilot_path(Some(path));
+        assert!(report.has_failure());
+        let s = render(&report);
+        assert!(s.contains("unreadable"));
+        let v = to_json_value(&report);
+        assert_eq!(v["copilot"]["state"], "io");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copilot_empty_file_treated_as_hook_missing() {
+        let dir = workdir("copilot-empty");
+        fs::create_dir_all(dir.join(".github/hooks")).unwrap();
+        let path = dir.join(".github/hooks/ptuf.json");
+        fs::write(&path, "").unwrap();
+        let report = report_with_copilot_path(Some(path));
+        assert!(!report.has_failure());
+        let v = to_json_value(&report);
+        assert_eq!(v["copilot"]["state"], "hookMissing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copilot_default_path_derived_from_repo_root() {
+        let dir = workdir("copilot-default");
+        let report = Report::gather(None, Some(dir.clone()), Layout::default(), None);
+        let v = to_json_value(&report);
+        let expected = dir.join(".github/hooks/ptuf.json");
+        assert_eq!(v["copilot"]["hooksPath"], expected.display().to_string());
+        assert_eq!(v["copilot"]["state"], "missing");
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **GitHub Copilot adapter (`v0.1.0` target).** First-class `copilot`
+  agent across hook / init / doctor:
+  - `ptuf hook copilot` — accepts both snake (`tool_name` / `tool_input`)
+    and camel (`toolName` / `toolArgs`) input shapes, applies tool name
+    mapping (`bash`→`Bash`, `view`→`Read`, `edit`→`Edit`, `create`→`Write`,
+    `web_fetch`→`WebFetch`, `powershell`→`Bash`), and writes a *bare* JSON
+    envelope (`{"permissionDecision":"deny","permissionDecisionReason":"…"}`)
+    on `Deny`. Because Copilot's hook protocol treats non-zero exit as a
+    hook *failure* and may let the call through, every Decision — including
+    the reserved `core.engine.invalid-payload` and
+    `core.engine.policy-load-failed` rules — exits `0` to stay
+    fail-closed. `Ask` is demoted to `Deny`.
+  - `ptuf init copilot --profile local` — atomically writes
+    `<repo>/.github/hooks/ptuf.json` with both `bash` and `powershell`
+    command strings on the `preToolUse` array. Idempotent (detects
+    existing entries via the `hook copilot` command tail). `--verify` /
+    `--dry-run` / `--json` follow the same contract as `init claude-code`
+    and `init codex`. `--profile cloud` is reserved for a future release
+    and is rejected at parse time.
+  - `ptuf doctor` — adds a `GitHub Copilot integration` section
+    (`✓` / `⚠` / `✗`). `doctor --json` adds a top-level `copilot` field
+    with state values `repoRootNotFound` / `missing` / `hookRegistered` /
+    `hookMissing` / `invalidJson` / `invalidSchema` / `io`. The schema
+    version stays at `1` (additive). Failures surface only on
+    `invalidJson` / `invalidSchema` / `io`.
+  - `audit.agent` now accepts `"copilot"` alongside `claude-code` and
+    `codex`.
 - `ptuf init <agent> --verify [--json]` — after writing the hook
   configuration, runs a builtin-only Engine against a synthetic
   `rm -rf /` payload to confirm `core.filesystem.destructive-rm` fires,
