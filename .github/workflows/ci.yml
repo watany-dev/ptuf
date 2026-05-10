@@ -163,6 +163,7 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@91bf2b620e09e18d6eb78b92e7861937469acedb # v2.0.17
 
   machete:
+    name: cargo-machete
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
