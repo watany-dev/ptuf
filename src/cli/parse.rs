@@ -253,9 +253,7 @@ fn parse_kiro_scope(value: &str) -> Result<KiroScope, ParseError> {
 fn parse_copilot_profile(value: &str) -> Result<CopilotProfile, ParseError> {
     match value {
         "local" => Ok(CopilotProfile::Local),
-        "cloud" => Err(ParseError::ConflictingFlags(
-            "--profile cloud is not yet supported (post-MVP)",
-        )),
+        "cloud" => Ok(CopilotProfile::Cloud),
         _ => Err(ParseError::UnexpectedArgument(format!("--profile {value}"))),
     }
 }
@@ -821,11 +819,31 @@ mod tests {
     }
 
     #[test]
-    fn rejects_copilot_profile_cloud_until_phase_4() {
-        assert!(matches!(
-            parse(&s(&["init", "copilot", "--profile", "cloud"])),
-            Err(ParseError::ConflictingFlags(_))
-        ));
+    fn accepts_copilot_profile_cloud() {
+        assert_eq!(
+            parse(&s(&["init", "copilot", "--profile", "cloud"])).unwrap(),
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    profile: CopilotProfile::Cloud,
+                    ..Default::default()
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn accepts_copilot_profile_cloud_with_eq_form() {
+        assert_eq!(
+            parse(&s(&["init", "copilot", "--profile=cloud"])).unwrap(),
+            Command::Init {
+                dry_run: false,
+                options: InitOptions::Copilot(CopilotInitOptions {
+                    profile: CopilotProfile::Cloud,
+                    ..Default::default()
+                }),
+            }
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! through [`invalid_payload_deny`] and `policy_load_failed_deny`.
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::Decision;
 use crate::hook_input::HookInput;
@@ -369,7 +369,15 @@ where
         Ok(t) => t,
         Err(err) => return fail_init(stderr, err),
     };
-    let snaps = match init::capture(&[targets.hooks_path.as_path()]) {
+    let snap_paths: Vec<&Path> = match options.profile {
+        crate::cli::CopilotProfile::Local => vec![targets.hooks_path.as_path()],
+        crate::cli::CopilotProfile::Cloud => vec![
+            targets.hooks_path.as_path(),
+            targets.bash_script_path.as_path(),
+            targets.powershell_script_path.as_path(),
+        ],
+    };
+    let snaps = match init::capture(&snap_paths) {
         Ok(s) => s,
         Err(err) => return fail_init(stderr, err),
     };

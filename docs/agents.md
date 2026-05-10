@@ -76,8 +76,22 @@ adapter always exits `0` and emits a bare JSON envelope (no
 `hookSpecificOutput` wrapper). `Ask` decisions become `Deny` for the same
 non-interactive reason as Codex.
 
-The `--profile cloud` variant (cloud-agent wrapper scripts) is post-MVP and
-not yet wired up.
+For Copilot's cloud / coding agent runners, where the developer's absolute
+binary path is not available, use the `cloud` profile:
+
+```bash
+ptuf init copilot --profile cloud
+ptuf init copilot --profile cloud --verify
+```
+
+This generates wrapper scripts at
+`<repo>/.github/hooks/scripts/ptuf-hook-copilot.{sh,ps1}` and points `bash`
+/ `powershell` at *repo-relative* invocations of those scripts. Each
+wrapper invokes `${PTUF_BINARY:-ptuf}` — set `PTUF_BINARY` on the runner,
+or ensure `ptuf` is on `PATH` (e.g. via `cargo install ptuf` in a setup
+step). All three files (the JSON hook + two wrapper scripts) are written
+atomically and can coexist with a `local` profile entry in the same
+`ptuf.json`.
 
 ## Kiro CLI
 

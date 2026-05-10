@@ -154,8 +154,47 @@ codex_hooks = true
 - entry には `bash` と `powershell` の両方を書く (cross-platform)
 - 書き込みは temp file + rename の原子的更新
 
-`--profile cloud` (cloud agent 用 wrapper script + JSON) は post-MVP。
-v0.1.0 では parse 段で reject される。
+`--profile cloud` は Copilot の cloud / coding agent runner 向けの
+プロファイル。runner 上には開発者マシンの絶対パス
+(`/usr/local/bin/ptuf` 等) が存在しないため、repo に commit された
+wrapper script 経由で `ptuf hook copilot` を呼び出す。
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "matcher": "*",
+        "bash": "bash .github/hooks/scripts/ptuf-hook-copilot.sh",
+        "powershell": "pwsh -File .github/hooks/scripts/ptuf-hook-copilot.ps1",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
+```
+
+書き出される wrapper:
+
+- `<repo>/.github/hooks/scripts/ptuf-hook-copilot.sh` (mode `0755`、unix のみ)
+- `<repo>/.github/hooks/scripts/ptuf-hook-copilot.ps1`
+
+両 wrapper は `${PTUF_BINARY:-ptuf}` で binary を探し、見つからない
+場合は runner が出す `command not found` エラーが stderr に出る
+(`ptuf` を runner に install する経路は repo オーナーの責務)。
+
+cloud profile の追加契約:
+
+- hook entry の `bash` / `powershell` は **repo-relative path のみ** を
+  含む (絶対パスは禁止)
+- 既存 entry の検出は wrapper script の basename
+  (`ptuf-hook-copilot.sh` / `ptuf-hook-copilot.ps1`) で行う
+- 3 ファイル (JSON + 2 script) はすべて temp + rename で原子的に書く
+- `local` profile entry と `cloud` profile entry は同一ファイル内で
+  共存可能 (互いを既存と見なさず両方追記される)
+- self-protection は wrapper script path を保護対象に追加する
+  (`src/self_paths.rs`)
 
 ## Kiro CLI への登録
 

@@ -403,6 +403,50 @@ fn copilot_unknown_tool_never_panics() {
 }
 
 #[test]
+fn copilot_cloud_install_emits_repo_relative_command() {
+    let dir = repo();
+    let (code, stdout, stderr) = run_in(dir.path(), &["init", "copilot", "--profile", "cloud"], "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+
+    let hooks_path = dir.path().join(".github/hooks/ptuf.json");
+    let body = std::fs::read_to_string(&hooks_path).expect("read hooks json");
+    let value: serde_json::Value = serde_json::from_str(&body).expect("hooks json must be valid");
+    let entry = &value["hooks"]["preToolUse"][0];
+    let bash = entry["bash"].as_str().expect("bash field");
+    let pwsh = entry["powershell"].as_str().expect("powershell field");
+    assert_eq!(bash, "bash .github/hooks/scripts/ptuf-hook-copilot.sh");
+    assert_eq!(
+        pwsh,
+        "pwsh -File .github/hooks/scripts/ptuf-hook-copilot.ps1"
+    );
+    assert!(
+        !bash.starts_with('/') && !bash.contains(":\\"),
+        "cloud command must be repo-relative, got {bash:?}",
+    );
+}
+
+#[test]
+fn copilot_cloud_wrapper_script_invokes_ptuf_hook_copilot() {
+    let dir = repo();
+    let (code, _stdout, _stderr) =
+        run_in(dir.path(), &["init", "copilot", "--profile", "cloud"], "");
+    assert_eq!(code, 0);
+    let sh = dir
+        .path()
+        .join(".github/hooks/scripts/ptuf-hook-copilot.sh");
+    let body = std::fs::read_to_string(&sh).expect("read sh wrapper");
+    assert!(body.starts_with("#!/usr/bin/env bash\n"), "shebang missing");
+    assert!(
+        body.contains("exec \"$bin\" hook copilot \"$@\""),
+        "wrapper must exec ptuf hook copilot, got: {body}",
+    );
+    assert!(
+        body.contains("${PTUF_BINARY:-ptuf}"),
+        "wrapper must honour PTUF_BINARY env var, got: {body}",
+    );
+}
+
+#[test]
 fn init_verify_json_schema_contract_is_stable() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let settings = dir.path().join("settings.json");
