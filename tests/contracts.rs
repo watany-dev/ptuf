@@ -60,26 +60,6 @@ fn hook_deny_json_contract_is_stable() {
 }
 
 #[test]
-fn doctor_json_schema_contract_exposes_expected_top_level_keys() {
-    let dir = repo();
-    let (code, stdout, stderr) = run_in(dir.path(), &["doctor", "--json"], "");
-    assert!(code == 0 || code == 1, "stderr: {stderr}");
-    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid doctor json");
-    assert_eq!(value["schemaVersion"], 1);
-
-    let expected: BTreeSet<String> =
-        serde_json::from_str(include_str!("contracts/doctor-schema-keys.json"))
-            .expect("doctor key fixture");
-    let actual: BTreeSet<String> = value
-        .as_object()
-        .expect("doctor json object")
-        .keys()
-        .cloned()
-        .collect();
-    assert_eq!(actual, expected);
-}
-
-#[test]
 fn audit_contract_includes_allowlist_id_for_suppressed_rule() {
     let dir = repo();
     let audit_path = dir.path().join("audit.jsonl");
@@ -94,7 +74,7 @@ fn audit_contract_includes_allowlist_id_for_suppressed_rule() {
 
     let (code, stdout, stderr) = run_in(
         dir.path(),
-        &["eval", "--tool", "Bash", "git reset --hard HEAD~3"],
+        &["check", "--tool", "Bash", "git reset --hard HEAD~3"],
         "",
     );
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
@@ -180,7 +160,7 @@ fn plugin_loader_error_contract_fails_closed() {
     )
     .expect("write yaml");
 
-    let (code, stdout, stderr) = run_in(dir.path(), &["eval", "--tool", "Bash", "ls"], "");
+    let (code, stdout, stderr) = run_in(dir.path(), &["check", "--tool", "Bash", "ls"], "");
     assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
     assert!(stdout.contains("Decision: deny"), "stdout: {stdout}");
     assert!(stdout.contains("core.engine.policy-load-failed"));
@@ -403,65 +383,24 @@ fn copilot_unknown_tool_never_panics() {
 }
 
 #[test]
-fn copilot_cloud_install_emits_repo_relative_command() {
-    let dir = repo();
-    let (code, stdout, stderr) = run_in(dir.path(), &["init", "copilot", "--profile", "cloud"], "");
-    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
-
-    let hooks_path = dir.path().join(".github/hooks/ptuf.json");
-    let body = std::fs::read_to_string(&hooks_path).expect("read hooks json");
-    let value: serde_json::Value = serde_json::from_str(&body).expect("hooks json must be valid");
-    let entry = &value["hooks"]["preToolUse"][0];
-    let bash = entry["bash"].as_str().expect("bash field");
-    let pwsh = entry["powershell"].as_str().expect("powershell field");
-    assert_eq!(bash, "bash .github/hooks/scripts/ptuf-hook-copilot.sh");
-    assert_eq!(
-        pwsh,
-        "pwsh -File .github/hooks/scripts/ptuf-hook-copilot.ps1"
-    );
-    assert!(
-        !bash.starts_with('/') && !bash.contains(":\\"),
-        "cloud command must be repo-relative, got {bash:?}",
-    );
-}
-
-#[test]
-fn copilot_cloud_wrapper_script_invokes_ptuf_hook_copilot() {
-    let dir = repo();
-    let (code, _stdout, _stderr) =
-        run_in(dir.path(), &["init", "copilot", "--profile", "cloud"], "");
-    assert_eq!(code, 0);
-    let sh = dir
-        .path()
-        .join(".github/hooks/scripts/ptuf-hook-copilot.sh");
-    let body = std::fs::read_to_string(&sh).expect("read sh wrapper");
-    assert!(body.starts_with("#!/usr/bin/env bash\n"), "shebang missing");
-    assert!(
-        body.contains("exec \"$bin\" hook copilot \"$@\""),
-        "wrapper must exec ptuf hook copilot, got: {body}",
-    );
-    assert!(
-        body.contains("${PTUF_BINARY:-ptuf}"),
-        "wrapper must honour PTUF_BINARY env var, got: {body}",
-    );
-}
-
-#[test]
 fn init_verify_json_schema_contract_is_stable() {
     let dir = tempfile::TempDir::new().expect("tempdir");
-    let settings = dir.path().join("settings.json");
-    let settings_str = settings.to_string_lossy().into_owned();
-    let (code, stdout, stderr) = run(
-        &[
-            "init",
-            "claude-code",
-            "--verify",
-            "--json",
-            "--settings",
-            &settings_str,
-        ],
-        "",
-    );
+    let home = dir.path();
+    std::fs::create_dir_all(home.join(".claude")).expect("mkdir .claude");
+    let mut child = binary()
+        .args(["--json", "init", "claude-code"])
+        .current_dir(home)
+        .env("HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ptuf");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("wait");
+    let code = output.status.code().expect("exit");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
 
     let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid init verify json");

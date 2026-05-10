@@ -160,14 +160,6 @@ pub(crate) fn pre_tool_use_hooks(root: &Value) -> Vec<&Value> {
     hooks
 }
 
-pub(crate) fn entry_commands(entry: &Value) -> Vec<String> {
-    entry_hooks(entry)
-        .into_iter()
-        .filter_map(|hook| hook.get("command").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect()
-}
-
 pub(crate) fn entry_hooks(entry: &Value) -> Vec<&Value> {
     let Some(hooks) = entry.get("hooks").and_then(Value::as_array) else {
         return Vec::new();
@@ -537,18 +529,15 @@ mod tests {
     }
 
     #[test]
-    fn entry_commands_returns_empty_when_hooks_key_is_missing() {
-        // The `Some(hooks) = entry.get("hooks").and_then(as_array) else
-        // { return Vec::new(); }` early-return arm is otherwise only
-        // reachable through full settings parsing.
+    fn entry_hooks_returns_empty_when_hooks_key_is_missing() {
         let entry = json!({ "matcher": "Bash" });
-        assert!(entry_commands(&entry).is_empty());
+        assert!(entry_hooks(&entry).is_empty());
     }
 
     #[test]
-    fn entry_commands_returns_empty_when_hooks_is_not_an_array() {
+    fn entry_hooks_returns_empty_when_hooks_is_not_an_array() {
         let entry = json!({ "matcher": "Bash", "hooks": "not-an-array" });
-        assert!(entry_commands(&entry).is_empty());
+        assert!(entry_hooks(&entry).is_empty());
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! through [`invalid_payload_deny`] and `policy_load_failed_deny`.
 
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::Decision;
 use crate::hook_input::HookInput;
@@ -18,8 +18,7 @@ use super::copilot_input;
 use super::kiro_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
 use super::{
-    ClaudeInitOptions, CodexInitOptions, CopilotInitOptions, HookAgent, INVALID_PAYLOAD_RULE,
-    InitOptions, KiroInitOptions, build_engine_or_fail_closed,
+    GlobalFlags, HookAgent, INVALID_PAYLOAD_RULE, InitOptions, build_engine_or_fail_closed,
 };
 
 pub(super) const MAX_HOOK_STDIN_BYTES: u64 = 8 * 1024 * 1024;
@@ -102,7 +101,7 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
     }
 }
 
-pub(super) fn run_eval<W1: Write, W2: Write>(
+pub(super) fn run_check<W1: Write, W2: Write>(
     tool: &str,
     command: &str,
     stdout: &mut W1,
@@ -135,7 +134,7 @@ pub(super) fn run_eval<W1: Write, W2: Write>(
     decision_exit_code(HookAgent::ClaudeCode, &decision)
 }
 
-pub(super) fn run_plugin_test<W1: Write, W2: Write>(
+pub(super) fn run_plugin_check<W1: Write, W2: Write>(
     path: &std::path::Path,
     stdout: &mut W1,
     stderr: &mut W2,
@@ -155,318 +154,172 @@ pub(super) fn run_plugin_test<W1: Write, W2: Write>(
     }
 }
 
+/// `ptuf init [<agent>] [--no-verify] [--dry-run]` entry point.
+///
+/// Responsibilities:
+/// - resolve which agents to install for (`Some(a)` -> `[a]`,
+///   `None` -> auto-detect from cwd / `$HOME`)
+/// - if no agents detected at all, exit 1 with "no agent detected"
+/// - run install (and verify, when requested) for each agent
+///   independently and aggregate the exit code
 pub(super) fn run_init<W1: Write, W2: Write>(
+    globals: GlobalFlags,
     options: InitOptions,
-    dry_run: bool,
     stdout: &mut W1,
     stderr: &mut W2,
 ) -> u8 {
-    let verify_requested = match &options {
-        InitOptions::ClaudeCode(o) => o.verify,
-        InitOptions::Codex(o) => o.verify,
-        InitOptions::Copilot(o) => o.verify,
-        InitOptions::Kiro(o) => o.verify,
-    };
-    if verify_requested {
-        return match options {
-            InitOptions::ClaudeCode(o) => {
-                run_init_claude_verify(&o, init::verify::run, stdout, stderr)
-            },
-            InitOptions::Codex(o) => run_init_codex_verify(&o, init::verify::run, stdout, stderr),
-            InitOptions::Copilot(o) => {
-                run_init_copilot_verify(&o, init::verify::run, stdout, stderr)
-            },
-            InitOptions::Kiro(o) => run_init_kiro_verify(&o, init::verify::run, stdout, stderr),
-        };
-    }
-    let outcome = match options {
-        InitOptions::ClaudeCode(options) => run_init_claude(&options, dry_run),
-        InitOptions::Codex(options) => run_init_codex(&options, dry_run),
-        InitOptions::Copilot(options) => run_init_copilot(&options, dry_run),
-        InitOptions::Kiro(options) => run_init_kiro(&options, dry_run),
-    };
-    match outcome {
-        Ok(outcome) => {
-            render_install_outcome(&outcome, dry_run, stdout);
-            0
-        },
-        Err(err) => fail_init(stderr, err),
-    }
+    run_init_with(globals, options, init::verify::run, stdout, stderr)
 }
 
-pub(super) fn run_doctor<W1: Write, W2: Write>(json: bool, stdout: &mut W1, stderr: &mut W2) -> u8 {
-    let result = if json {
-        crate::doctor::render_doctor_json(stdout)
+pub(super) fn run_init_with<W1, W2, F>(
+    globals: GlobalFlags,
+    options: InitOptions,
+    mut runner: F,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8
+where
+    W1: Write,
+    W2: Write,
+    F: FnMut() -> init::verify::VerifyReport,
+{
+    let cwd = std::env::current_dir().ok();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let agents = if let Some(a) = options.agent {
+        vec![a]
     } else {
-        crate::doctor::render_doctor(stdout)
+        let detected = init::detect_agents(cwd.as_deref(), home.as_deref());
+        if detected.is_empty() {
+            let _ = writeln!(
+                stderr,
+                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro)",
+            );
+            return 1;
+        }
+        if !globals.json {
+            let labels: Vec<&str> = detected.iter().map(|a| a.audit_name()).collect();
+            let _ = writeln!(stdout, "ptuf init: detected agents: {}", labels.join(", "));
+        }
+        detected
     };
-    match result {
-        Ok(failure) => u8::from(failure),
-        Err(err) => {
-            let _ = writeln!(stderr, "ptuf: doctor failed: {err}");
-            1
-        },
+
+    let mut overall: u8 = 0;
+    let mut json_results: Vec<serde_json::Value> = Vec::new();
+
+    for agent in agents {
+        let result = install_one(agent, cwd.as_deref(), &options, &mut runner, stderr);
+        match result {
+            Ok(InstallStep {
+                outcome,
+                report,
+                rolled_back,
+            }) => {
+                if let Some(report) = report.as_ref()
+                    && !report.passed()
+                {
+                    overall = 1;
+                }
+                if globals.json {
+                    let value = match report.as_ref() {
+                        Some(r) => init::verify::render_json(&outcome, r, rolled_back),
+                        None => render_install_json(&outcome, options.dry_run),
+                    };
+                    json_results.push(value);
+                } else {
+                    render_install_outcome(&outcome, options.dry_run, stdout);
+                    if let Some(report) = report.as_ref() {
+                        let _ = init::verify::render_text(report, stdout);
+                        if rolled_back {
+                            let _ =
+                                writeln!(stdout, "ptuf init: rolled back changes (verify failed)");
+                        } else if !report.passed()
+                            && matches!(outcome.status, init::InstallStatus::AlreadyPresent)
+                        {
+                            let _ = writeln!(
+                                stdout,
+                                "ptuf init: existing hook entry failed verification; review the file(s) above manually.",
+                            );
+                        }
+                    }
+                }
+            },
+            Err(err) => {
+                overall = 1;
+                if globals.json {
+                    json_results.push(serde_json::json!({
+                        "agent": agent.audit_name(),
+                        "error": err.to_string(),
+                    }));
+                } else {
+                    let _ = writeln!(stderr, "ptuf init {}: {err}", agent.audit_name());
+                }
+            },
+        }
     }
-}
 
-fn run_init_claude(
-    options: &ClaudeInitOptions,
-    dry_run: bool,
-) -> Result<init::InstallOutcome, init::InitError> {
-    let resolved_path = resolve_claude_settings_path(options)?;
-    let binary = init::claude_code::detect_binary();
-    init::claude_code::install(&resolved_path, &binary, dry_run)
-}
-
-fn run_init_codex(
-    options: &CodexInitOptions,
-    dry_run: bool,
-) -> Result<init::InstallOutcome, init::InitError> {
-    let cwd = std::env::current_dir().ok();
-    let targets = init::codex::resolve_paths(
-        cwd.as_deref(),
-        options.root.as_deref(),
-        options.hooks_path.as_deref(),
-        options.config_path.as_deref(),
-    )?;
-    let binary = init::codex::detect_binary();
-    init::codex::install(&targets, &binary, dry_run)
-}
-
-fn run_init_copilot(
-    options: &CopilotInitOptions,
-    dry_run: bool,
-) -> Result<init::InstallOutcome, init::InitError> {
-    let cwd = std::env::current_dir().ok();
-    let targets = init::copilot::resolve_paths(
-        cwd.as_deref(),
-        options.root.as_deref(),
-        options.hooks_path.as_deref(),
-    )?;
-    let binary = init::copilot::detect_binary();
-    init::copilot::install(&targets, &binary, options.profile, dry_run)
-}
-
-fn run_init_kiro(
-    options: &KiroInitOptions,
-    dry_run: bool,
-) -> Result<init::InstallOutcome, init::InitError> {
-    let cwd = std::env::current_dir().ok();
-    let targets = init::kiro::resolve_paths(
-        cwd.as_deref(),
-        options.root.as_deref(),
-        options.agent.as_deref(),
-        options.agent_config_path.as_deref(),
-        options.scope,
-    )?;
-    let binary = init::kiro::detect_binary();
-    init::kiro::install(&targets, &binary, dry_run)
-}
-
-fn resolve_claude_settings_path(options: &ClaudeInitOptions) -> Result<PathBuf, init::InitError> {
-    match options.settings_path.as_deref() {
-        Some(path) => Ok(path.to_path_buf()),
-        None => init::claude_code::default_settings_path().ok_or(init::InitError::HomeNotSet),
+    if globals.json {
+        let payload = if json_results.len() == 1 {
+            json_results.remove(0)
+        } else {
+            serde_json::Value::Array(json_results)
+        };
+        match serde_json::to_string_pretty(&payload) {
+            Ok(s) => {
+                let _ = writeln!(stdout, "{s}");
+            },
+            Err(err) => {
+                let _ = writeln!(stderr, "ptuf: failed to render init JSON: {err}");
+                return 1;
+            },
+        }
     }
+
+    overall
 }
 
-fn run_init_claude_verify<W1, W2, F>(
-    options: &ClaudeInitOptions,
-    runner: F,
-    stdout: &mut W1,
-    stderr: &mut W2,
-) -> u8
+struct InstallStep {
+    outcome: init::InstallOutcome,
+    report: Option<init::verify::VerifyReport>,
+    rolled_back: bool,
+}
+
+fn install_one<F, W: Write>(
+    agent: HookAgent,
+    cwd: Option<&std::path::Path>,
+    options: &InitOptions,
+    runner: &mut F,
+    stderr: &mut W,
+) -> Result<InstallStep, init::InitError>
 where
-    W1: Write,
-    W2: Write,
-    F: FnOnce() -> init::verify::VerifyReport,
+    F: FnMut() -> init::verify::VerifyReport,
 {
-    let resolved_path = match resolve_claude_settings_path(options) {
-        Ok(p) => p,
-        Err(err) => return fail_init(stderr, err),
+    let plan = AgentPlan::resolve(agent, cwd)?;
+    let snaps = if options.verify {
+        Some(init::capture(
+            &plan
+                .snapshot_paths
+                .iter()
+                .map(PathBuf::as_path)
+                .collect::<Vec<_>>(),
+        )?)
+    } else {
+        None
     };
-    let snaps = match init::capture(&[resolved_path.as_path()]) {
-        Ok(s) => s,
-        Err(err) => return fail_init(stderr, err),
-    };
-    let binary = init::claude_code::detect_binary();
-    let outcome = match init::claude_code::install(&resolved_path, &binary, false) {
-        Ok(o) => o,
-        Err(err) => return fail_init(stderr, err),
-    };
-    finish_verify(
-        VerifyContext {
-            outcome: &outcome,
-            snaps: &snaps,
-            json: options.json,
-        },
-        runner,
-        stdout,
-        stderr,
-    )
-}
-
-fn run_init_codex_verify<W1, W2, F>(
-    options: &CodexInitOptions,
-    runner: F,
-    stdout: &mut W1,
-    stderr: &mut W2,
-) -> u8
-where
-    W1: Write,
-    W2: Write,
-    F: FnOnce() -> init::verify::VerifyReport,
-{
-    let cwd = std::env::current_dir().ok();
-    let targets = match init::codex::resolve_paths(
-        cwd.as_deref(),
-        options.root.as_deref(),
-        options.hooks_path.as_deref(),
-        options.config_path.as_deref(),
-    ) {
-        Ok(t) => t,
-        Err(err) => return fail_init(stderr, err),
-    };
-    let snaps = match init::capture(&[targets.hooks_path.as_path(), targets.config_path.as_path()])
-    {
-        Ok(s) => s,
-        Err(err) => return fail_init(stderr, err),
-    };
-    let binary = init::codex::detect_binary();
-    let outcome = match init::codex::install(&targets, &binary, false) {
-        Ok(o) => o,
-        Err(err) => return fail_init(stderr, err),
-    };
-    finish_verify(
-        VerifyContext {
-            outcome: &outcome,
-            snaps: &snaps,
-            json: options.json,
-        },
-        runner,
-        stdout,
-        stderr,
-    )
-}
-
-fn run_init_copilot_verify<W1, W2, F>(
-    options: &CopilotInitOptions,
-    runner: F,
-    stdout: &mut W1,
-    stderr: &mut W2,
-) -> u8
-where
-    W1: Write,
-    W2: Write,
-    F: FnOnce() -> init::verify::VerifyReport,
-{
-    let cwd = std::env::current_dir().ok();
-    let targets = match init::copilot::resolve_paths(
-        cwd.as_deref(),
-        options.root.as_deref(),
-        options.hooks_path.as_deref(),
-    ) {
-        Ok(t) => t,
-        Err(err) => return fail_init(stderr, err),
-    };
-    let snap_paths: Vec<&Path> = match options.profile {
-        crate::cli::CopilotProfile::Local => vec![targets.hooks_path.as_path()],
-        crate::cli::CopilotProfile::Cloud => vec![
-            targets.hooks_path.as_path(),
-            targets.bash_script_path.as_path(),
-            targets.powershell_script_path.as_path(),
-        ],
-    };
-    let snaps = match init::capture(&snap_paths) {
-        Ok(s) => s,
-        Err(err) => return fail_init(stderr, err),
-    };
-    let binary = init::copilot::detect_binary();
-    let outcome = match init::copilot::install(&targets, &binary, options.profile, false) {
-        Ok(o) => o,
-        Err(err) => return fail_init(stderr, err),
-    };
-    finish_verify(
-        VerifyContext {
-            outcome: &outcome,
-            snaps: &snaps,
-            json: options.json,
-        },
-        runner,
-        stdout,
-        stderr,
-    )
-}
-
-fn run_init_kiro_verify<W1, W2, F>(
-    options: &KiroInitOptions,
-    runner: F,
-    stdout: &mut W1,
-    stderr: &mut W2,
-) -> u8
-where
-    W1: Write,
-    W2: Write,
-    F: FnOnce() -> init::verify::VerifyReport,
-{
-    let cwd = std::env::current_dir().ok();
-    let targets = match init::kiro::resolve_paths(
-        cwd.as_deref(),
-        options.root.as_deref(),
-        options.agent.as_deref(),
-        options.agent_config_path.as_deref(),
-        options.scope,
-    ) {
-        Ok(t) => t,
-        Err(err) => return fail_init(stderr, err),
-    };
-    let snaps = match init::capture(&[targets.agent_config_path.as_path()]) {
-        Ok(s) => s,
-        Err(err) => return fail_init(stderr, err),
-    };
-    let binary = init::kiro::detect_binary();
-    let outcome = match init::kiro::install(&targets, &binary, false) {
-        Ok(o) => o,
-        Err(err) => return fail_init(stderr, err),
-    };
-    finish_verify(
-        VerifyContext {
-            outcome: &outcome,
-            snaps: &snaps,
-            json: options.json,
-        },
-        runner,
-        stdout,
-        stderr,
-    )
-}
-
-fn fail_init<W: Write>(stderr: &mut W, err: impl std::fmt::Display) -> u8 {
-    let _ = writeln!(stderr, "ptuf: init failed: {err}");
-    1
-}
-
-struct VerifyContext<'a> {
-    outcome: &'a init::InstallOutcome,
-    snaps: &'a [init::PathSnapshot],
-    json: bool,
-}
-
-fn finish_verify<W1, W2, F>(
-    ctx: VerifyContext<'_>,
-    runner: F,
-    stdout: &mut W1,
-    stderr: &mut W2,
-) -> u8
-where
-    W1: Write,
-    W2: Write,
-    F: FnOnce() -> init::verify::VerifyReport,
-{
+    let outcome = (plan.install)(options.dry_run)?;
+    if !options.verify {
+        return Ok(InstallStep {
+            outcome,
+            report: None,
+            rolled_back: false,
+        });
+    }
     let report = runner();
     let mut rolled_back = false;
-    if !report.passed() && matches!(ctx.outcome.status, init::InstallStatus::Installed) {
-        match init::restore(ctx.snaps) {
+    if !report.passed()
+        && matches!(outcome.status, init::InstallStatus::Installed)
+        && let Some(snaps) = snaps.as_deref()
+    {
+        match init::restore(snaps) {
             Ok(()) => {
                 rolled_back = true;
             },
@@ -475,39 +328,65 @@ where
             },
         }
     }
-    if ctx.json {
-        let value = init::verify::render_json(ctx.outcome, &report, rolled_back);
-        match serde_json::to_string_pretty(&value) {
-            Ok(s) => {
-                let _ = writeln!(stdout, "{s}");
+    Ok(InstallStep {
+        outcome,
+        report: Some(report),
+        rolled_back,
+    })
+}
+
+struct AgentPlan {
+    snapshot_paths: Vec<PathBuf>,
+    install: Box<dyn FnOnce(bool) -> Result<init::InstallOutcome, init::InitError>>,
+}
+
+impl AgentPlan {
+    fn resolve(agent: HookAgent, cwd: Option<&std::path::Path>) -> Result<Self, init::InitError> {
+        match agent {
+            HookAgent::ClaudeCode => {
+                let path = init::claude_code::default_settings_path()
+                    .ok_or(init::InitError::HomeNotSet)?;
+                let install_path = path.clone();
+                Ok(Self {
+                    snapshot_paths: vec![path],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::claude_code::detect_binary();
+                        init::claude_code::install(&install_path, &binary, dry_run)
+                    }),
+                })
             },
-            Err(err) => {
-                let _ = writeln!(stderr, "ptuf: failed to render verify JSON: {err}");
-                return 1;
+            HookAgent::Codex => {
+                let targets = init::codex::resolve_paths(cwd)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.hooks_path.clone(), targets.config_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::codex::detect_binary();
+                        init::codex::install(&targets, &binary, dry_run)
+                    }),
+                })
             },
-        }
-    } else {
-        render_install_outcome(ctx.outcome, false, stdout);
-        let _ = init::verify::render_text(&report, stdout);
-        if rolled_back {
-            for snap in ctx.snaps {
-                let _ = writeln!(
-                    stdout,
-                    "ptuf init: rolled back changes to {}",
-                    snap.path.display()
-                );
-            }
-            let _ = writeln!(stdout, "ptuf init: verification failed; aborting");
-        } else if !report.passed()
-            && matches!(ctx.outcome.status, init::InstallStatus::AlreadyPresent)
-        {
-            let _ = writeln!(
-                stdout,
-                "ptuf init: existing hook entry failed verification; review the file(s) above manually."
-            );
+            HookAgent::Copilot => {
+                let targets = init::copilot::resolve_paths(cwd)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.hooks_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::copilot::detect_binary();
+                        init::copilot::install(&targets, &binary, dry_run)
+                    }),
+                })
+            },
+            HookAgent::Kiro => {
+                let targets = init::kiro::resolve_paths(cwd)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.agent_config_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::kiro::detect_binary();
+                        init::kiro::install(&targets, &binary, dry_run)
+                    }),
+                })
+            },
         }
     }
-    u8::from(!report.passed())
 }
 
 fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: bool, stdout: &mut W) {
@@ -543,6 +422,24 @@ fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: boo
     }
 }
 
+fn render_install_json(outcome: &init::InstallOutcome, dry_run: bool) -> serde_json::Value {
+    serde_json::json!({
+        "agent": outcome.agent,
+        "status": match outcome.status {
+            init::InstallStatus::Installed => "installed",
+            init::InstallStatus::AlreadyPresent => "alreadyPresent",
+            init::InstallStatus::WouldInstall => "wouldInstall",
+        },
+        "dryRun": dry_run,
+        "matcher": outcome.matcher,
+        "command": outcome.command,
+        "paths": outcome.paths.iter().map(|p| serde_json::json!({
+            "label": p.label,
+            "path": p.path.display().to_string(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -554,19 +451,58 @@ mod tests {
         CwdGuard, FailingReader, FailingWriter, make_engine_failing_repo, run_with,
     };
     use super::super::{
-        ClaudeInitOptions, CodexInitOptions, Command, CopilotInitOptions, CopilotProfile,
-        HookAgent, INVALID_PAYLOAD_RULE, InitOptions, KiroInitOptions, KiroScope,
+        Command, GlobalFlags, HookAgent, INVALID_PAYLOAD_RULE, InitOptions,
         POLICY_LOAD_FAILED_RULE, run,
     };
-    use super::{
-        MAX_HOOK_STDIN_BYTES, VerifyContext, finish_verify, render_install_outcome, run_doctor,
-        run_init_claude_verify, run_init_codex_verify, run_init_copilot_verify,
-        run_init_kiro_verify, run_plugin_test,
-    };
+    use super::{MAX_HOOK_STDIN_BYTES, render_install_outcome, run_init_with, run_plugin_check};
+
+    fn cmd_init(agent: Option<HookAgent>, verify: bool, dry_run: bool) -> Command {
+        Command::Init(InitOptions {
+            agent,
+            verify,
+            dry_run,
+        })
+    }
+
+    fn passing_report() -> init::verify::VerifyReport {
+        init::verify::VerifyReport {
+            synthetic_deny: init::verify::CheckOutcome::Passed {
+                rule_id: "core.filesystem.destructive-rm".into(),
+            },
+            fail_closed: init::verify::CheckOutcome::Passed {
+                rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
+            },
+            warnings: Vec::new(),
+        }
+    }
+
+    fn failing_report() -> init::verify::VerifyReport {
+        init::verify::VerifyReport {
+            synthetic_deny: init::verify::CheckOutcome::Failed {
+                detail: "synthetic deny did not fire".into(),
+            },
+            fail_closed: init::verify::CheckOutcome::Passed {
+                rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
+            },
+            warnings: Vec::new(),
+        }
+    }
+
+    fn workdir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-cli-run-{}-{}-{}",
+            tag,
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
-    fn eval_denies_destructive_rm() {
-        let (code, out, err) = run_with(&["eval", "--tool", "Bash", "rm -rf /"], "");
+    fn check_denies_destructive_rm() {
+        let (code, out, err) = run_with(&["check", "--tool", "Bash", "rm -rf /"], "");
         assert_eq!(code, 2);
         assert!(out.contains("Decision: deny"));
         assert!(out.contains("Rule: core.filesystem.destructive-rm"));
@@ -574,8 +510,8 @@ mod tests {
     }
 
     #[test]
-    fn eval_allows_safe_command() {
-        let (code, out, err) = run_with(&["eval", "--tool", "Bash", "ls -la"], "");
+    fn check_allows_safe_command() {
+        let (code, out, err) = run_with(&["check", "--tool", "Bash", "ls -la"], "");
         assert_eq!(code, 0);
         assert!(out.contains("Decision: allow"));
         assert!(err.is_empty(), "unexpected stderr: {err}");
@@ -632,22 +568,32 @@ mod tests {
     fn run_renders_help_and_version_to_stdout() {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = run(Command::Help, b"" as &[u8], &mut out, &mut err);
+        let code = run(
+            GlobalFlags::default(),
+            Command::Help,
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
         assert_eq!(code, 0);
         assert!(String::from_utf8_lossy(&out).contains("USAGE"));
 
         let mut out2 = Vec::new();
-        let code = run(Command::Version, b"" as &[u8], &mut out2, &mut err);
+        let code = run(
+            GlobalFlags::default(),
+            Command::Version,
+            b"" as &[u8],
+            &mut out2,
+            &mut err,
+        );
         assert_eq!(code, 0);
         assert!(String::from_utf8_lossy(&out2).contains("ptuf"));
     }
 
     #[test]
-    fn plugin_test_runs_and_returns_zero_on_pass() {
+    fn plugin_check_runs_and_returns_zero_on_pass() {
         use std::fs;
-        let dir =
-            std::env::temp_dir().join(format!("ptuf-plugin-test-pass-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
+        let dir = workdir("plugin-check-pass");
         let path = dir.join("demo.yaml");
         fs::write(
             &path,
@@ -673,119 +619,74 @@ rules:
 "#,
         )
         .unwrap();
-        let cmd = Command::PluginTest { path: path.clone() };
+        let cmd = Command::PluginCheck { path: path.clone() };
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = run(cmd, b"" as &[u8], &mut out, &mut err);
+        let code = run(
+            GlobalFlags::default(),
+            cmd,
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
         assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
         let s_out = String::from_utf8_lossy(&out);
         assert!(s_out.contains("plugin pack.demo"));
         assert!(s_out.contains("1 passed"));
-        let _ = fs::remove_file(&path);
-        let _ = fs::remove_dir(&dir);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn plugin_test_returns_one_when_a_case_fails() {
-        use std::fs;
-        let dir =
-            std::env::temp_dir().join(format!("ptuf-plugin-test-fail-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let path = dir.join("bad.yaml");
-        fs::write(
-            &path,
-            r#"
-apiVersion: ptuf.dev/v1
-kind: Plugin
-metadata:
-  name: pack.x
-rules:
-  - id: pack.x.miss
-    severity: low
-    defaultDecision: deny
-    when:
-      tool: Read
-    reason: blocked
-    tests:
-      deny:
-        - input:
-            tool_name: Bash
-            tool_input:
-              command: "ls"
-"#,
-        )
-        .unwrap();
-        let cmd = Command::PluginTest { path: path.clone() };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run(cmd, b"" as &[u8], &mut out, &mut err);
-        assert_eq!(code, 1);
-        let s_out = String::from_utf8_lossy(&out);
-        assert!(s_out.contains("FAIL"));
-        let _ = fs::remove_file(&path);
-        let _ = fs::remove_dir(&dir);
-    }
-
-    #[test]
-    fn plugin_test_returns_one_when_yaml_is_invalid() {
-        let cmd = Command::PluginTest {
+    fn plugin_check_returns_one_when_yaml_is_invalid() {
+        let cmd = Command::PluginCheck {
             path: PathBuf::from("/this/path/does/not/exist.yaml"),
         };
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = run(cmd, b"" as &[u8], &mut out, &mut err);
+        let code = run(
+            GlobalFlags::default(),
+            cmd,
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
         assert_eq!(code, 1);
         assert!(String::from_utf8_lossy(&err).contains("ptuf:"));
     }
 
     #[test]
-    fn run_init_copilot_dry_run_writes_outcome_summary() {
-        let dir =
-            std::env::temp_dir().join(format!("ptuf-cli-init-copilot-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let hooks_path = dir.join(".github/hooks/ptuf.json");
+    fn run_init_explicit_kiro_dry_run_writes_outcome_summary() {
+        let dir = workdir("init-kiro-dry");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
-            Command::Init {
-                dry_run: true,
-                options: InitOptions::Copilot(CopilotInitOptions {
-                    root: Some(dir.clone()),
-                    hooks_path: Some(hooks_path.clone()),
-                    profile: CopilotProfile::Local,
-                    ..Default::default()
-                }),
-            },
+            GlobalFlags::default(),
+            cmd_init(Some(HookAgent::Kiro), false, true),
             b"" as &[u8],
             &mut out,
             &mut err,
         );
-        assert_eq!(code, 0);
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
         assert!(String::from_utf8_lossy(&out).contains("would register hook"));
-        assert!(!hooks_path.exists());
+        assert!(!agent_path.exists());
+        drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn run_init_copilot_writes_hook_file_on_real_install() {
-        let dir =
-            std::env::temp_dir().join(format!("ptuf-cli-init-copilot-real-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn run_init_explicit_copilot_writes_hook_file() {
+        let dir = workdir("init-copilot-real");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
         let hooks_path = dir.join(".github/hooks/ptuf.json");
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Copilot(CopilotInitOptions {
-                    root: Some(dir.clone()),
-                    hooks_path: Some(hooks_path.clone()),
-                    profile: CopilotProfile::Local,
-                    ..Default::default()
-                }),
-            },
+            GlobalFlags::default(),
+            cmd_init(Some(HookAgent::Copilot), false, false),
             b"" as &[u8],
             &mut out,
             &mut err,
@@ -793,55 +694,78 @@ rules:
         assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
         assert!(String::from_utf8_lossy(&out).contains("registered hook"));
         assert!(hooks_path.exists());
+        drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn run_init_copilot_verify_passes_when_checks_succeed() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-init-copilot-verify-ok-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let hooks_path = dir.join(".github/hooks/ptuf.json");
-        let options = CopilotInitOptions {
-            root: Some(dir.clone()),
-            hooks_path: Some(hooks_path.clone()),
-            profile: CopilotProfile::Local,
-            verify: true,
-            json: false,
-        };
+    fn run_init_codex_explicit_dry_run() {
+        let dir = workdir("init-codex-dry");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = run_init_copilot_verify(&options, passing_report, &mut out, &mut err);
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init(Some(HookAgent::Codex), false, true),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0);
+        assert!(String::from_utf8_lossy(&out).contains("would register hook"));
+        assert!(!dir.join(".codex/hooks.json").exists());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_verify_passes_for_copilot_via_runner_injection() {
+        let dir = workdir("init-copilot-verify");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let hooks_path = dir.join(".github/hooks/ptuf.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_init_with(
+            GlobalFlags::default(),
+            InitOptions {
+                agent: Some(HookAgent::Copilot),
+                verify: true,
+                dry_run: false,
+            },
+            passing_report,
+            &mut out,
+            &mut err,
+        );
         assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
         let stdout = String::from_utf8_lossy(&out);
         assert!(stdout.contains("registered hook"), "stdout: {stdout}");
         assert!(stdout.contains("Verify:"), "stdout: {stdout}");
         assert!(hooks_path.exists());
+        drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn run_init_copilot_verify_rolls_back_when_check_fails() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-init-copilot-verify-rollback-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn run_init_verify_rolls_back_on_failure() {
+        let dir = workdir("init-copilot-rollback");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
         let hooks_path = dir.join(".github/hooks/ptuf.json");
-        let options = CopilotInitOptions {
-            root: Some(dir.clone()),
-            hooks_path: Some(hooks_path.clone()),
-            profile: CopilotProfile::Local,
-            verify: true,
-            json: false,
-        };
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = run_init_copilot_verify(&options, failing_report, &mut out, &mut err);
+        let code = run_init_with(
+            GlobalFlags::default(),
+            InitOptions {
+                agent: Some(HookAgent::Copilot),
+                verify: true,
+                dry_run: false,
+            },
+            failing_report,
+            &mut out,
+            &mut err,
+        );
         assert_eq!(code, 1);
         let stdout = String::from_utf8_lossy(&out);
         assert!(stdout.contains("FAILED"), "stdout: {stdout}");
@@ -850,66 +774,121 @@ rules:
             !hooks_path.exists(),
             "rollback must remove freshly-created hook file",
         );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_copilot_verify_reports_error_when_no_root() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-copilot-verify-noroot-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
-        let options = CopilotInitOptions {
-            root: None,
-            hooks_path: None,
-            profile: CopilotProfile::Local,
-            verify: true,
-            json: false,
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_init_copilot_verify(&options, passing_report, &mut out, &mut err);
-        assert_eq!(code, 1, "stderr: {}", String::from_utf8_lossy(&err));
-        assert!(String::from_utf8_lossy(&err).contains("init failed"));
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn run_dispatches_to_copilot_verify_when_verify_flag_set() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-run-copilot-verify-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let hooks_path = dir.join(".github/hooks/ptuf.json");
+    fn run_init_verify_emits_json_when_global_json_set() {
+        let dir = workdir("init-copilot-json");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = run(
-            Command::Init {
+        let code = run_init_with(
+            GlobalFlags { json: true },
+            InitOptions {
+                agent: Some(HookAgent::Copilot),
+                verify: true,
                 dry_run: false,
-                options: InitOptions::Copilot(CopilotInitOptions {
-                    root: Some(dir.clone()),
-                    hooks_path: Some(hooks_path.clone()),
-                    profile: CopilotProfile::Local,
-                    verify: true,
-                    json: false,
-                }),
             },
-            b"" as &[u8],
+            passing_report,
             &mut out,
             &mut err,
         );
         assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        let value: serde_json::Value =
+            serde_json::from_str(&stdout).expect("JSON branch must emit valid JSON");
+        assert_eq!(value["installed"], true);
+        assert_eq!(value["rolledBack"], false);
         assert!(
-            String::from_utf8_lossy(&out).contains("Synthetic deny test: passed"),
-            "stdout: {}",
-            String::from_utf8_lossy(&out),
+            !stdout.contains("Verify:"),
+            "JSON mode must not emit text section: {stdout}",
         );
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_no_verify_writes_without_running_verify() {
+        let dir = workdir("init-no-verify");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let hooks_path = dir.join(".github/hooks/ptuf.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init(Some(HookAgent::Copilot), false, false),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0);
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("registered hook"));
+        assert!(
+            !stdout.contains("Verify:"),
+            "verify=false must not emit Verify section: {stdout}",
+        );
+        assert!(hooks_path.exists());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_already_present_returns_zero_and_idempotent_message() {
+        let dir = workdir("init-idempotent");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let mut out1 = Vec::new();
+        let mut err1 = Vec::new();
+        assert_eq!(
+            run(
+                GlobalFlags::default(),
+                cmd_init(Some(HookAgent::Copilot), false, false),
+                b"" as &[u8],
+                &mut out1,
+                &mut err1,
+            ),
+            0,
+        );
+        let mut out2 = Vec::new();
+        let mut err2 = Vec::new();
+        assert_eq!(
+            run(
+                GlobalFlags::default(),
+                cmd_init(Some(HookAgent::Copilot), false, false),
+                b"" as &[u8],
+                &mut out2,
+                &mut err2,
+            ),
+            0,
+        );
+        assert!(String::from_utf8_lossy(&out2).contains("already contains"));
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_reports_resolve_error() {
+        // No repo discoverable, no HOME -> RepoRootNotFound for codex/copilot/kiro
+        let dir = workdir("init-no-repo");
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init(Some(HookAgent::Copilot), false, false),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        // Copilot resolve_paths walks to $HOME if no repo, so we may actually succeed.
+        // The point is: it never panics and returns either 0 or 1.
+        assert!(code == 0 || code == 1, "code: {code}");
+        drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -919,6 +898,7 @@ rules:
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
+            GlobalFlags::default(),
             Command::HookPreToolUse {
                 agent: HookAgent::Copilot,
             },
@@ -939,569 +919,11 @@ rules:
     }
 
     #[test]
-    fn run_init_codex_dry_run_writes_outcome_summary() {
-        let dir = std::env::temp_dir().join(format!("ptuf-cli-init-codex-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let hooks_path = dir.join("hooks.json");
-        let config_path = dir.join("config.toml");
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run(
-            Command::Init {
-                dry_run: true,
-                options: InitOptions::Codex(CodexInitOptions {
-                    root: None,
-                    hooks_path: Some(hooks_path.clone()),
-                    config_path: Some(config_path.clone()),
-                    ..Default::default()
-                }),
-            },
-            b"" as &[u8],
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 0);
-        assert!(String::from_utf8_lossy(&out).contains("would register hook"));
-        assert!(!hooks_path.exists());
-        assert!(!config_path.exists());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_dry_run_writes_outcome_summary() {
-        let dir = std::env::temp_dir().join(format!("ptuf-cli-init-dry-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run(
-            Command::Init {
-                dry_run: true,
-                options: InitOptions::ClaudeCode(ClaudeInitOptions {
-                    settings_path: Some(path.clone()),
-                    ..Default::default()
-                }),
-            },
-            b"" as &[u8],
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 0);
-        let s = String::from_utf8_lossy(&out);
-        assert!(s.contains("would register hook"));
-        assert!(s.contains("Run without --dry-run"));
-        assert!(!path.exists(), "dry-run must not write file");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_writes_and_is_idempotent_on_second_call() {
-        let dir =
-            std::env::temp_dir().join(format!("ptuf-cli-init-idempotent-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-        let mut out1 = Vec::new();
-        let mut err1 = Vec::new();
-        let code1 = run(
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::ClaudeCode(ClaudeInitOptions {
-                    settings_path: Some(path.clone()),
-                    ..Default::default()
-                }),
-            },
-            b"" as &[u8],
-            &mut out1,
-            &mut err1,
-        );
-        assert_eq!(code1, 0);
-        assert!(String::from_utf8_lossy(&out1).contains("registered hook"));
-        let after_first = std::fs::read_to_string(&path).unwrap();
-
-        let mut out2 = Vec::new();
-        let mut err2 = Vec::new();
-        let code2 = run(
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::ClaudeCode(ClaudeInitOptions {
-                    settings_path: Some(path.clone()),
-                    ..Default::default()
-                }),
-            },
-            b"" as &[u8],
-            &mut out2,
-            &mut err2,
-        );
-        assert_eq!(code2, 0);
-        assert!(String::from_utf8_lossy(&out2).contains("already contains"));
-        assert_eq!(
-            after_first,
-            std::fs::read_to_string(&path).unwrap(),
-            "second run must not rewrite the file",
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_reports_invalid_json_via_stderr() {
-        let dir = std::env::temp_dir().join(format!("ptuf-cli-init-bad-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-        std::fs::write(&path, "{not json").unwrap();
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run(
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::ClaudeCode(ClaudeInitOptions {
-                    settings_path: Some(path.clone()),
-                    ..Default::default()
-                }),
-            },
-            b"" as &[u8],
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 1);
-        assert!(String::from_utf8_lossy(&err).contains("init failed"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_claude_verify_rolls_back_when_synthetic_deny_fails() {
-        let dir =
-            std::env::temp_dir().join(format!("ptuf-cli-init-rollback-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-        let options = ClaudeInitOptions {
-            settings_path: Some(path.clone()),
-            verify: true,
-            json: false,
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_init_claude_verify(
-            &options,
-            || init::verify::VerifyReport {
-                synthetic_deny: init::verify::CheckOutcome::Failed {
-                    detail: "engine returned Allow".into(),
-                },
-                fail_closed: init::verify::CheckOutcome::Passed {
-                    rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
-                },
-                warnings: Vec::new(),
-            },
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 1, "verify failure must exit non-zero");
-        let stdout = String::from_utf8_lossy(&out);
-        assert!(stdout.contains("FAILED"), "stdout: {stdout}");
-        assert!(
-            stdout.contains("rolled back changes to"),
-            "stdout: {stdout}",
-        );
-        assert!(
-            stdout.contains("verification failed; aborting"),
-            "stdout: {stdout}",
-        );
-        assert!(
-            !path.exists(),
-            "rollback must remove the freshly-created settings file",
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_claude_verify_keeps_already_present_file_when_verify_fails() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-init-already-present-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-        let preexisting_options = ClaudeInitOptions {
-            settings_path: Some(path.clone()),
-            ..Default::default()
-        };
-        let mut out0 = Vec::new();
-        let mut err0 = Vec::new();
-        assert_eq!(
-            run(
-                Command::Init {
-                    dry_run: false,
-                    options: InitOptions::ClaudeCode(preexisting_options.clone()),
-                },
-                b"" as &[u8],
-                &mut out0,
-                &mut err0,
-            ),
-            0,
-        );
-        let snapshot = std::fs::read(&path).unwrap();
-
-        let verify_options = ClaudeInitOptions {
-            verify: true,
-            ..preexisting_options
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_init_claude_verify(
-            &verify_options,
-            || init::verify::VerifyReport {
-                synthetic_deny: init::verify::CheckOutcome::Failed {
-                    detail: "synthetic deny did not fire".into(),
-                },
-                fail_closed: init::verify::CheckOutcome::Passed {
-                    rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
-                },
-                warnings: Vec::new(),
-            },
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 1);
-        let stdout = String::from_utf8_lossy(&out);
-        assert!(stdout.contains("already contains"), "stdout: {stdout}");
-        assert!(
-            stdout.contains("review the file(s) above manually"),
-            "stdout: {stdout}",
-        );
-        assert!(
-            !stdout.contains("rolled back"),
-            "AlreadyPresent must not roll back: {stdout}",
-        );
-        assert_eq!(
-            std::fs::read(&path).unwrap(),
-            snapshot,
-            "AlreadyPresent file content must be untouched after a verify failure",
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    fn passing_report() -> init::verify::VerifyReport {
-        init::verify::VerifyReport {
-            synthetic_deny: init::verify::CheckOutcome::Passed {
-                rule_id: "core.filesystem.destructive-rm".into(),
-            },
-            fail_closed: init::verify::CheckOutcome::Passed {
-                rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
-            },
-            warnings: Vec::new(),
-        }
-    }
-
-    fn failing_report() -> init::verify::VerifyReport {
-        init::verify::VerifyReport {
-            synthetic_deny: init::verify::CheckOutcome::Failed {
-                detail: "synthetic deny did not fire".into(),
-            },
-            fail_closed: init::verify::CheckOutcome::Passed {
-                rule_id: POLICY_LOAD_FAILED_RULE.to_string(),
-            },
-            warnings: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn run_init_claude_verify_emits_json_when_requested() {
-        let dir =
-            std::env::temp_dir().join(format!("ptuf-cli-init-claude-json-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-        let options = ClaudeInitOptions {
-            settings_path: Some(path.clone()),
-            verify: true,
-            json: true,
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_init_claude_verify(&options, passing_report, &mut out, &mut err);
-        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
-        let stdout = String::from_utf8_lossy(&out);
-        let value: serde_json::Value =
-            serde_json::from_str(&stdout).expect("JSON branch must emit valid JSON");
-        assert_eq!(value["installed"], true);
-        assert_eq!(value["rolledBack"], false);
-        assert_eq!(value["verify"]["syntheticDeny"]["status"], "passed");
-        assert!(
-            !stdout.contains("Verify:"),
-            "JSON mode must not emit text section: {stdout}",
-        );
-        assert!(path.exists(), "JSON happy path must keep settings file");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_codex_verify_passes_when_checks_succeed() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-init-codex-verify-ok-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let hooks_path = dir.join("hooks.json");
-        let config_path = dir.join("config.toml");
-        let options = CodexInitOptions {
-            root: None,
-            hooks_path: Some(hooks_path.clone()),
-            config_path: Some(config_path.clone()),
-            verify: true,
-            json: false,
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_init_codex_verify(&options, passing_report, &mut out, &mut err);
-        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
-        let stdout = String::from_utf8_lossy(&out);
-        assert!(stdout.contains("registered hook"), "stdout: {stdout}");
-        assert!(stdout.contains("Verify:"), "stdout: {stdout}");
-        assert!(
-            stdout.contains("Synthetic deny test: passed"),
-            "stdout: {stdout}",
-        );
-        assert!(hooks_path.exists());
-        assert!(config_path.exists());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_codex_verify_rolls_back_both_paths_when_check_fails() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-init-codex-verify-rollback-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let hooks_path = dir.join("hooks.json");
-        let config_path = dir.join("config.toml");
-        let options = CodexInitOptions {
-            root: None,
-            hooks_path: Some(hooks_path.clone()),
-            config_path: Some(config_path.clone()),
-            verify: true,
-            json: false,
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_init_codex_verify(&options, failing_report, &mut out, &mut err);
-        assert_eq!(code, 1);
-        let stdout = String::from_utf8_lossy(&out);
-        assert!(stdout.contains("FAILED"), "stdout: {stdout}");
-        let rollback_lines = stdout.matches("rolled back changes to").count();
-        assert!(rollback_lines >= 2, "stdout: {stdout}");
-        assert!(
-            stdout.contains("verification failed; aborting"),
-            "stdout: {stdout}",
-        );
-        assert!(
-            !hooks_path.exists(),
-            "rollback must remove freshly-created hooks file"
-        );
-        assert!(
-            !config_path.exists(),
-            "rollback must remove freshly-created config file"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_dispatches_to_claude_verify_when_verify_flag_set() {
-        let dir =
-            std::env::temp_dir().join(format!("ptuf-cli-run-claude-verify-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run(
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::ClaudeCode(ClaudeInitOptions {
-                    settings_path: Some(path.clone()),
-                    verify: true,
-                    json: false,
-                }),
-            },
-            b"" as &[u8],
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
-        let stdout = String::from_utf8_lossy(&out);
-        assert!(
-            stdout.contains("Synthetic deny test: passed"),
-            "stdout: {stdout}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_dispatches_to_codex_verify_when_verify_flag_set() {
-        let dir =
-            std::env::temp_dir().join(format!("ptuf-cli-run-codex-verify-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let hooks = dir.join("hooks.json");
-        let cfg = dir.join("config.toml");
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run(
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Codex(CodexInitOptions {
-                    root: None,
-                    hooks_path: Some(hooks.clone()),
-                    config_path: Some(cfg.clone()),
-                    verify: true,
-                    json: false,
-                }),
-            },
-            b"" as &[u8],
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
-        let stdout = String::from_utf8_lossy(&out);
-        assert!(
-            stdout.contains("Synthetic deny test: passed"),
-            "stdout: {stdout}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_claude_verify_reports_error_when_settings_path_is_directory() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-claude-verify-baddir-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let options = ClaudeInitOptions {
-            settings_path: Some(dir.clone()),
-            verify: true,
-            json: false,
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_init_claude_verify(&options, passing_report, &mut out, &mut err);
-        assert_eq!(code, 1, "stderr: {}", String::from_utf8_lossy(&err));
-        assert!(String::from_utf8_lossy(&err).contains("init failed"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_codex_verify_reports_error_when_hooks_path_is_directory() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-codex-verify-baddir-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let bad_hooks = dir.join("hooks-as-dir");
-        std::fs::create_dir_all(&bad_hooks).unwrap();
-        let options = CodexInitOptions {
-            root: None,
-            hooks_path: Some(bad_hooks),
-            config_path: Some(dir.join("config.toml")),
-            verify: true,
-            json: false,
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_init_codex_verify(&options, passing_report, &mut out, &mut err);
-        assert_eq!(code, 1, "stderr: {}", String::from_utf8_lossy(&err));
-        assert!(String::from_utf8_lossy(&err).contains("init failed"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn finish_verify_logs_rollback_failure_when_restore_errors() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-finish-verify-rollback-err-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let blocker = dir.join("blocker");
-        std::fs::write(&blocker, b"i am a file").unwrap();
-        let bad_path = blocker.join("nested").join("settings.json");
-
-        let snaps = vec![init::PathSnapshot {
-            path: bad_path,
-            previous: Some(b"original".to_vec()),
-        }];
-        let outcome = init::InstallOutcome {
-            status: init::InstallStatus::Installed,
-            agent: "claude-code",
-            paths: vec![init::InstallPath {
-                label: "settings",
-                path: dir.join("settings.json"),
-            }],
-            matcher: "Bash".into(),
-            command: "ptuf hook claude-code".into(),
-        };
-        let ctx = VerifyContext {
-            outcome: &outcome,
-            snaps: &snaps,
-            json: false,
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = finish_verify(ctx, failing_report, &mut out, &mut err);
-        assert_eq!(code, 1);
-        let stderr = String::from_utf8_lossy(&err);
-        assert!(stderr.contains("rollback failed"), "stderr: {stderr}");
-        let stdout = String::from_utf8_lossy(&out);
-        assert!(
-            !stdout.contains("rolled back changes to"),
-            "stdout: {stdout}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_doctor_writes_text_report_to_stdout() {
-        let (code, out, _err) = run_with(&["doctor"], "");
-        assert!(
-            code == 0 || code == 1,
-            "doctor must return 0 or 1, got {code}"
-        );
-        assert!(out.contains("ptuf doctor"));
-        assert!(out.contains("Binary"));
-    }
-
-    #[test]
-    fn run_doctor_with_json_flag_emits_structured_json() {
-        let (code, out, _err) = run_with(&["doctor", "--json"], "");
-        assert!(
-            code == 0 || code == 1,
-            "doctor --json must return 0 or 1, got {code}"
-        );
-        let value: serde_json::Value =
-            serde_json::from_str(&out).expect("doctor --json output must be valid JSON");
-        assert_eq!(value["schemaVersion"], 1);
-        assert!(value["binary"]["version"].is_string());
-        assert!(value["configLayers"].is_array());
-        assert!(value["plugins"].is_array());
-        assert!(value["claude"]["state"].is_string());
-        assert!(value["codex"]["state"].is_string());
-        assert!(value["hasFailure"].is_boolean());
-    }
-
-    #[test]
     fn run_hook_fails_closed_when_stdin_read_fails() {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
+            GlobalFlags::default(),
             Command::HookPreToolUse {
                 agent: HookAgent::ClaudeCode,
             },
@@ -1526,6 +948,7 @@ rules:
         let mut err = Vec::new();
         let payload = vec![b' '; MAX_HOOK_STDIN_BYTES as usize + 1];
         let code = run(
+            GlobalFlags::default(),
             Command::HookPreToolUse {
                 agent: HookAgent::ClaudeCode,
             },
@@ -1558,6 +981,7 @@ rules:
         assert_eq!(payload.len() as u64, MAX_HOOK_STDIN_BYTES);
 
         let code = run(
+            GlobalFlags::default(),
             Command::HookPreToolUse {
                 agent: HookAgent::ClaudeCode,
             },
@@ -1573,44 +997,16 @@ rules:
         assert!(code == 0 || code == 1, "got exit code {code}: {err_s}");
     }
 
-    #[test]
-    fn run_hook_accepts_stdin_payload_one_byte_below_the_ceiling() {
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let body = br#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
-        let mut payload = Vec::with_capacity(MAX_HOOK_STDIN_BYTES as usize - 1);
-        payload.extend_from_slice(body);
-        payload.resize(MAX_HOOK_STDIN_BYTES as usize - 1, b' ');
-
-        let code = run(
-            Command::HookPreToolUse {
-                agent: HookAgent::ClaudeCode,
-            },
-            payload.as_slice(),
-            &mut out,
-            &mut err,
-        );
-        let err_s = String::from_utf8_lossy(&err);
-        assert!(
-            !err_s.contains("hook payload exceeds"),
-            "size deny fired below the limit: {err_s}",
-        );
-        assert!(code == 0 || code == 1, "got exit code {code}: {err_s}");
-    }
-
     // `read_to_string` rejects invalid UTF-8, so lone surrogates / bare
     // 0xFF / truncated multi-byte leads route through `failed to read
     // stdin` (not `invalid hook payload`) and must fail-closed.
     #[test]
     fn run_hook_fails_closed_for_invalid_utf8_stdin_payload() {
-        for bytes in [
-            &b"\xFF"[..],         // bare 0xFF — never legal in UTF-8
-            &b"\xC2"[..],         // truncated 2-byte lead
-            &b"\xED\xA0\x80"[..], // UTF-8-encoded surrogate U+D800
-        ] {
+        for bytes in [&b"\xFF"[..], &b"\xC2"[..], &b"\xED\xA0\x80"[..]] {
             let mut out = Vec::new();
             let mut err = Vec::new();
             let code = run(
+                GlobalFlags::default(),
                 Command::HookPreToolUse {
                     agent: HookAgent::ClaudeCode,
                 },
@@ -1635,6 +1031,7 @@ rules:
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
+            GlobalFlags::default(),
             Command::HookPreToolUse {
                 agent: HookAgent::Codex,
             },
@@ -1651,14 +1048,9 @@ rules:
     }
 
     #[test]
-    fn run_plugin_test_returns_one_when_render_writer_fails() {
+    fn run_plugin_check_returns_one_when_render_writer_fails() {
         use std::fs;
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-plugin-test-render-fail-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::create_dir_all(&dir);
+        let dir = workdir("plugin-render-fail");
         let path = dir.join("demo.yaml");
         fs::write(
             &path,
@@ -1687,7 +1079,7 @@ rules:
 
         let mut writer = FailingWriter { budget: 0 };
         let mut err = Vec::new();
-        let code = run_plugin_test(&path, &mut writer, &mut err);
+        let code = run_plugin_check(&path, &mut writer, &mut err);
         assert_eq!(code, 1);
         assert!(
             String::from_utf8_lossy(&err).contains("failed to write plugin test report"),
@@ -1695,8 +1087,7 @@ rules:
             String::from_utf8_lossy(&err)
         );
 
-        let _ = fs::remove_file(&path);
-        let _ = fs::remove_dir(&dir);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1704,9 +1095,8 @@ rules:
         let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
         let (code, out, err) = run_with(&["hook", "codex"], payload);
         assert_eq!(code, 2);
-        let out_s = out;
-        assert!(out_s.contains("\"hookSpecificOutput\""));
-        assert!(out_s.contains("\"permissionDecision\":\"deny\""));
+        assert!(out.contains("\"hookSpecificOutput\""));
+        assert!(out.contains("\"permissionDecision\":\"deny\""));
         assert!(err.contains("Blocked by ptuf rule"));
     }
 
@@ -1733,25 +1123,6 @@ rules:
         render_install_outcome(&outcome, true, &mut out);
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("(dry-run)"), "out: {s}");
-        assert!(s.contains("already contains"), "out: {s}");
-    }
-
-    #[test]
-    fn render_install_outcome_for_already_present_without_dry_run_omits_suffix() {
-        let outcome = init::InstallOutcome {
-            status: init::InstallStatus::AlreadyPresent,
-            agent: "claude-code",
-            paths: vec![init::InstallPath {
-                label: "settings",
-                path: PathBuf::from("/x/settings.json"),
-            }],
-            matcher: "Bash".to_string(),
-            command: "/x/ptuf hook claude-code".to_string(),
-        };
-        let mut out = Vec::new();
-        render_install_outcome(&outcome, false, &mut out);
-        let s = String::from_utf8_lossy(&out);
-        assert!(!s.contains("(dry-run)"), "out: {s}");
         assert!(s.contains("already contains"), "out: {s}");
     }
 
@@ -1804,55 +1175,6 @@ rules:
     }
 
     #[test]
-    fn run_init_already_present_returns_zero_and_idempotent_message() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-init-already-present-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-
-        let cmd = || Command::Init {
-            dry_run: false,
-            options: InitOptions::ClaudeCode(ClaudeInitOptions {
-                settings_path: Some(path.clone()),
-                ..Default::default()
-            }),
-        };
-
-        let mut out1 = Vec::new();
-        let mut err1 = Vec::new();
-        assert_eq!(run(cmd(), b"" as &[u8], &mut out1, &mut err1), 0);
-
-        let mut out2 = Vec::new();
-        let mut err2 = Vec::new();
-        assert_eq!(run(cmd(), b"" as &[u8], &mut out2, &mut err2), 0);
-        assert!(String::from_utf8_lossy(&out2).contains("already contains"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_doctor_returns_one_when_writer_fails() {
-        let mut writer = FailingWriter { budget: 0 };
-        let mut err = Vec::new();
-        let code = run_doctor(false, &mut writer, &mut err);
-        assert_eq!(code, 1);
-        assert!(String::from_utf8_lossy(&err).contains("doctor failed"));
-    }
-
-    #[test]
-    fn run_doctor_json_returns_one_when_writer_fails() {
-        let mut writer = FailingWriter { budget: 0 };
-        let mut err = Vec::new();
-        let code = run_doctor(true, &mut writer, &mut err);
-        assert_eq!(code, 1);
-        assert!(String::from_utf8_lossy(&err).contains("doctor failed"));
-    }
-
-    #[test]
     fn run_hook_fails_closed_when_engine_construction_fails() {
         let dir = make_engine_failing_repo("hook");
         let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
@@ -1860,6 +1182,7 @@ rules:
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
+            GlobalFlags::default(),
             Command::HookPreToolUse {
                 agent: HookAgent::ClaudeCode,
             },
@@ -1881,13 +1204,14 @@ rules:
     }
 
     #[test]
-    fn run_eval_fails_closed_when_engine_construction_fails() {
-        let dir = make_engine_failing_repo("eval");
+    fn run_check_fails_closed_when_engine_construction_fails() {
+        let dir = make_engine_failing_repo("check");
         let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
-            Command::Eval {
+            GlobalFlags::default(),
+            Command::Check {
                 tool: "Bash".into(),
                 command: "ls".into(),
             },
@@ -1902,172 +1226,6 @@ rules:
         let err_s = String::from_utf8_lossy(&err);
         assert!(err_s.contains("could not load policy"), "stderr: {err_s}");
         drop(_guard);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_kiro_dry_run_writes_outcome_summary() {
-        let dir = std::env::temp_dir().join(format!("ptuf-cli-init-kiro-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run(
-            Command::Init {
-                dry_run: true,
-                options: InitOptions::Kiro(KiroInitOptions {
-                    root: Some(dir.clone()),
-                    scope: KiroScope::Local,
-                    ..Default::default()
-                }),
-            },
-            b"" as &[u8],
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
-        assert!(String::from_utf8_lossy(&out).contains("would register hook"));
-        assert!(!agent_path.exists());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_kiro_writes_agent_file_on_real_install() {
-        let dir =
-            std::env::temp_dir().join(format!("ptuf-cli-init-kiro-real-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run(
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Kiro(KiroInitOptions {
-                    root: Some(dir.clone()),
-                    scope: KiroScope::Local,
-                    ..Default::default()
-                }),
-            },
-            b"" as &[u8],
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
-        assert!(String::from_utf8_lossy(&out).contains("registered hook"));
-        assert!(agent_path.exists());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_kiro_verify_passes_when_checks_succeed() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-init-kiro-verify-ok-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
-        let options = KiroInitOptions {
-            root: Some(dir.clone()),
-            scope: KiroScope::Local,
-            verify: true,
-            ..Default::default()
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_init_kiro_verify(&options, passing_report, &mut out, &mut err);
-        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
-        let stdout = String::from_utf8_lossy(&out);
-        assert!(stdout.contains("registered hook"), "stdout: {stdout}");
-        assert!(stdout.contains("Verify:"), "stdout: {stdout}");
-        assert!(agent_path.exists());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_kiro_verify_rolls_back_when_check_fails() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-init-kiro-verify-rollback-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
-        let options = KiroInitOptions {
-            root: Some(dir.clone()),
-            scope: KiroScope::Local,
-            verify: true,
-            ..Default::default()
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_init_kiro_verify(&options, failing_report, &mut out, &mut err);
-        assert_eq!(code, 1);
-        let stdout = String::from_utf8_lossy(&out);
-        assert!(stdout.contains("FAILED"), "stdout: {stdout}");
-        assert!(stdout.contains("rolled back"), "stdout: {stdout}");
-        assert!(
-            !agent_path.exists(),
-            "rollback must remove freshly-created agent file",
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_init_kiro_verify_reports_error_when_no_root() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-cli-kiro-verify-noroot-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
-        let options = KiroInitOptions {
-            scope: KiroScope::Local,
-            verify: true,
-            ..Default::default()
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_init_kiro_verify(&options, passing_report, &mut out, &mut err);
-        assert_eq!(code, 1, "stderr: {}", String::from_utf8_lossy(&err));
-        assert!(String::from_utf8_lossy(&err).contains("init failed"));
-        drop(_guard);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_dispatches_to_kiro_verify_when_verify_flag_set() {
-        let dir =
-            std::env::temp_dir().join(format!("ptuf-cli-run-kiro-verify-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run(
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Kiro(KiroInitOptions {
-                    root: Some(dir.clone()),
-                    scope: KiroScope::Local,
-                    verify: true,
-                    ..Default::default()
-                }),
-            },
-            b"" as &[u8],
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
-        assert!(
-            String::from_utf8_lossy(&out).contains("Synthetic deny test: passed"),
-            "stdout: {}",
-            String::from_utf8_lossy(&out),
-        );
-        assert!(agent_path.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -2,8 +2,7 @@
 
 ptuf は CLI バイナリとして配布され、同時に Claude Code / Codex / GitHub
 Copilot / Kiro CLI の `PreToolUse` hook adapter を提供する。Kiro 固有の
-正規化や fail-closed 経路、doctor 統合の詳細は
-[`kiro-cli.md`](kiro-cli.md) を参照。
+正規化や fail-closed 経路の詳細は [`kiro-cli.md`](kiro-cli.md) を参照。
 
 ## 実装済みサブコマンド
 
@@ -12,23 +11,40 @@ ptuf hook claude-code
 ptuf hook codex
 ptuf hook copilot
 ptuf hook kiro
-ptuf eval --tool Bash 'git reset --hard HEAD~1'
-ptuf plugin test ./ptuf-plugin.yaml
-ptuf init claude-code
-ptuf init codex
-ptuf init copilot --profile local
-ptuf init kiro
-ptuf doctor
+ptuf [--json] check --tool Bash 'git reset --hard HEAD~1'
+ptuf [--json] plugin check ./ptuf-plugin.yaml
+ptuf [--json] init                       # auto-detect every agent
+ptuf [--json] init claude-code           # pin to one adapter
+ptuf [--json] init claude-code --no-verify
+ptuf [--json] init claude-code --dry-run
 ```
 
 | サブコマンド | 用途 |
 | --- | --- |
 | `ptuf hook <agent>` | hook 本体。stdin JSON を評価する |
-| `ptuf eval --tool <name> <command>` | 単発評価 |
-| `ptuf plugin test <path>` | plugin rule の `tests:` を実行 |
-| `ptuf init <agent> [--verify [--json]]` | agent 側の hook 設定を配線 (オプションで synthetic payload による事後検証) |
-| `ptuf doctor [--json]` | binary / config / plugin / hook の診断 |
+| `ptuf check --tool <name> <command>` | 単発評価 |
+| `ptuf plugin check <path>` | plugin rule の `tests:` を実行 |
+| `ptuf init [<agent>] [--no-verify] [--dry-run]` | agent 側の hook 設定を配線 (verify は既定 ON、`--dry-run` 時は自動 OFF) |
 | `ptuf --help`, `ptuf --version` | 情報表示 |
+
+`--json` はトップレベルの global flag で、サブコマンド **の前** にのみ
+書ける (`ptuf --json init ...`)。`hook <agent>` は host 側の出力形が
+固定なので `--json` を parse 段で reject する。
+
+`ptuf init` は引数なしで auto-detect を行う:
+
+| Agent | 検出条件 | install 先 |
+|---|---|---|
+| ClaudeCode | `$HOME/.claude/` | `$HOME/.claude/settings.json` |
+| Codex | `<repo>/.codex/` または `$HOME/.codex/` | repo 配下の `.codex/` |
+| Copilot | `<repo>/.github/` | `<repo>/.github/hooks/ptuf.json` |
+| Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | 該当 `.kiro/agents/ptuf-guarded.json` |
+
+検出 0 件 → exit `1` + `no agent detected` を stderr に出す。1 件以上
+→ 全部 install + verify。verify がいずれかで失敗すれば exit `1`。
+`--dry-run` は計画のみ (verify off)、`--no-verify` は書き込むが verify
+を走らせない。`<agent>` を明示すれば auto-detect を bypass し単独
+install になる。
 
 ## 終了コード
 
@@ -37,7 +53,7 @@ ptuf doctor
 | `Allow` / `Monitor` / Claude Code の `Ask` | `0` |
 | `Deny` (Claude Code / Codex / Kiro) | `2` |
 | Copilot の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
-| 内部エラー、引数不正、plugin test fail、doctor failure | `1` |
+| 内部エラー、引数不正、plugin check fail、init verify fail | `1` |
 
 Codex / Kiro では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
 
@@ -84,7 +100,7 @@ exit `0` + `core.engine.invalid-payload` の bare deny JSON にフォールバ�
 - 旧形式との互換性のため、command 末尾 `hook claude-code` も検出する
 - binary の絶対パス差異は無視する
 - 書き込みは temp file + rename の原子的更新
-- `--settings <PATH>` で対象を差し替えられる
+- 対象 path は固定で `$HOME/.claude/settings.json` (HOME unset → `InitError::HomeNotSet`)
 
 ## Codex への登録
 
@@ -119,14 +135,15 @@ codex_hooks = true
 
 実装上の契約:
 
-- repo root が見つからない場合は `--root` または明示的な `--hooks` /
-  `--config` が必要
+- repo root が見つからない場合は `InitError::RepoRootNotFound` を返す
+  (auto-detect では `.codex/` 検出が repo root を要求しないため、`$HOME/.codex/`
+  fallback でも install を試みる)
 - `hooks.json` は JSON object、`config.toml` は valid TOML である必要がある
 - 既存 entry の検出は command 末尾 `hook codex` で行う
 
 ## GitHub Copilot への登録
 
-`ptuf init copilot --profile local` は repo-local な
+`ptuf init copilot` は repo-local な
 `<repo>/.github/hooks/ptuf.json` を更新する。
 
 ```json
@@ -147,63 +164,19 @@ codex_hooks = true
 
 実装上の契約:
 
-- repo root が見つからない場合は `--root` または明示的な `--hooks` が必要
+- repo root が見つからない場合は `InitError::RepoRootNotFound` を返す
 - ファイルは JSON object、`version` は `1` (欠落時は `1` で補完)
 - 既存 entry の検出は `bash` / `powershell` field の command 末尾
   `hook copilot` で行う
 - entry には `bash` と `powershell` の両方を書く (cross-platform)
 - 書き込みは temp file + rename の原子的更新
 
-`--profile cloud` は Copilot の cloud / coding agent runner 向けの
-プロファイル。runner 上には開発者マシンの絶対パス
-(`/usr/local/bin/ptuf` 等) が存在しないため、repo に commit された
-wrapper script 経由で `ptuf hook copilot` を呼び出す。
-
-```json
-{
-  "version": 1,
-  "hooks": {
-    "preToolUse": [
-      {
-        "matcher": "*",
-        "bash": "bash .github/hooks/scripts/ptuf-hook-copilot.sh",
-        "powershell": "pwsh -File .github/hooks/scripts/ptuf-hook-copilot.ps1",
-        "timeoutSec": 10
-      }
-    ]
-  }
-}
-```
-
-書き出される wrapper:
-
-- `<repo>/.github/hooks/scripts/ptuf-hook-copilot.sh` (mode `0755`、unix のみ)
-- `<repo>/.github/hooks/scripts/ptuf-hook-copilot.ps1`
-
-両 wrapper は `${PTUF_BINARY:-ptuf}` で binary を探し、見つからない
-場合は runner が出す `command not found` エラーが stderr に出る
-(`ptuf` を runner に install する経路は repo オーナーの責務)。
-
-cloud profile の追加契約:
-
-- hook entry の `bash` / `powershell` は **repo-relative path のみ** を
-  含む (絶対パスは禁止)
-- 既存 entry の検出は wrapper script の basename
-  (`ptuf-hook-copilot.sh` / `ptuf-hook-copilot.ps1`) で行う
-- 3 ファイル (JSON + 2 script) はすべて temp + rename で原子的に書く
-- `local` profile entry と `cloud` profile entry は同一ファイル内で
-  共存可能 (互いを既存と見なさず両方追記される)
-- self-protection は wrapper script path を保護対象に追加する
-  (`src/self_paths.rs`)
-
 ## Kiro CLI への登録
 
-`ptuf init kiro` は既定で repo-local な
-`<repo>/.kiro/agents/ptuf-guarded.json` を更新する。`--scope global` を指定
-すると `~/.kiro/agents/ptuf-guarded.json` を更新し、`--agent <name>` で
-ファイル stem (および JSON の `name`) を上書きできる。`--agent-config <path>`
-を指定した場合は scope と root の解決を完全に bypass し、その path を直接
-使う。
+`ptuf init kiro` は repo-local な
+`<repo>/.kiro/agents/ptuf-guarded.json` を更新する。repo root が見つからない
+場合は `$HOME/.kiro/agents/ptuf-guarded.json` へ fallback する。agent 名は
+`ptuf-guarded` 固定。
 
 ```json
 {
@@ -226,9 +199,9 @@ cloud profile の追加契約:
 
 実装上の契約:
 
-- `--scope local` (既定) で repo root が見つからない場合は `--root` または
-  `--agent-config` が必要
-- `--scope global` で `$HOME` が unset な場合は `InitError::HomeNotSet`
+- repo root が見つからない場合は `$HOME` 配下へ fallback する。両方とも
+  解決できない場合は `InitError::RepoRootNotFound` を返す
+- `$HOME` が unset で repo root も無い場合は `InitError::HomeNotSet`
 - ファイルは JSON object、新規生成時は default skeleton (`name`,
   `description`, `tools`, `includeMcpJson`, `hooks.preToolUse`) を書く
 - 既存 entry の検出は `hooks.preToolUse[].command` 末尾 `hook kiro` で行う
@@ -236,12 +209,15 @@ cloud profile の追加契約:
   `allowedTools` / `resources` 等) は `serde_json::Value` のまま保持される
 - 書き込みは temp file + rename の原子的更新
 
-## install verification (`--verify`)
+## install verification
 
-`ptuf init <agent> --verify` は配線を書いたあと、内部 Engine を起動して
+`ptuf init <agent>` は配線を書いたあと、内部 Engine を起動して
 synthetic payload を 1 度だけ評価する。これは「設定ファイルが書けた」だけ
 ではなく「ptuf 本体が deny 判定に到達できる」ことをインストール直後に確認
 する目的で、CI gate や README の手動確認手順を不要にする。
+
+verify は既定で実行される。`--no-verify` で skip、`--dry-run` 指定時は
+書き込み自体を行わないため verify も自動的に off になる。
 
 検査項目は 2 件:
 
@@ -254,8 +230,9 @@ synthetic payload を 1 度だけ評価する。これは「設定ファイル�
 override は意図的に無視する — verify は ptuf 本体の guardrail が機能して
 いるかを確かめるものであり、ユーザ環境の効果を再現するものではない。
 
-`--verify` は `--dry-run` と同時には使えず、`--json` は `--verify` と
-セットでのみ有効。両ルールに違反した場合は parse error で exit `1` を返す。
+`--json` は global flag のため `ptuf --json init ...` の形でのみ受け付ける。
+`ptuf init --json` のように subcommand 後置の場合は `UnexpectedArgument` で
+exit `1` を返す。
 
 ### 失敗時の挙動
 
@@ -282,8 +259,7 @@ Verify:
   Warnings: none
 ```
 
-`--verify --json` 版は `schemaVersion: 1` を持ち、以下の top-level key を
-出す。
+`--json` 版は `schemaVersion: 1` を持ち、以下の top-level key を出す。
 
 ```json
 {
@@ -307,7 +283,7 @@ Verify:
 
 `syntheticDeny.ruleId` が `core.filesystem.destructive-rm` で固定であることは
 `tests/contracts.rs` の contract test で保証される。`failClosed.ruleId` は
-`hook` / `eval` と同じ CLI fail-closed contract (`core.engine.policy-load-failed`)
+`hook` / `check` と同じ CLI fail-closed contract (`core.engine.policy-load-failed`)
 を共有する。
 
 ## hook response
@@ -423,41 +399,9 @@ Kiro CLI の `preToolUse` payload は `{"hook_event_name":"preToolUse",
 `hook_event_name` が `preToolUse` 以外の場合は `core.engine.invalid-payload`
 で fail-closed する。空 payload / 非 object payload / `tool_name` 欠落も同様。
 
-## `ptuf doctor`
-
-`ptuf doctor` は text、`ptuf doctor --json` は JSON で診断を出す。確認対象は:
-
-- 実行中 binary
-- repo root
-- config layer の有無
-- 読み込んだ plugin
-- Claude Code integration
-- Codex integration
-- GitHub Copilot integration
-
-text 版はセクションごとに `✓`, `⚠`, `✗` を表示する。ひとつでも `✗` があれば
-exit `1`、それ以外は `0`。
-
-JSON 版は `schemaVersion: 1` に加えて、少なくとも次の top-level key を持つ。
-
-- `binary`
-- `project`
-- `configLayers`
-- `config`
-- `plugins`
-- `claude`
-- `codex`
-- `copilot`
-- `hasFailure`
-
-`copilot.state` の値は次のいずれか: `repoRootNotFound`, `missing`,
-`hookRegistered`, `hookMissing`, `invalidJson`, `invalidSchema`, `io`。
-失敗扱い (`hasFailure: true`) になるのは `invalidJson` / `invalidSchema` /
-`io` のみ。
-
 ## fail-closed
 
-`hook` と `eval` は engine 構築に失敗すると
+`hook` と `check` は engine 構築に失敗すると
 `core.engine.policy-load-failed` で deny する。これは CLI の固定契約であり、
 ライブラリ API `decide()` とは意図的に異なる。
 

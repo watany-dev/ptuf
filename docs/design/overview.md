@@ -9,8 +9,8 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) と `v0.1.0` (
 次を実装済み:
 
 - `PreToolUse` 向け CLI とライブラリ
-- Claude Code / Codex / GitHub Copilot adapter
-- Kiro CLI adapter (`hook` / `init` / `doctor` 連携を実装済み)
+- Claude Code / Codex / GitHub Copilot adapter (frozen)
+- Kiro CLI adapter (`hook` / `init` 連携を実装済み)
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
   `core.self_protection` / `core.engine` /
@@ -20,8 +20,8 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) と `v0.1.0` (
 - `bash -c`, `sh -c`, `eval`, `xargs`, `find -exec` に対する bounded wrapper
   inspection と、wrapped redirect を含む self-protection
 - layered YAML config, YAML plugin, allowlist, audit JSONL
-- `ptuf init <agent>`, `ptuf doctor [--json]`, `ptuf plugin test <path>`
-- `tests/contracts.rs` による hook / audit / `doctor --json` 契約の固定
+- `ptuf init [<agent>]` (auto-detect), `ptuf check`, `ptuf plugin check <path>`
+- `tests/contracts.rs` による hook / audit / `init --json` 契約の固定
 
 ## ビルド前提と依存
 
@@ -59,21 +59,22 @@ CLI 経路はこれと異なり fail-closed で動作する。
 
 ## CLI の現在形
 
-実装済みサブコマンドは次のとおり。
+実装済みサブコマンドは次のとおり。`--json` はトップレベルの global flag
+で、subcommand の前にのみ書ける (`ptuf --json init ...`)。
 
 - `ptuf hook claude-code`
 - `ptuf hook codex`
 - `ptuf hook copilot`
 - `ptuf hook kiro`
-- `ptuf eval --tool <name> <command>`
-- `ptuf plugin test <path>`
-- `ptuf init claude-code [--dry-run] [--settings <PATH>] [--verify [--json]]`
-- `ptuf init codex [--dry-run] [--root <PATH>] [--hooks <PATH>] [--config <PATH>] [--verify [--json]]`
-- `ptuf init copilot [--dry-run] [--root <PATH>] [--hooks <PATH>] [--profile local|cloud] [--verify [--json]]`
-- `ptuf init kiro [--dry-run] [--root <PATH>] [--agent <NAME>] [--agent-config <PATH>] [--scope local|global] [--verify [--json]]`
-- `ptuf doctor [--json]`
+- `ptuf [--json] check --tool <name> <command>`
+- `ptuf [--json] plugin check <path>`
+- `ptuf [--json] init [<agent>] [--no-verify] [--dry-run]`
 - `ptuf --help`
 - `ptuf --version`
+
+`init` は引数なしで `$HOME` / repo root を見て agent を auto-detect する。
+verify は既定で実行され、`--no-verify` で skip、`--dry-run` 時は書き込みも
+verify も行わない。
 
 ## 目的
 
@@ -101,8 +102,8 @@ CLI 経路はこれと異なり fail-closed で動作する。
 | [`decision-model.md`](decision-model.md) | `Decision` の意味、集約順序、mode、fail-closed |
 | [`policy-packs.md`](policy-packs.md) | 実装済み built-in pack と rule 一覧 |
 | [`config-and-plugins.md`](config-and-plugins.md) | config schema、plugin schema、allowlist |
-| [`cli-and-hooks.md`](cli-and-hooks.md) | `init` / `hook` / `doctor` と agent 統合 |
-| [`kiro-cli.md`](kiro-cli.md) | Kiro CLI adapter の正規化・fail-closed・doctor 統合 |
+| [`cli-and-hooks.md`](cli-and-hooks.md) | `init` / `hook` / `check` と agent 統合 |
+| [`kiro-cli.md`](kiro-cli.md) | Kiro CLI adapter の正規化・fail-closed |
 | [`audit.md`](audit.md) | audit JSONL schema と redaction |
 | [`testing.md`](testing.md) | example-based test と PBT の役割分担 |
 | [`roadmap.md`](roadmap.md) | M1〜M5 の到達点と今後の候補 |

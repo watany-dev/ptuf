@@ -2,7 +2,7 @@
 
 Kiro CLI の `preToolUse` hook を ptuf に橋渡しする adapter (M6) の設計
 書。本書は Kiro 固有の payload 正規化・出力規約・fail-closed 経路・
-`init` / `doctor` 統合をまとめる。一般的な hook protocol と Decision
+`init` 統合をまとめる。一般的な hook protocol と Decision
 モデルは [`cli-and-hooks.md`](cli-and-hooks.md) と
 [`decision-model.md`](decision-model.md) を参照。
 
@@ -11,13 +11,11 @@ Kiro CLI の `preToolUse` hook を ptuf に橋渡しする adapter (M6) の設�
 | サブコマンド | 役割 |
 | --- | --- |
 | `ptuf hook kiro` | stdin の Kiro `preToolUse` payload を canonical `HookInput` に正規化し、engine 判定結果を stderr + exit code で返す |
-| `ptuf init kiro` | `<repo>/.kiro/agents/<name>.json` (local) / `~/.kiro/agents/<name>.json` (global) に hook entry を idempotent に書き込む |
-| `ptuf doctor` | 上記の agent 設定ファイルを走査し、`hooks.preToolUse[].command` の末尾が `["hook", "kiro"]` のものを「ptuf hook 登録済み」として報告 |
+| `ptuf init kiro` | `<repo>/.kiro/agents/ptuf-guarded.json` (local) / `~/.kiro/agents/ptuf-guarded.json` (global fallback) に hook entry を idempotent に書き込む |
 
 中核 engine と他 3 adapter (Claude Code / Codex / Copilot) は不変。Kiro
 固有の揺れは `src/cli/kiro_input.rs`, `src/cli/output.rs::adapt_hook_decision`,
-`src/init/kiro.rs`, `src/doctor/mod.rs::build_kiro_status` に閉じ込めて
-ある。
+`src/init/kiro.rs` に閉じ込めてある。
 
 ## 入力 payload の正規化
 
@@ -82,20 +80,20 @@ stdin が読めない、JSON parse 失敗、`hook_event_name != preToolUse` の
 
 ## `ptuf init kiro`
 
-`.kiro/agents/<name>.json` の `hooks.preToolUse` 配列に entry を append
+`.kiro/agents/ptuf-guarded.json` の `hooks.preToolUse` 配列に entry を append
 する。既に末尾 token が `["hook", "kiro"]` の `command` を持つ entry
 があれば `AlreadyPresent` で no-op。
 
-CLI フラグ:
+agent 名は `ptuf-guarded` 固定、agent file の path も `<repo>/.kiro/agents/`
+配下が既定で、repo root が見つからない場合は `$HOME/.kiro/agents/` へ
+fallback する。
+
+`init` の global flag:
 
 | フラグ | 用途 |
 | --- | --- |
-| `--root <PATH>` | 明示 repo root (省略時は cwd から `.git` を辿る) |
-| `--agent <NAME>` | 既定 `ptuf-guarded`。agent file の `name` と stem に使う |
-| `--agent-config <PATH>` | scope/root を無視して指定 path に直接書き込む |
-| `--scope local\|global` | local 既定。global は `$HOME/.kiro/agents/<name>.json` |
-| `--dry-run` | 書き込まずに `WouldInstall` を報告 |
-| `--verify [--json]` | install 後に synthetic deny + fail-closed の 2 case を実行。失敗時は capture/restore で rollback |
+| `--no-verify` | install 後の synthetic deny / fail-closed verify を skip |
+| `--dry-run` | 書き込まずに `WouldInstall` を報告 (verify は自動的に off) |
 
 書き込みは temp file + `rename(2)` の atomic write、JSON は
 `serde_json::to_string_pretty` + 末尾改行 1 つ。`hooks.preToolUse` 以外
@@ -126,44 +124,6 @@ CLI フラグ:
 `<absolute ptuf path>` は `std::env::current_exe()` から導出する。
 得られない場合は literal `"ptuf"` にフォールバック (他 adapter と同様)。
 
-## `ptuf doctor` 統合
-
-`Kiro CLI integration` section が次を出力する:
-
-- `local agents dir`: `<repo>/.kiro/agents`
-- `global agents dir`: `$HOME/.kiro/agents`
-- 状態:
-  - `noTargets` — repo root も `$HOME` も解決できず走査対象なし (warning)
-  - `missing` — どちらの directory にも `.json` agent file が無い (warning)
-  - `hookRegistered` — agent file の中に末尾 token が `["hook", "kiro"]`
-    の `command` が見つかった。`scope` (`local` / `global`) と任意の
-    `matcher` を併記
-  - `hookMissing` — agent file はあるが ptuf hook が無い (warning)
-  - `invalidJson` — どれかの agent file が JSON parse 失敗 (failure)
-  - `io` — directory / agent file の I/O error (failure)
-
-最初に `hookRegistered` を返した entry の path を採用する (local を
-global より優先する)。
-
-`doctor --json` 側は `kiro` ブロックとして同等情報を返す:
-
-```json
-{
-  "schemaVersion": 1,
-  "kiro": {
-    "localAgentsDir": "/repo/.kiro/agents",
-    "globalAgentsDir": "/home/me/.kiro/agents",
-    "state": "hookRegistered",
-    "configPath": "/repo/.kiro/agents/ptuf-guarded.json",
-    "scope": "local",
-    "matcher": "*"
-  }
-}
-```
-
-`scope` / `matcher` / `configPath` / `error` は state に応じて省略
-される (`#[serde(skip_serializing_if = "Option::is_none")]`)。
-
 ## audit log との関係
 
 Kiro 経由の hook 呼び出しは audit JSONL に `agent: "kiro"` として
@@ -179,6 +139,4 @@ Kiro 経由の hook 呼び出しは audit JSONL に `agent: "kiro"` として
 - `src/hook_output.rs::kiro::deny_reason_for_ask` — Ask 拒否文言
 - `src/init/kiro.rs` — `resolve_paths` / `install` / `entry_commands` /
   `command_invokes_ptuf_hook`
-- `src/doctor/mod.rs::{KiroStatus, KiroState, build_kiro_status,
-  KiroPaths}` と `src/doctor/json.rs::JsonKiro` — doctor 統合
 - `tests/cli_smoke.rs::kiro_hook_*` — subprocess 境界の smoke test

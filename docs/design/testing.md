@@ -110,7 +110,7 @@ mcp_nested_input / arbitrary_utf8_bytes / safe_command_string) を集約し、
 ここでは example-based / PBT とは別に、次を regression として保持する。
 
 - hook deny 時の `hookSpecificOutput` JSON shape
-- `doctor --json` の top-level schema
+- `init --json` の verify report top-level schema
 - audit JSONL の field contract (`schemaVersion`, `agent`, `allowlistId` など)
 - plugin loader error の fail-closed 契約
 - hook stdin の fail-closed 契約 (`core.engine.invalid-payload` での deny)

@@ -13,14 +13,14 @@ where
     S: AsRef<str>,
 {
     let owned: Vec<String> = args.iter().map(|s| s.as_ref().to_string()).collect();
-    let command = match cli::parse(&owned) {
+    let (globals, command) = match cli::parse(&owned) {
         Ok(c) => c,
         Err(err) => {
             let _ = writeln!(stderr, "ptuf: {err}");
             return ExitCode::from(1);
         },
     };
-    ExitCode::from(cli::run(command, stdin, stdout, stderr))
+    ExitCode::from(cli::run(globals, command, stdin, stdout, stderr))
 }
 
 #[cfg(test)]
@@ -28,10 +28,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn run_dispatches_eval_with_args() {
+    fn run_dispatches_check_with_args() {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let args: Vec<&str> = vec!["eval", "--tool", "Bash", "ls"];
+        let args: Vec<&str> = vec!["check", "--tool", "Bash", "ls"];
         let _exit = run(&args, b"" as &[u8], &mut out, &mut err);
         let out_s = String::from_utf8_lossy(&out);
         assert!(out_s.contains("Decision: allow"));

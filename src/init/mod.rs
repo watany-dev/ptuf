@@ -5,11 +5,45 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use crate::cli::HookAgent;
+
 pub mod claude_code;
 pub mod codex;
 pub mod copilot;
 pub mod kiro;
 pub mod verify;
+
+/// Auto-detect every agent reachable from the given `cwd` and `home`.
+///
+/// - `ClaudeCode`: requires `<home>/.claude/` to exist.
+/// - `Codex`: `<repo>/.codex/` or `<home>/.codex/`.
+/// - `Copilot`: `<repo>/.github/`.
+/// - `Kiro`: `<repo>/.kiro/` or `<home>/.kiro/`.
+///
+/// Returns agents in a stable order so callers can install / report
+/// deterministically. Production callers pass `std::env::var_os("HOME")`
+/// for `home`; tests inject deterministic paths.
+pub fn detect_agents(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> {
+    let repo = cwd.and_then(crate::config::repo::discover);
+    let mut found = Vec::new();
+    if home.is_some_and(|h| h.join(".claude").is_dir()) {
+        found.push(HookAgent::ClaudeCode);
+    }
+    if repo.as_deref().is_some_and(|r| r.join(".codex").is_dir())
+        || home.is_some_and(|h| h.join(".codex").is_dir())
+    {
+        found.push(HookAgent::Codex);
+    }
+    if repo.as_deref().is_some_and(|r| r.join(".github").is_dir()) {
+        found.push(HookAgent::Copilot);
+    }
+    if repo.as_deref().is_some_and(|r| r.join(".kiro").is_dir())
+        || home.is_some_and(|h| h.join(".kiro").is_dir())
+    {
+        found.push(HookAgent::Kiro);
+    }
+    found
+}
 
 /// Errors surfaced by every `init` adapter.
 #[derive(Debug)]
@@ -55,10 +89,13 @@ impl std::fmt::Display for InitError {
                     path.display()
                 )
             },
-            Self::HomeNotSet => write!(f, "$HOME is not set; pass --settings <PATH> explicitly"),
+            Self::HomeNotSet => write!(
+                f,
+                "$HOME is not set; ptuf init needs HOME to locate the agent's settings file"
+            ),
             Self::RepoRootNotFound => write!(
                 f,
-                "could not discover a repository root; pass --root <PATH> or explicit --hooks/--config paths"
+                "could not discover a repository root; run ptuf init from inside a git working tree"
             ),
         }
     }
@@ -445,6 +482,101 @@ mod tests {
             tmp.parent()
                 .map(|p| p.as_os_str().is_empty())
                 .unwrap_or(true)
+        );
+    }
+
+    #[test]
+    fn detect_agents_returns_empty_when_no_paths_exist() {
+        let dir = workdir("detect-empty");
+        let home = dir.join("home");
+        fs::create_dir_all(&home).expect("mkdir home");
+        // cwd has no .git → repo discover returns None.
+        assert!(detect_agents(Some(dir.as_path()), Some(home.as_path())).is_empty());
+        // Also covers the home=None branch.
+        assert!(detect_agents(Some(dir.as_path()), None).is_empty());
+        // And cwd=None.
+        assert!(detect_agents(None, Some(home.as_path())).is_empty());
+    }
+
+    #[test]
+    fn detect_agents_finds_claude_when_only_home_dotclaude_exists() {
+        let dir = workdir("detect-claude");
+        let home = dir.join("home");
+        fs::create_dir_all(home.join(".claude")).expect("mkdir home/.claude");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::ClaudeCode]);
+    }
+
+    #[test]
+    fn detect_agents_finds_codex_via_repo_only() {
+        let dir = workdir("detect-codex-repo");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        fs::create_dir_all(dir.join(".codex")).expect("mkdir .codex");
+        let home = dir.join("home");
+        fs::create_dir_all(&home).expect("mkdir home");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Codex]);
+    }
+
+    #[test]
+    fn detect_agents_finds_codex_via_home_only() {
+        let dir = workdir("detect-codex-home");
+        let home = dir.join("home");
+        fs::create_dir_all(home.join(".codex")).expect("mkdir home/.codex");
+        // cwd has no .git, no .codex.
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Codex]);
+    }
+
+    #[test]
+    fn detect_agents_finds_copilot_via_repo_dotgithub() {
+        let dir = workdir("detect-copilot");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        fs::create_dir_all(dir.join(".github")).expect("mkdir .github");
+        let home = dir.join("home");
+        fs::create_dir_all(&home).expect("mkdir home");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Copilot]);
+    }
+
+    #[test]
+    fn detect_agents_finds_kiro_via_repo_only() {
+        let dir = workdir("detect-kiro-repo");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        fs::create_dir_all(dir.join(".kiro")).expect("mkdir .kiro");
+        let home = dir.join("home");
+        fs::create_dir_all(&home).expect("mkdir home");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Kiro]);
+    }
+
+    #[test]
+    fn detect_agents_finds_kiro_via_home_only() {
+        let dir = workdir("detect-kiro-home");
+        let home = dir.join("home");
+        fs::create_dir_all(home.join(".kiro")).expect("mkdir home/.kiro");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Kiro]);
+    }
+
+    #[test]
+    fn detect_agents_returns_all_four_in_stable_order() {
+        let dir = workdir("detect-all");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        fs::create_dir_all(dir.join(".codex")).expect("mkdir .codex");
+        fs::create_dir_all(dir.join(".github")).expect("mkdir .github");
+        fs::create_dir_all(dir.join(".kiro")).expect("mkdir .kiro");
+        let home = dir.join("home");
+        fs::create_dir_all(home.join(".claude")).expect("mkdir home/.claude");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(
+            found,
+            vec![
+                HookAgent::ClaudeCode,
+                HookAgent::Codex,
+                HookAgent::Copilot,
+                HookAgent::Kiro,
+            ],
         );
     }
 }

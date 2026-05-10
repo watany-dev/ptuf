@@ -41,33 +41,27 @@ pub fn detect_binary() -> String {
         .unwrap_or_else(|| "ptuf".to_string())
 }
 
-pub fn resolve_paths(
+pub fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    resolve_paths_with(start, home.as_deref())
+}
+
+pub(crate) fn resolve_paths_with(
     start: Option<&Path>,
-    root: Option<&Path>,
-    hooks_path: Option<&Path>,
-    config_path: Option<&Path>,
+    home: Option<&Path>,
 ) -> Result<TargetPaths, InitError> {
-    let discovered_root = root
-        .map(Path::to_path_buf)
-        .or_else(|| start.and_then(crate::config::repo::discover));
-
-    let hooks_path = match (hooks_path, discovered_root.as_ref(), config_path) {
-        (Some(path), _, _) => path.to_path_buf(),
-        (None, Some(root), _) => root.join(".codex/hooks.json"),
-        (None, None, Some(config)) => sibling_path(config, "hooks.json"),
-        (None, None, None) => return Err(InitError::RepoRootNotFound),
-    };
-    let config_path = match (config_path, discovered_root.as_ref(), hooks_path.parent()) {
-        (Some(path), _, _) => path.to_path_buf(),
-        (None, Some(root), _) => root.join(".codex/config.toml"),
-        (None, None, Some(parent)) => parent.join("config.toml"),
-        (None, None, None) => PathBuf::from("config.toml"),
-    };
-
+    if let Some(root) = start.and_then(crate::config::repo::discover) {
+        return Ok(TargetPaths {
+            root: Some(root.clone()),
+            hooks_path: root.join(".codex/hooks.json"),
+            config_path: root.join(".codex/config.toml"),
+        });
+    }
+    let home = home.ok_or(InitError::RepoRootNotFound)?;
     Ok(TargetPaths {
-        root: discovered_root,
-        hooks_path,
-        config_path,
+        root: None,
+        hooks_path: home.join(".codex/hooks.json"),
+        config_path: home.join(".codex/config.toml"),
     })
 }
 
@@ -309,11 +303,6 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
     }
 }
 
-fn sibling_path(path: &Path, file_name: &str) -> PathBuf {
-    path.parent()
-        .map_or_else(|| PathBuf::from(file_name), |parent| parent.join(file_name))
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -336,37 +325,32 @@ mod tests {
     }
 
     #[test]
-    fn resolve_paths_prefers_root_defaults() {
-        let root = PathBuf::from("/repo");
-        let paths = resolve_paths(None, Some(&root), None, None).unwrap();
-        assert_eq!(paths.hooks_path, PathBuf::from("/repo/.codex/hooks.json"));
-        assert_eq!(paths.config_path, PathBuf::from("/repo/.codex/config.toml"));
+    fn resolve_paths_uses_repo_root_when_discovered() {
+        let dir = workdir("resolve-repo");
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        let paths = resolve_paths_with(Some(dir.as_path()), None).unwrap();
+        assert_eq!(paths.hooks_path, dir.join(".codex/hooks.json"));
+        assert_eq!(paths.config_path, dir.join(".codex/config.toml"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn resolve_paths_can_derive_from_explicit_hooks_path() {
-        let paths =
-            resolve_paths(None, None, Some(Path::new("/repo/.codex/hooks.json")), None).unwrap();
-        assert_eq!(paths.config_path, PathBuf::from("/repo/.codex/config.toml"));
+    fn resolve_paths_falls_back_to_home_when_no_repo_root() {
+        let home = workdir("resolve-home");
+        let outside = workdir("resolve-outside");
+        let paths = resolve_paths_with(Some(outside.as_path()), Some(home.as_path())).unwrap();
+        assert_eq!(paths.hooks_path, home.join(".codex/hooks.json"));
+        assert_eq!(paths.config_path, home.join(".codex/config.toml"));
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(&outside);
     }
 
     #[test]
-    fn resolve_paths_can_derive_hooks_from_explicit_config_path() {
-        let paths = resolve_paths(
-            None,
-            None,
-            None,
-            Some(Path::new("/repo/.codex/config.toml")),
-        )
-        .unwrap();
-        assert_eq!(paths.hooks_path, PathBuf::from("/repo/.codex/hooks.json"));
-        assert_eq!(paths.config_path, PathBuf::from("/repo/.codex/config.toml"));
-    }
-
-    #[test]
-    fn resolve_paths_requires_root_or_explicit_target() {
-        let err = resolve_paths(None, None, None, None).unwrap_err();
+    fn resolve_paths_errors_when_no_repo_and_home_unset() {
+        let outside = workdir("resolve-no-home");
+        let err = resolve_paths_with(Some(outside.as_path()), None).unwrap_err();
         assert!(matches!(err, InitError::RepoRootNotFound));
+        let _ = fs::remove_dir_all(&outside);
     }
 
     #[test]
@@ -903,20 +887,6 @@ mod tests {
             tmp.to_string_lossy().contains("hooks.json.ptuf."),
             "missing file_name must default to hooks.json: {tmp:?}"
         );
-    }
-
-    #[test]
-    fn sibling_path_falls_back_to_bare_filename_when_no_parent() {
-        let bare = Path::new("hooks.json");
-        let other = sibling_path(bare, "config.toml");
-        assert_eq!(other, PathBuf::from("config.toml"));
-    }
-
-    #[test]
-    fn resolve_paths_derives_config_alongside_explicit_bare_hooks_path() {
-        let paths = resolve_paths(None, None, Some(Path::new("hooks.json")), None).unwrap();
-        assert_eq!(paths.hooks_path, PathBuf::from("hooks.json"));
-        assert_eq!(paths.config_path, PathBuf::from("config.toml"));
     }
 
     #[test]

@@ -7,272 +7,47 @@
 
 use std::path::PathBuf;
 
-use super::{
-    ClaudeInitOptions, CodexInitOptions, Command, CopilotInitOptions, CopilotProfile, HookAgent,
-    InitOptions, KiroInitOptions, KiroScope, ParseError,
-};
-
-pub(super) fn parse_doctor<'a, I>(iter: &mut I) -> Result<Command, ParseError>
-where
-    I: Iterator<Item = &'a String>,
-{
-    let mut json = false;
-    for arg in iter {
-        match arg.as_str() {
-            "--json" => json = true,
-            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
-        }
-    }
-    Ok(Command::Doctor { json })
-}
+use super::{Command, HookAgent, InitOptions, ParseError};
 
 pub(super) fn parse_init<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
     I: Iterator<Item = &'a String>,
 {
-    let agent = iter.next().ok_or(ParseError::MissingValue("agent"))?;
-    match agent.as_str() {
-        "claude-code" => parse_init_claude(iter),
-        "codex" => parse_init_codex(iter),
-        "copilot" => parse_init_copilot(iter),
-        "kiro" => parse_init_kiro(iter),
-        _ => Err(ParseError::UnknownAgent(agent.clone())),
-    }
-}
-
-pub(super) fn parse_init_claude<'a, I>(iter: &mut I) -> Result<Command, ParseError>
-where
-    I: Iterator<Item = &'a String>,
-{
+    let mut agent: Option<HookAgent> = None;
     let mut dry_run = false;
-    let mut settings_path: Option<PathBuf> = None;
-    let mut verify = false;
-    let mut json = false;
-    while let Some(arg) = iter.next() {
+    let mut no_verify = false;
+    for arg in iter {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
-            "--verify" => verify = true,
-            "--json" => json = true,
-            "--settings" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--settings"))?;
-                settings_path = Some(PathBuf::from(value));
-            },
-            other if other.starts_with("--settings=") => {
-                settings_path = Some(PathBuf::from(other.trim_start_matches("--settings=")));
+            "--no-verify" => no_verify = true,
+            "claude-code" | "codex" | "copilot" | "kiro" => {
+                if agent.is_some() {
+                    return Err(ParseError::UnexpectedArgument(arg.clone()));
+                }
+                agent = Some(parse_agent(arg)?);
             },
             other => return Err(ParseError::UnexpectedArgument(other.to_string())),
         }
     }
-    check_verify_flags(verify, json, dry_run)?;
-    Ok(Command::Init {
+    // Dry-run never writes, so the synthetic-deny check would just
+    // confirm whatever was already on disk; treat dry-run as "skip
+    // verify" rather than as a parse error.
+    let verify = !no_verify && !dry_run;
+    Ok(Command::Init(InitOptions {
+        agent,
+        verify,
         dry_run,
-        options: InitOptions::ClaudeCode(ClaudeInitOptions {
-            settings_path,
-            verify,
-            json,
-        }),
-    })
+    }))
 }
 
-pub(super) fn parse_init_codex<'a, I>(iter: &mut I) -> Result<Command, ParseError>
-where
-    I: Iterator<Item = &'a String>,
-{
-    let mut dry_run = false;
-    let mut root: Option<PathBuf> = None;
-    let mut hooks_path: Option<PathBuf> = None;
-    let mut config_path: Option<PathBuf> = None;
-    let mut verify = false;
-    let mut json = false;
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--dry-run" => dry_run = true,
-            "--verify" => verify = true,
-            "--json" => json = true,
-            "--root" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--root"))?;
-                root = Some(PathBuf::from(value));
-            },
-            "--hooks" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--hooks"))?;
-                hooks_path = Some(PathBuf::from(value));
-            },
-            "--config" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--config"))?;
-                config_path = Some(PathBuf::from(value));
-            },
-            other if other.starts_with("--root=") => {
-                root = Some(PathBuf::from(other.trim_start_matches("--root=")));
-            },
-            other if other.starts_with("--hooks=") => {
-                hooks_path = Some(PathBuf::from(other.trim_start_matches("--hooks=")));
-            },
-            other if other.starts_with("--config=") => {
-                config_path = Some(PathBuf::from(other.trim_start_matches("--config=")));
-            },
-            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
-        }
-    }
-    check_verify_flags(verify, json, dry_run)?;
-    Ok(Command::Init {
-        dry_run,
-        options: InitOptions::Codex(CodexInitOptions {
-            root,
-            hooks_path,
-            config_path,
-            verify,
-            json,
-        }),
-    })
-}
-
-pub(super) fn parse_init_copilot<'a, I>(iter: &mut I) -> Result<Command, ParseError>
-where
-    I: Iterator<Item = &'a String>,
-{
-    let mut dry_run = false;
-    let mut root: Option<PathBuf> = None;
-    let mut hooks_path: Option<PathBuf> = None;
-    let mut profile = CopilotProfile::Local;
-    let mut verify = false;
-    let mut json = false;
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--dry-run" => dry_run = true,
-            "--verify" => verify = true,
-            "--json" => json = true,
-            "--root" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--root"))?;
-                root = Some(PathBuf::from(value));
-            },
-            "--hooks" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--hooks"))?;
-                hooks_path = Some(PathBuf::from(value));
-            },
-            "--profile" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--profile"))?;
-                profile = parse_copilot_profile(value)?;
-            },
-            other if other.starts_with("--root=") => {
-                root = Some(PathBuf::from(other.trim_start_matches("--root=")));
-            },
-            other if other.starts_with("--hooks=") => {
-                hooks_path = Some(PathBuf::from(other.trim_start_matches("--hooks=")));
-            },
-            other if other.starts_with("--profile=") => {
-                profile = parse_copilot_profile(other.trim_start_matches("--profile="))?;
-            },
-            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
-        }
-    }
-    check_verify_flags(verify, json, dry_run)?;
-    Ok(Command::Init {
-        dry_run,
-        options: InitOptions::Copilot(CopilotInitOptions {
-            root,
-            hooks_path,
-            profile,
-            verify,
-            json,
-        }),
-    })
-}
-
-pub(super) fn parse_init_kiro<'a, I>(iter: &mut I) -> Result<Command, ParseError>
-where
-    I: Iterator<Item = &'a String>,
-{
-    let mut dry_run = false;
-    let mut root: Option<PathBuf> = None;
-    let mut agent: Option<String> = None;
-    let mut agent_config_path: Option<PathBuf> = None;
-    let mut scope = KiroScope::Local;
-    let mut verify = false;
-    let mut json = false;
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--dry-run" => dry_run = true,
-            "--verify" => verify = true,
-            "--json" => json = true,
-            "--root" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--root"))?;
-                root = Some(PathBuf::from(value));
-            },
-            "--agent" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--agent"))?;
-                agent = Some(value.clone());
-            },
-            "--agent-config" => {
-                let value = iter
-                    .next()
-                    .ok_or(ParseError::MissingValue("--agent-config"))?;
-                agent_config_path = Some(PathBuf::from(value));
-            },
-            "--scope" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--scope"))?;
-                scope = parse_kiro_scope(value)?;
-            },
-            other if other.starts_with("--root=") => {
-                root = Some(PathBuf::from(other.trim_start_matches("--root=")));
-            },
-            other if other.starts_with("--agent=") => {
-                agent = Some(other.trim_start_matches("--agent=").to_string());
-            },
-            other if other.starts_with("--agent-config=") => {
-                agent_config_path =
-                    Some(PathBuf::from(other.trim_start_matches("--agent-config=")));
-            },
-            other if other.starts_with("--scope=") => {
-                scope = parse_kiro_scope(other.trim_start_matches("--scope="))?;
-            },
-            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
-        }
-    }
-    check_verify_flags(verify, json, dry_run)?;
-    Ok(Command::Init {
-        dry_run,
-        options: InitOptions::Kiro(KiroInitOptions {
-            root,
-            agent,
-            agent_config_path,
-            scope,
-            verify,
-            json,
-        }),
-    })
-}
-
-fn parse_kiro_scope(value: &str) -> Result<KiroScope, ParseError> {
+fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
     match value {
-        "local" => Ok(KiroScope::Local),
-        "global" => Ok(KiroScope::Global),
-        _ => Err(ParseError::UnexpectedArgument(format!("--scope {value}"))),
+        "claude-code" => Ok(HookAgent::ClaudeCode),
+        "codex" => Ok(HookAgent::Codex),
+        "copilot" => Ok(HookAgent::Copilot),
+        "kiro" => Ok(HookAgent::Kiro),
+        other => Err(ParseError::UnknownAgent(other.to_string())),
     }
-}
-
-fn parse_copilot_profile(value: &str) -> Result<CopilotProfile, ParseError> {
-    match value {
-        "local" => Ok(CopilotProfile::Local),
-        "cloud" => Ok(CopilotProfile::Cloud),
-        _ => Err(ParseError::UnexpectedArgument(format!("--profile {value}"))),
-    }
-}
-
-/// Reject `--verify` / `--json` / `--dry-run` combinations that have no
-/// sensible meaning. `--json` only structures verify output, so it must
-/// be paired with `--verify`. `--verify` forces an install + synthetic
-/// payload run, so it cannot be combined with `--dry-run` (which writes
-/// nothing).
-fn check_verify_flags(verify: bool, json: bool, dry_run: bool) -> Result<(), ParseError> {
-    if json && !verify {
-        return Err(ParseError::ConflictingFlags("--json requires --verify"));
-    }
-    if verify && dry_run {
-        return Err(ParseError::ConflictingFlags(
-            "--verify cannot be combined with --dry-run",
-        ));
-    }
-    Ok(())
 }
 
 pub(super) fn parse_hook<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -280,20 +55,14 @@ where
     I: Iterator<Item = &'a String>,
 {
     let agent = iter.next().ok_or(ParseError::MissingValue("agent"))?;
-    let agent = match agent.as_str() {
-        "claude-code" => HookAgent::ClaudeCode,
-        "codex" => HookAgent::Codex,
-        "copilot" => HookAgent::Copilot,
-        "kiro" => HookAgent::Kiro,
-        _ => return Err(ParseError::UnknownAgent(agent.clone())),
-    };
+    let agent = parse_agent(agent)?;
     if let Some(extra) = iter.next() {
         return Err(ParseError::UnexpectedArgument(extra.clone()));
     }
     Ok(Command::HookPreToolUse { agent })
 }
 
-pub(super) fn parse_eval<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+pub(super) fn parse_check<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
     I: Iterator<Item = &'a String>,
 {
@@ -318,7 +87,7 @@ where
     }
     let tool = tool.ok_or(ParseError::MissingValue("--tool"))?;
     let command = command.ok_or(ParseError::MissingValue("<command>"))?;
-    Ok(Command::Eval { tool, command })
+    Ok(Command::Check { tool, command })
 }
 
 pub(super) fn parse_plugin<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -326,14 +95,14 @@ where
     I: Iterator<Item = &'a String>,
 {
     let sub = iter.next().ok_or(ParseError::MissingValue("subcommand"))?;
-    if sub != "test" {
+    if sub != "check" {
         return Err(ParseError::UnknownCommand(format!("plugin {sub}")));
     }
     let path = iter.next().ok_or(ParseError::MissingValue("<path>"))?;
     if let Some(extra) = iter.next() {
         return Err(ParseError::UnexpectedArgument(extra.clone()));
     }
-    Ok(Command::PluginTest {
+    Ok(Command::PluginCheck {
         path: PathBuf::from(path),
     })
 }
@@ -344,10 +113,15 @@ mod tests {
     use std::path::PathBuf;
 
     use super::super::test_support::s;
-    use super::super::{
-        ClaudeInitOptions, CodexInitOptions, Command, CopilotInitOptions, CopilotProfile,
-        HookAgent, InitOptions, KiroInitOptions, KiroScope, ParseError, parse,
-    };
+    use super::super::{Command, GlobalFlags, HookAgent, InitOptions, ParseError, parse};
+
+    fn ok(args: &[&str]) -> (GlobalFlags, Command) {
+        parse(&s(args)).unwrap()
+    }
+
+    fn cmd(args: &[&str]) -> Command {
+        ok(args).1
+    }
 
     #[test]
     fn rejects_no_args_with_missing_subcommand_error() {
@@ -359,35 +133,34 @@ mod tests {
 
     #[test]
     fn parses_help_and_version() {
-        assert_eq!(parse(&s(&["--help"])).unwrap(), Command::Help);
-        assert_eq!(parse(&s(&["-h"])).unwrap(), Command::Help);
-        assert_eq!(parse(&s(&["--version"])).unwrap(), Command::Version);
-        assert_eq!(parse(&s(&["-V"])).unwrap(), Command::Version);
+        assert_eq!(cmd(&["--help"]), Command::Help);
+        assert_eq!(cmd(&["-h"]), Command::Help);
+        assert_eq!(cmd(&["--version"]), Command::Version);
+        assert_eq!(cmd(&["-V"]), Command::Version);
     }
 
     #[test]
     fn parses_hook_subcommand() {
-        let cmd = parse(&s(&["hook", "claude-code"])).unwrap();
         assert_eq!(
-            cmd,
+            cmd(&["hook", "claude-code"]),
             Command::HookPreToolUse {
                 agent: HookAgent::ClaudeCode
             }
         );
-        let codex = parse(&s(&["hook", "codex"])).unwrap();
         assert_eq!(
-            codex,
+            cmd(&["hook", "codex"]),
             Command::HookPreToolUse {
                 agent: HookAgent::Codex
             }
         );
-    }
-
-    #[test]
-    fn parses_kiro_hook_subcommand() {
-        let cmd = parse(&s(&["hook", "kiro"])).unwrap();
         assert_eq!(
-            cmd,
+            cmd(&["hook", "copilot"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::Copilot
+            }
+        );
+        assert_eq!(
+            cmd(&["hook", "kiro"]),
             Command::HookPreToolUse {
                 agent: HookAgent::Kiro
             }
@@ -419,47 +192,60 @@ mod tests {
     }
 
     #[test]
-    fn parses_eval_with_separate_value() {
-        let cmd = parse(&s(&["eval", "--tool", "Bash", "ls -la"])).unwrap();
-        assert_eq!(
-            cmd,
-            Command::Eval {
-                tool: "Bash".into(),
-                command: "ls -la".into()
-            }
-        );
-    }
-
-    #[test]
-    fn parses_eval_with_equals_form() {
-        let cmd = parse(&s(&["eval", "--tool=Bash", "ls"])).unwrap();
-        assert_eq!(
-            cmd,
-            Command::Eval {
-                tool: "Bash".into(),
-                command: "ls".into()
-            }
-        );
-    }
-
-    #[test]
-    fn eval_requires_tool_and_command() {
+    fn hook_rejects_global_json() {
         assert!(matches!(
-            parse(&s(&["eval", "--tool", "Bash"])),
+            parse(&s(&["--json", "hook", "claude-code"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn parses_check_with_separate_value() {
+        assert_eq!(
+            cmd(&["check", "--tool", "Bash", "ls -la"]),
+            Command::Check {
+                tool: "Bash".into(),
+                command: "ls -la".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_check_with_equals_form() {
+        assert_eq!(
+            cmd(&["check", "--tool=Bash", "ls"]),
+            Command::Check {
+                tool: "Bash".into(),
+                command: "ls".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn check_requires_tool_and_command() {
+        assert!(matches!(
+            parse(&s(&["check", "--tool", "Bash"])),
             Err(ParseError::MissingValue("<command>"))
         ));
         assert!(matches!(
-            parse(&s(&["eval", "ls"])),
+            parse(&s(&["check", "ls"])),
             Err(ParseError::MissingValue("--tool"))
         ));
     }
 
     #[test]
-    fn parses_plugin_test_subcommand() {
-        let cmd = parse(&s(&["plugin", "test", "demo.yaml"])).unwrap();
+    fn check_extra_positional_argument_is_rejected() {
+        assert!(matches!(
+            parse(&s(&["check", "--tool", "Bash", "ls", "extra"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn parses_plugin_check_subcommand() {
         assert_eq!(
-            cmd,
-            Command::PluginTest {
+            cmd(&["plugin", "check", "demo.yaml"]),
+            Command::PluginCheck {
                 path: PathBuf::from("demo.yaml"),
             }
         );
@@ -468,23 +254,23 @@ mod tests {
     #[test]
     fn rejects_unknown_plugin_subcommand() {
         assert!(matches!(
-            parse(&s(&["plugin", "lint", "demo.yaml"])),
+            parse(&s(&["plugin", "test", "demo.yaml"])),
             Err(ParseError::UnknownCommand(_))
         ));
     }
 
     #[test]
-    fn plugin_test_requires_path() {
+    fn plugin_check_requires_path() {
         assert!(matches!(
-            parse(&s(&["plugin", "test"])),
+            parse(&s(&["plugin", "check"])),
             Err(ParseError::MissingValue("<path>"))
         ));
     }
 
     #[test]
-    fn plugin_test_rejects_extra_argument() {
+    fn plugin_check_rejects_extra_argument() {
         assert!(matches!(
-            parse(&s(&["plugin", "test", "p.yaml", "extra"])),
+            parse(&s(&["plugin", "check", "p.yaml", "extra"])),
             Err(ParseError::UnexpectedArgument(_))
         ));
     }
@@ -506,540 +292,118 @@ mod tests {
     }
 
     #[test]
-    fn parses_init_with_just_agent() {
-        let cmd = parse(&s(&["init", "claude-code"])).unwrap();
+    fn parses_init_no_agent_returns_init_with_none() {
+        let (g, c) = ok(&["init"]);
+        assert!(!g.json);
         assert_eq!(
-            cmd,
-            Command::Init {
+            c,
+            Command::Init(InitOptions {
+                agent: None,
+                verify: true,
                 dry_run: false,
-                options: InitOptions::ClaudeCode(ClaudeInitOptions::default()),
-            }
+            })
         );
     }
 
     #[test]
-    fn parses_init_with_dry_run_and_settings() {
-        let cmd = parse(&s(&[
-            "init",
-            "claude-code",
-            "--dry-run",
-            "--settings",
-            "/tmp/x.json",
-        ]))
-        .unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: true,
-                options: InitOptions::ClaudeCode(ClaudeInitOptions {
-                    settings_path: Some(PathBuf::from("/tmp/x.json")),
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_init_with_equals_settings_form() {
-        let cmd = parse(&s(&["init", "claude-code", "--settings=/tmp/x.json"])).unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::ClaudeCode(ClaudeInitOptions {
-                    settings_path: Some(PathBuf::from("/tmp/x.json")),
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_codex_init_flags() {
-        let cmd = parse(&s(&[
-            "init",
-            "codex",
-            "--dry-run",
-            "--root",
-            "/repo",
-            "--hooks=/tmp/hooks.json",
-            "--config",
-            "/tmp/config.toml",
-        ]))
-        .unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: true,
-                options: InitOptions::Codex(CodexInitOptions {
-                    root: Some(PathBuf::from("/repo")),
-                    hooks_path: Some(PathBuf::from("/tmp/hooks.json")),
-                    config_path: Some(PathBuf::from("/tmp/config.toml")),
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_init_with_verify() {
-        let cmd = parse(&s(&["init", "claude-code", "--verify"])).unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::ClaudeCode(ClaudeInitOptions {
+    fn parses_init_with_each_agent_token() {
+        for (token, expected) in [
+            ("claude-code", HookAgent::ClaudeCode),
+            ("codex", HookAgent::Codex),
+            ("copilot", HookAgent::Copilot),
+            ("kiro", HookAgent::Kiro),
+        ] {
+            let c = cmd(&["init", token]);
+            assert_eq!(
+                c,
+                Command::Init(InitOptions {
+                    agent: Some(expected),
                     verify: true,
-                    ..Default::default()
+                    dry_run: false,
                 }),
-            }
-        );
+                "agent token {token}",
+            );
+        }
     }
 
     #[test]
-    fn parses_init_with_verify_json() {
-        let cmd = parse(&s(&["init", "codex", "--verify", "--json"])).unwrap();
+    fn parses_init_no_verify_flag() {
         assert_eq!(
-            cmd,
-            Command::Init {
+            cmd(&["init", "--no-verify"]),
+            Command::Init(InitOptions {
+                agent: None,
+                verify: false,
                 dry_run: false,
-                options: InitOptions::Codex(CodexInitOptions {
-                    verify: true,
-                    json: true,
-                    ..Default::default()
-                }),
-            }
+            })
         );
     }
 
     #[test]
-    fn rejects_json_without_verify() {
-        assert!(matches!(
-            parse(&s(&["init", "claude-code", "--json"])),
-            Err(ParseError::ConflictingFlags(_))
-        ));
+    fn parses_init_dry_run_implies_verify_off() {
+        assert_eq!(
+            cmd(&["init", "--dry-run"]),
+            Command::Init(InitOptions {
+                agent: None,
+                verify: false,
+                dry_run: true,
+            })
+        );
     }
 
     #[test]
-    fn rejects_verify_with_dry_run() {
-        assert!(matches!(
-            parse(&s(&["init", "claude-code", "--verify", "--dry-run"])),
-            Err(ParseError::ConflictingFlags(_))
-        ));
+    fn parses_init_with_agent_and_dry_run() {
+        assert_eq!(
+            cmd(&["init", "claude-code", "--dry-run"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::ClaudeCode),
+                verify: false,
+                dry_run: true,
+            })
+        );
     }
 
     #[test]
-    fn init_requires_agent() {
+    fn init_rejects_two_agent_tokens() {
         assert!(matches!(
-            parse(&s(&["init"])),
-            Err(ParseError::MissingValue("agent"))
+            parse(&s(&["init", "claude-code", "codex"])),
+            Err(ParseError::UnexpectedArgument(_))
         ));
     }
 
     #[test]
     fn init_rejects_unknown_flags() {
         assert!(matches!(
-            parse(&s(&["init", "claude-code", "--bogus"])),
+            parse(&s(&["init", "--bogus"])),
             Err(ParseError::UnexpectedArgument(_))
         ));
         assert!(matches!(
-            parse(&s(&["init", "codex", "--settings=/tmp/x.json"])),
-            Err(ParseError::UnexpectedArgument(_))
-        ));
-    }
-
-    #[test]
-    fn init_settings_flag_requires_value() {
-        assert!(matches!(
-            parse(&s(&["init", "claude-code", "--settings"])),
-            Err(ParseError::MissingValue("--settings"))
-        ));
-        assert!(matches!(
-            parse(&s(&["init", "codex", "--hooks"])),
-            Err(ParseError::MissingValue("--hooks"))
-        ));
-    }
-
-    #[test]
-    fn parses_doctor_subcommand() {
-        assert_eq!(
-            parse(&s(&["doctor"])).unwrap(),
-            Command::Doctor { json: false }
-        );
-        assert_eq!(
-            parse(&s(&["doctor", "--json"])).unwrap(),
-            Command::Doctor { json: true }
-        );
-    }
-
-    #[test]
-    fn doctor_rejects_unknown_flags() {
-        assert!(matches!(
-            parse(&s(&["doctor", "--bogus"])),
+            parse(&s(&["init", "claude-code", "--settings=/tmp/x.json"])),
             Err(ParseError::UnexpectedArgument(_))
         ));
     }
 
     #[test]
-    fn eval_extra_positional_argument_is_rejected() {
+    fn parse_global_json_before_subcommand() {
+        let (g, c) = ok(&["--json", "init"]);
+        assert!(g.json);
+        assert!(matches!(c, Command::Init(_)));
+    }
+
+    #[test]
+    fn parse_global_json_then_check() {
+        let (g, c) = ok(&["--json", "check", "--tool", "Bash", "ls"]);
+        assert!(g.json);
+        assert!(matches!(c, Command::Check { .. }));
+    }
+
+    #[test]
+    fn parse_global_json_after_subcommand_is_unknown_arg() {
         assert!(matches!(
-            parse(&s(&["eval", "--tool", "Bash", "ls", "extra"])),
+            parse(&s(&["init", "--json"])),
             Err(ParseError::UnexpectedArgument(_))
         ));
-    }
-
-    #[test]
-    fn parse_codex_init_accepts_equals_forms_for_all_path_flags() {
-        let cmd = parse(&s(&[
-            "init",
-            "codex",
-            "--root=/r",
-            "--hooks=/h.json",
-            "--config=/c.toml",
-        ]))
-        .unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Codex(CodexInitOptions {
-                    root: Some(PathBuf::from("/r")),
-                    hooks_path: Some(PathBuf::from("/h.json")),
-                    config_path: Some(PathBuf::from("/c.toml")),
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_codex_init_separate_hooks_form_value() {
-        let cmd = parse(&s(&["init", "codex", "--hooks", "/h.json"])).unwrap();
         assert!(matches!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Codex(CodexInitOptions {
-                    hooks_path: Some(_),
-                    ..
-                })
-            }
-        ));
-    }
-
-    #[test]
-    fn parses_init_rejects_unknown_agent() {
-        assert!(matches!(
-            parse(&s(&["init", "bogus"])),
-            Err(ParseError::UnknownAgent(_))
-        ));
-    }
-
-    #[test]
-    fn parses_eval_rejects_extra_positional() {
-        assert!(matches!(
-            parse(&s(&["eval", "--tool", "Bash", "ls", "extra"])),
-            Err(ParseError::UnexpectedArgument(_))
-        ));
-    }
-
-    #[test]
-    fn parses_copilot_init_with_just_agent() {
-        let cmd = parse(&s(&["init", "copilot"])).unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Copilot(CopilotInitOptions {
-                    profile: CopilotProfile::Local,
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_copilot_init_flags() {
-        let cmd = parse(&s(&[
-            "init",
-            "copilot",
-            "--dry-run",
-            "--root",
-            "/repo",
-            "--hooks=/tmp/hooks.json",
-            "--profile",
-            "local",
-        ]))
-        .unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: true,
-                options: InitOptions::Copilot(CopilotInitOptions {
-                    root: Some(PathBuf::from("/repo")),
-                    hooks_path: Some(PathBuf::from("/tmp/hooks.json")),
-                    profile: CopilotProfile::Local,
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_copilot_init_with_equals_root_and_profile() {
-        let cmd = parse(&s(&["init", "copilot", "--root=/r", "--profile=local"])).unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Copilot(CopilotInitOptions {
-                    root: Some(PathBuf::from("/r")),
-                    profile: CopilotProfile::Local,
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_copilot_init_with_verify_and_json() {
-        let cmd = parse(&s(&["init", "copilot", "--verify", "--json"])).unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Copilot(CopilotInitOptions {
-                    profile: CopilotProfile::Local,
-                    verify: true,
-                    json: true,
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn accepts_copilot_profile_cloud() {
-        assert_eq!(
-            parse(&s(&["init", "copilot", "--profile", "cloud"])).unwrap(),
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Copilot(CopilotInitOptions {
-                    profile: CopilotProfile::Cloud,
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn accepts_copilot_profile_cloud_with_eq_form() {
-        assert_eq!(
-            parse(&s(&["init", "copilot", "--profile=cloud"])).unwrap(),
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Copilot(CopilotInitOptions {
-                    profile: CopilotProfile::Cloud,
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_copilot_unknown_profile_value() {
-        assert!(matches!(
-            parse(&s(&["init", "copilot", "--profile", "weird"])),
-            Err(ParseError::UnexpectedArgument(_))
-        ));
-    }
-
-    #[test]
-    fn copilot_root_flag_requires_value() {
-        assert!(matches!(
-            parse(&s(&["init", "copilot", "--root"])),
-            Err(ParseError::MissingValue("--root"))
-        ));
-    }
-
-    #[test]
-    fn copilot_hooks_flag_requires_value() {
-        assert!(matches!(
-            parse(&s(&["init", "copilot", "--hooks"])),
-            Err(ParseError::MissingValue("--hooks"))
-        ));
-    }
-
-    #[test]
-    fn copilot_profile_flag_requires_value() {
-        assert!(matches!(
-            parse(&s(&["init", "copilot", "--profile"])),
-            Err(ParseError::MissingValue("--profile"))
-        ));
-    }
-
-    #[test]
-    fn copilot_init_rejects_unknown_flag() {
-        assert!(matches!(
-            parse(&s(&["init", "copilot", "--unknown"])),
-            Err(ParseError::UnexpectedArgument(_))
-        ));
-    }
-
-    #[test]
-    fn copilot_init_rejects_json_without_verify() {
-        assert!(matches!(
-            parse(&s(&["init", "copilot", "--json"])),
-            Err(ParseError::ConflictingFlags(_))
-        ));
-    }
-
-    #[test]
-    fn copilot_init_rejects_verify_with_dry_run() {
-        assert!(matches!(
-            parse(&s(&["init", "copilot", "--verify", "--dry-run"])),
-            Err(ParseError::ConflictingFlags(_))
-        ));
-    }
-
-    #[test]
-    fn parses_kiro_init_with_defaults() {
-        let cmd = parse(&s(&["init", "kiro"])).unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Kiro(KiroInitOptions {
-                    scope: KiroScope::Local,
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_kiro_init_flags_root_agent_scope() {
-        let cmd = parse(&s(&[
-            "init", "kiro", "--root", "/repo", "--agent", "guarded", "--scope", "global",
-        ]))
-        .unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Kiro(KiroInitOptions {
-                    root: Some(PathBuf::from("/repo")),
-                    agent: Some("guarded".into()),
-                    scope: KiroScope::Global,
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_kiro_init_agent_config() {
-        let cmd = parse(&s(&["init", "kiro", "--agent-config=/tmp/agents/x.json"])).unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Kiro(KiroInitOptions {
-                    agent_config_path: Some(PathBuf::from("/tmp/agents/x.json")),
-                    scope: KiroScope::Local,
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_kiro_init_dry_run() {
-        let cmd = parse(&s(&["init", "kiro", "--dry-run"])).unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: true,
-                options: InitOptions::Kiro(KiroInitOptions {
-                    scope: KiroScope::Local,
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_kiro_init_with_equals_forms() {
-        let cmd = parse(&s(&[
-            "init",
-            "kiro",
-            "--root=/r",
-            "--agent=name",
-            "--scope=local",
-        ]))
-        .unwrap();
-        assert_eq!(
-            cmd,
-            Command::Init {
-                dry_run: false,
-                options: InitOptions::Kiro(KiroInitOptions {
-                    root: Some(PathBuf::from("/r")),
-                    agent: Some("name".into()),
-                    scope: KiroScope::Local,
-                    ..Default::default()
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn kiro_init_rejects_json_without_verify() {
-        assert!(matches!(
-            parse(&s(&["init", "kiro", "--json"])),
-            Err(ParseError::ConflictingFlags(_))
-        ));
-    }
-
-    #[test]
-    fn kiro_init_rejects_verify_with_dry_run() {
-        assert!(matches!(
-            parse(&s(&["init", "kiro", "--verify", "--dry-run"])),
-            Err(ParseError::ConflictingFlags(_))
-        ));
-    }
-
-    #[test]
-    fn kiro_init_rejects_unknown_scope_value() {
-        assert!(matches!(
-            parse(&s(&["init", "kiro", "--scope", "weird"])),
-            Err(ParseError::UnexpectedArgument(_))
-        ));
-    }
-
-    #[test]
-    fn kiro_init_flags_require_values() {
-        assert!(matches!(
-            parse(&s(&["init", "kiro", "--root"])),
-            Err(ParseError::MissingValue("--root"))
-        ));
-        assert!(matches!(
-            parse(&s(&["init", "kiro", "--agent"])),
-            Err(ParseError::MissingValue("--agent"))
-        ));
-        assert!(matches!(
-            parse(&s(&["init", "kiro", "--agent-config"])),
-            Err(ParseError::MissingValue("--agent-config"))
-        ));
-        assert!(matches!(
-            parse(&s(&["init", "kiro", "--scope"])),
-            Err(ParseError::MissingValue("--scope"))
-        ));
-    }
-
-    #[test]
-    fn kiro_init_rejects_unknown_flag() {
-        assert!(matches!(
-            parse(&s(&["init", "kiro", "--bogus"])),
+            parse(&s(&["check", "--tool", "Bash", "ls", "--json"])),
             Err(ParseError::UnexpectedArgument(_))
         ));
     }

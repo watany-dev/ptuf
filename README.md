@@ -44,13 +44,13 @@ The full pack catalogue lives in
 After installing, run the manual evaluator without wiring anything up:
 
 ```text
-$ ptuf eval --tool Bash 'rm -rf /'
+$ ptuf check --tool Bash 'rm -rf /'
 Decision: deny
 Rule: core.filesystem.destructive-rm
 # stderr: Blocked by ptuf rule core.filesystem.destructive-rm. ...
 # exit 2
 
-$ ptuf eval --tool Bash 'ls'
+$ ptuf check --tool Bash 'ls'
 Decision: allow
 # exit 0
 ```
@@ -84,7 +84,7 @@ ptuf init codex
 **GitHub Copilot** — writes `<repo>/.github/hooks/ptuf.json`:
 
 ```bash
-ptuf init copilot --profile local
+ptuf init copilot
 ```
 
 **Kiro CLI** — writes `<repo>/.kiro/agents/ptuf-guarded.json`:
@@ -93,19 +93,32 @@ ptuf init copilot --profile local
 ptuf init kiro
 ```
 
-For `--dry-run`, `--scope global`, payload normalization, and the per-host
-hook envelope details, see [`docs/agents.md`](docs/agents.md).
+`ptuf init` with no agent auto-detects every reachable host under cwd /
+`$HOME` and installs the `PreToolUse` hook into each. Pass `--dry-run`
+to show the plan without writing, or `--no-verify` to skip the
+post-install synthetic deny check. The full CLI surface, per-host hook
+envelope details, and payload normalization rules live in
+[`docs/agents.md`](docs/agents.md) and
+[`docs/design/cli-and-hooks.md`](docs/design/cli-and-hooks.md).
 
-## Verify and diagnose
+## CLI
 
-After install, prove the wiring is fail-closed and the binary, config, and
-hook entries all line up:
-
-```bash
-ptuf init <agent> --verify   # synthetic deny + synthetic policy-load failure
-ptuf doctor                  # binary / config / plugins / hook diagnostics
-ptuf doctor --json           # machine-readable report
+```text
+ptuf hook <agent>
+ptuf [--json] check --tool <name> <command>
+ptuf [--json] plugin check <path>
+ptuf [--json] init [<agent>] [--no-verify] [--dry-run]
+ptuf --help
+ptuf --version
 ```
+
+`--json` is a global, top-level flag; it must appear *before* the
+subcommand. `hook` does not accept `--json` because the hook protocol
+output shape is fixed by the host. `init` runs the post-install verify
+by default; pass `--no-verify` to skip, or `--dry-run` to plan only
+(dry-run implicitly turns verify off because nothing is written).
+`hook_event_name` other than `preToolUse` is rejected with
+`core.engine.invalid-payload`.
 
 ## Customize
 
@@ -130,7 +143,7 @@ audit:
 Full schema (allowlists, plugin loading, audit redaction) lives in
 [`docs/design/config-and-plugins.md`](docs/design/config-and-plugins.md).
 Plugin authoring (`apiVersion: ptuf.dev/v1`, rule-local `tests:`,
-`ptuf plugin test`) is in the same doc.
+`ptuf plugin check`) is in the same doc.
 
 ## Use as a Rust library
 

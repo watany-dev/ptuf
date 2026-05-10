@@ -53,61 +53,30 @@ impl HookAgent {
     }
 }
 
+/// Parsed `ptuf init [<agent>] [--no-verify] [--dry-run]`.
+///
+/// `agent = None` means "auto-detect every agent reachable from
+/// `cwd` / `$HOME`". `verify` defaults to `true`; `--no-verify`
+/// flips it off, and `--dry-run` implicitly disables verify (a
+/// dry run never writes, so the synthetic-deny check would just
+/// confirm the unmodified disk state).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ClaudeInitOptions {
-    pub settings_path: Option<PathBuf>,
+pub struct InitOptions {
+    pub agent: Option<HookAgent>,
     pub verify: bool,
-    pub json: bool,
+    pub dry_run: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CodexInitOptions {
-    pub root: Option<PathBuf>,
-    pub hooks_path: Option<PathBuf>,
-    pub config_path: Option<PathBuf>,
-    pub verify: bool,
-    pub json: bool,
-}
-
+/// Top-level flags that apply uniformly across subcommands.
+///
+/// Currently only `--json`, accepted exclusively before the
+/// subcommand token (`ptuf --json init`). Per-subcommand
+/// `--json` was removed in the v0 simplification; `hook` rejects
+/// `--json` at parse time because the hook protocol output shape
+/// is fixed by Claude Code / Codex / Copilot / Kiro.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CopilotProfile {
-    #[default]
-    Local,
-    Cloud,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CopilotInitOptions {
-    pub root: Option<PathBuf>,
-    pub hooks_path: Option<PathBuf>,
-    pub profile: CopilotProfile,
-    pub verify: bool,
+pub struct GlobalFlags {
     pub json: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum KiroScope {
-    #[default]
-    Local,
-    Global,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct KiroInitOptions {
-    pub root: Option<PathBuf>,
-    pub agent: Option<String>,
-    pub agent_config_path: Option<PathBuf>,
-    pub scope: KiroScope,
-    pub verify: bool,
-    pub json: bool,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum InitOptions {
-    ClaudeCode(ClaudeInitOptions),
-    Codex(CodexInitOptions),
-    Copilot(CopilotInitOptions),
-    Kiro(KiroInitOptions),
 }
 
 /// Build the engine for the CWD-derived project scope, or surface a
@@ -150,15 +119,14 @@ pub enum Command {
     /// `ptuf hook <agent>` — read JSON payload from stdin and emit an
     /// agent-specific `hookSpecificOutput` response on stdout.
     HookPreToolUse { agent: HookAgent },
-    /// `ptuf eval --tool <name> <command>` — manual evaluation.
-    Eval { tool: String, command: String },
-    /// `ptuf plugin test <path>` — run plugin assertions.
-    PluginTest { path: PathBuf },
-    /// `ptuf init <agent> [--dry-run] [--settings <PATH>]` — install the
-    /// PreToolUse hook entry.
-    Init { dry_run: bool, options: InitOptions },
-    /// `ptuf doctor [--json]` — print a diagnostic report.
-    Doctor { json: bool },
+    /// `ptuf check --tool <name> <command>` — manual evaluation.
+    Check { tool: String, command: String },
+    /// `ptuf plugin check <path>` — run plugin assertions.
+    PluginCheck { path: PathBuf },
+    /// `ptuf init [<agent>] [--no-verify] [--dry-run]` — install the
+    /// PreToolUse hook entry. `agent = None` auto-detects every
+    /// agent reachable from cwd / `$HOME`.
+    Init(InitOptions),
     /// `--help` / `-h`.
     Help,
     /// `--version` / `-V`.
@@ -186,64 +154,68 @@ impl std::fmt::Display for ParseError {
     }
 }
 
-/// Parse argv (excluding the program name) into a [`Command`].
-pub fn parse(args: &[String]) -> Result<Command, ParseError> {
-    let mut iter = args.iter();
+/// Parse argv (excluding the program name) into a [`GlobalFlags`] +
+/// [`Command`]. `--json` is accepted only as a leading global flag —
+/// any later occurrence is rejected by the subcommand parser as an
+/// unexpected argument.
+pub fn parse(args: &[String]) -> Result<(GlobalFlags, Command), ParseError> {
+    let mut iter = args.iter().peekable();
+    let mut globals = GlobalFlags::default();
+    while let Some(a) = iter.peek() {
+        if a.as_str() == "--json" {
+            globals.json = true;
+            iter.next();
+        } else {
+            break;
+        }
+    }
     let first = iter.next().ok_or(ParseError::MissingValue("subcommand"))?;
 
-    match first.as_str() {
-        "-h" | "--help" => Ok(Command::Help),
-        "-V" | "--version" => Ok(Command::Version),
-        "hook" => parse::parse_hook(&mut iter),
-        "eval" => parse::parse_eval(&mut iter),
-        "plugin" => parse::parse_plugin(&mut iter),
-        "init" => parse::parse_init(&mut iter),
-        "doctor" => parse::parse_doctor(&mut iter),
-        other => Err(ParseError::UnknownCommand(other.to_string())),
+    let cmd = match first.as_str() {
+        "-h" | "--help" => Command::Help,
+        "-V" | "--version" => Command::Version,
+        "hook" => parse::parse_hook(&mut iter)?,
+        "check" => parse::parse_check(&mut iter)?,
+        "plugin" => parse::parse_plugin(&mut iter)?,
+        "init" => parse::parse_init(&mut iter)?,
+        other => return Err(ParseError::UnknownCommand(other.to_string())),
+    };
+
+    if globals.json && matches!(cmd, Command::HookPreToolUse { .. }) {
+        return Err(ParseError::ConflictingFlags(
+            "--json is meaningless for `hook`",
+        ));
     }
+    Ok((globals, cmd))
 }
 
 const HELP: &str = "ptuf — PreToolUseFilter, a guardrail for coding agents
 
 USAGE:
-    ptuf hook <AGENT>                            (run as the agent's PreToolUse hook;
-                                                  AGENT = claude-code | codex | copilot | kiro)
-    ptuf eval --tool <NAME> <COMMAND>            (evaluate a single tool call)
-    ptuf plugin test <PATH>                      (run a plugin's deny/allow tests)
-    ptuf init claude-code [--dry-run]            (register hook in
-                          [--settings <PATH>]    ~/.claude/settings.json;
-                          [--verify [--json]]    --verify runs synthetic deny +
-                                                  fail-closed checks after install)
-    ptuf init codex [--dry-run]                  (register repo-local Codex hook in
-                    [--root <PATH>]              <repo>/.codex/{hooks.json,config.toml})
-                    [--hooks <PATH>]
-                    [--config <PATH>]
-                    [--verify [--json]]
-    ptuf init copilot [--dry-run]                (register repo-local Copilot hook in
-                      [--root <PATH>]            <repo>/.github/hooks/ptuf.json)
-                      [--hooks <PATH>]
-                      [--profile local|cloud]
-                      [--verify [--json]]
-    ptuf init kiro [--dry-run]                   (register Kiro CLI preToolUse hook in
-                   [--root <PATH>]               <repo>/.kiro/agents/<name>.json or
-                   [--agent <NAME>]              ~/.kiro/agents/<name>.json)
-                   [--agent-config <PATH>]
-                   [--scope local|global]
-                   [--verify [--json]]
-    ptuf doctor [--json]                         (print a diagnostic report)
+    ptuf [--json] init [<AGENT>] [--no-verify] [--dry-run]
+        (auto-detect every agent under cwd / $HOME and install the
+         PreToolUse hook with verify enabled by default. AGENT pins
+         to a single adapter: claude-code | codex | copilot | kiro)
+    ptuf hook <AGENT>
+        (run as the agent's PreToolUse hook over stdin/stdout)
+    ptuf [--json] check --tool <NAME> <COMMAND>
+        (evaluate a single tool call against the active policy)
+    ptuf [--json] plugin check <PATH>
+        (run a plugin's deny/allow tests)
     ptuf --help | --version
 
 EXIT CODES:
-    0   allow / monitor / ask / plugin tests pass
-    1   non-hook internal error (eval / plugin / init / doctor / bad arguments)
-        or plugin tests fail
-    2   deny — including hook initialisation failures (invalid stdin payload,
-        policy load error)
+    0   allow / monitor / ask / plugin tests pass / init succeeds
+    1   non-hook internal error (check / plugin / init / bad arguments)
+        or plugin tests fail or verify fails
+    2   deny — including hook initialisation failures (invalid stdin
+        payload, policy load error)
 ";
 
 /// Run a parsed [`Command`] against the given I/O streams. Returns the u8
 /// exit code so [`crate::io_runner::run`] can wrap it in [`std::process::ExitCode`].
 pub fn run<R: Read, W1: Write, W2: Write>(
+    globals: GlobalFlags,
     command: Command,
     stdin: R,
     stdout: &mut W1,
@@ -251,10 +223,9 @@ pub fn run<R: Read, W1: Write, W2: Write>(
 ) -> u8 {
     match command {
         Command::HookPreToolUse { agent } => run::run_hook(agent, stdin, stdout, stderr),
-        Command::Eval { tool, command } => run::run_eval(&tool, &command, stdout, stderr),
-        Command::PluginTest { path } => run::run_plugin_test(&path, stdout, stderr),
-        Command::Init { dry_run, options } => run::run_init(options, dry_run, stdout, stderr),
-        Command::Doctor { json } => run::run_doctor(json, stdout, stderr),
+        Command::Check { tool, command } => run::run_check(&tool, &command, stdout, stderr),
+        Command::PluginCheck { path } => run::run_plugin_check(&path, stdout, stderr),
+        Command::Init(options) => run::run_init(globals, options, stdout, stderr),
         Command::Help => {
             let _ = writeln!(stdout, "{HELP}");
             0
