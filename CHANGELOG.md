@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-05-10
 
 ### BREAKING
 - **CLI surface — zero-base simplification.** `v0.1.0` rewires the
@@ -224,5 +224,5 @@ Initial public release.
 - `curl | sh` and PowerShell installers via cargo-dist
 - crates.io publication
 
-[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.0.1...HEAD
+[0.1.0]: https://github.com/watany-dev/ptuf/releases/tag/v0.1.0
 [0.0.1]: https://github.com/watany-dev/ptuf/releases/tag/v0.0.1
