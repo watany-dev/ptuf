@@ -259,6 +259,7 @@ fn doctor_prints_each_section() {
     assert!(stdout.contains("Plugins"));
     assert!(stdout.contains("Claude Code integration"));
     assert!(stdout.contains("Codex integration"));
+    assert!(stdout.contains("GitHub Copilot integration"));
 }
 
 #[test]
@@ -835,4 +836,96 @@ fn init_codex_real_install_is_byte_for_byte_idempotent() {
     let config_second = std::fs::read(&config_path).expect("read config after second install");
     assert_eq!(hooks_first, hooks_second, "hooks.json must be stable");
     assert_eq!(config_first, config_second, "config.toml must be stable");
+}
+
+#[test]
+fn init_copilot_dry_run_is_idempotent() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("hooks.json");
+    let path_str = path.to_string_lossy().into_owned();
+
+    let (code1, stdout1, _) = run(&["init", "copilot", "--dry-run", "--hooks", &path_str], "");
+    assert_eq!(code1, 0);
+    assert!(stdout1.contains("would register hook"));
+    assert!(!path.exists(), "dry-run must not write the hooks file");
+
+    let (code2, stdout2, _) = run(&["init", "copilot", "--dry-run", "--hooks", &path_str], "");
+    assert_eq!(code2, 0);
+    assert!(stdout2.contains("would register hook"));
+    assert!(
+        !path.exists(),
+        "second dry-run must not write the hooks file"
+    );
+}
+
+#[test]
+fn init_copilot_verify_writes_hooks_and_passes_checks() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("hooks.json");
+    let path_str = path.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run(&["init", "copilot", "--verify", "--hooks", &path_str], "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(path.exists(), "verify must persist hooks on success");
+    assert!(stdout.contains("Verify:"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("Synthetic deny test: passed (rule: core.filesystem.destructive-rm)"),
+        "stdout: {stdout}",
+    );
+    assert!(
+        stdout.contains(
+            "Fail-closed internal error test: passed (rule: core.engine.policy-load-failed)",
+        ),
+        "stdout: {stdout}",
+    );
+    assert!(stdout.contains("Warnings: none"), "stdout: {stdout}");
+    assert!(
+        !stdout.contains("rolled back"),
+        "happy path must not roll back"
+    );
+}
+
+#[test]
+fn init_copilot_verify_json_passes_checks() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("hooks.json");
+    let path_str = path.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run(
+        &[
+            "init", "copilot", "--verify", "--json", "--hooks", &path_str,
+        ],
+        "",
+    );
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid verify json");
+    assert_eq!(value["installed"], true);
+    assert_eq!(value["rolledBack"], false);
+    assert_eq!(value["verify"]["syntheticDeny"]["status"], "passed");
+    assert_eq!(value["verify"]["failClosed"]["status"], "passed");
+}
+
+// A second install must not re-encode hooks.json (key order /
+// whitespace), so the file remains byte-identical.
+#[test]
+fn init_copilot_real_install_is_byte_for_byte_idempotent() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("hooks.json");
+    let path_str = path.to_string_lossy().into_owned();
+
+    let (code1, _stdout1, stderr1) = run(&["init", "copilot", "--hooks", &path_str], "");
+    assert_eq!(code1, 0, "stderr: {stderr1}");
+    let after_first = std::fs::read(&path).expect("read hooks after first install");
+
+    let (code2, stdout2, stderr2) = run(&["init", "copilot", "--hooks", &path_str], "");
+    assert_eq!(code2, 0, "stderr: {stderr2}");
+    assert!(
+        stdout2.contains("already contains"),
+        "second install must report already-present; stdout: {stdout2}",
+    );
+    let after_second = std::fs::read(&path).expect("read hooks after second install");
+    assert_eq!(
+        after_first, after_second,
+        "second install must not rewrite hooks.json"
+    );
 }
