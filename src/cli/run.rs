@@ -184,10 +184,11 @@ where
     F: FnMut() -> init::verify::VerifyReport,
 {
     let cwd = std::env::current_dir().ok();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
     let agents = if let Some(a) = options.agent {
         vec![a]
     } else {
-        let detected = init::detect_agents(cwd.as_deref());
+        let detected = init::detect_agents(cwd.as_deref(), home.as_deref());
         if detected.is_empty() {
             let _ = writeln!(
                 stderr,
@@ -230,7 +231,7 @@ where
                         let _ = init::verify::render_text(report, stdout);
                         if rolled_back {
                             let _ =
-                                writeln!(stdout, "ptuf init: rolled back changes (verify failed)",);
+                                writeln!(stdout, "ptuf init: rolled back changes (verify failed)");
                         } else if !report.passed()
                             && matches!(outcome.status, init::InstallStatus::AlreadyPresent)
                         {
@@ -250,7 +251,7 @@ where
                         "error": err.to_string(),
                     }));
                 } else {
-                    let _ = writeln!(stderr, "ptuf init {}: {err}", agent.audit_name(),);
+                    let _ = writeln!(stderr, "ptuf init {}: {err}", agent.audit_name());
                 }
             },
         }

@@ -358,7 +358,146 @@ fn init_auto_detect_with_no_agents_returns_error() {
     // Empty home and tempdir cwd → no .claude/.codex/.github/.kiro present.
     let (code, stdout, stderr) = run_in(&["init"], home, Some(home), "");
     assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
-    assert!(stderr.contains("no agent detected"), "stderr: {stderr}",);
+    assert!(stderr.contains("no agent detected"), "stderr: {stderr}");
+}
+
+#[test]
+fn init_auto_detect_finds_copilot_via_repo_dotgithub_only() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
+    std::fs::create_dir_all(cwd.join(".github")).expect("mkdir .github");
+
+    let (code, stdout, stderr) = run_in(&["init", "--dry-run"], cwd, Some(&home), "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(
+        stdout.contains("detected agents: copilot"),
+        "stdout: {stdout}",
+    );
+    assert!(stdout.contains("would register hook"), "stdout: {stdout}");
+}
+
+#[test]
+fn init_auto_detect_skips_summary_line_in_json_mode() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
+    std::fs::create_dir_all(cwd.join(".github")).expect("mkdir .github");
+
+    let (code, stdout, stderr) = run_in(&["--json", "init", "--dry-run"], cwd, Some(&home), "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(
+        !stdout.contains("detected agents:"),
+        "JSON mode must not emit the text summary: {stdout}",
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("JSON mode must emit valid JSON");
+    assert_eq!(value["status"], "wouldInstall");
+    assert_eq!(value["agent"], "copilot");
+}
+
+#[test]
+fn init_auto_detect_aggregates_multiple_agents_into_json_array() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
+    std::fs::create_dir_all(cwd.join(".github")).expect("mkdir .github");
+    std::fs::create_dir_all(cwd.join(".kiro")).expect("mkdir .kiro");
+
+    let (code, stdout, stderr) = run_in(&["--json", "init", "--dry-run"], cwd, Some(&home), "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("JSON mode must emit valid JSON");
+    let arr = value
+        .as_array()
+        .expect("multi-agent must aggregate into array");
+    assert_eq!(arr.len(), 2);
+    let agents: Vec<&str> = arr.iter().filter_map(|v| v["agent"].as_str()).collect();
+    assert!(agents.contains(&"copilot"), "agents: {agents:?}");
+    assert!(agents.contains(&"kiro"), "agents: {agents:?}");
+}
+
+#[test]
+fn init_explicit_copilot_outside_repo_renders_text_error() {
+    // Copilot resolve_paths requires a repo root and never falls back
+    // to $HOME, so a tempdir without .git triggers RepoRootNotFound.
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+
+    let (code, stdout, stderr) = run_in(&["init", "copilot"], cwd, Some(&home), "");
+    assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
+    assert!(stderr.contains("ptuf init copilot:"), "stderr: {stderr}");
+}
+
+#[test]
+fn init_explicit_copilot_outside_repo_renders_json_error() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+
+    let (code, stdout, stderr) = run_in(&["--json", "init", "copilot"], cwd, Some(&home), "");
+    assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("JSON Err arm must emit valid JSON");
+    assert_eq!(value["agent"], "copilot");
+    assert!(
+        value["error"].as_str().is_some(),
+        "error key must be a string: {value}",
+    );
+}
+
+#[test]
+fn init_auto_detect_finds_codex_via_repo_only() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
+    std::fs::create_dir_all(cwd.join(".codex")).expect("mkdir .codex");
+
+    let (code, stdout, stderr) = run_in(&["init", "--dry-run"], cwd, Some(&home), "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(
+        stdout.contains("detected agents: codex"),
+        "stdout: {stdout}",
+    );
+}
+
+#[test]
+fn init_auto_detect_finds_codex_via_home_only() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".codex")).expect("mkdir home/.codex");
+    // No .git in cwd — codex must still be detected through HOME.
+
+    let (code, stdout, stderr) = run_in(&["init", "--dry-run"], cwd, Some(&home), "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(
+        stdout.contains("detected agents: codex"),
+        "stdout: {stdout}",
+    );
+}
+
+#[test]
+fn init_auto_detect_finds_kiro_via_home_only() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".kiro")).expect("mkdir home/.kiro");
+
+    let (code, stdout, stderr) = run_in(&["init", "--dry-run"], cwd, Some(&home), "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(stdout.contains("detected agents: kiro"), "stdout: {stdout}");
 }
 
 #[test]
