@@ -37,6 +37,11 @@ runs the call. A few examples of what fires by default:
   — blocks `git reset --hard`, `git clean -fdx`, `git branch -D`, and
   `git stash clear` when checked out on a protected branch (default:
   `main`, `master`, `release/*`).
+- **`core.workspace.outside-access`** *(opt-in)* — blocks `Read` /
+  `Write` / `Edit` / `apply_patch` / MCP `path` / Bash redirect targets
+  whose canonical path falls outside the project root plus
+  `additionalWorkspaces`. Symlinks and `..` are resolved before the
+  boundary check.
 - **`core.self_protection.*`** — blocks the agent from editing ptuf's own
   binary, config, plugins, hook script, or your `~/.claude/settings.json`
   hook entry. The agent cannot turn ptuf off mid-session.

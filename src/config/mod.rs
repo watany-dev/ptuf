@@ -61,6 +61,11 @@ pub struct Config {
     /// A higher scope's value replaces lower scopes wholesale rather
     /// than merging, so projects can override the default cleanly.
     pub protected_branches: Vec<String>,
+    /// Extra workspace boundaries consumed by
+    /// `core.workspace.outside-access`. Stored raw (with `~` un-expanded);
+    /// the engine canonicalises them when constructing `Engine.workspaces`.
+    /// A higher scope's value replaces lower scopes wholesale.
+    pub additional_workspaces: Vec<String>,
 }
 
 impl Default for Config {
@@ -75,6 +80,15 @@ impl Default for Config {
                 enabled: Some(false),
             },
         );
+        // core.workspace is opt-in: outside-access also denies Read,
+        // which would block reads of external libraries (~/.cargo/...,
+        // /usr/include) for projects that have not opted into the boundary.
+        pack_overrides.insert(
+            "core.workspace".to_string(),
+            PackOverride {
+                enabled: Some(false),
+            },
+        );
         Self {
             mode: Mode::default(),
             fail_closed: true,
@@ -84,6 +98,7 @@ impl Default for Config {
             plugin_paths: Vec::new(),
             audit: AuditConfig::default(),
             protected_branches: vec!["main".into(), "master".into(), "release/*".into()],
+            additional_workspaces: Vec::new(),
         }
     }
 }

@@ -61,6 +61,9 @@ fn apply(acc: &mut Config, layer: MergeLayer) {
     if let Some(branches) = layer.protected_branches {
         acc.protected_branches = branches;
     }
+    if let Some(ws) = layer.additional_workspaces {
+        acc.additional_workspaces = ws;
+    }
 }
 
 fn merge_pack_override(into: &mut PackOverride, from: PackOverride) {
@@ -97,6 +100,7 @@ mod tests {
         RawPack {
             enabled: Some(enabled),
             protected_branches: None,
+            additional_workspaces: None,
         }
     }
 
@@ -106,12 +110,19 @@ mod tests {
         assert_eq!(cfg, Config::default());
         assert_eq!(cfg.mode, Mode::Enforce);
         assert!(cfg.fail_closed);
-        // Builtin default disables `core.project_hygiene` (opt-in pack);
-        // anything beyond that comes from explicit YAML.
-        assert_eq!(cfg.pack_overrides.len(), 1);
+        // Builtin defaults disable the two opt-in packs
+        // (`core.project_hygiene`, `core.workspace`); anything beyond
+        // that comes from explicit YAML.
+        assert_eq!(cfg.pack_overrides.len(), 2);
         assert_eq!(
             cfg.pack_overrides
                 .get("core.project_hygiene")
+                .and_then(|o| o.enabled),
+            Some(false),
+        );
+        assert_eq!(
+            cfg.pack_overrides
+                .get("core.workspace")
                 .and_then(|o| o.enabled),
             Some(false),
         );
@@ -161,8 +172,9 @@ mod tests {
             ..raw()
         };
         let cfg = merge(vec![lower, higher]);
-        // 2 explicit overrides + 1 built-in default for core.project_hygiene.
-        assert_eq!(cfg.pack_overrides.len(), 3);
+        // 2 explicit overrides + 2 built-in defaults
+        // (core.project_hygiene, core.workspace).
+        assert_eq!(cfg.pack_overrides.len(), 4);
         assert_eq!(
             cfg.pack_overrides
                 .get("core.network")
