@@ -82,8 +82,12 @@ audit:
 | --- | --- | --- |
 | `enabled` | `bool` | pack 全体の有効 / 無効 |
 | `protectedBranches` | `string[]` | `core.project_hygiene` のみ使用 |
+| `additionalWorkspaces` | `string[]` | `core.workspace` のみ使用。`~` / `$HOME` を展開し、engine が canonical 化して `repo_root` と合わせて境界集合を作る |
 
-`core.project_hygiene` は default で `enabled: false`。
+`core.project_hygiene` と `core.workspace` は default で `enabled: false`。
+`core.workspace.outside-access` は Read も対象にするため、有効化すると
+外部 lib (`~/.cargo/registry/...`, `/usr/include/...` など) の参照が
+deny される。詳細は `policy-packs.md#core-workspace` を参照。
 
 ### `rules`
 

@@ -12,6 +12,7 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 | `core.self_protection` | enabled | ptuf 自身と hook 設定の保護 |
 | `core.engine` | enabled | 動的コード評価 (`bash -c` / `eval` 等) の確認 |
 | `core.project_hygiene` | disabled | lockfile / protected branch 規約 |
+| `core.workspace` | disabled | workspace 外への Read/Write/redirect/MCP path |
 
 ## `core.filesystem`
 
@@ -127,4 +128,45 @@ packs:
       - main
       - master
       - release/*
+```
+
+## `core.workspace`
+
+この pack は default で無効。`packs.core.workspace.enabled: true` で有効化する。
+Read も対象になるため、有効化すると外部 lib (`~/.cargo/registry/...`,
+`/usr/include/...` など) の参照が default で deny される点に注意する。
+
+| Rule id | Decision | hardDeny | severity | 対象 |
+| --- | --- | --- | --- | --- |
+| `core.workspace.outside-access` | deny | false | medium | tool 入力 (`Read`/`Edit`/`Write`/`apply_patch`/MCP `path`) と Bash redirect target が workspace 境界の外を指す場合 |
+
+境界は engine の `repo_root` (`.git` 探索結果) と
+`packs.core.workspace.additionalWorkspaces` の和集合。両方とも未設定なら
+ルールはスキップ (`None` を返す)。境界・候補とも `canonicalize` で
+symlink を解決してから component 単位で `starts_with` 判定するため、
+`/work-evil` のような lookalike prefix では誤マッチしない。存在しない
+descendant については祖先まで遡って canonicalize し、`..` を自前で
+解決した正規化形を判定対象とする。
+
+```yaml
+packs:
+  core.workspace:
+    enabled: true
+    additionalWorkspaces:
+      - ~/work/notes
+      - /opt/shared/scratch
+```
+
+UX 上の摩擦を緩和したい場合は `allowlists` で対象パスを限定的に許可
+できる:
+
+```yaml
+allowlists:
+  - id: tmp-build-ok
+    appliesTo:
+      rules: [core.workspace.outside-access]
+    when:
+      path.absolute:
+        startsWith: /tmp/build-
+    reason: ビルドキャッシュは workspace 外 OK
 ```

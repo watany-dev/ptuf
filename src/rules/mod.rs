@@ -11,6 +11,7 @@ pub mod remote_pipe;
 pub mod self_protection;
 pub mod sensitive_net;
 pub mod sensitive_read;
+pub mod workspace;
 
 /// Trait implemented by every rule that the engine evaluates, both
 /// builtin and (eventually) plugin-loaded.
@@ -68,6 +69,7 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &project_hygiene::LockMismatchPnpm,
     &project_hygiene::LockMismatchUv,
     &project_hygiene::ProtectedBranchDestructiveGit,
+    &workspace::OUTSIDE_ACCESS_RULE,
 ];
 
 /// Run every built-in rule against `facts` + `input` and collect
@@ -154,6 +156,7 @@ mod tests {
         ] {
             assert!(ids.contains(&hyg_id), "missing rule_id {hyg_id}");
         }
+        assert!(ids.contains(&"core.workspace.outside-access"));
     }
 
     #[test]

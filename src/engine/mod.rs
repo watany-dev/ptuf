@@ -57,6 +57,11 @@ pub struct Engine {
     /// flag) collected once at construction so per-decide evaluation
     /// stays I/O-free.
     project_facts: ProjectFacts,
+    /// Canonical workspace boundaries for `core.workspace.outside-access`.
+    /// Built from `repo_root` plus `config.additional_workspaces`. Empty
+    /// when no boundary is configured — the rule treats that as a skip
+    /// rather than a fail-closed.
+    workspaces: Vec<PathBuf>,
 }
 
 /// Result of [`Engine::decide`].
@@ -129,6 +134,7 @@ impl Engine {
         let protected = ProtectedPaths::collect(repo_root, &config);
         let plugin_versions = compute_plugin_versions(&plugins);
         let project_facts = facts::project::collect(repo_root, &config.protected_branches);
+        let workspaces = compute_workspaces(repo_root, &config);
         Ok(Self {
             config,
             plugins,
@@ -140,6 +146,7 @@ impl Engine {
             agent: "unknown",
             plugin_versions,
             project_facts,
+            workspaces,
         })
     }
 
@@ -168,6 +175,7 @@ impl Engine {
         let protected = ProtectedPaths::collect(None, &config);
         let plugin_versions = compute_plugin_versions(&plugins);
         let project_facts = facts::project::collect(None, &config.protected_branches);
+        let workspaces = compute_workspaces(None, &config);
         Ok(Self {
             config,
             plugins,
@@ -179,6 +187,7 @@ impl Engine {
             agent: "unknown",
             plugin_versions,
             project_facts,
+            workspaces,
         })
     }
 
@@ -189,6 +198,7 @@ impl Engine {
         let protected = ProtectedPaths::collect(None, &config);
         let plugin_versions = compute_plugin_versions(&plugins);
         let project_facts = facts::project::collect(None, &config.protected_branches);
+        let workspaces = compute_workspaces(None, &config);
         Self {
             config,
             plugins,
@@ -200,6 +210,7 @@ impl Engine {
             agent: "unknown",
             plugin_versions,
             project_facts,
+            workspaces,
         }
     }
 
@@ -217,7 +228,13 @@ impl Engine {
     /// Override the engine's recorded project root. Useful for tests
     /// that construct an engine directly without going through
     /// [`Engine::new`].
+    ///
+    /// Recomputes `workspaces` so `core.workspace.outside-access` keeps
+    /// matching the active root. `protected` and `project_facts` are not
+    /// re-derived — callers that need those rebuilt should construct a
+    /// fresh [`Engine`] via [`Engine::new`] / [`Engine::builder`].
     pub fn with_repo_root(mut self, repo_root: Option<PathBuf>) -> Self {
+        self.workspaces = compute_workspaces(repo_root.as_deref(), &self.config);
         self.repo_root = repo_root;
         self
     }
@@ -298,12 +315,17 @@ impl Engine {
         // Bash redirect targets surfaced by the parser (`>`, `>>`, `<`,
         // `2>`, `&>`). Redirect facts are kept off `facts.paths` to
         // preserve the tool-input semantics the plugin DSL relies on.
-        let redirect_facts =
+        // Re-derive against the engine's repo_root so redirect targets
+        // are anchored at the project root rather than the cwd default.
+        facts.bash_redirects =
             facts::path::from_bash_redirects(facts.bash.as_ref(), self.repo_root.as_deref());
-        facts.protected =
-            self.protected
-                .classify_input_with_paths_pair(input, &facts.paths, &redirect_facts);
+        facts.protected = self.protected.classify_input_with_paths_pair(
+            input,
+            &facts.paths,
+            &facts.bash_redirects,
+        );
         facts.project = self.project_facts.clone();
+        facts.workspaces.clone_from(&self.workspaces);
         let now = SystemTime::now();
         let allowlist_ctx = AllowlistContext {
             facts: &facts,
@@ -425,6 +447,32 @@ pub(super) fn compute_plugin_versions(plugins: &PluginSet) -> Vec<String> {
         .iter()
         .map(|p| format!("{}@{}", p.name, p.version))
         .collect()
+}
+
+/// Build the canonical workspace boundary list consumed by
+/// `core.workspace.outside-access`. `repo_root` becomes the first
+/// boundary (resolved through `canonicalize` to follow symlinks);
+/// `config.additional_workspaces` entries are home-expanded then
+/// canonicalised. Entries that fail to canonicalise are kept in their
+/// unresolved form so the boundary is still enforceable. Duplicates are
+/// dropped while preserving order.
+pub(super) fn compute_workspaces(repo_root: Option<&Path>, config: &Config) -> Vec<PathBuf> {
+    use crate::config::scope::SystemEnv;
+    let mut out: Vec<PathBuf> = Vec::new();
+    let push = |path: PathBuf, out: &mut Vec<PathBuf>| {
+        let resolved = path.canonicalize().unwrap_or(path);
+        if !out.contains(&resolved) {
+            out.push(resolved);
+        }
+    };
+    if let Some(root) = repo_root {
+        push(root.to_path_buf(), &mut out);
+    }
+    for raw in &config.additional_workspaces {
+        let expanded = facts::path::expand_home(raw, &SystemEnv);
+        push(expanded, &mut out);
+    }
+    out
 }
 
 fn audit_sink_from_config(config: &Config) -> (Box<dyn AuditSink>, Option<String>) {
