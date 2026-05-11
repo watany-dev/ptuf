@@ -221,11 +221,22 @@ mod tests {
 
     #[test]
     fn symlink_inside_workspace_pointing_outside_is_denied() {
+        // Use a self-contained outside tempdir as the symlink target rather
+        // than an OS-specific path like /etc/hostname: macOS does not ship
+        // /etc/hostname by default, which makes the symlink dangling and
+        // lets climb-and-canonicalize re-resolve the path back inside the
+        // workspace, producing a false Allow.
+        let outside_dir = tempfile::TempDir::new().expect("outside tempdir");
+        let outside_target = outside_dir.path().join("target");
+        std::fs::write(&outside_target, b"x").expect("write outside target");
+        let outside_canonical = outside_target
+            .canonicalize()
+            .expect("canonicalize outside target");
+
         let dir = tempfile::TempDir::new().expect("tempdir");
         let workspace = dir.path().canonicalize().expect("canonicalize");
-        // Create a symlink inside the workspace that points to /etc.
         let link = workspace.join("escape");
-        std::os::unix::fs::symlink("/etc/hostname", &link).expect("symlink");
+        std::os::unix::fs::symlink(&outside_canonical, &link).expect("symlink");
         let input = read_input(link.to_str().expect("utf-8"));
         let f = facts_with_workspaces(&input, vec![workspace]);
         assert!(matches!(
