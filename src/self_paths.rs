@@ -880,6 +880,150 @@ mod tests {
         assert!(labels.contains(&ProtectedKind::ClaudeSettings));
     }
 
+    #[test]
+    fn collect_includes_repo_local_copilot_settings() {
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        assert!(
+            p.copilot_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/repo/.github/hooks/ptuf.json"))
+        );
+    }
+
+    #[test]
+    fn collect_includes_kiro_settings_for_repo_and_home() {
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        assert!(
+            p.kiro_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/repo/.kiro/agents/ptuf-guarded.json"))
+        );
+        assert!(
+            p.kiro_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/h/.kiro/agents/ptuf-guarded.json"))
+        );
+    }
+
+    #[test]
+    fn collect_extracts_hook_scripts_from_copilot_hooks_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-copilot-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(dir.join(".github/hooks")).expect("mkdir");
+        std::fs::write(
+            dir.join(".github/hooks/ptuf.json"),
+            r#"{
+  "hooks": {
+    "preToolUse": [
+      {
+        "bash": "./hooks/guard.sh hook copilot",
+        "powershell": "./hooks/guard.sh hook copilot"
+      }
+    ]
+  }
+}"#,
+        )
+        .expect("write hooks");
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
+        assert!(
+            p.hook_scripts
+                .iter()
+                .any(|path| path == &dir.join("./hooks/guard.sh")),
+            "expected hook script from copilot hooks.json, got {:?}",
+            p.hook_scripts
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_extracts_hook_scripts_from_kiro_hooks_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-kiro-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(dir.join(".kiro/agents")).expect("mkdir");
+        std::fs::write(
+            dir.join(".kiro/agents/ptuf-guarded.json"),
+            r#"{
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": "./hooks/guard.sh hook kiro"
+      }
+    ]
+  }
+}"#,
+        )
+        .expect("write agent");
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
+        assert!(
+            p.hook_scripts
+                .iter()
+                .any(|path| path == &dir.join("./hooks/guard.sh")),
+            "expected hook script from kiro ptuf-guarded.json, got {:?}",
+            p.hook_scripts
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn classify_matches_edit_of_copilot_settings() {
+        let p = ProtectedPaths {
+            copilot_settings: vec![PathBuf::from("/repo/.github/hooks/ptuf.json")],
+            ..ProtectedPaths::default()
+        };
+        let input = HookInput {
+            tool_name: "Edit".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/.github/hooks/ptuf.json"
+            }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(labels.contains(&ProtectedKind::CopilotSettings));
+    }
+
+    #[test]
+    fn classify_matches_edit_of_kiro_settings() {
+        let p = ProtectedPaths {
+            kiro_settings: vec![PathBuf::from("/repo/.kiro/agents/ptuf-guarded.json")],
+            ..ProtectedPaths::default()
+        };
+        let input = HookInput {
+            tool_name: "Edit".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/.kiro/agents/ptuf-guarded.json"
+            }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(labels.contains(&ProtectedKind::KiroSettings));
+    }
+
+    #[test]
+    fn classify_matches_edit_of_binary_path() {
+        let p = ProtectedPaths {
+            binary: Some(PathBuf::from("/usr/bin/ptuf")),
+            ..ProtectedPaths::default()
+        };
+        let input = HookInput {
+            tool_name: "Edit".into(),
+            tool_input: serde_json::json!({ "file_path": "/usr/bin/ptuf" }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(labels.contains(&ProtectedKind::Binary));
+    }
+
     use crate::testing::proptest::{protected_kind, richer_hook_input};
     use proptest::prelude::*;
 

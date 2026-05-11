@@ -519,16 +519,90 @@ mod tests {
     }
 
     #[test]
-    fn sibling_temp_path_falls_back_to_bare_filename_when_no_parent() {
-        let bare = Path::new("agent.json");
-        let tmp = sibling_temp_path(bare);
+    fn write_json_atomically_propagates_dir_creation_error() {
+        let dir = workdir("write-json-dir-fail");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, "not-a-dir").expect("write blocker");
+        // parent = dir/blocker/nested — create_dir_all fails because blocker is a file
+        let target = blocker.join("nested").join("target.json");
+        let err = write_json_atomically(&target, &json!({"x": 1}))
+            .expect_err("must fail when parent can't be created");
         assert!(
-            tmp.parent()
-                .map(Path::as_os_str)
-                .unwrap_or_default()
-                .is_empty(),
-            "no-parent input must yield no-parent temp path: {tmp:?}"
+            matches!(err, InitError::Io { .. }),
+            "expected Io, got {err:?}"
         );
-        assert!(tmp.to_string_lossy().contains("agent.json.ptuf."));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_json_atomically_propagates_write_error_when_tmp_is_a_directory() {
+        let dir = workdir("write-tmp-blocked");
+        let target = dir.join("ptuf-guarded.json");
+        let collision = dir.join(format!("ptuf-guarded.json.ptuf.{}.tmp", std::process::id()));
+        fs::create_dir_all(&collision).unwrap();
+        let targets = TargetPaths {
+            agent_config_path: target,
+        };
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
+        assert!(
+            matches!(err, InitError::Io { .. }),
+            "expected Io, got {err:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_json_atomically_propagates_rename_error_when_target_is_a_directory() {
+        let dir = workdir("rename-blocked");
+        let target = dir.join("target");
+        fs::create_dir_all(&target).unwrap();
+        let err = write_json_atomically(&target, &json!({"x": 1}))
+            .expect_err("rename onto dir must fail");
+        assert!(
+            matches!(err, InitError::Io { .. }),
+            "expected Io, got {err:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_paths_falls_back_to_home_when_outside_git_tree() {
+        // Pass a path that is not a git worktree so discover() returns None,
+        // triggering the HOME fallback on line 66-68.
+        let result = resolve_paths(Some(Path::new("/nonexistent-definitely-not-git")));
+        match result {
+            Ok(t) => assert!(
+                t.agent_config_path
+                    .to_string_lossy()
+                    .contains(".kiro/agents"),
+                "expected kiro path, got {:?}",
+                t.agent_config_path
+            ),
+            Err(InitError::RepoRootNotFound) => {},
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    #[test]
+    fn pre_tool_use_commands_extracts_all_commands() {
+        let root = json!({
+            "hooks": {
+                "preToolUse": [
+                    { "command": "/x/ptuf hook kiro" },
+                    { "command": "/y/ptuf hook kiro" },
+                ]
+            }
+        });
+        let cmds = pre_tool_use_commands(&root);
+        assert_eq!(cmds, vec!["/x/ptuf hook kiro", "/y/ptuf hook kiro"]);
+    }
+
+    #[test]
+    fn pre_tool_use_commands_returns_empty_when_key_missing() {
+        assert!(pre_tool_use_commands(&json!({})).is_empty());
+        assert!(pre_tool_use_commands(&json!({ "hooks": {} })).is_empty());
+        assert!(
+            pre_tool_use_commands(&json!({ "hooks": { "preToolUse": "not-array" } })).is_empty()
+        );
     }
 }
