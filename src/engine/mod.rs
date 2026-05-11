@@ -449,30 +449,13 @@ pub(super) fn compute_plugin_versions(plugins: &PluginSet) -> Vec<String> {
         .collect()
 }
 
-/// Build the canonical workspace boundary list consumed by
-/// `core.workspace.outside-access`. `repo_root` becomes the first
-/// boundary (resolved through `canonicalize` to follow symlinks);
-/// `config.additional_workspaces` entries are home-expanded then
-/// canonicalised. Entries that fail to canonicalise are kept in their
-/// unresolved form so the boundary is still enforceable. Duplicates are
-/// dropped while preserving order.
+/// Resolve the workspace boundary list for an engine constructor.
+/// Thin wrapper around [`facts::path::canonical_workspaces`] that pulls
+/// the additional-workspace strings out of `Config` and supplies the
+/// process environment for `~` / `$HOME` expansion.
 pub(super) fn compute_workspaces(repo_root: Option<&Path>, config: &Config) -> Vec<PathBuf> {
     use crate::config::scope::SystemEnv;
-    let mut out: Vec<PathBuf> = Vec::new();
-    let push = |path: PathBuf, out: &mut Vec<PathBuf>| {
-        let resolved = path.canonicalize().unwrap_or(path);
-        if !out.contains(&resolved) {
-            out.push(resolved);
-        }
-    };
-    if let Some(root) = repo_root {
-        push(root.to_path_buf(), &mut out);
-    }
-    for raw in &config.additional_workspaces {
-        let expanded = facts::path::expand_home(raw, &SystemEnv);
-        push(expanded, &mut out);
-    }
-    out
+    facts::path::canonical_workspaces(repo_root, &config.additional_workspaces, &SystemEnv)
 }
 
 fn audit_sink_from_config(config: &Config) -> (Box<dyn AuditSink>, Option<String>) {

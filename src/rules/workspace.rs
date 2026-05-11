@@ -185,12 +185,14 @@ mod tests {
 
     #[test]
     fn lookalike_prefix_does_not_satisfy_boundary() {
-        // workspace = /tmp/work-XXX. /tmp/work-XXX-evil/foo would
-        // satisfy a byte-prefix check but must fail the component-wise
-        // starts_with test.
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let workspace = dir.path().to_path_buf();
-        let evil_root = workspace.with_extension("evil");
+        // workspace ≠ workspace-evil as a path component prefix, even
+        // though `<ws>-evil/x` byte-prefix-matches `<ws>`. Both dirs
+        // sit inside the same parent TempDir so RAII cleans them up
+        // even on panic.
+        let parent = tempfile::TempDir::new().expect("tempdir");
+        let workspace = parent.path().join("work");
+        let evil_root = parent.path().join("work-evil");
+        std::fs::create_dir_all(&workspace).expect("mkdir workspace");
         std::fs::create_dir_all(&evil_root).expect("mkdir evil");
         let evil_target = evil_root.join("payload.txt");
         let input = write_input(evil_target.to_str().expect("utf-8"));
@@ -199,7 +201,6 @@ mod tests {
             OUTSIDE_ACCESS_RULE.evaluate(&f, &input),
             Some(Decision::Deny { .. })
         ));
-        let _ = std::fs::remove_dir_all(&evil_root);
     }
 
     #[test]

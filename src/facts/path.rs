@@ -219,6 +219,35 @@ pub fn is_within_workspace(target: &Path, workspaces: &[PathBuf]) -> bool {
     workspaces.iter().any(|w| target.starts_with(w))
 }
 
+/// Build the canonical workspace boundary list consumed by
+/// `core.workspace.outside-access`. `repo_root` becomes the first
+/// boundary (resolved through `canonicalize` to follow symlinks);
+/// `additional` entries are home-expanded against `env` then
+/// canonicalised. Entries that fail to canonicalise are kept in their
+/// unresolved form so the boundary is still enforceable. Duplicates are
+/// dropped while preserving order.
+pub(crate) fn canonical_workspaces(
+    repo_root: Option<&Path>,
+    additional: &[String],
+    env: &dyn EnvLookup,
+) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    if let Some(root) = repo_root {
+        push_canonical(root.to_path_buf(), &mut out);
+    }
+    for raw in additional {
+        push_canonical(expand_home(raw, env), &mut out);
+    }
+    out
+}
+
+fn push_canonical(path: PathBuf, out: &mut Vec<PathBuf>) {
+    let resolved = path.canonicalize().unwrap_or(path);
+    if !out.contains(&resolved) {
+        out.push(resolved);
+    }
+}
+
 /// Resolve `.` and `..` components without touching the filesystem.
 /// Used as a final pass on paths whose tail does not exist on disk and
 /// therefore cannot be canonicalised by the OS. `..` at the root or in
@@ -347,10 +376,8 @@ fn push_redirect_fact(redirect: &Redirect, repo_root: Option<&Path>, out: &mut V
 }
 
 /// Expand `~` / `$HOME` / `${HOME}` prefixes against the supplied env
-/// lookup. Falls back to the raw string when `HOME` is unset. Made
-/// `pub(crate)` so the engine can reuse it for additional-workspace
-/// resolution.
-pub(crate) fn expand_home(raw: &str, env: &dyn EnvLookup) -> PathBuf {
+/// lookup. Falls back to the raw string when `HOME` is unset.
+fn expand_home(raw: &str, env: &dyn EnvLookup) -> PathBuf {
     let Some(home_os) = env.var_os("HOME") else {
         return PathBuf::from(raw);
     };
