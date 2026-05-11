@@ -94,8 +94,11 @@ pub(crate) fn resolve_with_env(raw: &str, base_dir: Option<&Path>, env: &dyn Env
 /// `MapEnv` to verify `~` expansion deterministically.
 ///
 /// MCP tool calls (`mcp__<server>__<tool>`) are normalised on generic
-/// path carriers, including `path`, `paths[]`, `files[].path`, and
-/// `items[].path`.
+/// path carriers. Recognised top-level keys cover the common synonyms
+/// MCP servers use for a single path (`path`, `file_path`, `filename`,
+/// `file`, `filepath`, `target`, `target_file`, `dest`, `destination`,
+/// `src`, `source`, `from`, `to`, `location`, `uri`) plus the nested
+/// shapes `paths[]`, `files[].path`, and `items[].path`.
 pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathFact> {
     let (tool, tagged): (PathTool, Vec<(String, PathOrigin)>) = match input.tool_name.as_str() {
         "Read" | "Edit" | "Write" => {
@@ -150,9 +153,35 @@ pub fn extract_all(input: &HookInput) -> Vec<FilePath> {
     extract_all_with_env(input, &SystemEnv)
 }
 
+/// Single-path top-level keys recognised on MCP payloads. `path` is the
+/// canonical shape; the rest are common synonyms observed in the wild
+/// (e.g. filesystem servers use `file`/`filename`, github-style servers
+/// use `source`/`destination`, copy-style tools use `src`/`from`/`to`).
+/// Ordering controls iteration but does not change semantics — each key
+/// is independent.
+const MCP_DIRECT_PATH_KEYS: &[&str] = &[
+    "path",
+    "file_path",
+    "filename",
+    "file",
+    "filepath",
+    "target",
+    "target_file",
+    "dest",
+    "destination",
+    "src",
+    "source",
+    "from",
+    "to",
+    "location",
+    "uri",
+];
+
 fn collect_mcp_paths(value: &serde_json::Value) -> Vec<(String, PathOrigin)> {
     let mut out = Vec::new();
-    push_tagged(value.get("path"), PathOrigin::ToolInputDirect, &mut out);
+    for key in MCP_DIRECT_PATH_KEYS {
+        push_tagged(value.get(*key), PathOrigin::ToolInputDirect, &mut out);
+    }
     for key in ["files", "items"] {
         if let Some(items) = value.get(key).and_then(serde_json::Value::as_array) {
             for item in items {
@@ -554,6 +583,50 @@ mod tests {
             }),
         };
         assert!(extract_all_with_env(&i, &MapEnv::with_home("/h")).is_empty());
+    }
+
+    #[test]
+    fn extract_mcp_tool_recognises_synonym_keys() {
+        // Each entry in MCP_DIRECT_PATH_KEYS must surface as a PathFact
+        // when used as a top-level string on an MCP payload.
+        for key in [
+            "path",
+            "file_path",
+            "filename",
+            "file",
+            "filepath",
+            "target",
+            "target_file",
+            "dest",
+            "destination",
+            "src",
+            "source",
+            "from",
+            "to",
+            "location",
+            "uri",
+        ] {
+            let i = HookInput {
+                tool_name: "mcp__custom__write".into(),
+                tool_input: serde_json::json!({ key: ".env" }),
+            };
+            let fp = extract_with_env(&i, &MapEnv::with_home("/h"))
+                .unwrap_or_else(|| panic!("expected PathFact for key {key:?}"));
+            assert_eq!(fp.raw, ".env", "key={key:?}");
+            assert_eq!(fp.tool, PathTool::Mcp);
+            assert_eq!(fp.origin, PathOrigin::ToolInputDirect);
+        }
+    }
+
+    #[test]
+    fn extract_mcp_tool_url_key_is_not_treated_as_path() {
+        // `url` (distinct from `uri`) is intentionally absent from the
+        // synonym list so `mcp__fetch__fetch` stays a URL-only carrier.
+        let i = HookInput {
+            tool_name: "mcp__fetch__fetch".into(),
+            tool_input: serde_json::json!({"url": "https://example.com/x"}),
+        };
+        assert!(extract_with_env(&i, &MapEnv::with_home("/h")).is_none());
     }
 
     #[test]

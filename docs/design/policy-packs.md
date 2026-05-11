@@ -38,17 +38,38 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
 | `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`scp`/`rsync`/`nc` 等) が共存。pipeline の redirect 先が機密 path の場合も対象 |
-| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit`、または path を持つ MCP tool で機密 path を直接対象にする |
+| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする |
+| `core.secrets.sensitive-bash-read` | ask | false | high | Bash の reader head (`cat`/`head`/`tail`/`source`/`.`/`grep`/`awk`/`sed`/`dd` 等) または `<` redirect が機密 path を読む |
 
 機密分類は `~/.ssh/**`, `~/.aws/**`, `~/.config/gcloud/**`, `~/.kube/config`,
 `~/.docker/config.json`, `.env*`, `.npmrc`, `.pypirc`, `*.tfstate`, PEM blob など。
+判定は case-insensitive で行うため `.ENV` / `.Ssh` / `.AWS` 等の大文字混じり
+でも一致する (case-insensitive FS 上の bypass 対策)。`.env` 系の anchor には
+`/`・空白に加えて glob meta (`*`, `?`, `[`, `]`) と `=` も含まれ、`cat *.env`、
+`cp ?.env`、`dd if=.env`、`--env-file=.env` 等の literal token も検出する。
 
 `sensitive-path-to-network` は segment (`;` / `&&` / `||` 区切り) ごとに判定する
 ため `ls ~/.ssh; curl https://example.com` のように無関係な segment を並べた
 shape では発火しない。一方 pipeline 内の redirect (`curl https://x > ~/.ssh/foo`
 など) は同一 pipeline として扱う。`$(...)` を含む command は parser から body
 が見えないため、従来どおり command-wide co-occurrence で pessimistic に判定
-する (false positive を選ぶ既存方針)。
+する (false positive を選ぶ既存方針)。`sensitive-bash-read` も同じ
+pessimistic 戦略 + Ask 設計を採用するため、reader head が外側の argv に
+出る限り (`cat $(echo .env)`) は捕捉し、外側が非 reader で内側に reader が
+隠れる shape (`echo $(cat .env)`) は parser 制約により取り逃す既知の限界が
+ある (ADR 0001)。`apply_patch` の patch body 内 PEM/credentials の内容
+スキャンも本イテレーション範囲外。
+
+`sensitive-bash-read` の reader head allowlist には `cat`/`head`/`tail`/
+`less`/`more`/`view`/`bat`/`xxd`/`od`/`hexdump`/`strings`/`base64`/`base32`/
+`grep`/`egrep`/`fgrep`/`awk`/`gawk`/`mawk`/`sed`/`cut`/`tr`/`sort`/`uniq`/
+`wc`/`nl`/`tac`/`rev`/`column`/`file`/`dd`/`source`/`.` が含まれる。
+`tee` は writer なので除外 (`cat foo | tee .env` の判定は前段の `cat` 側で
+完結する)。書き込み系 redirect (`>`, `>>`, `2>`, `&>`) は `sensitive-read`
+(Write tool 経由) の責務として本ルール対象外。Ask を採用しているため
+`cat .env.example` 等の正当な使用も発火するが、`.ptuf.yaml` の
+`overrides.allow` で project-local に suppress 可能 (Copilot adapter では
+Ask が Deny に demote される既存挙動が適用される)。
 
 ## `core.git`
 
