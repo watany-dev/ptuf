@@ -96,6 +96,11 @@ fn collect_sensitive(
 
     for p in paths {
         push_all(&p.raw);
+        // Resolve symlink and `~`/`$HOME` bypasses: classify the expanded
+        // and canonicalised forms too. `canonical_or_raw` falls back to
+        // `absolute` when the file does not exist, so this is infallible.
+        push_all(&p.expanded.to_string_lossy());
+        push_all(&p.canonical_or_raw.to_string_lossy());
     }
 
     if let Some(u) = url {
@@ -195,6 +200,33 @@ mod tests {
             f.sensitive
                 .iter()
                 .any(|s| s.kind == sensitive::SensitiveKind::PemBlob)
+        );
+    }
+
+    #[test]
+    fn extract_collects_sensitive_through_symlink_canonicalisation() {
+        // Setup: <tmp>/.env (real dotenv file) + <tmp>/notes.txt -> .env.
+        // Reading the symlink classifies as Dotenv because
+        // canonicalisation resolves the link to the `.env` target and
+        // `collect_sensitive` now inspects `canonical_or_raw`.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let real = dir.path().join(".env");
+        std::fs::write(&real, "X=1").expect("write env target");
+        let link = dir.path().join("notes.txt");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+        let i = HookInput {
+            tool_name: "Read".into(),
+            tool_input: serde_json::json!({ "file_path": link.to_string_lossy() }),
+        };
+        let f = extract(&i);
+        assert!(
+            f.sensitive
+                .iter()
+                .any(|s| s.kind == sensitive::SensitiveKind::Dotenv),
+            "expected Dotenv classification via symlink target, got {:?} (canonical={:?})",
+            f.sensitive,
+            f.path.as_ref().map(|p| &p.canonical_or_raw),
         );
     }
 }

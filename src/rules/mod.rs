@@ -9,6 +9,7 @@ pub mod patterns;
 pub mod project_hygiene;
 pub mod remote_pipe;
 pub mod self_protection;
+pub mod sensitive_bash_read;
 pub mod sensitive_net;
 pub mod sensitive_read;
 
@@ -46,6 +47,7 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &destructive_rm::DestructiveRm,
     &remote_pipe::RemoteScriptPipe,
     &sensitive_net::SensitivePathToNetwork,
+    &sensitive_bash_read::SensitiveBashRead,
     &dynamic_eval::DynamicEval,
     &git::FORCE_PUSH_RULE,
     &git::FORCE_PUSH_WITH_LEASE_RULE,
@@ -146,6 +148,7 @@ mod tests {
             assert!(ids.contains(&self_id), "missing rule_id {self_id}");
         }
         assert!(ids.contains(&"core.secrets.sensitive-read"));
+        assert!(ids.contains(&"core.secrets.sensitive-bash-read"));
         assert!(ids.contains(&"core.engine.dynamic-eval"));
         for hyg_id in [
             "core.project_hygiene.lock-mismatch-pnpm",
@@ -258,6 +261,7 @@ mod tests {
         "core.filesystem.destructive-rm",
         "core.network.remote-script-pipe",
         "core.secrets.sensitive-path-to-network",
+        "core.secrets.sensitive-bash-read",
         "core.engine.dynamic-eval",
         "core.git.force-push",
         "core.git.force-push-with-lease",

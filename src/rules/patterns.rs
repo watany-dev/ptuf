@@ -12,8 +12,12 @@ use std::sync::LazyLock;
     reason = "static pattern literal validated by tests"
 )]
 pub static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    // `(?i)` defends case-insensitive filesystems and `.ENV`/`.SSH` variants.
+    // The PEM header sub-pattern is wrapped in `(?-i)` to honour RFC 7468's
+    // uppercase requirement. The dotenv anchor includes glob metacharacters
+    // (`*`, `?`, `[`, `]`) so literal-glob argv tokens are caught.
     Regex::new(concat!(
-        r"(?x)",
+        r"(?ix)",
         r"(?:",
         r"(?:~|\$HOME|\$\{HOME\})/\.ssh(?:/|\b)",
         r"|(?:~|\$HOME|\$\{HOME\})/\.aws(?:/|\b)",
@@ -21,11 +25,11 @@ pub static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
         r"|(?:~|\$HOME|\$\{HOME\})/\.kube/config\b",
         r"|(?:~|\$HOME|\$\{HOME\})/\.docker/config\.json\b",
         r"|\bid_(?:rsa|ed25519|ecdsa)\b",
-        r"|(?:^|/|\s)\.env(?:\.[A-Za-z0-9_-]+)?\b",
+        r"|(?:^|/|\s|[*?\[\]=])\.env(?:\.[A-Za-z0-9_-]+)?\b",
         r"|\b\.npmrc\b",
         r"|\b\.pypirc\b",
         r"|\S+\.tfstate\b",
-        r"|-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----",
+        r"|(?-i:-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----)",
         r")",
     ))
     .expect("SENSITIVE_PATH regex")

@@ -1,0 +1,382 @@
+//! `core.secrets.sensitive-bash-read` — asks the user before a Bash
+//! command reads a credentials file out to its stdout / stdin.
+//!
+//! The sibling `core.secrets.sensitive-path-to-network` rule only fires
+//! when a *network* sink is co-located with a sensitive token; plain
+//! `cat ~/.ssh/id_rsa` or `source .env` slip past it because there is no
+//! pipe to curl/scp/etc. But emitting secret contents to the agent's
+//! transcript is itself an exposure: the AUT now knows the secret, and
+//! any later step (prompt injection, debug logging, copy-paste into a
+//! comment) can leak it.
+//!
+//! This rule covers that gap. It targets a curated allowlist of
+//! "reader" command heads plus the Bash stdin redirect (`< .env`).
+//! Write-style redirects (`>`, `>>`, `2>`, `&>`) are *not* in scope —
+//! those are handled by the file-tool rule `core.secrets.sensitive-read`
+//! once Write/apply_patch joined its matcher.
+//!
+//! Default is `Ask`, not `Deny`, because false positives are expected
+//! (`cat .env.example`, `source ./hack/setup-env.sh`). `hard_deny` is
+//! `false` so projects can suppress the rule via `overrides.allow` in
+//! `.ptuf.yaml` once they have audited a specific shape.
+
+use crate::decision::{Decision, DecisionKind, Severity};
+use crate::facts::Facts;
+use crate::facts::shell::{Argv, Bash, Pipeline, Redirect, RedirectOp};
+use crate::hook_input::HookInput;
+use crate::reason;
+
+use super::ConfigRule;
+use super::patterns::SENSITIVE_PATH;
+
+pub struct SensitiveBashRead;
+
+const RULE_ID: &str = "core.secrets.sensitive-bash-read";
+
+/// Command heads that emit file contents to stdout, stdin, or another
+/// downstream consumer. Keep this list *narrow*: every entry produces
+/// `Ask` prompts on its sensitive-path uses, so a head whose typical
+/// invocation rarely touches credentials does not belong here.
+///
+/// Explicitly excluded:
+/// - `tee` — writes stdin to a file. The reader is whatever upstream
+///   command feeds tee; tee itself is a sink, not a source.
+/// - `>`, `>>`, `2>`, `&>` redirect targets — write destinations,
+///   covered by `core.secrets.sensitive-read` (via Write payloads).
+const READER_HEADS: &[&str] = &[
+    "cat", "head", "tail", "less", "more", "view", "bat", "xxd", "od", "hexdump", "strings",
+    "base64", "base32", "grep", "egrep", "fgrep", "awk", "gawk", "mawk", "sed", "cut", "tr",
+    "sort", "uniq", "wc", "nl", "tac", "rev", "column", "file", "dd", "source", ".",
+];
+
+impl ConfigRule for SensitiveBashRead {
+    fn id(&self) -> &str {
+        RULE_ID
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::High
+    }
+
+    fn default_decision(&self) -> DecisionKind {
+        DecisionKind::Ask
+    }
+
+    fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
+        let bash = facts.bash.as_ref()?;
+        if !bash_reads_sensitive_path(bash) {
+            return None;
+        }
+        let reason = reason::build(
+            RULE_ID,
+            "The command would feed a credentials file (SSH key, AWS / gcloud / kube config, \
+             dotenv, npmrc, pypirc, tfstate, or PEM blob) into its stdout or stdin. The agent \
+             would then see the secret in its transcript even though no network sink is \
+             involved.",
+            &[
+                "Ask the user to inspect or transform the file themselves.",
+                "Operate on a redacted copy with the secret values stripped.",
+                "If `.env.example` (or another non-secret sample) is intended, suppress this \
+                 rule for that file via `overrides.allow` in `.ptuf.yaml`.",
+            ],
+        );
+        Some(Decision::Ask {
+            rule_id: RULE_ID.into(),
+            reason,
+        })
+    }
+}
+
+/// `$(...)` collapses substitution bodies into the surrounding word, so
+/// pipeline scope can no longer see what executes inside. Widen to
+/// command-wide co-occurrence in that case: false positives are
+/// preferable to letting a substitution hide a sensitive read shape.
+fn bash_reads_sensitive_path(bash: &Bash) -> bool {
+    if bash.has_command_substitution {
+        let commands = bash.commands();
+        let has_reader = commands.iter().any(|a| invokes_reader(a));
+        let has_sensitive = commands.iter().any(|a| references_sensitive_token(a));
+        return has_reader && has_sensitive;
+    }
+    bash.segments.iter().any(pipeline_reads_sensitive)
+}
+
+fn pipeline_reads_sensitive(pipe: &Pipeline) -> bool {
+    let argv_match = pipe.commands.iter().any(argv_reads_sensitive);
+    let stdin_match = pipe.redirects.iter().any(stdin_target_is_sensitive);
+    argv_match || stdin_match
+}
+
+/// True when this argv (or any wrapped inner argv) is a reader head
+/// invoked on a sensitive token. The wrapper recursion covers
+/// `bash -c '...'`, `xargs`, `find -exec`, and `eval`.
+fn argv_reads_sensitive(argv: &Argv) -> bool {
+    if invokes_reader(argv) && argv_has_sensitive_positional(argv) {
+        return true;
+    }
+    if let Some(inner) = crate::facts::shell::unwrap_sudo(argv)
+        && invokes_reader(&inner)
+        && argv_has_sensitive_positional(&inner)
+    {
+        return true;
+    }
+    // Heredoc/inner_redirects on this argv: a `< .env` inside a wrapped
+    // bash -c shows up there.
+    if argv.inner_redirects.iter().any(stdin_target_is_sensitive) {
+        return true;
+    }
+    argv.inner_argv.iter().any(argv_reads_sensitive)
+}
+
+fn argv_has_sensitive_positional(argv: &Argv) -> bool {
+    if SENSITIVE_PATH.is_match(&argv.head) {
+        return true;
+    }
+    argv.args.iter().any(|a| SENSITIVE_PATH.is_match(a))
+}
+
+fn invokes_reader(argv: &Argv) -> bool {
+    if READER_HEADS.contains(&argv.head.as_str()) {
+        return true;
+    }
+    if argv.head == "sudo"
+        && let Some(first) = argv.positional().next()
+    {
+        return READER_HEADS.contains(&first);
+    }
+    false
+}
+
+fn stdin_target_is_sensitive(r: &Redirect) -> bool {
+    matches!(r.op, RedirectOp::Stdin) && SENSITIVE_PATH.is_match(&r.target)
+}
+
+fn references_sensitive_token(argv: &Argv) -> bool {
+    if SENSITIVE_PATH.is_match(&argv.head) {
+        return true;
+    }
+    if argv.args.iter().any(|a| SENSITIVE_PATH.is_match(a)) {
+        return true;
+    }
+    if argv
+        .env_assignments
+        .iter()
+        .any(|e| SENSITIVE_PATH.is_match(&e.value))
+    {
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hook_input::HookInput;
+
+    fn bash(cmd: &str) -> HookInput {
+        HookInput {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({ "command": cmd }),
+        }
+    }
+
+    fn evaluate_for(input: &HookInput) -> Option<Decision> {
+        let facts = crate::facts::extract(input);
+        SensitiveBashRead.evaluate(&facts, input)
+    }
+
+    fn assert_ask(cmd: &str) {
+        let result = evaluate_for(&bash(cmd));
+        assert!(
+            matches!(&result, Some(Decision::Ask { rule_id, .. }) if rule_id == RULE_ID),
+            "expected Ask for {cmd:?}, got {result:?}",
+        );
+    }
+
+    fn assert_silent(cmd: &str) {
+        let result = evaluate_for(&bash(cmd));
+        assert!(
+            result.is_none(),
+            "expected None for {cmd:?}, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn asks_for_cat_of_dotenv() {
+        assert_ask("cat .env");
+        assert_ask("cat /repo/.env.production");
+    }
+
+    #[test]
+    fn asks_for_source_of_dotenv() {
+        assert_ask("source .env");
+        assert_ask("source ./.env.production");
+    }
+
+    #[test]
+    fn asks_for_dot_of_dotenv() {
+        assert_ask(". .env.production");
+    }
+
+    #[test]
+    fn asks_for_redirected_stdin() {
+        assert_ask("read -r LINE < .env");
+        assert_ask("awk '{print}' < .env");
+    }
+
+    #[test]
+    fn asks_for_sudo_cat() {
+        assert_ask("sudo cat .env");
+        assert_ask("sudo head -n 5 ~/.ssh/id_rsa");
+    }
+
+    #[test]
+    fn asks_for_inner_bash_c() {
+        assert_ask("bash -c 'cat .env'");
+    }
+
+    #[test]
+    fn asks_for_command_substitution_pessimistic() {
+        // The substitution body is folded into the surrounding token,
+        // so the outer reader head + the leaked sensitive substring
+        // still satisfy the pessimistic-mode coexistence check.
+        assert_ask("cat $(echo .env)");
+        assert_ask("source $(printf %s .env.production)");
+    }
+
+    #[test]
+    fn does_not_fire_when_outer_head_is_not_reader_under_substitution() {
+        // Known design limitation (documented in ADR 0001): a
+        // substitution body where the *outer* head is non-reader
+        // (`echo $(cat .env)`) hides `cat` from the parser. Pessimistic
+        // mode requires reader + sensitive coexistence at the visible
+        // argv level, mirroring sensitive-path-to-network. This test
+        // pins the limitation so removing it is a deliberate change.
+        assert_silent("echo $(cat .env)");
+    }
+
+    #[test]
+    fn asks_for_ssh_key_read() {
+        assert_ask("cat ~/.ssh/id_rsa");
+        assert_ask("head ~/.aws/credentials");
+        assert_ask("tail -n 1 ~/.kube/config");
+    }
+
+    #[test]
+    fn asks_for_dd_in_either_direction() {
+        // `dd if=.env of=/tmp/x` is a read; `dd if=/tmp/x of=.env` is a
+        // write. Both surface a sensitive path on the argv so both Ask.
+        // The Ask resolution is left to the user.
+        assert_ask("dd if=.env of=/tmp/out");
+        assert_ask("dd if=/tmp/in of=.env");
+    }
+
+    #[test]
+    fn allows_non_reader_with_dotenv_arg() {
+        assert_silent("rm .env");
+        assert_silent("chmod 600 .env");
+        assert_silent("mv .env .env.bak");
+        assert_silent("ls -la .env");
+    }
+
+    #[test]
+    fn allows_reader_without_sensitive_arg() {
+        assert_silent("cat /repo/README.md");
+        assert_silent("grep -r foo /repo/src");
+        assert_silent("head -n 5 Cargo.toml");
+    }
+
+    #[test]
+    fn allows_redirect_write_to_sensitive_path() {
+        // Write-side redirects belong to sensitive-read (Write tool) —
+        // this rule only fires on Stdin (`<`).
+        assert_silent("echo X=1 > .env");
+        assert_silent("echo X=1 >> .env");
+    }
+
+    #[test]
+    fn allows_tee_into_sensitive_path() {
+        // tee is a writer, not a reader. The shape `cat foo | tee .env`
+        // is a write to `.env`; the reader judgement belongs to the
+        // upstream `cat foo` (non-sensitive in this example).
+        assert_silent("echo hi | tee .env");
+    }
+
+    #[test]
+    fn allows_unrelated_segments_separated_by_semicolon() {
+        // Each `;`-separated segment is judged independently; only
+        // segments that themselves combine reader + sensitive fire.
+        assert_silent("cat /repo/README.md; ls .env");
+        assert_silent("ls -la; echo done");
+    }
+
+    #[test]
+    fn asks_when_sensitive_segment_present_among_others() {
+        // Even if other segments are unrelated, a single sensitive read
+        // segment must fire.
+        assert_ask("ls -la; cat .env; echo done");
+    }
+
+    #[test]
+    fn ignores_non_bash_tools() {
+        let input = HookInput {
+            tool_name: "Read".into(),
+            tool_input: serde_json::json!({"command": "cat .env"}),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(SensitiveBashRead.evaluate(&facts, &input).is_none());
+    }
+
+    #[test]
+    fn metadata_matches_design() {
+        assert!(!SensitiveBashRead.hard_deny());
+        assert!(SensitiveBashRead.overridable());
+        assert_eq!(SensitiveBashRead.severity(), Severity::High);
+        assert_eq!(SensitiveBashRead.default_decision(), DecisionKind::Ask);
+        assert_eq!(SensitiveBashRead.id(), RULE_ID);
+    }
+
+    use crate::testing::proptest::{arbitrary_command, bash_command, non_bash_hook_input};
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn pbt_non_bash_yields_none(input in non_bash_hook_input()) {
+            prop_assert!(evaluate_for(&input).is_none());
+        }
+
+        #[test]
+        fn pbt_evaluate_never_panics(cmd in arbitrary_command()) {
+            let _ = evaluate_for(&bash(&cmd));
+        }
+
+        #[test]
+        fn pbt_only_emits_ask_with_correct_id(cmd in bash_command()) {
+            let input = bash(&cmd);
+            if let Some(d) = evaluate_for(&input) {
+                match d {
+                    Decision::Ask { rule_id, .. } => prop_assert_eq!(rule_id, RULE_ID),
+                    other => prop_assert!(false, "expected Ask, got {other:?}"),
+                }
+            }
+        }
+
+        // Without any reader head, the rule cannot fire — even with
+        // sensitive-looking arguments.
+        #[test]
+        fn pbt_no_reader_head_means_no_fire(
+            head in "[a-z][a-z0-9]{0,5}",
+            args in proptest::collection::vec("[a-zA-Z0-9_./-]{1,8}", 0..3),
+        ) {
+            prop_assume!(!READER_HEADS.contains(&head.as_str()));
+            prop_assume!(head != "sudo");
+            let cmd = if args.is_empty() {
+                head
+            } else {
+                format!("{} {}", head, args.join(" "))
+            };
+            let input = bash(&cmd);
+            prop_assert!(evaluate_for(&input).is_none());
+        }
+    }
+}
