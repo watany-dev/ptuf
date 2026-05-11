@@ -23,6 +23,8 @@ pub enum ProtectedKind {
     ClaudeSettings,
     CodexSettings,
     HookScript,
+    CopilotSettings,
+    KiroSettings,
 }
 
 impl ProtectedKind {
@@ -34,13 +36,15 @@ impl ProtectedKind {
             Self::ClaudeSettings => "claude_settings",
             Self::CodexSettings => "codex_settings",
             Self::HookScript => "hook_script",
+            Self::CopilotSettings => "copilot_settings",
+            Self::KiroSettings => "kiro_settings",
         }
     }
 }
 
 /// Small, allocation-free set of protected target labels.
 ///
-/// There are only six [`ProtectedKind`] variants, so a fixed buffer is
+/// There are only eight [`ProtectedKind`] variants, so a fixed buffer is
 /// simpler than pulling in a small-vector dependency for the hook hot path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProtectedKinds {
@@ -49,7 +53,7 @@ pub struct ProtectedKinds {
 }
 
 impl ProtectedKinds {
-    const CAPACITY: usize = 6;
+    const CAPACITY: usize = 8;
 
     pub fn new() -> Self {
         Self::default()
@@ -112,6 +116,8 @@ pub struct ProtectedPaths {
     pub claude_settings: Vec<PathBuf>,
     pub codex_settings: Vec<PathBuf>,
     pub hook_scripts: Vec<PathBuf>,
+    pub copilot_settings: Vec<PathBuf>,
+    pub kiro_settings: Vec<PathBuf>,
 }
 
 impl ProtectedPaths {
@@ -213,6 +219,74 @@ impl ProtectedPaths {
             }
         }
 
+        let mut copilot_settings: Vec<PathBuf> = Vec::new();
+        if let Some(root) = repo_root {
+            copilot_settings.push(root.join(".github/hooks/ptuf.json"));
+        }
+        copilot_settings.sort();
+        copilot_settings.dedup();
+
+        for hooks_path in &copilot_settings {
+            let body = match fs::read_to_string(hooks_path) {
+                Ok(s) => s,
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Err(_) => continue,
+            };
+            let parsed: Value = match serde_json::from_str(&body) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            for command in crate::init::copilot::pre_tool_use_commands(&parsed) {
+                let Some(executable) = crate::init::copilot::command_executable(&command) else {
+                    continue;
+                };
+                let normalized = crate::facts::path::resolve_with_env(
+                    executable,
+                    repo_root.or_else(|| hooks_path.parent()),
+                    env,
+                );
+                if !hook_scripts.contains(&normalized) {
+                    hook_scripts.push(normalized);
+                }
+            }
+        }
+
+        let mut kiro_settings: Vec<PathBuf> = Vec::new();
+        if let Some(root) = repo_root {
+            kiro_settings.push(root.join(".kiro/agents/ptuf-guarded.json"));
+        }
+        if let Some(home_os) = env.var_os("HOME") {
+            let home = PathBuf::from(home_os);
+            kiro_settings.push(home.join(".kiro/agents/ptuf-guarded.json"));
+        }
+        kiro_settings.sort();
+        kiro_settings.dedup();
+
+        for agent_path in &kiro_settings {
+            let body = match fs::read_to_string(agent_path) {
+                Ok(s) => s,
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Err(_) => continue,
+            };
+            let parsed: Value = match serde_json::from_str(&body) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            for command in crate::init::kiro::pre_tool_use_commands(&parsed) {
+                let Some(executable) = crate::init::kiro::command_executable(&command) else {
+                    continue;
+                };
+                let normalized = crate::facts::path::resolve_with_env(
+                    executable,
+                    repo_root.or_else(|| agent_path.parent()),
+                    env,
+                );
+                if !hook_scripts.contains(&normalized) {
+                    hook_scripts.push(normalized);
+                }
+            }
+        }
+
         // Pre-cache `canonical_or_raw` on every target list so
         // `path_matches` only canonicalises the candidate. Symlinks
         // collapse for files that exist; non-existent targets keep
@@ -226,6 +300,8 @@ impl ProtectedPaths {
         let claude_settings = canonicalize_each(claude_settings);
         let codex_settings = canonicalize_each(codex_settings);
         let hook_scripts = canonicalize_each(hook_scripts);
+        let copilot_settings = canonicalize_each(copilot_settings);
+        let kiro_settings = canonicalize_each(kiro_settings);
 
         Self {
             repo_root: repo_root.map(Path::to_path_buf),
@@ -235,6 +311,8 @@ impl ProtectedPaths {
             claude_settings,
             codex_settings,
             hook_scripts,
+            copilot_settings,
+            kiro_settings,
         }
     }
 
@@ -305,6 +383,20 @@ impl ProtectedPaths {
             .any(|p| path_matches(candidate, p))
         {
             return Some(ProtectedKind::CodexSettings);
+        }
+        if self
+            .copilot_settings
+            .iter()
+            .any(|p| path_matches(candidate, p))
+        {
+            return Some(ProtectedKind::CopilotSettings);
+        }
+        if self
+            .kiro_settings
+            .iter()
+            .any(|p| path_matches(candidate, p))
+        {
+            return Some(ProtectedKind::KiroSettings);
         }
         if self.hook_scripts.iter().any(|p| path_matches(candidate, p)) {
             return Some(ProtectedKind::HookScript);
@@ -434,6 +526,8 @@ mod tests {
             ProtectedKind::ClaudeSettings,
             ProtectedKind::CodexSettings,
             ProtectedKind::HookScript,
+            ProtectedKind::CopilotSettings,
+            ProtectedKind::KiroSettings,
         ] {
             assert!(!k.as_str().is_empty());
         }

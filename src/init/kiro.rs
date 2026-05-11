@@ -129,6 +129,21 @@ fn default_agent_skeleton() -> Value {
     })
 }
 
+pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
+    let Some(arr) = root.pointer("/hooks/preToolUse").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut commands = Vec::new();
+    for entry in arr {
+        commands.extend(entry_commands(entry));
+    }
+    commands
+}
+
+pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
+    cmd.split_whitespace().next()
+}
+
 pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
     let tokens: Vec<&str> = cmd.split_whitespace().collect();
     let n = tokens.len();

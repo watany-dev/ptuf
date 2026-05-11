@@ -100,7 +100,7 @@ command head と誤認しないように unwrap してから評価する。
 
 ## `core.self_protection`
 
-実装済み rule は 6 個で、すべて `deny`, `hardDeny: true`, `severity: critical`。
+実装済み rule は 8 個で、すべて `deny`, `hardDeny: true`, `severity: critical`。
 
 | Rule id | 対象 |
 | --- | --- |
@@ -109,7 +109,9 @@ command head と誤認しないように unwrap してから評価する。
 | `core.self_protection.plugin` | config で参照された plugin YAML |
 | `core.self_protection.claude-settings` | `.claude/settings*.json` |
 | `core.self_protection.codex-settings` | `.codex/config.toml`, `.codex/hooks.json` |
-| `core.self_protection.hook-script` | Claude / Codex の hook command が参照する実行ファイル |
+| `core.self_protection.copilot-settings` | `.github/hooks/ptuf.json` |
+| `core.self_protection.kiro-settings` | `.kiro/agents/ptuf-guarded.json` |
+| `core.self_protection.hook-script` | Claude / Codex / Copilot / Kiro の hook command が参照する実行ファイル |
 
 ## `core.engine`
 

@@ -927,6 +927,8 @@ rules:
             claude_settings: Vec::new(),
             codex_settings: Vec::new(),
             hook_scripts: Vec::new(),
+            copilot_settings: Vec::new(),
+            kiro_settings: Vec::new(),
         };
         let input = HookInput {
             tool_name: "Edit".into(),
