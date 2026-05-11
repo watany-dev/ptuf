@@ -95,12 +95,22 @@ fn collect_sensitive(
     }
 
     for p in paths {
-        push_all(&p.raw);
-        // Resolve symlink and `~`/`$HOME` bypasses: classify the expanded
-        // and canonicalised forms too. `canonical_or_raw` falls back to
-        // `absolute` when the file does not exist, so this is infallible.
-        push_all(&p.expanded.to_string_lossy());
-        push_all(&p.canonical_or_raw.to_string_lossy());
+        // Resolve symlink and `~`/`$HOME` bypasses by also classifying
+        // the expanded and canonicalised forms. `canonical_or_raw` falls
+        // back to `absolute` when the file does not exist (infallible).
+        // Skip strings that match an earlier form to avoid re-running the
+        // regex sweep on identical input in the common case where the
+        // path is already absolute and canonicalises to itself.
+        let raw = p.raw.as_str();
+        let expanded = p.expanded.to_string_lossy();
+        let canonical = p.canonical_or_raw.to_string_lossy();
+        push_all(raw);
+        if expanded.as_ref() != raw {
+            push_all(&expanded);
+        }
+        if canonical.as_ref() != raw && canonical != expanded {
+            push_all(&canonical);
+        }
     }
 
     if let Some(u) = url {

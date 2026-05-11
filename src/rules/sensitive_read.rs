@@ -141,11 +141,8 @@ mod tests {
 
     #[test]
     fn does_not_fire_for_non_sensitive_write() {
-        // Write of a non-sensitive path with non-sensitive content stays
-        // out of this rule entirely. (Renamed from
-        // `does_not_fire_for_write_payloads_alone` after Write joined the
-        // tool matcher — the invariant we care about is that ordinary
-        // source-file writes never trigger this rule.)
+        // Ordinary source-file writes (non-sensitive path, non-sensitive
+        // content) must never trigger this rule.
         let input = HookInput {
             tool_name: "Write".into(),
             tool_input: serde_json::json!({

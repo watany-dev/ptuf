@@ -63,6 +63,23 @@
   `collect_event_paths` で重複排除しつつ収集する additive 拡張
 - audit `agent: "kiro"` を許容
 
+### M8 — `.env` 保護穴塞ぎ (実装済み, post-`v0.1.0`)
+
+詳細は `docs/adr/0001-env-protection-gaps.md`。
+
+- `core.secrets.sensitive-bash-read` (Ask / High / overridable) 追加。
+  Bash の reader head allowlist + `<` redirect で機密 path の単独読みを
+  捕捉する
+- `core.secrets.sensitive-read` の matcher を `Read` / `Edit` /
+  `Write` / `apply_patch` + path 持ち MCP に拡張
+- 機密 path 正規表現を case-insensitive 化 (PEM_BLOB のみ
+  `(?-i:...)` で RFC 7468 準拠を維持)、dotenv anchor を glob meta /
+  `=` に拡張
+- `facts.path.collect_mcp_paths` に同義キー (`file_path`, `target`,
+  `dest`, `source`, `from`, `to`, ...) を追加
+- `facts.collect_sensitive` で `expanded` / `canonical_or_raw` も
+  classify (symlink bypass を塞ぐ)
+
 ### M7 — CLI ゼロベース簡素化 (実装済み, `v0.1.0` 予定 / breaking)
 
 - `ptuf init` を引数なしで auto-detect (cwd の repo root と `$HOME` から

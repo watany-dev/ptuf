@@ -27,7 +27,7 @@ use crate::hook_input::HookInput;
 use crate::reason;
 
 use super::ConfigRule;
-use super::patterns::SENSITIVE_PATH;
+use super::patterns::{SENSITIVE_PATH, argv_references_sensitive};
 
 pub struct SensitiveBashRead;
 
@@ -95,7 +95,7 @@ fn bash_reads_sensitive_path(bash: &Bash) -> bool {
     if bash.has_command_substitution {
         let commands = bash.commands();
         let has_reader = commands.iter().any(|a| invokes_reader(a));
-        let has_sensitive = commands.iter().any(|a| references_sensitive_token(a));
+        let has_sensitive = commands.iter().any(|a| argv_references_sensitive(a));
         return has_reader && has_sensitive;
     }
     bash.segments.iter().any(pipeline_reads_sensitive)
@@ -149,23 +149,6 @@ fn invokes_reader(argv: &Argv) -> bool {
 
 fn stdin_target_is_sensitive(r: &Redirect) -> bool {
     matches!(r.op, RedirectOp::Stdin) && SENSITIVE_PATH.is_match(&r.target)
-}
-
-fn references_sensitive_token(argv: &Argv) -> bool {
-    if SENSITIVE_PATH.is_match(&argv.head) {
-        return true;
-    }
-    if argv.args.iter().any(|a| SENSITIVE_PATH.is_match(a)) {
-        return true;
-    }
-    if argv
-        .env_assignments
-        .iter()
-        .any(|e| SENSITIVE_PATH.is_match(&e.value))
-    {
-        return true;
-    }
-    false
 }
 
 #[cfg(test)]

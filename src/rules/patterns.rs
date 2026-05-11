@@ -1,6 +1,8 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
+use crate::facts::shell::Argv;
+
 /// Sensitive filesystem paths whose contents must not flow into network sinks.
 /// See `docs/design/policy-packs.md` `core.secrets`.
 ///
@@ -34,6 +36,21 @@ pub static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
     ))
     .expect("SENSITIVE_PATH regex")
 });
+
+/// True when this argv has a token (head, positional/flag arg, or env
+/// assignment value) that matches [`SENSITIVE_PATH`]. Shared by every
+/// rule that needs "does this argv mention a credentials path?".
+pub(super) fn argv_references_sensitive(argv: &Argv) -> bool {
+    if SENSITIVE_PATH.is_match(&argv.head) {
+        return true;
+    }
+    if argv.args.iter().any(|a| SENSITIVE_PATH.is_match(a)) {
+        return true;
+    }
+    argv.env_assignments
+        .iter()
+        .any(|e| SENSITIVE_PATH.is_match(&e.value))
+}
 
 #[cfg(test)]
 mod tests {
