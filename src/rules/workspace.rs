@@ -116,8 +116,19 @@ mod tests {
     }
 
     fn facts_with_workspaces(input: &HookInput, workspaces: Vec<PathBuf>) -> Facts {
+        // macOS `/var/folders/...` is a symlink to `/private/var/folders/...`.
+        // `tempfile::TempDir::path()` returns the un-canonicalized form, but
+        // the rule's `PathFact` canonicalizes its target — so the workspace
+        // boundary check would compare `/private/var/folders/...` (resolved
+        // input) against `/var/folders/...` (workspace) and report a false
+        // Deny. Canonicalize each workspace path here so both sides share
+        // the same resolved form. Falls back to the original path when the
+        // directory does not exist (proptest passes synthetic paths).
         let mut f = crate::facts::extract(input);
-        f.workspaces = workspaces;
+        f.workspaces = workspaces
+            .into_iter()
+            .map(|w| w.canonicalize().unwrap_or(w))
+            .collect();
         f
     }
 
@@ -359,7 +370,10 @@ mod tests {
             tail in "[a-z][a-z0-9_]{0,16}",
         ) {
             let dir = tempfile::TempDir::new().expect("tempdir");
-            let inside = dir.path().join(&tail);
+            // Canonicalize for macOS /var/folders → /private/var/folders
+            // parity with the rule's PathFact resolution.
+            let workspace = dir.path().canonicalize().expect("canonicalize");
+            let inside = workspace.join(&tail);
             let input = HookInput {
                 tool_name: tool.into(),
                 tool_input: serde_json::json!({
@@ -368,7 +382,7 @@ mod tests {
                 }),
             };
             let mut facts = crate::facts::extract(&input);
-            facts.workspaces = vec![dir.path().to_path_buf()];
+            facts.workspaces = vec![workspace];
             let allowed = OUTSIDE_ACCESS_RULE.evaluate(&facts, &input).is_none();
             prop_assert!(allowed);
         }
