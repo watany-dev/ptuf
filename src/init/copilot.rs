@@ -101,10 +101,6 @@ fn read_hooks(path: &Path) -> Result<Value, InitError> {
     }
 }
 
-pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
-    cmd.split_whitespace().next()
-}
-
 pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
     let tokens: Vec<&str> = cmd.split_whitespace().collect();
     let n = tokens.len();

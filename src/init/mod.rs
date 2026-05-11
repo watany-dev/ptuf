@@ -13,6 +13,13 @@ pub mod copilot;
 pub mod kiro;
 pub mod verify;
 
+/// Return the first whitespace-delimited token of `cmd`, which is the
+/// executable path/name. Used by path-collection callers to extract the
+/// binary from a full hook command string.
+pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
+    cmd.split_whitespace().next()
+}
+
 /// Auto-detect every agent reachable from the given `cwd` and `home`.
 ///
 /// - `ClaudeCode`: requires `<home>/.claude/` to exist.

@@ -176,8 +176,7 @@ impl ProtectedPaths {
                 Err(_) => continue,
             };
             for command in crate::init::claude_code::pre_tool_use_commands(&parsed) {
-                let Some(executable) = crate::init::claude_code::command_executable(&command)
-                else {
+                let Some(executable) = crate::init::command_executable(&command) else {
                     continue;
                 };
                 let normalized = crate::facts::path::resolve_with_env(
@@ -205,7 +204,7 @@ impl ProtectedPaths {
                 Err(_) => continue,
             };
             for command in crate::init::codex::pre_tool_use_commands(&parsed) {
-                let Some(executable) = crate::init::codex::command_executable(&command) else {
+                let Some(executable) = crate::init::command_executable(&command) else {
                     continue;
                 };
                 let normalized = crate::facts::path::resolve_with_env(
@@ -223,8 +222,6 @@ impl ProtectedPaths {
         if let Some(root) = repo_root {
             copilot_settings.push(root.join(".github/hooks/ptuf.json"));
         }
-        copilot_settings.sort();
-        copilot_settings.dedup();
 
         for hooks_path in &copilot_settings {
             let body = match fs::read_to_string(hooks_path) {
@@ -237,7 +234,7 @@ impl ProtectedPaths {
                 Err(_) => continue,
             };
             for command in crate::init::copilot::pre_tool_use_commands(&parsed) {
-                let Some(executable) = crate::init::copilot::command_executable(&command) else {
+                let Some(executable) = crate::init::command_executable(&command) else {
                     continue;
                 };
                 let normalized = crate::facts::path::resolve_with_env(
@@ -273,7 +270,7 @@ impl ProtectedPaths {
                 Err(_) => continue,
             };
             for command in crate::init::kiro::pre_tool_use_commands(&parsed) {
-                let Some(executable) = crate::init::kiro::command_executable(&command) else {
+                let Some(executable) = crate::init::command_executable(&command) else {
                     continue;
                 };
                 let normalized = crate::facts::path::resolve_with_env(
