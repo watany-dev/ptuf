@@ -1,9 +1,9 @@
 //! `core.git` pack — guards against destructive git operations.
 //!
-//! Implements the 19 rules tabled in `docs/design/policy-packs.md`
-//! (13 destructive-operation rules + 6 hook/signing/credential/path
-//! bypass-blockers). Each rule shares the [`GitRule`] adapter so the
-//! [`crate::rules::ConfigRule`] trait is implemented exactly once.
+//! Covers force-push variants, history rewrites, hook / signing / credential
+//! bypasses, and env-var redirection. The authoritative rule list lives in
+//! `docs/design/policy-packs.md`. Each rule shares the [`GitRule`] adapter
+//! so the [`crate::rules::ConfigRule`] trait is implemented exactly once.
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
@@ -284,7 +284,7 @@ fn matches_force_push(argv: &Argv) -> bool {
                 && !a.starts_with("--")
                 && a.contains('f')
                 && !a.contains("force-with-lease"))
-            || (a.starts_with('+') && a.len() > 1 && !a.starts_with("+-"))
+            || (a.starts_with('+') && a.len() > 1)
     })
 }
 
@@ -443,7 +443,6 @@ fn matches_push_delete_remote(argv: &Argv) -> bool {
     let rest = args_after_subcommand(argv, "push");
     rest.iter().any(|a| {
         *a == "--delete"
-            || *a == "-d"
             || (a.starts_with('-') && !a.starts_with("--") && a.contains('d'))
             || (a.starts_with(':') && a.len() > 1)
     })
@@ -499,52 +498,38 @@ fn matches_gc_prune_now(argv: &Argv) -> bool {
         .any(|a| *a == "--prune=now" || *a == "--prune=all")
 }
 
-fn matches_env_bypass(argv: &Argv) -> bool {
+/// Shared env-var matcher. `scope = Some(list)` restricts to specific git
+/// subcommands; `scope = None` fires on any git subcommand.
+fn matches_env_keys(argv: &Argv, scope: Option<&[&str]>, keys: &[(&str, BypassMatch)]) -> bool {
     let Some(sub) = git_subcommand(argv) else {
         return false;
     };
-    if !BYPASS_SCOPE_SUBCOMMANDS.contains(&sub) {
+    if let Some(allowed) = scope
+        && !allowed.contains(&sub)
+    {
         return false;
     }
-    for ea in &argv.env_assignments {
-        for (target, mode) in ENV_BYPASS_KEYS {
-            if ea.key.eq_ignore_ascii_case(target) && bypass_value_matches(*mode, &ea.value) {
-                return true;
-            }
-        }
-    }
-    false
+    argv.env_assignments.iter().any(|ea| {
+        keys.iter().any(|(target, mode)| {
+            ea.key.eq_ignore_ascii_case(target) && bypass_value_matches(*mode, &ea.value)
+        })
+    })
+}
+
+fn matches_env_bypass(argv: &Argv) -> bool {
+    matches_env_keys(argv, Some(BYPASS_SCOPE_SUBCOMMANDS), ENV_BYPASS_KEYS)
 }
 
 fn matches_env_credential_hijack(argv: &Argv) -> bool {
-    let Some(sub) = git_subcommand(argv) else {
-        return false;
-    };
-    if !CREDENTIAL_HIJACK_SUBCOMMANDS.contains(&sub) {
-        return false;
-    }
-    for ea in &argv.env_assignments {
-        for (target, mode) in CREDENTIAL_HIJACK_KEYS {
-            if ea.key.eq_ignore_ascii_case(target) && bypass_value_matches(*mode, &ea.value) {
-                return true;
-            }
-        }
-    }
-    false
+    matches_env_keys(
+        argv,
+        Some(CREDENTIAL_HIJACK_SUBCOMMANDS),
+        CREDENTIAL_HIJACK_KEYS,
+    )
 }
 
 fn matches_env_path_redirect(argv: &Argv) -> bool {
-    if git_subcommand(argv).is_none() {
-        return false;
-    }
-    for ea in &argv.env_assignments {
-        for (target, mode) in PATH_REDIRECT_KEYS {
-            if ea.key.eq_ignore_ascii_case(target) && bypass_value_matches(*mode, &ea.value) {
-                return true;
-            }
-        }
-    }
-    false
+    matches_env_keys(argv, None, PATH_REDIRECT_KEYS)
 }
 
 const FORCE_PUSH: RuleSpec = RuleSpec {
