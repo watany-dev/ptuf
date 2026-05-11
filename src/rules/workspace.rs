@@ -117,13 +117,7 @@ mod tests {
 
     fn facts_with_workspaces(input: &HookInput, workspaces: Vec<PathBuf>) -> Facts {
         let mut f = crate::facts::extract(input);
-        // Mirror Engine::compute_workspaces: canonicalize so macOS
-        // `/var/folders/...` boundaries match the `/private/var/...`
-        // form PathFact resolves candidates to.
-        f.workspaces = workspaces
-            .into_iter()
-            .map(|p| p.canonicalize().unwrap_or(p))
-            .collect();
+        f.workspaces = workspaces;
         f
     }
 
@@ -342,8 +336,7 @@ mod tests {
                 }),
             };
             let mut facts = crate::facts::extract(&input);
-            let ws = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
-            facts.workspaces = vec![ws];
+            facts.workspaces = vec![dir.path().to_path_buf()];
             let d = OUTSIDE_ACCESS_RULE.evaluate(&facts, &input);
             let is_deny = matches!(d, Some(Decision::Deny { .. }));
             prop_assert!(is_deny);
@@ -364,8 +357,7 @@ mod tests {
                 }),
             };
             let mut facts = crate::facts::extract(&input);
-            let ws = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
-            facts.workspaces = vec![ws];
+            facts.workspaces = vec![dir.path().to_path_buf()];
             let allowed = OUTSIDE_ACCESS_RULE.evaluate(&facts, &input).is_none();
             prop_assert!(allowed);
         }
