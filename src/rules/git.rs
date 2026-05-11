@@ -1,9 +1,9 @@
 //! `core.git` pack — guards against destructive git operations.
 //!
-//! Implements the 11 rules tabled in `docs/design/policy-packs.md`
-//! (7 destructive-operation rules + 4 hook/signing bypass-blockers).
-//! Each rule shares the [`GitRule`] adapter so the
-//! [`crate::rules::ConfigRule`] trait is implemented exactly once.
+//! Covers force-push variants, history rewrites, hook / signing / credential
+//! bypasses, and env-var redirection. The authoritative rule list lives in
+//! `docs/design/policy-packs.md`. Each rule shares the [`GitRule`] adapter
+//! so the [`crate::rules::ConfigRule`] trait is implemented exactly once.
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
@@ -246,8 +246,32 @@ const ENV_BYPASS_KEYS: &[(&str, BypassMatch)] = &[
     ("CORE_HOOKSPATH", BypassMatch::Any),
 ];
 
+const CREDENTIAL_HIJACK_SUBCOMMANDS: &[&str] =
+    &["push", "pull", "fetch", "clone", "ls-remote", "remote"];
+
+const CREDENTIAL_HIJACK_KEYS: &[(&str, BypassMatch)] = &[
+    ("GIT_SSH_COMMAND", BypassMatch::Any),
+    ("GIT_SSH", BypassMatch::Any),
+    ("GIT_ASKPASS", BypassMatch::Any),
+    ("SSH_ASKPASS", BypassMatch::Any),
+];
+
+const PATH_REDIRECT_KEYS: &[(&str, BypassMatch)] = &[
+    ("GIT_DIR", BypassMatch::Any),
+    ("GIT_WORK_TREE", BypassMatch::Any),
+    ("GIT_OBJECT_DIRECTORY", BypassMatch::Any),
+    ("GIT_INDEX_FILE", BypassMatch::Any),
+    ("GIT_CONFIG", BypassMatch::Any),
+    ("GIT_CONFIG_GLOBAL", BypassMatch::Any),
+    ("GIT_CONFIG_SYSTEM", BypassMatch::Any),
+    ("GIT_ALTERNATE_OBJECT_DIRECTORIES", BypassMatch::Any),
+];
+
 /// Match `git push --force` / `git push -f` / `git push --force-with-lease`
 /// while letting only `--force-with-lease` fall to the lease-specific rule.
+///
+/// Also catches refspecs prefixed with `+` (e.g. `git push origin +main:main`),
+/// which is git's shell-quoting-friendly synonym for `--force`.
 fn matches_force_push(argv: &Argv) -> bool {
     if git_subcommand(argv) != Some("push") {
         return false;
@@ -260,6 +284,7 @@ fn matches_force_push(argv: &Argv) -> bool {
                 && !a.starts_with("--")
                 && a.contains('f')
                 && !a.contains("force-with-lease"))
+            || (a.starts_with('+') && a.len() > 1)
     })
 }
 
@@ -402,21 +427,109 @@ fn matches_config_override_bypass(argv: &Argv) -> bool {
     false
 }
 
-fn matches_env_bypass(argv: &Argv) -> bool {
+fn matches_push_mirror(argv: &Argv) -> bool {
+    if git_subcommand(argv) != Some("push") {
+        return false;
+    }
+    let rest = args_after_subcommand(argv, "push");
+    rest.iter()
+        .any(|a| *a == "--mirror" || a.starts_with("--mirror="))
+}
+
+fn matches_push_delete_remote(argv: &Argv) -> bool {
+    if git_subcommand(argv) != Some("push") {
+        return false;
+    }
+    let rest = args_after_subcommand(argv, "push");
+    rest.iter().any(|a| {
+        *a == "--delete"
+            || (a.starts_with('-') && !a.starts_with("--") && a.contains('d'))
+            || (a.starts_with(':') && a.len() > 1)
+    })
+}
+
+fn matches_force_if_includes(argv: &Argv) -> bool {
+    if git_subcommand(argv) != Some("push") {
+        return false;
+    }
+    let rest = args_after_subcommand(argv, "push");
+    rest.iter()
+        .any(|a| *a == "--force-if-includes" || a.starts_with("--force-if-includes="))
+}
+
+fn matches_update_ref_delete(argv: &Argv) -> bool {
+    if git_subcommand(argv) != Some("update-ref") {
+        return false;
+    }
+    let rest = args_after_subcommand(argv, "update-ref");
+    rest.iter().any(|a| *a == "-d" || *a == "--delete")
+}
+
+/// `git reflog delete <ref>` (always destructive) or `git reflog expire`
+/// with an immediate-expiry flag. `reflog show --all` and similar
+/// read-only operations are explicitly excluded.
+fn matches_reflog_expire(argv: &Argv) -> bool {
+    if git_subcommand(argv) != Some("reflog") {
+        return false;
+    }
+    let rest = args_after_subcommand(argv, "reflog");
+    let sub = rest.iter().find(|a| !a.starts_with('-')).copied();
+    match sub {
+        Some("delete") => true,
+        Some("expire") => rest.iter().any(|a| {
+            *a == "--expire=now"
+                || *a == "--expire=0"
+                || *a == "--expire-unreachable=now"
+                || *a == "--expire-unreachable=0"
+        }),
+        _ => false,
+    }
+}
+
+/// `git gc --prune=now` or `--prune=all`. The default `--prune=2.weeks.ago`
+/// (and any other dated value) is left alone because it cannot destroy
+/// commits that are still recoverable through the reflog grace window.
+fn matches_gc_prune_now(argv: &Argv) -> bool {
+    if git_subcommand(argv) != Some("gc") {
+        return false;
+    }
+    let rest = args_after_subcommand(argv, "gc");
+    rest.iter()
+        .any(|a| *a == "--prune=now" || *a == "--prune=all")
+}
+
+/// Shared env-var matcher. `scope = Some(list)` restricts to specific git
+/// subcommands; `scope = None` fires on any git subcommand.
+fn matches_env_keys(argv: &Argv, scope: Option<&[&str]>, keys: &[(&str, BypassMatch)]) -> bool {
     let Some(sub) = git_subcommand(argv) else {
         return false;
     };
-    if !BYPASS_SCOPE_SUBCOMMANDS.contains(&sub) {
+    if let Some(allowed) = scope
+        && !allowed.contains(&sub)
+    {
         return false;
     }
-    for ea in &argv.env_assignments {
-        for (target, mode) in ENV_BYPASS_KEYS {
-            if ea.key.eq_ignore_ascii_case(target) && bypass_value_matches(*mode, &ea.value) {
-                return true;
-            }
-        }
-    }
-    false
+    argv.env_assignments.iter().any(|ea| {
+        keys.iter().any(|(target, mode)| {
+            ea.key.eq_ignore_ascii_case(target) && bypass_value_matches(*mode, &ea.value)
+        })
+    })
+}
+
+fn matches_env_bypass(argv: &Argv) -> bool {
+    matches_env_keys(argv, Some(BYPASS_SCOPE_SUBCOMMANDS), ENV_BYPASS_KEYS)
+}
+
+fn matches_env_credential_hijack(argv: &Argv) -> bool {
+    matches_env_keys(
+        argv,
+        Some(CREDENTIAL_HIJACK_SUBCOMMANDS),
+        CREDENTIAL_HIJACK_KEYS,
+    )
+}
+
+fn matches_env_path_redirect(argv: &Argv) -> bool {
+    matches_env_keys(argv, None, PATH_REDIRECT_KEYS)
 }
 
 const FORCE_PUSH: RuleSpec = RuleSpec {
@@ -583,6 +696,123 @@ const ENV_BYPASS: RuleSpec = RuleSpec {
     ],
 };
 
+const PUSH_MIRROR: RuleSpec = RuleSpec {
+    id: "core.git.push-mirror",
+    severity: Severity::High,
+    decision_kind: DecisionKind::Ask,
+    hard_deny: false,
+    matcher: matches_push_mirror,
+    problem: "git push --mirror overwrites every ref on the remote with whatever exists \
+         locally, including deleted branches and tags — equivalent to a force push across \
+         the entire repository.",
+    alternatives: &[
+        "Push only the refs you actually want with explicit refspecs (git push origin <branch>).",
+        "If you really need a mirror sync, confirm with the user and verify the remote first.",
+    ],
+};
+
+const PUSH_DELETE_REMOTE: RuleSpec = RuleSpec {
+    id: "core.git.push-delete-remote",
+    severity: Severity::High,
+    decision_kind: DecisionKind::Ask,
+    hard_deny: false,
+    matcher: matches_push_delete_remote,
+    problem: "git push --delete (or `:<ref>` refspec) removes a branch or tag on the remote, \
+         which is destructive and can break collaborators if the ref is shared.",
+    alternatives: &[
+        "Confirm with the user that the remote ref is safe to remove.",
+        "If the goal is to clean up a stale local branch, use git branch -d locally instead.",
+    ],
+};
+
+const FORCE_IF_INCLUDES: RuleSpec = RuleSpec {
+    id: "core.git.force-if-includes",
+    severity: Severity::High,
+    decision_kind: DecisionKind::Ask,
+    hard_deny: false,
+    matcher: matches_force_if_includes,
+    problem: "git push --force-if-includes still rewrites the remote branch when the local \
+         tip subsumes the remote, which can drop commits other collaborators expect to see.",
+    alternatives: &[
+        "Pull / rebase to incorporate the remote, then push normally.",
+        "Confirm with the user that overwriting the remote tip is intended.",
+    ],
+};
+
+const UPDATE_REF_DELETE: RuleSpec = RuleSpec {
+    id: "core.git.update-ref-delete",
+    severity: Severity::High,
+    decision_kind: DecisionKind::Ask,
+    hard_deny: false,
+    matcher: matches_update_ref_delete,
+    problem: "git update-ref -d forcibly removes a ref without any of the safety checks \
+         that git branch / git tag apply, and bypasses pre-push hooks entirely.",
+    alternatives: &[
+        "Use git branch -d / git tag -d for normal deletion with merged-check.",
+        "Confirm with the user before removing a low-level ref.",
+    ],
+};
+
+const REFLOG_EXPIRE: RuleSpec = RuleSpec {
+    id: "core.git.reflog-expire",
+    severity: Severity::High,
+    decision_kind: DecisionKind::Ask,
+    hard_deny: false,
+    matcher: matches_reflog_expire,
+    problem: "git reflog delete / expire --expire=now destroys the local recovery log that \
+         lets `git fsck --lost-found` and dated revisions reach orphaned commits.",
+    alternatives: &[
+        "Leave the reflog alone; entries expire on their own under git's grace window.",
+        "If disk is the concern, run git gc without --prune=now so the grace window still applies.",
+    ],
+};
+
+const GC_PRUNE_NOW: RuleSpec = RuleSpec {
+    id: "core.git.gc-prune-now",
+    severity: Severity::Medium,
+    decision_kind: DecisionKind::Ask,
+    hard_deny: false,
+    matcher: matches_gc_prune_now,
+    problem: "git gc --prune=now (or --prune=all) immediately removes unreachable objects \
+         without the usual two-week grace window, making orphaned commits unrecoverable.",
+    alternatives: &[
+        "Run git gc without --prune=now to keep the grace window.",
+        "If you really need to reclaim space, confirm with the user and verify nothing is dangling.",
+    ],
+};
+
+const ENV_CREDENTIAL_HIJACK: RuleSpec = RuleSpec {
+    id: "core.git.env-credential-hijack",
+    severity: Severity::High,
+    decision_kind: DecisionKind::Deny,
+    hard_deny: false,
+    matcher: matches_env_credential_hijack,
+    problem: "Inline GIT_SSH_COMMAND / GIT_SSH / GIT_ASKPASS / SSH_ASKPASS in front of a \
+         networked git command replaces git's transport or credential-prompt program for \
+         this single invocation — a well-known vector for exfiltrating credentials or \
+         redirecting traffic.",
+    alternatives: &[
+        "Configure ssh / askpass once in ~/.ssh/config or git config and re-run.",
+        "If the override is genuinely needed, set it in repo config so it is reviewable.",
+    ],
+};
+
+const ENV_PATH_REDIRECT: RuleSpec = RuleSpec {
+    id: "core.git.env-path-redirect",
+    severity: Severity::High,
+    decision_kind: DecisionKind::Deny,
+    hard_deny: false,
+    matcher: matches_env_path_redirect,
+    problem: "Inline GIT_DIR / GIT_WORK_TREE / GIT_OBJECT_DIRECTORY / GIT_INDEX_FILE / \
+         GIT_CONFIG{,_GLOBAL,_SYSTEM} / GIT_ALTERNATE_OBJECT_DIRECTORIES re-points git at a \
+         different repository, config, or object store for this one invocation — bypassing \
+         every project-local guard, hook, and audit trail.",
+    alternatives: &[
+        "Run git from inside the intended worktree without redirecting paths.",
+        "If you really need an alternate repo, cd into it and run git normally.",
+    ],
+};
+
 pub static FORCE_PUSH_RULE: GitRule = GitRule { spec: &FORCE_PUSH };
 pub static FORCE_PUSH_WITH_LEASE_RULE: GitRule = GitRule {
     spec: &FORCE_PUSH_WITH_LEASE,
@@ -602,6 +832,28 @@ pub static CONFIG_OVERRIDE_BYPASS_RULE: GitRule = GitRule {
     spec: &CONFIG_OVERRIDE_BYPASS,
 };
 pub static ENV_BYPASS_RULE: GitRule = GitRule { spec: &ENV_BYPASS };
+pub static PUSH_MIRROR_RULE: GitRule = GitRule { spec: &PUSH_MIRROR };
+pub static PUSH_DELETE_REMOTE_RULE: GitRule = GitRule {
+    spec: &PUSH_DELETE_REMOTE,
+};
+pub static FORCE_IF_INCLUDES_RULE: GitRule = GitRule {
+    spec: &FORCE_IF_INCLUDES,
+};
+pub static UPDATE_REF_DELETE_RULE: GitRule = GitRule {
+    spec: &UPDATE_REF_DELETE,
+};
+pub static REFLOG_EXPIRE_RULE: GitRule = GitRule {
+    spec: &REFLOG_EXPIRE,
+};
+pub static GC_PRUNE_NOW_RULE: GitRule = GitRule {
+    spec: &GC_PRUNE_NOW,
+};
+pub static ENV_CREDENTIAL_HIJACK_RULE: GitRule = GitRule {
+    spec: &ENV_CREDENTIAL_HIJACK,
+};
+pub static ENV_PATH_REDIRECT_RULE: GitRule = GitRule {
+    spec: &ENV_PATH_REDIRECT,
+};
 
 #[cfg(test)]
 mod tests {
@@ -1252,13 +1504,18 @@ mod tests {
             &RESET_HARD_RULE,
             &CLEAN_FDX_RULE,
             &BRANCH_DELETE_FORCE_RULE,
+            &PUSH_MIRROR_RULE,
+            &PUSH_DELETE_REMOTE_RULE,
+            &FORCE_IF_INCLUDES_RULE,
+            &UPDATE_REF_DELETE_RULE,
+            &REFLOG_EXPIRE_RULE,
         ] {
             assert!(!rule.hard_deny());
             assert_eq!(rule.severity(), Severity::High);
             assert_eq!(rule.default_decision(), DecisionKind::Ask);
         }
 
-        for rule in [&STASH_CLEAR_RULE, &REMOTE_SET_URL_RULE] {
+        for rule in [&STASH_CLEAR_RULE, &REMOTE_SET_URL_RULE, &GC_PRUNE_NOW_RULE] {
             assert!(!rule.hard_deny());
             assert_eq!(rule.severity(), Severity::Medium);
             assert_eq!(rule.default_decision(), DecisionKind::Ask);
@@ -1268,6 +1525,8 @@ mod tests {
             &NO_VERIFY_RULE,
             &CONFIG_OVERRIDE_BYPASS_RULE,
             &ENV_BYPASS_RULE,
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            &ENV_PATH_REDIRECT_RULE,
         ] {
             assert!(!rule.hard_deny());
             assert_eq!(rule.severity(), Severity::High);
@@ -1315,7 +1574,7 @@ mod tests {
     use crate::testing::proptest::{arbitrary_command, bash_command, non_bash_hook_input};
     use proptest::prelude::*;
 
-    fn all_git_rules() -> [&'static GitRule; 11] {
+    fn all_git_rules() -> [&'static GitRule; 19] {
         [
             &FORCE_PUSH_RULE,
             &FORCE_PUSH_WITH_LEASE_RULE,
@@ -1328,6 +1587,14 @@ mod tests {
             &NO_GPG_SIGN_RULE,
             &CONFIG_OVERRIDE_BYPASS_RULE,
             &ENV_BYPASS_RULE,
+            &PUSH_MIRROR_RULE,
+            &PUSH_DELETE_REMOTE_RULE,
+            &FORCE_IF_INCLUDES_RULE,
+            &UPDATE_REF_DELETE_RULE,
+            &REFLOG_EXPIRE_RULE,
+            &GC_PRUNE_NOW_RULE,
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            &ENV_PATH_REDIRECT_RULE,
         ]
     }
 
@@ -1527,5 +1794,284 @@ mod tests {
         // confirming evaluate doesn't panic exercises the `iter.next()
         // returned None` arm of `config_overrides`.
         let _ = CONFIG_OVERRIDE_BYPASS_RULE.evaluate(&facts, &input);
+    }
+
+    // --- force-push +refspec extension ----------------------------------
+
+    #[test]
+    fn force_push_denies_plus_refspec() {
+        for cmd in [
+            "git push origin +main:main",
+            "git push origin +main",
+            "git push origin +refs/heads/foo:refs/heads/foo",
+            "git push o +a:b +c:d",
+        ] {
+            assert_decision(&FORCE_PUSH_RULE, cmd, DecisionKind::Deny);
+        }
+    }
+
+    #[test]
+    fn force_push_plus_refspec_via_sudo() {
+        assert_decision(
+            &FORCE_PUSH_RULE,
+            "sudo git push origin +main:main",
+            DecisionKind::Deny,
+        );
+    }
+
+    #[test]
+    fn force_push_does_not_fire_on_bare_plus() {
+        // A bare `+` is not a refspec; only `+name` matters.
+        assert_allow(&FORCE_PUSH_RULE, "git push origin +");
+    }
+
+    // --- push-mirror ----------------------------------------------------
+
+    #[test]
+    fn push_mirror_asks_long_flag() {
+        assert_decision(&PUSH_MIRROR_RULE, "git push --mirror", DecisionKind::Ask);
+        assert_decision(
+            &PUSH_MIRROR_RULE,
+            "git push --mirror origin",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn push_mirror_allows_safe_push() {
+        assert_allow(&PUSH_MIRROR_RULE, "git push origin main");
+        assert_allow(&PUSH_MIRROR_RULE, "git push --tags origin");
+    }
+
+    #[test]
+    fn push_mirror_via_sudo() {
+        assert_decision(
+            &PUSH_MIRROR_RULE,
+            "sudo git push --mirror origin",
+            DecisionKind::Ask,
+        );
+    }
+
+    // --- push-delete-remote ---------------------------------------------
+
+    #[test]
+    fn push_delete_asks_long_flag() {
+        assert_decision(
+            &PUSH_DELETE_REMOTE_RULE,
+            "git push --delete origin foo",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn push_delete_asks_short_flag() {
+        assert_decision(
+            &PUSH_DELETE_REMOTE_RULE,
+            "git push -d origin foo",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn push_delete_asks_colon_refspec() {
+        assert_decision(
+            &PUSH_DELETE_REMOTE_RULE,
+            "git push origin :foo",
+            DecisionKind::Ask,
+        );
+        assert_decision(
+            &PUSH_DELETE_REMOTE_RULE,
+            "git push origin :refs/heads/foo",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn push_delete_allows_normal_push() {
+        assert_allow(&PUSH_DELETE_REMOTE_RULE, "git push origin main");
+        assert_allow(&PUSH_DELETE_REMOTE_RULE, "git push origin main:main");
+    }
+
+    // --- force-if-includes ----------------------------------------------
+
+    #[test]
+    fn force_if_includes_asks_long_flag() {
+        assert_decision(
+            &FORCE_IF_INCLUDES_RULE,
+            "git push --force-if-includes",
+            DecisionKind::Ask,
+        );
+        assert_decision(
+            &FORCE_IF_INCLUDES_RULE,
+            "git push --force-if-includes origin main",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn force_if_includes_does_not_fire_for_lease_or_force() {
+        assert_allow(
+            &FORCE_IF_INCLUDES_RULE,
+            "git push --force-with-lease origin main",
+        );
+        assert_allow(&FORCE_IF_INCLUDES_RULE, "git push --force origin main");
+        assert_allow(&FORCE_IF_INCLUDES_RULE, "git push origin main");
+    }
+
+    // --- update-ref-delete ----------------------------------------------
+
+    #[test]
+    fn update_ref_delete_asks_dash_d() {
+        assert_decision(
+            &UPDATE_REF_DELETE_RULE,
+            "git update-ref -d refs/heads/foo",
+            DecisionKind::Ask,
+        );
+        assert_decision(
+            &UPDATE_REF_DELETE_RULE,
+            "git update-ref --delete refs/heads/foo",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn update_ref_delete_allows_create_or_update() {
+        assert_allow(
+            &UPDATE_REF_DELETE_RULE,
+            "git update-ref refs/heads/foo HEAD",
+        );
+        assert_allow(&UPDATE_REF_DELETE_RULE, "git update-ref --stdin");
+    }
+
+    // --- reflog-expire --------------------------------------------------
+
+    #[test]
+    fn reflog_expire_asks_expire_now() {
+        for cmd in [
+            "git reflog expire --expire=now --all",
+            "git reflog expire --expire=0 --all",
+            "git reflog expire --expire-unreachable=now --all",
+        ] {
+            assert_decision(&REFLOG_EXPIRE_RULE, cmd, DecisionKind::Ask);
+        }
+    }
+
+    #[test]
+    fn reflog_expire_asks_delete_subcommand() {
+        assert_decision(
+            &REFLOG_EXPIRE_RULE,
+            "git reflog delete HEAD@{0}",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn reflog_expire_allows_read_only_ops() {
+        assert_allow(&REFLOG_EXPIRE_RULE, "git reflog show --all");
+        assert_allow(&REFLOG_EXPIRE_RULE, "git reflog");
+        assert_allow(
+            &REFLOG_EXPIRE_RULE,
+            "git reflog expire --expire=2.weeks.ago",
+        );
+    }
+
+    // --- gc-prune-now ---------------------------------------------------
+
+    #[test]
+    fn gc_prune_now_asks() {
+        assert_decision(&GC_PRUNE_NOW_RULE, "git gc --prune=now", DecisionKind::Ask);
+        assert_decision(&GC_PRUNE_NOW_RULE, "git gc --prune=all", DecisionKind::Ask);
+        assert_decision(
+            &GC_PRUNE_NOW_RULE,
+            "git gc --aggressive --prune=now",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn gc_prune_now_allows_safe_gc() {
+        assert_allow(&GC_PRUNE_NOW_RULE, "git gc");
+        assert_allow(&GC_PRUNE_NOW_RULE, "git gc --auto");
+        assert_allow(&GC_PRUNE_NOW_RULE, "git gc --prune=2.weeks.ago");
+    }
+
+    // --- env-credential-hijack ------------------------------------------
+
+    #[test]
+    fn env_credential_hijack_denies_ssh_command_on_push() {
+        assert_decision(
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            "GIT_SSH_COMMAND='ssh -i /tmp/k' git push origin main",
+            DecisionKind::Deny,
+        );
+    }
+
+    #[test]
+    fn env_credential_hijack_denies_askpass_on_fetch() {
+        assert_decision(
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            "GIT_ASKPASS=/tmp/x git fetch origin",
+            DecisionKind::Deny,
+        );
+    }
+
+    #[test]
+    fn env_credential_hijack_denies_on_clone_and_ls_remote() {
+        assert_decision(
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            "GIT_SSH_COMMAND=x git clone git@example.com:foo/bar.git",
+            DecisionKind::Deny,
+        );
+        assert_decision(
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            "GIT_SSH=x git ls-remote origin",
+            DecisionKind::Deny,
+        );
+    }
+
+    #[test]
+    fn env_credential_hijack_silent_outside_network_scope() {
+        // `git status` is not a network op; the env var should not fire.
+        assert_allow(&ENV_CREDENTIAL_HIJACK_RULE, "GIT_SSH_COMMAND=x git status");
+        assert_allow(&ENV_CREDENTIAL_HIJACK_RULE, "git push origin main");
+    }
+
+    // --- env-path-redirect ----------------------------------------------
+
+    #[test]
+    fn env_path_redirect_denies_git_dir() {
+        assert_decision(
+            &ENV_PATH_REDIRECT_RULE,
+            "GIT_DIR=/tmp/x git log",
+            DecisionKind::Deny,
+        );
+    }
+
+    #[test]
+    fn env_path_redirect_denies_config_overrides() {
+        for cmd in [
+            "GIT_CONFIG=/tmp/c git commit -m foo",
+            "GIT_CONFIG_GLOBAL=/tmp/c git commit -m foo",
+            "GIT_CONFIG_SYSTEM=/tmp/c git push",
+            "GIT_WORK_TREE=/tmp/w git status",
+            "GIT_OBJECT_DIRECTORY=/tmp/o git fsck",
+            "GIT_INDEX_FILE=/tmp/i git diff",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES=/tmp/a git log",
+        ] {
+            assert_decision(&ENV_PATH_REDIRECT_RULE, cmd, DecisionKind::Deny);
+        }
+    }
+
+    #[test]
+    fn env_path_redirect_allows_unrelated_env() {
+        assert_allow(&ENV_PATH_REDIRECT_RULE, "SOMETHING=1 git log");
+        assert_allow(&ENV_PATH_REDIRECT_RULE, "git log");
+    }
+
+    #[test]
+    fn env_path_redirect_silent_on_non_git_head() {
+        // The redirect rule keys off git_subcommand(), so a non-git head
+        // (even with the same env var) should not fire.
+        assert_allow(&ENV_PATH_REDIRECT_RULE, "GIT_DIR=/tmp/x ls");
     }
 }

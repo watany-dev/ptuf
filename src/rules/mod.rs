@@ -61,6 +61,14 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &git::NO_GPG_SIGN_RULE,
     &git::CONFIG_OVERRIDE_BYPASS_RULE,
     &git::ENV_BYPASS_RULE,
+    &git::PUSH_MIRROR_RULE,
+    &git::PUSH_DELETE_REMOTE_RULE,
+    &git::FORCE_IF_INCLUDES_RULE,
+    &git::UPDATE_REF_DELETE_RULE,
+    &git::REFLOG_EXPIRE_RULE,
+    &git::GC_PRUNE_NOW_RULE,
+    &git::ENV_CREDENTIAL_HIJACK_RULE,
+    &git::ENV_PATH_REDIRECT_RULE,
     &self_protection::BINARY_RULE,
     &self_protection::CONFIG_RULE,
     &self_protection::PLUGIN_RULE,
@@ -138,6 +146,14 @@ mod tests {
             "core.git.no-gpg-sign",
             "core.git.config-override-bypass",
             "core.git.env-bypass",
+            "core.git.push-mirror",
+            "core.git.push-delete-remote",
+            "core.git.force-if-includes",
+            "core.git.update-ref-delete",
+            "core.git.reflog-expire",
+            "core.git.gc-prune-now",
+            "core.git.env-credential-hijack",
+            "core.git.env-path-redirect",
         ] {
             assert!(ids.contains(&git_id), "missing rule_id {git_id}");
         }
@@ -281,6 +297,14 @@ mod tests {
         "core.git.no-gpg-sign",
         "core.git.config-override-bypass",
         "core.git.env-bypass",
+        "core.git.push-mirror",
+        "core.git.push-delete-remote",
+        "core.git.force-if-includes",
+        "core.git.update-ref-delete",
+        "core.git.reflog-expire",
+        "core.git.gc-prune-now",
+        "core.git.env-credential-hijack",
+        "core.git.env-path-redirect",
     ];
 
     proptest! {
