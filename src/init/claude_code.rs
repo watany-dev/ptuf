@@ -137,10 +137,6 @@ pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
     tokens[n - COMMAND_TAIL.len()..] == *COMMAND_TAIL
 }
 
-pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
-    cmd.split_whitespace().next()
-}
-
 pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
     pre_tool_use_hooks(root)
         .iter()
@@ -250,6 +246,7 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
 mod tests {
 
     use super::*;
+    use crate::init::command_executable;
 
     fn workdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

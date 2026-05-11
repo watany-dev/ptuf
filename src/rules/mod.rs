@@ -67,6 +67,8 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &self_protection::CLAUDE_SETTINGS_RULE,
     &self_protection::CODEX_SETTINGS_RULE,
     &self_protection::HOOK_SCRIPT_RULE,
+    &self_protection::COPILOT_SETTINGS_RULE,
+    &self_protection::KIRO_SETTINGS_RULE,
     &sensitive_read::SensitiveRead,
     &project_hygiene::LockMismatchPnpm,
     &project_hygiene::LockMismatchUv,
@@ -146,6 +148,8 @@ mod tests {
             "core.self_protection.claude-settings",
             "core.self_protection.codex-settings",
             "core.self_protection.hook-script",
+            "core.self_protection.copilot-settings",
+            "core.self_protection.kiro-settings",
         ] {
             assert!(ids.contains(&self_id), "missing rule_id {self_id}");
         }

@@ -17,6 +17,7 @@ target
 tarpaulin-report.html
 tarpaulin-report.json
 cobertura.xml
+lcov.info
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

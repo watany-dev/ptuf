@@ -23,6 +23,8 @@ pub enum ProtectedKind {
     ClaudeSettings,
     CodexSettings,
     HookScript,
+    CopilotSettings,
+    KiroSettings,
 }
 
 impl ProtectedKind {
@@ -34,13 +36,15 @@ impl ProtectedKind {
             Self::ClaudeSettings => "claude_settings",
             Self::CodexSettings => "codex_settings",
             Self::HookScript => "hook_script",
+            Self::CopilotSettings => "copilot_settings",
+            Self::KiroSettings => "kiro_settings",
         }
     }
 }
 
 /// Small, allocation-free set of protected target labels.
 ///
-/// There are only six [`ProtectedKind`] variants, so a fixed buffer is
+/// There are only eight [`ProtectedKind`] variants, so a fixed buffer is
 /// simpler than pulling in a small-vector dependency for the hook hot path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProtectedKinds {
@@ -49,7 +53,7 @@ pub struct ProtectedKinds {
 }
 
 impl ProtectedKinds {
-    const CAPACITY: usize = 6;
+    const CAPACITY: usize = 8;
 
     pub fn new() -> Self {
         Self::default()
@@ -112,6 +116,8 @@ pub struct ProtectedPaths {
     pub claude_settings: Vec<PathBuf>,
     pub codex_settings: Vec<PathBuf>,
     pub hook_scripts: Vec<PathBuf>,
+    pub copilot_settings: Vec<PathBuf>,
+    pub kiro_settings: Vec<PathBuf>,
 }
 
 impl ProtectedPaths {
@@ -170,8 +176,7 @@ impl ProtectedPaths {
                 Err(_) => continue,
             };
             for command in crate::init::claude_code::pre_tool_use_commands(&parsed) {
-                let Some(executable) = crate::init::claude_code::command_executable(&command)
-                else {
+                let Some(executable) = crate::init::command_executable(&command) else {
                     continue;
                 };
                 let normalized = crate::facts::path::resolve_with_env(
@@ -199,12 +204,78 @@ impl ProtectedPaths {
                 Err(_) => continue,
             };
             for command in crate::init::codex::pre_tool_use_commands(&parsed) {
-                let Some(executable) = crate::init::codex::command_executable(&command) else {
+                let Some(executable) = crate::init::command_executable(&command) else {
                     continue;
                 };
                 let normalized = crate::facts::path::resolve_with_env(
                     executable,
                     repo_root.or_else(|| hooks_path.parent()),
+                    env,
+                );
+                if !hook_scripts.contains(&normalized) {
+                    hook_scripts.push(normalized);
+                }
+            }
+        }
+
+        let mut copilot_settings: Vec<PathBuf> = Vec::new();
+        if let Some(root) = repo_root {
+            copilot_settings.push(root.join(".github/hooks/ptuf.json"));
+        }
+
+        for hooks_path in &copilot_settings {
+            let body = match fs::read_to_string(hooks_path) {
+                Ok(s) => s,
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Err(_) => continue,
+            };
+            let parsed: Value = match serde_json::from_str(&body) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            for command in crate::init::copilot::pre_tool_use_commands(&parsed) {
+                let Some(executable) = crate::init::command_executable(&command) else {
+                    continue;
+                };
+                let normalized = crate::facts::path::resolve_with_env(
+                    executable,
+                    repo_root.or_else(|| hooks_path.parent()),
+                    env,
+                );
+                if !hook_scripts.contains(&normalized) {
+                    hook_scripts.push(normalized);
+                }
+            }
+        }
+
+        let mut kiro_settings: Vec<PathBuf> = Vec::new();
+        if let Some(root) = repo_root {
+            kiro_settings.push(root.join(".kiro/agents/ptuf-guarded.json"));
+        }
+        if let Some(home_os) = env.var_os("HOME") {
+            let home = PathBuf::from(home_os);
+            kiro_settings.push(home.join(".kiro/agents/ptuf-guarded.json"));
+        }
+        kiro_settings.sort();
+        kiro_settings.dedup();
+
+        for agent_path in &kiro_settings {
+            let body = match fs::read_to_string(agent_path) {
+                Ok(s) => s,
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Err(_) => continue,
+            };
+            let parsed: Value = match serde_json::from_str(&body) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            for command in crate::init::kiro::pre_tool_use_commands(&parsed) {
+                let Some(executable) = crate::init::command_executable(&command) else {
+                    continue;
+                };
+                let normalized = crate::facts::path::resolve_with_env(
+                    executable,
+                    repo_root.or_else(|| agent_path.parent()),
                     env,
                 );
                 if !hook_scripts.contains(&normalized) {
@@ -226,6 +297,8 @@ impl ProtectedPaths {
         let claude_settings = canonicalize_each(claude_settings);
         let codex_settings = canonicalize_each(codex_settings);
         let hook_scripts = canonicalize_each(hook_scripts);
+        let copilot_settings = canonicalize_each(copilot_settings);
+        let kiro_settings = canonicalize_each(kiro_settings);
 
         Self {
             repo_root: repo_root.map(Path::to_path_buf),
@@ -235,6 +308,8 @@ impl ProtectedPaths {
             claude_settings,
             codex_settings,
             hook_scripts,
+            copilot_settings,
+            kiro_settings,
         }
     }
 
@@ -305,6 +380,20 @@ impl ProtectedPaths {
             .any(|p| path_matches(candidate, p))
         {
             return Some(ProtectedKind::CodexSettings);
+        }
+        if self
+            .copilot_settings
+            .iter()
+            .any(|p| path_matches(candidate, p))
+        {
+            return Some(ProtectedKind::CopilotSettings);
+        }
+        if self
+            .kiro_settings
+            .iter()
+            .any(|p| path_matches(candidate, p))
+        {
+            return Some(ProtectedKind::KiroSettings);
         }
         if self.hook_scripts.iter().any(|p| path_matches(candidate, p)) {
             return Some(ProtectedKind::HookScript);
@@ -434,6 +523,8 @@ mod tests {
             ProtectedKind::ClaudeSettings,
             ProtectedKind::CodexSettings,
             ProtectedKind::HookScript,
+            ProtectedKind::CopilotSettings,
+            ProtectedKind::KiroSettings,
         ] {
             assert!(!k.as_str().is_empty());
         }
@@ -787,6 +878,150 @@ mod tests {
         )];
         let labels = p.classify_input_with_paths_pair(&input, &[], &extra);
         assert!(labels.contains(&ProtectedKind::ClaudeSettings));
+    }
+
+    #[test]
+    fn collect_includes_repo_local_copilot_settings() {
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        assert!(
+            p.copilot_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/repo/.github/hooks/ptuf.json"))
+        );
+    }
+
+    #[test]
+    fn collect_includes_kiro_settings_for_repo_and_home() {
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        assert!(
+            p.kiro_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/repo/.kiro/agents/ptuf-guarded.json"))
+        );
+        assert!(
+            p.kiro_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/h/.kiro/agents/ptuf-guarded.json"))
+        );
+    }
+
+    #[test]
+    fn collect_extracts_hook_scripts_from_copilot_hooks_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-copilot-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(dir.join(".github/hooks")).expect("mkdir");
+        std::fs::write(
+            dir.join(".github/hooks/ptuf.json"),
+            r#"{
+  "hooks": {
+    "preToolUse": [
+      {
+        "bash": "./hooks/guard.sh hook copilot",
+        "powershell": "./hooks/guard.sh hook copilot"
+      }
+    ]
+  }
+}"#,
+        )
+        .expect("write hooks");
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
+        assert!(
+            p.hook_scripts
+                .iter()
+                .any(|path| path == &dir.join("./hooks/guard.sh")),
+            "expected hook script from copilot hooks.json, got {:?}",
+            p.hook_scripts
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_extracts_hook_scripts_from_kiro_hooks_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-kiro-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(dir.join(".kiro/agents")).expect("mkdir");
+        std::fs::write(
+            dir.join(".kiro/agents/ptuf-guarded.json"),
+            r#"{
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": "./hooks/guard.sh hook kiro"
+      }
+    ]
+  }
+}"#,
+        )
+        .expect("write agent");
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
+        assert!(
+            p.hook_scripts
+                .iter()
+                .any(|path| path == &dir.join("./hooks/guard.sh")),
+            "expected hook script from kiro ptuf-guarded.json, got {:?}",
+            p.hook_scripts
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn classify_matches_edit_of_copilot_settings() {
+        let p = ProtectedPaths {
+            copilot_settings: vec![PathBuf::from("/repo/.github/hooks/ptuf.json")],
+            ..ProtectedPaths::default()
+        };
+        let input = HookInput {
+            tool_name: "Edit".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/.github/hooks/ptuf.json"
+            }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(labels.contains(&ProtectedKind::CopilotSettings));
+    }
+
+    #[test]
+    fn classify_matches_edit_of_kiro_settings() {
+        let p = ProtectedPaths {
+            kiro_settings: vec![PathBuf::from("/repo/.kiro/agents/ptuf-guarded.json")],
+            ..ProtectedPaths::default()
+        };
+        let input = HookInput {
+            tool_name: "Edit".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/.kiro/agents/ptuf-guarded.json"
+            }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(labels.contains(&ProtectedKind::KiroSettings));
+    }
+
+    #[test]
+    fn classify_matches_edit_of_binary_path() {
+        let p = ProtectedPaths {
+            binary: Some(PathBuf::from("/usr/bin/ptuf")),
+            ..ProtectedPaths::default()
+        };
+        let input = HookInput {
+            tool_name: "Edit".into(),
+            tool_input: serde_json::json!({ "file_path": "/usr/bin/ptuf" }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(labels.contains(&ProtectedKind::Binary));
     }
 
     use crate::testing::proptest::{protected_kind, richer_hook_input};
