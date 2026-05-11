@@ -9,6 +9,7 @@ rules:
   # ファイル単位で抑制する。
   superfluous-actions:
     ignore:
+      - audit.yml
       - ci.yml
       - publish-crates.yml
       - release.yml
