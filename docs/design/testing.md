@@ -120,3 +120,7 @@ mcp_nested_input / arbitrary_utf8_bytes / safe_command_string) を集約し、
   全 Decision exit `0` / fail-closed (`core.engine.invalid-payload` /
   `core.engine.policy-load-failed`) を 9 ケースで固定
   (`tests/contracts.rs` の `copilot_*` 群)
+- `rules::iter()` の出力順 (37 件) は `tests/rules_iter_order.rs` で fixture
+  固定する。audit のルール表示順、`severity_for` 検索順、`engine::aggregate`
+  の決定取捨選択が暗黙に順序に依存しているため、`src/rules/mod.rs::RULES`
+  並び替えやモジュール分割の回帰検出ネットとして機能する。

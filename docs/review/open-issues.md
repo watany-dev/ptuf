@@ -87,14 +87,15 @@ inspect できるようになった。adapter 層は `RawHookInput` と normaliz
   (`include_str!("builtins.yaml")`) で配布し、起動時に DSL コンパイラを
   通す案。Rust 専用にすべきは self_protection の `ProtectedPaths` 突合
   のように DSL では書けないものだけ。優先度: P2 (大改修)
-- **§1.2** deferred。`dyn ConfigRule` static slice + `pub static` 16 個
-  (`src/rules/git.rs` 等)。`enum Rule { Filesystem(...), Git(GitRuleId),
+- **§1.2** deferred。`dyn ConfigRule` static slice + `pub static` 19 個
+  (`src/rules/git/` 等)。`enum Rule { Filesystem(...), Git(GitRuleId),
   SelfProtection(ProtectedKind), Plugin(PluginRule), … }` で動的
   ディスパッチを消す。優先度: P2
 - **D11** 解消済み。`src/engine.rs` を `src/engine/{mod,builder,filter}.rs` に、
   `src/cli.rs` を `src/cli/{mod,parse,run,output,test_support}.rs` に、
-  `src/doctor.rs` を `src/doctor/{mod,json}.rs` に分割し、責務単位で
-  ファイルを縮小した。残る `src/plugin/dsl.rs` 1066 行は次回以降の候補。
+  `src/doctor.rs` を `src/doctor/{mod,json}.rs` に、`src/rules/git.rs` (2077 行)
+  を `src/rules/git/{mod,argv,branch,bypass,clean,env_redirect,history,push,remote,reset,stash}.rs`
+  に分割し、責務単位でファイルを縮小した。残る `src/plugin/dsl.rs` 1066 行は次回以降の候補。
 
 ## 6. テスト基盤
 
