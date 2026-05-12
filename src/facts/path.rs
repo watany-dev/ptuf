@@ -4,7 +4,7 @@
 //! can inject a hermetic `HOME` (and the production path delegates to
 //! [`crate::config::scope::SystemEnv`]).
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::config::scope::{EnvLookup, SystemEnv};
 use crate::facts::shell::{Bash, Redirect, RedirectOp};
@@ -94,8 +94,11 @@ pub(crate) fn resolve_with_env(raw: &str, base_dir: Option<&Path>, env: &dyn Env
 /// `MapEnv` to verify `~` expansion deterministically.
 ///
 /// MCP tool calls (`mcp__<server>__<tool>`) are normalised on generic
-/// path carriers, including `path`, `paths[]`, `files[].path`, and
-/// `items[].path`.
+/// path carriers. Recognised top-level keys cover the common synonyms
+/// MCP servers use for a single path (`path`, `file_path`, `filename`,
+/// `file`, `filepath`, `target`, `target_file`, `dest`, `destination`,
+/// `src`, `source`, `from`, `to`, `location`, `uri`) plus the nested
+/// shapes `paths[]`, `files[].path`, and `items[].path`.
 pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathFact> {
     let (tool, tagged): (PathTool, Vec<(String, PathOrigin)>) = match input.tool_name.as_str() {
         "Read" | "Edit" | "Write" => {
@@ -150,9 +153,35 @@ pub fn extract_all(input: &HookInput) -> Vec<FilePath> {
     extract_all_with_env(input, &SystemEnv)
 }
 
+/// Single-path top-level keys recognised on MCP payloads. `path` is the
+/// canonical shape; the rest are common synonyms observed in the wild
+/// (e.g. filesystem servers use `file`/`filename`, github-style servers
+/// use `source`/`destination`, copy-style tools use `src`/`from`/`to`).
+/// Ordering controls iteration but does not change semantics — each key
+/// is independent.
+const MCP_DIRECT_PATH_KEYS: &[&str] = &[
+    "path",
+    "file_path",
+    "filename",
+    "file",
+    "filepath",
+    "target",
+    "target_file",
+    "dest",
+    "destination",
+    "src",
+    "source",
+    "from",
+    "to",
+    "location",
+    "uri",
+];
+
 fn collect_mcp_paths(value: &serde_json::Value) -> Vec<(String, PathOrigin)> {
     let mut out = Vec::new();
-    push_tagged(value.get("path"), PathOrigin::ToolInputDirect, &mut out);
+    for key in MCP_DIRECT_PATH_KEYS {
+        push_tagged(value.get(*key), PathOrigin::ToolInputDirect, &mut out);
+    }
     for key in ["files", "items"] {
         if let Some(items) = value.get(key).and_then(serde_json::Value::as_array) {
             for item in items {
@@ -197,6 +226,96 @@ fn collect_apply_patch_paths(command: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Resolve a [`PathFact`] to the form used by workspace-containment
+/// checks. When [`PathFact::canonical_or_raw`] differs from
+/// [`PathFact::absolute`] we trust the canonicalisation (symlinks
+/// already resolved); otherwise we climb the path until an existing
+/// ancestor canonicalises, reattach the missing tail, and resolve any
+/// remaining `..` components manually.
+pub fn resolve_for_containment(fact: &PathFact) -> PathBuf {
+    if fact.canonical_or_raw != fact.absolute {
+        return fact.canonical_or_raw.clone();
+    }
+    climb_and_canonicalize(&fact.absolute)
+}
+
+/// True iff `target` is identical to or a descendant (component-wise)
+/// of any path in `workspaces`. Both sides are expected to be canonical
+/// or normalised to the same form.
+pub fn is_within_workspace(target: &Path, workspaces: &[PathBuf]) -> bool {
+    workspaces.iter().any(|w| target.starts_with(w))
+}
+
+/// Build the canonical workspace boundary list consumed by
+/// `core.workspace.outside-access`. `repo_root` becomes the first
+/// boundary (resolved through `canonicalize` to follow symlinks);
+/// `additional` entries are home-expanded against `env` then
+/// canonicalised. Entries that fail to canonicalise are kept in their
+/// unresolved form so the boundary is still enforceable. Duplicates are
+/// dropped while preserving order.
+pub(crate) fn canonical_workspaces(
+    repo_root: Option<&Path>,
+    additional: &[String],
+    env: &dyn EnvLookup,
+) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    if let Some(root) = repo_root {
+        push_canonical(root.to_path_buf(), &mut out);
+    }
+    for raw in additional {
+        push_canonical(expand_home(raw, env), &mut out);
+    }
+    out
+}
+
+fn push_canonical(path: PathBuf, out: &mut Vec<PathBuf>) {
+    let resolved = path.canonicalize().unwrap_or(path);
+    if !out.contains(&resolved) {
+        out.push(resolved);
+    }
+}
+
+/// Resolve `.` and `..` components without touching the filesystem.
+/// Used as a final pass on paths whose tail does not exist on disk and
+/// therefore cannot be canonicalised by the OS. `..` at the root or in
+/// front of a `RootDir` component is a no-op (`PathBuf::pop` returns
+/// false), matching POSIX semantics.
+pub fn normalize_components(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {},
+            Component::ParentDir => {
+                let _ = out.pop();
+            },
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+fn climb_and_canonicalize(abs: &Path) -> PathBuf {
+    let mut current = abs.to_path_buf();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        if let Ok(canon) = current.canonicalize() {
+            let mut rebuilt = canon;
+            for name in tail.iter().rev() {
+                rebuilt.push(name);
+            }
+            return normalize_components(&rebuilt);
+        }
+        let Some(name) = current.file_name().map(std::ffi::OsStr::to_os_string) else {
+            break;
+        };
+        tail.push(name);
+        if !current.pop() {
+            break;
+        }
+    }
+    normalize_components(abs)
 }
 
 impl PathFact {
@@ -285,6 +404,8 @@ fn push_redirect_fact(redirect: &Redirect, repo_root: Option<&Path>, out: &mut V
     ));
 }
 
+/// Expand `~` / `$HOME` / `${HOME}` prefixes against the supplied env
+/// lookup. Falls back to the raw string when `HOME` is unset.
 fn expand_home(raw: &str, env: &dyn EnvLookup) -> PathBuf {
     let Some(home_os) = env.var_os("HOME") else {
         return PathBuf::from(raw);
@@ -557,6 +678,50 @@ mod tests {
     }
 
     #[test]
+    fn extract_mcp_tool_recognises_synonym_keys() {
+        // Each entry in MCP_DIRECT_PATH_KEYS must surface as a PathFact
+        // when used as a top-level string on an MCP payload.
+        for key in [
+            "path",
+            "file_path",
+            "filename",
+            "file",
+            "filepath",
+            "target",
+            "target_file",
+            "dest",
+            "destination",
+            "src",
+            "source",
+            "from",
+            "to",
+            "location",
+            "uri",
+        ] {
+            let i = HookInput {
+                tool_name: "mcp__custom__write".into(),
+                tool_input: serde_json::json!({ key: ".env" }),
+            };
+            let fp = extract_with_env(&i, &MapEnv::with_home("/h"))
+                .unwrap_or_else(|| panic!("expected PathFact for key {key:?}"));
+            assert_eq!(fp.raw, ".env", "key={key:?}");
+            assert_eq!(fp.tool, PathTool::Mcp);
+            assert_eq!(fp.origin, PathOrigin::ToolInputDirect);
+        }
+    }
+
+    #[test]
+    fn extract_mcp_tool_url_key_is_not_treated_as_path() {
+        // `url` (distinct from `uri`) is intentionally absent from the
+        // synonym list so `mcp__fetch__fetch` stays a URL-only carrier.
+        let i = HookInput {
+            tool_name: "mcp__fetch__fetch".into(),
+            tool_input: serde_json::json!({"url": "https://example.com/x"}),
+        };
+        assert!(extract_with_env(&i, &MapEnv::with_home("/h")).is_none());
+    }
+
+    #[test]
     fn extract_mcp_tool_expands_home_in_raw_path() {
         let i = HookInput {
             tool_name: "mcp__filesystem__read_file".into(),
@@ -614,6 +779,109 @@ mod tests {
             PathBuf::from("/repo/.claude/settings.json")
         );
         assert_eq!(facts[0].raw, ".claude/settings.json");
+    }
+
+    #[test]
+    fn normalize_components_resolves_dot_and_dotdot() {
+        let p = PathBuf::from("/a/b/./c/../d");
+        assert_eq!(normalize_components(&p), PathBuf::from("/a/b/d"));
+    }
+
+    #[test]
+    fn normalize_components_dotdot_at_root_is_noop() {
+        let p = PathBuf::from("/../etc/passwd");
+        assert_eq!(normalize_components(&p), PathBuf::from("/etc/passwd"));
+    }
+
+    #[test]
+    fn normalize_components_preserves_relative() {
+        let p = PathBuf::from("a/./b/../c");
+        assert_eq!(normalize_components(&p), PathBuf::from("a/c"));
+    }
+
+    #[test]
+    fn is_within_workspace_uses_component_prefix_not_byte_prefix() {
+        let ws = vec![PathBuf::from("/work")];
+        assert!(is_within_workspace(Path::new("/work/src/x.rs"), &ws));
+        assert!(is_within_workspace(Path::new("/work"), &ws));
+        // Lookalike prefix `/work-evil` must NOT match `/work`.
+        assert!(!is_within_workspace(Path::new("/work-evil/secret"), &ws));
+        assert!(!is_within_workspace(Path::new("/etc/passwd"), &ws));
+    }
+
+    #[test]
+    fn is_within_workspace_empty_list_rejects_everything() {
+        assert!(!is_within_workspace(Path::new("/work/x"), &[]));
+    }
+
+    #[test]
+    fn resolve_for_containment_uses_canonical_when_available() {
+        // When canonical_or_raw differs from absolute, that's the
+        // symlink-resolved physical path and we trust it.
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-resolve-canon-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let real = dir.join("real.txt");
+        std::fs::write(&real, "hi").expect("write");
+        let fact = PathFact::from_raw(
+            real.to_string_lossy().into_owned(),
+            PathTool::Read,
+            PathOrigin::ToolInputDirect,
+            None,
+            &MapEnv::with_home("/h"),
+        );
+        let resolved = resolve_for_containment(&fact);
+        assert_eq!(resolved, real.canonicalize().expect("canon"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_for_containment_climbs_for_nonexistent_tail() {
+        // For a path whose tail doesn't exist, climb until an ancestor
+        // canonicalises, then reattach the tail.
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-resolve-climb-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let target = dir.join("does/not/exist.txt");
+        let fact = PathFact::from_raw(
+            target.to_string_lossy().into_owned(),
+            PathTool::Write,
+            PathOrigin::ToolInputDirect,
+            None,
+            &MapEnv::with_home("/h"),
+        );
+        let resolved = resolve_for_containment(&fact);
+        let expected = dir
+            .canonicalize()
+            .expect("canon")
+            .join("does/not/exist.txt");
+        assert_eq!(resolved, expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_for_containment_resolves_dotdot_in_nonexistent_tail() {
+        // A `..` in a non-existent path is resolved by normalize_components,
+        // protecting us from `/work/../etc/passwd`-style traversal even
+        // when nothing on disk lets canonicalize collapse it.
+        let fact = PathFact {
+            tool: PathTool::Read,
+            raw: "/ptuf-nonexist/work/../etc/passwd".into(),
+            expanded: PathBuf::from("/ptuf-nonexist/work/../etc/passwd"),
+            absolute: PathBuf::from("/ptuf-nonexist/work/../etc/passwd"),
+            canonical_or_raw: PathBuf::from("/ptuf-nonexist/work/../etc/passwd"),
+            origin: PathOrigin::ToolInputDirect,
+        };
+        let resolved = resolve_for_containment(&fact);
+        assert_eq!(resolved, PathBuf::from("/ptuf-nonexist/etc/passwd"));
     }
 
     use crate::testing::proptest::{file_path, richer_hook_input};

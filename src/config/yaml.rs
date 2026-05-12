@@ -78,6 +78,7 @@ packs:
             crate::config::schema::RawPack {
                 enabled: Some(false),
                 protected_branches: None,
+                additional_workspaces: None,
             },
         );
         expected.insert(
@@ -85,6 +86,7 @@ packs:
             crate::config::schema::RawPack {
                 enabled: Some(true),
                 protected_branches: None,
+                additional_workspaces: None,
             },
         );
         assert_eq!(raw.packs, expected);

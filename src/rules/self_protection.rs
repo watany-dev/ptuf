@@ -117,12 +117,40 @@ const CODEX_SETTINGS: RuleSpec = RuleSpec {
 const HOOK_SCRIPT: RuleSpec = RuleSpec {
     id: "core.self_protection.hook-script",
     kind: ProtectedKind::HookScript,
-    problem: "The command modifies a script registered as a Claude Code or Codex hook. Editing or \
-         chmod-ing a hook script can disable ptuf-style enforcement at the next tool use.",
+    problem: "The command modifies a script registered as a Claude Code, Codex, Copilot, or Kiro \
+         hook. Editing or chmod-ing a hook script can disable ptuf-style enforcement at the next \
+         tool use.",
     alternatives: &[
         "Edit the hook script outside an agent session, after review.",
-        "Replace the hook entry with `ptuf init claude-code` or `ptuf init codex`.",
+        "Replace the hook entry with `ptuf init claude-code`, `ptuf init codex`, \
+         `ptuf init copilot`, or `ptuf init kiro`.",
         "Verify the script change is not reachable from the registered hook path.",
+    ],
+};
+
+const COPILOT_SETTINGS: RuleSpec = RuleSpec {
+    id: "core.self_protection.copilot-settings",
+    kind: ProtectedKind::CopilotSettings,
+    problem: "The command modifies the GitHub Copilot hook file (.github/hooks/ptuf.json). The \
+         hook registration lives there, so this edit could remove or short-circuit the ptuf hook \
+         entirely.",
+    alternatives: &[
+        "Use `ptuf init copilot` to manage the hook entry safely.",
+        "Have the user edit the hook file outside an agent session.",
+        "If the change is unrelated to hooks, narrow the edit to a non-hook field.",
+    ],
+};
+
+const KIRO_SETTINGS: RuleSpec = RuleSpec {
+    id: "core.self_protection.kiro-settings",
+    kind: ProtectedKind::KiroSettings,
+    problem: "The command modifies a Kiro CLI agent config file (.kiro/agents/ptuf-guarded.json). \
+         The hook registration lives there, so this edit could remove or short-circuit the ptuf \
+         hook entirely.",
+    alternatives: &[
+        "Use `ptuf init kiro` to manage the hook entry safely.",
+        "Have the user edit the agent config outside an agent session.",
+        "If the change is unrelated to hooks, narrow the edit to a non-hook field.",
     ],
 };
 
@@ -136,6 +164,12 @@ pub static CODEX_SETTINGS_RULE: SelfRule = SelfRule {
     spec: &CODEX_SETTINGS,
 };
 pub static HOOK_SCRIPT_RULE: SelfRule = SelfRule { spec: &HOOK_SCRIPT };
+pub static COPILOT_SETTINGS_RULE: SelfRule = SelfRule {
+    spec: &COPILOT_SETTINGS,
+};
+pub static KIRO_SETTINGS_RULE: SelfRule = SelfRule {
+    spec: &KIRO_SETTINGS,
+};
 
 #[cfg(test)]
 mod tests {
@@ -196,6 +230,8 @@ mod tests {
         ));
         assert!(CODEX_SETTINGS_RULE.evaluate(&facts, &input).is_none());
         assert!(HOOK_SCRIPT_RULE.evaluate(&facts, &input).is_none());
+        assert!(COPILOT_SETTINGS_RULE.evaluate(&facts, &input).is_none());
+        assert!(KIRO_SETTINGS_RULE.evaluate(&facts, &input).is_none());
     }
 
     #[test]
@@ -207,6 +243,34 @@ mod tests {
             Some(Decision::Deny { .. })
         ));
         assert!(CLAUDE_SETTINGS_RULE.evaluate(&facts, &input).is_none());
+        assert!(COPILOT_SETTINGS_RULE.evaluate(&facts, &input).is_none());
+        assert!(KIRO_SETTINGS_RULE.evaluate(&facts, &input).is_none());
+    }
+
+    #[test]
+    fn copilot_settings_rule_fires_only_for_copilot_settings_label() {
+        let facts = facts_with(&[ProtectedKind::CopilotSettings]);
+        let input = sample("Edit");
+        assert!(matches!(
+            COPILOT_SETTINGS_RULE.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
+        assert!(CLAUDE_SETTINGS_RULE.evaluate(&facts, &input).is_none());
+        assert!(CODEX_SETTINGS_RULE.evaluate(&facts, &input).is_none());
+        assert!(KIRO_SETTINGS_RULE.evaluate(&facts, &input).is_none());
+    }
+
+    #[test]
+    fn kiro_settings_rule_fires_only_for_kiro_settings_label() {
+        let facts = facts_with(&[ProtectedKind::KiroSettings]);
+        let input = sample("Edit");
+        assert!(matches!(
+            KIRO_SETTINGS_RULE.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
+        assert!(CLAUDE_SETTINGS_RULE.evaluate(&facts, &input).is_none());
+        assert!(CODEX_SETTINGS_RULE.evaluate(&facts, &input).is_none());
+        assert!(COPILOT_SETTINGS_RULE.evaluate(&facts, &input).is_none());
     }
 
     #[test]
@@ -231,6 +295,8 @@ mod tests {
             &CLAUDE_SETTINGS_RULE,
             &CODEX_SETTINGS_RULE,
             &HOOK_SCRIPT_RULE,
+            &COPILOT_SETTINGS_RULE,
+            &KIRO_SETTINGS_RULE,
         ] {
             assert!(rule.evaluate(&facts, &input).is_none());
         }
@@ -245,6 +311,8 @@ mod tests {
             &CLAUDE_SETTINGS_RULE,
             &CODEX_SETTINGS_RULE,
             &HOOK_SCRIPT_RULE,
+            &COPILOT_SETTINGS_RULE,
+            &KIRO_SETTINGS_RULE,
         ] {
             assert!(rule.hard_deny(), "{} must be hard_deny", rule.id());
             assert_eq!(
@@ -281,6 +349,8 @@ mod tests {
             CLAUDE_SETTINGS_RULE.id(),
             CODEX_SETTINGS_RULE.id(),
             HOOK_SCRIPT_RULE.id(),
+            COPILOT_SETTINGS_RULE.id(),
+            KIRO_SETTINGS_RULE.id(),
         ] {
             assert!(id.starts_with("core.self_protection."), "id was {id}");
         }
@@ -289,7 +359,7 @@ mod tests {
     use crate::testing::proptest::{protected_kind, richer_hook_input};
     use proptest::prelude::*;
 
-    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 6] {
+    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 8] {
         [
             (&BINARY_RULE, ProtectedKind::Binary),
             (&CONFIG_RULE, ProtectedKind::Config),
@@ -297,6 +367,8 @@ mod tests {
             (&CLAUDE_SETTINGS_RULE, ProtectedKind::ClaudeSettings),
             (&CODEX_SETTINGS_RULE, ProtectedKind::CodexSettings),
             (&HOOK_SCRIPT_RULE, ProtectedKind::HookScript),
+            (&COPILOT_SETTINGS_RULE, ProtectedKind::CopilotSettings),
+            (&KIRO_SETTINGS_RULE, ProtectedKind::KiroSettings),
         ]
     }
 

@@ -383,6 +383,74 @@ fn copilot_unknown_tool_never_panics() {
 }
 
 #[test]
+fn workspace_outside_access_denies_read_outside_repo_when_pack_enabled() {
+    let dir = repo();
+    std::fs::write(
+        dir.path().join(".ptuf.yaml"),
+        "packs:\n  core.workspace:\n    enabled: true\n",
+    )
+    .expect("write yaml");
+    let payload = r#"{"tool_name":"Read","tool_input":{"file_path":"/etc/hostname"}}"#;
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "claude-code"], payload);
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert!(
+        value["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.workspace.outside-access"))
+    );
+}
+
+#[test]
+fn workspace_outside_access_skips_when_pack_disabled() {
+    let dir = repo();
+    // Default config has core.workspace disabled; reading outside the
+    // repo must surface as Allow (no other rule fires for /etc/hostname).
+    let payload = r#"{"tool_name":"Read","tool_input":{"file_path":"/etc/hostname"}}"#;
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "claude-code"], payload);
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+}
+
+#[test]
+fn workspace_outside_access_allows_inside_repo_when_pack_enabled() {
+    let dir = repo();
+    std::fs::write(
+        dir.path().join(".ptuf.yaml"),
+        "packs:\n  core.workspace:\n    enabled: true\n",
+    )
+    .expect("write yaml");
+    let inside = dir.path().join("src/main.rs");
+    let payload = format!(
+        r#"{{"tool_name":"Read","tool_input":{{"file_path":"{}"}}}}"#,
+        inside.display(),
+    );
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "claude-code"], &payload);
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+}
+
+#[test]
+fn workspace_outside_access_honours_additional_workspaces() {
+    let dir = repo();
+    let extra = tempfile::TempDir::new().expect("extra tempdir");
+    let extra_path = extra.path().to_str().expect("utf-8");
+    std::fs::write(
+        dir.path().join(".ptuf.yaml"),
+        format!(
+            "packs:\n  core.workspace:\n    enabled: true\n    additionalWorkspaces:\n      - {extra_path}\n",
+        ),
+    )
+    .expect("write yaml");
+    let inside_extra = extra.path().join("notes.md");
+    let payload = format!(
+        r#"{{"tool_name":"Write","tool_input":{{"file_path":"{}","content":"x"}}}}"#,
+        inside_extra.display(),
+    );
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "claude-code"], &payload);
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+}
+
+#[test]
 fn init_verify_json_schema_contract_is_stable() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let home = dir.path();
