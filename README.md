@@ -67,12 +67,42 @@ Decision: allow
 
 ## Install
 
+The fastest path needs no Rust toolchain — `ptuf` ships pre-built binaries
+for Linux / macOS / Windows on every GitHub release.
+
+**One-liner (recommended, no toolchain)**
+
 ```bash
-cargo install ptuf
+# Linux / macOS
+curl -LsSf https://github.com/watany-dev/ptuf/releases/download/v0.1.0-rc.2/ptuf-installer.sh | sh
 ```
 
-For pinned releases with checksum + GitHub artifact attestation
-verification, see [`docs/install.md`](docs/install.md).
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/download/v0.1.0-rc.2/ptuf-installer.ps1 | iex"
+```
+
+**Rust toolchain**
+
+```bash
+cargo install ptuf --version 0.1.0-rc.2   # from crates.io
+cargo binstall ptuf                       # fetch pre-built binary, skip build
+```
+
+(While 0.1.0 is in RC, `cargo install ptuf` without `--version` will keep
+resolving to the previous release; pass `--version` until 0.1.0 final ships.)
+
+**Version manager**
+
+```bash
+ubi -p watany-dev/ptuf                              # one-shot fetch
+mise use -g ubi:watany-dev/ptuf@0.1.0-rc.2          # pin via mise
+```
+
+Checksums (`SHA256SUMS`) and GitHub artifact attestations are attached to
+every release. The verified-install procedure (with `gh attestation verify`)
+lives in [`docs/install.md`](docs/install.md) — recommended for shared or
+production deployments.
 
 ## Wire it into your agent
 
