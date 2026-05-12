@@ -270,15 +270,15 @@ pub fn build_installer_command(
         },
         Strategy::PrebuiltInstaller => match platform {
             Platform::Unix => {
-                let url = format!("{RELEASES_DOWNLOAD_URL_PREFIX}{tag}/ptuf-installer.sh",);
-                let script = format!("curl --proto '=https' --tlsv1.2 -LsSf {url} | sh",);
+                let url = format!("{RELEASES_DOWNLOAD_URL_PREFIX}{tag}/ptuf-installer.sh");
+                let script = format!("curl --proto '=https' --tlsv1.2 -LsSf {url} | sh");
                 InstallerCommand {
                     program: "sh".to_string(),
                     args: vec!["-c".to_string(), script],
                 }
             },
             Platform::Windows => {
-                let url = format!("{RELEASES_DOWNLOAD_URL_PREFIX}{tag}/ptuf-installer.ps1",);
+                let url = format!("{RELEASES_DOWNLOAD_URL_PREFIX}{tag}/ptuf-installer.ps1");
                 let script = format!("iwr -useb '{url}' | iex");
                 InstallerCommand {
                     program: "powershell".to_string(),

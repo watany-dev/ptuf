@@ -920,21 +920,21 @@ fn update_check_with_fake_curl_reports_latest_tag() {
 fn update_rejects_unknown_flag_with_exit_one() {
     let (code, _stdout, stderr) = run(&["update", "--bogus"], "");
     assert_eq!(code, 1);
-    assert!(stderr.contains("unexpected argument"), "stderr: {stderr}",);
+    assert!(stderr.contains("unexpected argument"), "stderr: {stderr}");
 }
 
 #[test]
 fn update_check_conflicts_with_version_pin_with_exit_one() {
     let (code, _stdout, stderr) = run(&["update", "--check", "--version", "v1"], "");
     assert_eq!(code, 1);
-    assert!(stderr.contains("conflicting flags"), "stderr: {stderr}",);
+    assert!(stderr.contains("conflicting flags"), "stderr: {stderr}");
 }
 
 #[test]
 fn update_rejects_global_json_with_exit_one() {
     let (code, _stdout, stderr) = run(&["--json", "update", "--check"], "");
     assert_eq!(code, 1);
-    assert!(stderr.contains("conflicting flags"), "stderr: {stderr}",);
+    assert!(stderr.contains("conflicting flags"), "stderr: {stderr}");
 }
 
 #[cfg(unix)]
@@ -944,5 +944,5 @@ fn update_curl_missing_is_friendly_error() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let (code, _stdout, stderr) = run_with_path(&["update", "--check"], dir.path());
     assert_eq!(code, 1);
-    assert!(stderr.contains("requires curl on PATH"), "stderr: {stderr}",);
+    assert!(stderr.contains("requires curl on PATH"), "stderr: {stderr}");
 }
