@@ -12,6 +12,7 @@ pub mod plugin;
 pub mod reason;
 pub mod rules;
 pub mod self_paths;
+pub(crate) mod update;
 
 #[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]

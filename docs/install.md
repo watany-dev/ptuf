@@ -104,3 +104,28 @@ cargo install ptuf
 make build
 cargo install --path .
 ```
+
+## Updating
+
+`ptuf update` upgrades the installed binary in place. It auto-detects
+the install path and dispatches to the matching updater:
+
+- if `ptuf` lives under `$CARGO_HOME/bin` (or `~/.cargo/bin`) and `cargo`
+  is on PATH, it runs `cargo install ptuf --force`;
+- otherwise it pipes the cargo-dist installer (`ptuf-installer.sh` on
+  Unix, `ptuf-installer.ps1` on Windows) for the requested release tag.
+
+Common flags:
+
+```bash
+ptuf update            # upgrade to the latest GitHub release
+ptuf update --check    # only print current vs. latest, no write
+ptuf update --version v0.2.0   # pin to a specific tag
+ptuf update --force    # reinstall even if already up to date
+```
+
+`ptuf update` shells out to `curl` (for the latest-release lookup) and
+to either `cargo` or `sh` / `powershell` for the actual swap. It does
+not embed an HTTP client. If you want to reproduce the verified install
+manually (curl + SHA256SUMS + `gh attestation verify`), continue to
+follow the steps under [Verified install](#verified-install-recommended).

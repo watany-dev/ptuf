@@ -13,6 +13,9 @@ use crate::hook_input::HookInput;
 use crate::init;
 use crate::plugin::runner as plugin_runner;
 use crate::reason;
+use crate::update::exe::RealExeLocator;
+use crate::update::spawn::ProcessSpawner;
+use crate::update::{self, UpdateOptions};
 
 use super::copilot_input;
 use super::kiro_input;
@@ -275,6 +278,16 @@ where
     }
 
     overall
+}
+
+pub(super) fn run_update<W1: Write, W2: Write>(
+    options: UpdateOptions,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8 {
+    let spawner = ProcessSpawner;
+    let locator = RealExeLocator;
+    update::run(options, &spawner, &locator, stdout, stderr)
 }
 
 struct InstallStep {

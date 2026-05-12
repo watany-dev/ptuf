@@ -74,6 +74,11 @@ cargo install ptuf
 For pinned releases with checksum + GitHub artifact attestation
 verification, see [`docs/install.md`](docs/install.md).
 
+Once installed, `ptuf update` upgrades the binary in place — it
+auto-detects whether the current binary came from `cargo install` or
+the prebuilt installer and shells out to the matching updater (no
+`--cargo` / `--prebuilt` flag to remember).
+
 ## Wire it into your agent
 
 Pick your host and run a single command. Each installer is idempotent and
@@ -118,6 +123,7 @@ ptuf hook <agent>
 ptuf [--json] check --tool <name> <command>
 ptuf [--json] plugin check <path>
 ptuf [--json] init [<agent>] [--no-verify] [--dry-run]
+ptuf update [--check] [--version <TAG>] [--force]
 ptuf --help
 ptuf --version
 ```
