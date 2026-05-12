@@ -14,12 +14,22 @@ use crate::reason;
 use super::ConfigRule;
 
 mod argv;
+mod branch;
+mod clean;
 mod push;
+mod remote;
+mod reset;
+mod stash;
 
+pub use branch::BRANCH_DELETE_FORCE_RULE;
+pub use clean::CLEAN_FDX_RULE;
 pub use push::{
     FORCE_IF_INCLUDES_RULE, FORCE_PUSH_RULE, FORCE_PUSH_WITH_LEASE_RULE, PUSH_DELETE_REMOTE_RULE,
     PUSH_MIRROR_RULE,
 };
+pub use remote::REMOTE_SET_URL_RULE;
+pub use reset::RESET_HARD_RULE;
+pub use stash::STASH_CLEAR_RULE;
 
 use argv::{
     BypassMatch, args_after_subcommand, bypass_value_matches, config_overrides, git_subcommand,
@@ -178,78 +188,6 @@ const PATH_REDIRECT_KEYS: &[(&str, BypassMatch)] = &[
     ("GIT_ALTERNATE_OBJECT_DIRECTORIES", BypassMatch::Any),
 ];
 
-fn matches_reset_hard(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("reset") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "reset");
-    rest.contains(&"--hard")
-}
-
-fn matches_clean_fdx(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("clean") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "clean");
-    let mut has_force = false;
-    let mut has_dir = false;
-    let mut has_ignored = false;
-    let mut has_dry_run = false;
-
-    for arg in rest {
-        if arg == "--force" {
-            has_force = true;
-            continue;
-        }
-        if arg.starts_with("--") {
-            continue;
-        }
-        let Some(body) = arg.strip_prefix('-') else {
-            continue;
-        };
-        for flag in body.chars() {
-            if flag == 'e' {
-                break;
-            }
-            has_force |= flag == 'f';
-            has_dir |= flag == 'd';
-            has_ignored |= flag == 'x' || flag == 'X';
-            has_dry_run |= flag == 'n';
-        }
-    }
-
-    has_force && has_dir && has_ignored && !has_dry_run
-}
-
-fn matches_branch_delete_force(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("branch") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "branch");
-    rest.iter().any(|a| {
-        *a == "-D"
-            || (a.starts_with('-') && !a.starts_with("--") && a.contains('D'))
-            || *a == "--delete=force"
-    })
-}
-
-fn matches_stash_clear(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("stash") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "stash");
-    rest.contains(&"clear")
-}
-
-fn matches_remote_set_url(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("remote") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "remote");
-    let mut iter = rest.iter().filter(|a| !a.starts_with('-'));
-    iter.next() == Some(&"set-url")
-}
-
 fn matches_no_verify(argv: &Argv) -> bool {
     let Some(sub) = git_subcommand(argv) else {
         return false;
@@ -364,79 +302,6 @@ fn matches_env_credential_hijack(argv: &Argv) -> bool {
 fn matches_env_path_redirect(argv: &Argv) -> bool {
     matches_env_keys(argv, None, PATH_REDIRECT_KEYS)
 }
-
-const RESET_HARD: RuleSpec = RuleSpec {
-    id: "core.git.reset-hard",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_reset_hard,
-    problem: "git reset --hard discards uncommitted changes and rewrites HEAD without warning.",
-    alternatives: &[
-        "Stash or commit the working tree first (git stash push -u).",
-        "Use git reset --keep or git restore for a narrower change.",
-        "Ask the user to confirm before throwing away local work.",
-    ],
-};
-
-const CLEAN_FDX: RuleSpec = RuleSpec {
-    id: "core.git.clean-fdx",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_clean_fdx,
-    problem: "git clean -fdx removes every untracked and ignored file, including local-only \
-         secrets, build artefacts, and editor state.",
-    alternatives: &[
-        "Run git clean -ndx first to preview what would be removed.",
-        "Restrict cleaning to a specific path or pattern.",
-        "Ask the user before deleting ignored files.",
-    ],
-};
-
-const BRANCH_DELETE_FORCE: RuleSpec = RuleSpec {
-    id: "core.git.branch-delete-force",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_branch_delete_force,
-    problem: "git branch -D force-deletes a branch even if it has unmerged commits, which can \
-         lose work that lives only on that branch.",
-    alternatives: &[
-        "Verify the branch is fully merged with git branch --merged.",
-        "Use git branch -d to refuse deletion when commits would be lost.",
-        "Ask the user before removing a branch with unmerged commits.",
-    ],
-};
-
-const STASH_CLEAR: RuleSpec = RuleSpec {
-    id: "core.git.stash-clear",
-    severity: Severity::Medium,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_stash_clear,
-    problem: "git stash clear deletes every stashed change at once with no per-entry recovery.",
-    alternatives: &[
-        "List stashes first with git stash list and drop entries individually.",
-        "Apply or pop stashes that you still need before clearing.",
-        "Ask the user before discarding all stashes.",
-    ],
-};
-
-const REMOTE_SET_URL: RuleSpec = RuleSpec {
-    id: "core.git.remote-set-url",
-    severity: Severity::Medium,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_remote_set_url,
-    problem: "git remote set-url silently re-points push and fetch traffic, which can redirect \
-         pushes to an attacker-controlled host.",
-    alternatives: &[
-        "Verify the new URL with the user before changing it.",
-        "Inspect the change with git remote -v after running it.",
-        "Use a separate remote name (git remote add) when the original should stay.",
-    ],
-};
 
 const NO_VERIFY: RuleSpec = RuleSpec {
     id: "core.git.no-verify",
@@ -574,15 +439,6 @@ const ENV_PATH_REDIRECT: RuleSpec = RuleSpec {
     ],
 };
 
-pub static RESET_HARD_RULE: GitRule = GitRule { spec: &RESET_HARD };
-pub static CLEAN_FDX_RULE: GitRule = GitRule { spec: &CLEAN_FDX };
-pub static BRANCH_DELETE_FORCE_RULE: GitRule = GitRule {
-    spec: &BRANCH_DELETE_FORCE,
-};
-pub static STASH_CLEAR_RULE: GitRule = GitRule { spec: &STASH_CLEAR };
-pub static REMOTE_SET_URL_RULE: GitRule = GitRule {
-    spec: &REMOTE_SET_URL,
-};
 pub static NO_VERIFY_RULE: GitRule = GitRule { spec: &NO_VERIFY };
 pub static NO_GPG_SIGN_RULE: GitRule = GitRule { spec: &NO_GPG_SIGN };
 pub static CONFIG_OVERRIDE_BYPASS_RULE: GitRule = GitRule {
