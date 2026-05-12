@@ -22,7 +22,6 @@ pub use decision::{Decision, aggregate};
 pub use engine::{Engine, EngineError, Outcome};
 pub use facts::Facts;
 pub use hook_input::HookInput;
-pub use update::UpdateOptions;
 
 /// Stateless decision API kept for backward compatibility.
 ///

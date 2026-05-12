@@ -1,9 +1,10 @@
 //! Process-spawning seam used by `ptuf update`.
 //!
-//! The trait lets unit tests inject a recording fake while production code
-//! drives `std::process::Command` synchronously. Mirrors the
-//! `Command::new(...).output()` pattern already used by
-//! `src/audit/writer.rs:197` for `id -u`.
+//! Two flavours: `run` buffers stdout/stderr so the caller can parse the
+//! response (used for the curl `Location:` probe and the `cargo --version`
+//! detection); `run_inherited` lets the child inherit ptuf's stdio so the
+//! user sees `cargo install` / installer progress live. Tests inject
+//! `RecordingSpawner` to drive both without touching the real filesystem.
 
 use std::io;
 use std::process::Command;
@@ -16,7 +17,16 @@ pub struct SpawnOutcome {
 }
 
 pub trait Spawner {
+    /// Run `program` with `args`, capturing stdout/stderr into the outcome.
+    /// Use for short probes whose output ptuf parses (curl headers,
+    /// `cargo --version`).
     fn run(&self, program: &str, args: &[&str]) -> io::Result<SpawnOutcome>;
+
+    /// Run `program` with `args`, inheriting ptuf's stdin/stdout/stderr so
+    /// the user sees live progress. Returns the child's exit code only.
+    /// Use for the actual updater spawn (`cargo install ptuf --force`,
+    /// `sh -c "curl ... | sh"`).
+    fn run_inherited(&self, program: &str, args: &[&str]) -> io::Result<i32>;
 }
 
 #[derive(Debug, Default)]
@@ -26,10 +36,17 @@ impl Spawner for ProcessSpawner {
     fn run(&self, program: &str, args: &[&str]) -> io::Result<SpawnOutcome> {
         let output = Command::new(program).args(args).output()?;
         Ok(SpawnOutcome {
+            // Signal-terminated children have no exit code; treat as
+            // failure so `ptuf update` doesn't silently report success.
             exit_code: output.status.code().unwrap_or(1),
             stdout: output.stdout,
             stderr: output.stderr,
         })
+    }
+
+    fn run_inherited(&self, program: &str, args: &[&str]) -> io::Result<i32> {
+        let status = Command::new(program).args(args).status()?;
+        Ok(status.code().unwrap_or(1))
     }
 }
 
@@ -83,6 +100,13 @@ pub mod testing {
             }
             outcomes.remove(0)
         }
+
+        fn run_inherited(&self, program: &str, args: &[&str]) -> io::Result<i32> {
+            // Tests reuse the same outcome queue; only the exit code
+            // matters because production discards stdout/stderr (the
+            // child inherits ptuf's stdio).
+            self.run(program, args).map(|o| o.exit_code)
+        }
     }
 
     pub fn ok(stdout: &str) -> io::Result<SpawnOutcome> {
@@ -129,5 +153,21 @@ mod tests {
             .run("ptuf-nonexistent-binary-xyz", &[])
             .expect_err("missing program must surface as io::Error");
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn process_spawner_inherited_returns_exit_code_only() {
+        let spawner = ProcessSpawner;
+        let code = spawner.run_inherited("true", &[]).expect("true should run");
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn process_spawner_inherited_propagates_nonzero_exit_code() {
+        let spawner = ProcessSpawner;
+        let code = spawner
+            .run_inherited("false", &[])
+            .expect("false should run");
+        assert_eq!(code, 1);
     }
 }

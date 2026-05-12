@@ -25,9 +25,8 @@ const RELEASES_DOWNLOAD_URL_PREFIX: &str = "https://github.com/watany-dev/ptuf/r
 
 /// Parsed `ptuf update [--check] [--version <TAG>] [--force]`.
 ///
-/// Public so it can ride along inside [`crate::cli::Command`], which is
-/// itself part of the published CLI surface (`src/main.rs`,
-/// `tests/cli_smoke.rs`). Mirrors [`crate::cli::InitOptions`].
+/// Re-exported through `crate::cli::UpdateOptions` because it rides
+/// inside the `pub Command::Update` variant.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UpdateOptions {
     pub check: bool,
@@ -39,6 +38,15 @@ pub struct UpdateOptions {
 pub enum Strategy {
     CargoInstall,
     PrebuiltInstaller,
+}
+
+impl Strategy {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::CargoInstall => "cargo install",
+            Self::PrebuiltInstaller => "prebuilt installer",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -360,18 +368,17 @@ where
     }
 
     let command = build_installer_command(strategy, &tag, pinned, platform);
-    let strategy_label = match strategy {
-        Strategy::CargoInstall => "cargo install",
-        Strategy::PrebuiltInstaller => "prebuilt installer",
-    };
     let _ = writeln!(
         stdout,
-        "ptuf update: {strategy_label} -> {normalised} (current {current})",
+        "ptuf update: {label} -> {normalised} (current {current})",
+        label = strategy.label(),
     );
 
     let arg_refs: Vec<&str> = command.args.iter().map(String::as_str).collect();
-    let outcome = match spawner.run(&command.program, &arg_refs) {
-        Ok(o) => o,
+    // Inherit stdio so `cargo install` / installer progress streams live
+    // to the user instead of being buffered until exit.
+    let exit_code = match spawner.run_inherited(&command.program, &arg_refs) {
+        Ok(c) => c,
         Err(source) => {
             let mapped = UpdateError::UpdaterSpawn {
                 program: command.program.clone(),
@@ -382,13 +389,10 @@ where
         },
     };
 
-    let _ = stdout.write_all(&outcome.stdout);
-    let _ = stderr.write_all(&outcome.stderr);
-
-    if outcome.exit_code != 0 {
+    if exit_code != 0 {
         let err = UpdateError::UpdaterExitCode {
             program: command.program.clone(),
-            code: outcome.exit_code,
+            code: exit_code,
         };
         let _ = writeln!(stderr, "ptuf update: {err}");
         return 1;
@@ -738,12 +742,16 @@ mod tests {
 
     #[test]
     fn run_updater_exit_code_is_normalised_to_one() {
+        // The installer's own stdout/stderr are inherited (kernel
+        // forwards them to the user terminal), so the test only needs
+        // to verify that ptuf maps the non-zero exit to 1 and emits a
+        // friendly summary on its own stderr.
         let spawner = RecordingSpawner::new(vec![
             ok(&redirect_headers("v9.9.9")),
             Ok(SpawnOutcome {
                 exit_code: 7,
-                stdout: b"installer noise\n".to_vec(),
-                stderr: b"installer failure\n".to_vec(),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
             }),
         ]);
         let locator = system_locator();
@@ -754,9 +762,12 @@ mod tests {
         assert_eq!(code, 1);
         let err_s = String::from_utf8_lossy(&err);
         assert!(err_s.contains("exited with status 7"), "stderr: {err_s}");
-        assert!(err_s.contains("installer failure"), "stderr: {err_s}");
-        let out_s = String::from_utf8_lossy(&out);
-        assert!(out_s.contains("installer noise"), "stdout: {out_s}");
+    }
+
+    #[test]
+    fn strategy_label_distinguishes_variants() {
+        assert_eq!(Strategy::CargoInstall.label(), "cargo install");
+        assert_eq!(Strategy::PrebuiltInstaller.label(), "prebuilt installer");
     }
 
     #[test]

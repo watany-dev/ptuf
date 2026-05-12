@@ -13,7 +13,8 @@ use std::path::PathBuf;
 use crate::Decision;
 use crate::engine::Engine;
 use crate::reason;
-use crate::update::UpdateOptions;
+
+pub use crate::update::UpdateOptions;
 
 mod copilot_input;
 mod input_helpers;

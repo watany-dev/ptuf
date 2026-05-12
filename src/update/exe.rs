@@ -6,7 +6,9 @@
 //! strategy logic without touching the real filesystem.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::config::scope::{EnvLookup, SystemEnv};
 
 pub trait ExeLocator {
     fn current_exe(&self) -> io::Result<PathBuf>;
@@ -14,20 +16,18 @@ pub trait ExeLocator {
 }
 
 /// Resolve the cargo home directory: `$CARGO_HOME` if set and non-empty,
-/// otherwise `<HOME>/.cargo`. Returns `None` only when both are absent.
+/// otherwise `<HOME>/.cargo`. Returns `None` when neither is available.
 ///
-/// Pure function so unit tests can drive every branch without touching
-/// real env vars.
-pub fn compute_cargo_home(
-    getenv: impl Fn(&str) -> Option<String>,
-    home: Option<&Path>,
-) -> Option<PathBuf> {
-    if let Some(value) = getenv("CARGO_HOME")
+/// Threads the shared `EnvLookup` seam (also used by
+/// `crate::config::scope` and `crate::self_paths`) so tests can drive
+/// every branch with an in-memory env without mutating global state.
+pub fn compute_cargo_home(env: &dyn EnvLookup) -> Option<PathBuf> {
+    if let Some(value) = env.var_os("CARGO_HOME")
         && !value.is_empty()
     {
         return Some(PathBuf::from(value));
     }
-    home.map(|h| h.join(".cargo"))
+    env.var_os("HOME").map(|h| PathBuf::from(h).join(".cargo"))
 }
 
 #[derive(Debug, Default)]
@@ -39,8 +39,7 @@ impl ExeLocator for RealExeLocator {
     }
 
     fn cargo_home(&self) -> Option<PathBuf> {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        compute_cargo_home(|k| std::env::var(k).ok(), home.as_deref())
+        compute_cargo_home(&SystemEnv)
     }
 }
 
@@ -64,47 +63,53 @@ impl ExeLocator for FakeExeLocator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+
+    struct MapEnv(HashMap<String, OsString>);
+
+    impl MapEnv {
+        fn new(pairs: &[(&str, &str)]) -> Self {
+            Self(
+                pairs
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), OsString::from(*v)))
+                    .collect(),
+            )
+        }
+    }
+
+    impl EnvLookup for MapEnv {
+        fn var_os(&self, key: &str) -> Option<OsString> {
+            self.0.get(key).cloned()
+        }
+    }
 
     #[test]
     fn compute_cargo_home_prefers_env_var_when_set() {
-        let result = compute_cargo_home(
-            |k| {
-                if k == "CARGO_HOME" {
-                    Some("/x/.cargo".to_string())
-                } else {
-                    None
-                }
-            },
-            Some(Path::new("/h")),
-        );
-        assert_eq!(result, Some(PathBuf::from("/x/.cargo")));
+        let env = MapEnv::new(&[("CARGO_HOME", "/x/.cargo"), ("HOME", "/h")]);
+        assert_eq!(compute_cargo_home(&env), Some(PathBuf::from("/x/.cargo")));
     }
 
     #[test]
     fn compute_cargo_home_ignores_empty_env_var() {
-        let result = compute_cargo_home(
-            |k| {
-                if k == "CARGO_HOME" {
-                    Some(String::new())
-                } else {
-                    None
-                }
-            },
-            Some(Path::new("/h")),
-        );
-        assert_eq!(result, Some(PathBuf::from("/h/.cargo")));
+        let env = MapEnv::new(&[("CARGO_HOME", ""), ("HOME", "/h")]);
+        assert_eq!(compute_cargo_home(&env), Some(PathBuf::from("/h/.cargo")));
     }
 
     #[test]
     fn compute_cargo_home_falls_back_to_home_dot_cargo() {
-        let result = compute_cargo_home(|_| None, Some(Path::new("/home/user")));
-        assert_eq!(result, Some(PathBuf::from("/home/user/.cargo")));
+        let env = MapEnv::new(&[("HOME", "/home/user")]);
+        assert_eq!(
+            compute_cargo_home(&env),
+            Some(PathBuf::from("/home/user/.cargo")),
+        );
     }
 
     #[test]
     fn compute_cargo_home_returns_none_without_home_or_env() {
-        let result = compute_cargo_home(|_| None, None);
-        assert_eq!(result, None);
+        let env = MapEnv::new(&[]);
+        assert_eq!(compute_cargo_home(&env), None);
     }
 
     #[test]
