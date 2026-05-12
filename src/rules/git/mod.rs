@@ -17,6 +17,7 @@ mod argv;
 mod branch;
 mod bypass;
 mod clean;
+mod history;
 mod push;
 mod remote;
 mod reset;
@@ -25,6 +26,7 @@ mod stash;
 pub use branch::BRANCH_DELETE_FORCE_RULE;
 pub use bypass::{CONFIG_OVERRIDE_BYPASS_RULE, ENV_BYPASS_RULE, NO_GPG_SIGN_RULE, NO_VERIFY_RULE};
 pub use clean::CLEAN_FDX_RULE;
+pub use history::{GC_PRUNE_NOW_RULE, REFLOG_EXPIRE_RULE, UPDATE_REF_DELETE_RULE};
 pub use push::{
     FORCE_IF_INCLUDES_RULE, FORCE_PUSH_RULE, FORCE_PUSH_WITH_LEASE_RULE, PUSH_DELETE_REMOTE_RULE,
     PUSH_MIRROR_RULE,
@@ -33,7 +35,7 @@ pub use remote::REMOTE_SET_URL_RULE;
 pub use reset::RESET_HARD_RULE;
 pub use stash::STASH_CLEAR_RULE;
 
-use argv::{BypassMatch, args_after_subcommand, git_subcommand, matches_env_keys};
+use argv::{BypassMatch, matches_env_keys};
 
 /// Per-rule wiring: matcher predicate + decision shape + reason text.
 ///
@@ -133,47 +135,6 @@ const PATH_REDIRECT_KEYS: &[(&str, BypassMatch)] = &[
     ("GIT_ALTERNATE_OBJECT_DIRECTORIES", BypassMatch::Any),
 ];
 
-fn matches_update_ref_delete(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("update-ref") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "update-ref");
-    rest.iter().any(|a| *a == "-d" || *a == "--delete")
-}
-
-/// `git reflog delete <ref>` (always destructive) or `git reflog expire`
-/// with an immediate-expiry flag. `reflog show --all` and similar
-/// read-only operations are explicitly excluded.
-fn matches_reflog_expire(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("reflog") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "reflog");
-    let sub = rest.iter().find(|a| !a.starts_with('-')).copied();
-    match sub {
-        Some("delete") => true,
-        Some("expire") => rest.iter().any(|a| {
-            *a == "--expire=now"
-                || *a == "--expire=0"
-                || *a == "--expire-unreachable=now"
-                || *a == "--expire-unreachable=0"
-        }),
-        _ => false,
-    }
-}
-
-/// `git gc --prune=now` or `--prune=all`. The default `--prune=2.weeks.ago`
-/// (and any other dated value) is left alone because it cannot destroy
-/// commits that are still recoverable through the reflog grace window.
-fn matches_gc_prune_now(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("gc") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "gc");
-    rest.iter()
-        .any(|a| *a == "--prune=now" || *a == "--prune=all")
-}
-
 fn matches_env_credential_hijack(argv: &Argv) -> bool {
     matches_env_keys(
         argv,
@@ -185,48 +146,6 @@ fn matches_env_credential_hijack(argv: &Argv) -> bool {
 fn matches_env_path_redirect(argv: &Argv) -> bool {
     matches_env_keys(argv, None, PATH_REDIRECT_KEYS)
 }
-
-const UPDATE_REF_DELETE: RuleSpec = RuleSpec {
-    id: "core.git.update-ref-delete",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_update_ref_delete,
-    problem: "git update-ref -d forcibly removes a ref without any of the safety checks \
-         that git branch / git tag apply, and bypasses pre-push hooks entirely.",
-    alternatives: &[
-        "Use git branch -d / git tag -d for normal deletion with merged-check.",
-        "Confirm with the user before removing a low-level ref.",
-    ],
-};
-
-const REFLOG_EXPIRE: RuleSpec = RuleSpec {
-    id: "core.git.reflog-expire",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_reflog_expire,
-    problem: "git reflog delete / expire --expire=now destroys the local recovery log that \
-         lets `git fsck --lost-found` and dated revisions reach orphaned commits.",
-    alternatives: &[
-        "Leave the reflog alone; entries expire on their own under git's grace window.",
-        "If disk is the concern, run git gc without --prune=now so the grace window still applies.",
-    ],
-};
-
-const GC_PRUNE_NOW: RuleSpec = RuleSpec {
-    id: "core.git.gc-prune-now",
-    severity: Severity::Medium,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_gc_prune_now,
-    problem: "git gc --prune=now (or --prune=all) immediately removes unreachable objects \
-         without the usual two-week grace window, making orphaned commits unrecoverable.",
-    alternatives: &[
-        "Run git gc without --prune=now to keep the grace window.",
-        "If you really need to reclaim space, confirm with the user and verify nothing is dangling.",
-    ],
-};
 
 const ENV_CREDENTIAL_HIJACK: RuleSpec = RuleSpec {
     id: "core.git.env-credential-hijack",
@@ -260,15 +179,6 @@ const ENV_PATH_REDIRECT: RuleSpec = RuleSpec {
     ],
 };
 
-pub static UPDATE_REF_DELETE_RULE: GitRule = GitRule {
-    spec: &UPDATE_REF_DELETE,
-};
-pub static REFLOG_EXPIRE_RULE: GitRule = GitRule {
-    spec: &REFLOG_EXPIRE,
-};
-pub static GC_PRUNE_NOW_RULE: GitRule = GitRule {
-    spec: &GC_PRUNE_NOW,
-};
 pub static ENV_CREDENTIAL_HIJACK_RULE: GitRule = GitRule {
     spec: &ENV_CREDENTIAL_HIJACK,
 };
