@@ -18,7 +18,7 @@ use crate::facts;
 use crate::plugin::PluginSet;
 use crate::self_paths::ProtectedPaths;
 
-use super::{Engine, EngineError, compute_plugin_versions};
+use super::{Engine, EngineError, compute_plugin_versions, compute_workspaces};
 
 /// Builder for [`Engine`] that always populates self-protection.
 #[derive(Default)]
@@ -85,6 +85,7 @@ impl EngineBuilder {
         let plugin_versions = compute_plugin_versions(&plugins);
         let project_facts =
             facts::project::collect(self.repo_root.as_deref(), &config.protected_branches);
+        let workspaces = compute_workspaces(self.repo_root.as_deref(), &config);
         Ok(Engine {
             config,
             plugins,
@@ -96,6 +97,7 @@ impl EngineBuilder {
             agent: self.agent.unwrap_or("unknown"),
             plugin_versions,
             project_facts,
+            workspaces,
         })
     }
 }

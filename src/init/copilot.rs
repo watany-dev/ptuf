@@ -162,12 +162,10 @@ fn ensure_version(root: &mut Value, hooks_path: &Path) -> Result<(), InitError> 
 }
 
 fn append_hook(root: &mut Value, hooks_path: &Path, command: &str) -> Result<(), InitError> {
-    let Some(map) = root.as_object_mut() else {
-        return Err(InitError::Schema {
-            path: hooks_path.to_path_buf(),
-            message: "top-level value must be a JSON object".into(),
-        });
-    };
+    let map = root.as_object_mut().ok_or_else(|| InitError::Schema {
+        path: hooks_path.to_path_buf(),
+        message: "top-level value must be a JSON object".into(),
+    })?;
 
     let hooks = ensure_object(map, "hooks").ok_or_else(|| InitError::Schema {
         path: hooks_path.to_path_buf(),
@@ -595,6 +593,36 @@ mod tests {
         assert!(
             matches!(err, InitError::Io { .. }),
             "expected IO error when parent path is a regular file, got: {err:?}",
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn append_hook_rejects_non_object_root_directly() {
+        // ensure_version catches non-objects before append_hook in the normal
+        // install flow, so we call append_hook directly to reach the
+        // ok_or_else closure body.
+        let mut root = json!([]);
+        let path = Path::new("dummy.json");
+        let err = append_hook(&mut root, path, "ptuf hook copilot").unwrap_err();
+        assert!(matches!(err, InitError::Schema { .. }));
+    }
+
+    #[test]
+    fn install_returns_schema_error_when_hooks_file_is_non_object_json() {
+        let dir = workdir("schema-non-object");
+        let targets = TargetPaths {
+            root: dir.clone(),
+            hooks_path: dir.join(".github/hooks/ptuf.json"),
+        };
+        std::fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        // Valid JSON but not a JSON object — triggers the append_hook
+        // schema error path (lines 166-168).
+        fs::write(&targets.hooks_path, r#""not-an-object""#).unwrap();
+        let err = install(&targets, "/x/ptuf", false).unwrap_err();
+        assert!(
+            matches!(err, InitError::Schema { .. }),
+            "expected Schema error for non-object JSON, got: {err:?}",
         );
         let _ = fs::remove_dir_all(&dir);
     }

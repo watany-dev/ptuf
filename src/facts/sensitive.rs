@@ -82,21 +82,29 @@ fn build(pat: &str) -> Regex {
     Regex::new(pat).expect("sensitive variant regex")
 }
 
+// `(?i)` defends case-insensitive filesystems (macOS APFS, Windows NTFS)
+// where `.ENV`/`.Ssh` would otherwise bypass detection. PEM_BLOB stays
+// case-sensitive because RFC 7468 mandates uppercase header labels.
 static SSH_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|[\s])(?:~|\$HOME|\$\{HOME\})/\.ssh(?:/|$|\b)"));
+    LazyLock::new(|| build(r"(?i)(?:^|[\s])(?:~|\$HOME|\$\{HOME\})/\.ssh(?:/|$|\b)"));
 static AWS_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|[\s])(?:~|\$HOME|\$\{HOME\})/\.aws(?:/|$|\b)"));
+    LazyLock::new(|| build(r"(?i)(?:^|[\s])(?:~|\$HOME|\$\{HOME\})/\.aws(?:/|$|\b)"));
 static GCLOUD_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|[\s])(?:~|\$HOME|\$\{HOME\})/\.config/gcloud(?:/|$|\b)"));
+    LazyLock::new(|| build(r"(?i)(?:^|[\s])(?:~|\$HOME|\$\{HOME\})/\.config/gcloud(?:/|$|\b)"));
 static KUBE_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:~|\$HOME|\$\{HOME\})/\.kube/config\b"));
+    LazyLock::new(|| build(r"(?i)(?:~|\$HOME|\$\{HOME\})/\.kube/config\b"));
 static DOCKER_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:~|\$HOME|\$\{HOME\})/\.docker/config\.json\b"));
-static PRIVATE_KEY_FILE: LazyLock<Regex> = LazyLock::new(|| build(r"\bid_(?:rsa|ed25519|ecdsa)\b"));
-static DOTENV: LazyLock<Regex> = LazyLock::new(|| build(r"(?:^|/|\s)\.env(?:\.[A-Za-z0-9_-]+)?\b"));
-static NPMRC: LazyLock<Regex> = LazyLock::new(|| build(r"\.npmrc\b"));
-static PYPIRC: LazyLock<Regex> = LazyLock::new(|| build(r"\.pypirc\b"));
-static TFSTATE: LazyLock<Regex> = LazyLock::new(|| build(r"\S+\.tfstate\b"));
+    LazyLock::new(|| build(r"(?i)(?:~|\$HOME|\$\{HOME\})/\.docker/config\.json\b"));
+static PRIVATE_KEY_FILE: LazyLock<Regex> =
+    LazyLock::new(|| build(r"(?i)\bid_(?:rsa|ed25519|ecdsa)\b"));
+// Anchor includes glob metacharacters and `=` so `cat *.env`,
+// `cp ?.env`, `rm [abc].env`, and `dd if=.env`/`--env-file=.env` style
+// flag values are caught at the token boundary.
+static DOTENV: LazyLock<Regex> =
+    LazyLock::new(|| build(r"(?i)(?:^|/|\s|[*?\[\]=])\.env(?:\.[A-Za-z0-9_-]+)?\b"));
+static NPMRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i)\.npmrc\b"));
+static PYPIRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i)\.pypirc\b"));
+static TFSTATE: LazyLock<Regex> = LazyLock::new(|| build(r"(?i)\S+\.tfstate\b"));
 static PEM_BLOB: LazyLock<Regex> =
     LazyLock::new(|| build(r"-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----"));
 
@@ -175,6 +183,40 @@ mod tests {
         assert!(kinds(".env").contains(&SensitiveKind::Dotenv));
         assert!(kinds(".env.production").contains(&SensitiveKind::Dotenv));
         assert!(kinds("/srv/app/.env").contains(&SensitiveKind::Dotenv));
+    }
+
+    #[test]
+    fn classifies_case_variant_paths() {
+        assert!(kinds(".ENV").contains(&SensitiveKind::Dotenv));
+        assert!(kinds(".Env.PRODUCTION").contains(&SensitiveKind::Dotenv));
+        assert!(kinds("~/.SSH/id_rsa").contains(&SensitiveKind::SshDir));
+        assert!(kinds("~/.AWS/credentials").contains(&SensitiveKind::AwsDir));
+        assert!(kinds("~/.Kube/config").contains(&SensitiveKind::KubeConfig));
+        assert!(kinds(".NPMRC").contains(&SensitiveKind::Npmrc));
+        assert!(kinds("ID_RSA").contains(&SensitiveKind::PrivateKeyFile));
+    }
+
+    #[test]
+    fn classifies_dotenv_through_glob_anchor() {
+        assert!(kinds("*.env").contains(&SensitiveKind::Dotenv));
+        assert!(kinds("?.env").contains(&SensitiveKind::Dotenv));
+        assert!(kinds("[abc].env").contains(&SensitiveKind::Dotenv));
+        assert!(kinds("a*.env").contains(&SensitiveKind::Dotenv));
+        assert!(kinds("dir/*.env.local").contains(&SensitiveKind::Dotenv));
+    }
+
+    #[test]
+    fn does_not_misclassify_dotenv_lookalikes() {
+        // No leading anchor character: not a path token.
+        assert!(!kinds("envfile").contains(&SensitiveKind::Dotenv));
+        assert!(!kinds("data.env").contains(&SensitiveKind::Dotenv));
+        assert!(!kinds("benvironment").contains(&SensitiveKind::Dotenv));
+    }
+
+    #[test]
+    fn pem_blob_remains_case_sensitive() {
+        // RFC 7468 requires uppercase headers; lowercase must not match.
+        assert!(!kinds("-----begin rsa private key-----").contains(&SensitiveKind::PemBlob));
     }
 
     #[test]

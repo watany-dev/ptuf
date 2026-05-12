@@ -9,8 +9,10 @@ pub mod patterns;
 pub mod project_hygiene;
 pub mod remote_pipe;
 pub mod self_protection;
+pub mod sensitive_bash_read;
 pub mod sensitive_net;
 pub mod sensitive_read;
+pub mod workspace;
 
 /// Trait implemented by every rule that the engine evaluates, both
 /// builtin and (eventually) plugin-loaded.
@@ -46,6 +48,7 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &destructive_rm::DestructiveRm,
     &remote_pipe::RemoteScriptPipe,
     &sensitive_net::SensitivePathToNetwork,
+    &sensitive_bash_read::SensitiveBashRead,
     &dynamic_eval::DynamicEval,
     &git::FORCE_PUSH_RULE,
     &git::FORCE_PUSH_WITH_LEASE_RULE,
@@ -58,16 +61,27 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &git::NO_GPG_SIGN_RULE,
     &git::CONFIG_OVERRIDE_BYPASS_RULE,
     &git::ENV_BYPASS_RULE,
+    &git::PUSH_MIRROR_RULE,
+    &git::PUSH_DELETE_REMOTE_RULE,
+    &git::FORCE_IF_INCLUDES_RULE,
+    &git::UPDATE_REF_DELETE_RULE,
+    &git::REFLOG_EXPIRE_RULE,
+    &git::GC_PRUNE_NOW_RULE,
+    &git::ENV_CREDENTIAL_HIJACK_RULE,
+    &git::ENV_PATH_REDIRECT_RULE,
     &self_protection::BINARY_RULE,
     &self_protection::CONFIG_RULE,
     &self_protection::PLUGIN_RULE,
     &self_protection::CLAUDE_SETTINGS_RULE,
     &self_protection::CODEX_SETTINGS_RULE,
     &self_protection::HOOK_SCRIPT_RULE,
+    &self_protection::COPILOT_SETTINGS_RULE,
+    &self_protection::KIRO_SETTINGS_RULE,
     &sensitive_read::SensitiveRead,
     &project_hygiene::LockMismatchPnpm,
     &project_hygiene::LockMismatchUv,
     &project_hygiene::ProtectedBranchDestructiveGit,
+    &workspace::OUTSIDE_ACCESS_RULE,
 ];
 
 /// Run every built-in rule against `facts` + `input` and collect
@@ -132,6 +146,14 @@ mod tests {
             "core.git.no-gpg-sign",
             "core.git.config-override-bypass",
             "core.git.env-bypass",
+            "core.git.push-mirror",
+            "core.git.push-delete-remote",
+            "core.git.force-if-includes",
+            "core.git.update-ref-delete",
+            "core.git.reflog-expire",
+            "core.git.gc-prune-now",
+            "core.git.env-credential-hijack",
+            "core.git.env-path-redirect",
         ] {
             assert!(ids.contains(&git_id), "missing rule_id {git_id}");
         }
@@ -142,10 +164,13 @@ mod tests {
             "core.self_protection.claude-settings",
             "core.self_protection.codex-settings",
             "core.self_protection.hook-script",
+            "core.self_protection.copilot-settings",
+            "core.self_protection.kiro-settings",
         ] {
             assert!(ids.contains(&self_id), "missing rule_id {self_id}");
         }
         assert!(ids.contains(&"core.secrets.sensitive-read"));
+        assert!(ids.contains(&"core.secrets.sensitive-bash-read"));
         assert!(ids.contains(&"core.engine.dynamic-eval"));
         for hyg_id in [
             "core.project_hygiene.lock-mismatch-pnpm",
@@ -154,6 +179,7 @@ mod tests {
         ] {
             assert!(ids.contains(&hyg_id), "missing rule_id {hyg_id}");
         }
+        assert!(ids.contains(&"core.workspace.outside-access"));
     }
 
     #[test]
@@ -258,6 +284,7 @@ mod tests {
         "core.filesystem.destructive-rm",
         "core.network.remote-script-pipe",
         "core.secrets.sensitive-path-to-network",
+        "core.secrets.sensitive-bash-read",
         "core.engine.dynamic-eval",
         "core.git.force-push",
         "core.git.force-push-with-lease",
@@ -270,6 +297,14 @@ mod tests {
         "core.git.no-gpg-sign",
         "core.git.config-override-bypass",
         "core.git.env-bypass",
+        "core.git.push-mirror",
+        "core.git.push-delete-remote",
+        "core.git.force-if-includes",
+        "core.git.update-ref-delete",
+        "core.git.reflog-expire",
+        "core.git.gc-prune-now",
+        "core.git.env-credential-hijack",
+        "core.git.env-path-redirect",
     ];
 
     proptest! {

@@ -1,9 +1,9 @@
 //! `core.git` pack — guards against destructive git operations.
 //!
-//! Implements the 11 rules tabled in `docs/design/policy-packs.md`
-//! (7 destructive-operation rules + 4 hook/signing bypass-blockers).
-//! Each rule shares the [`GitRule`] adapter so the
-//! [`crate::rules::ConfigRule`] trait is implemented exactly once.
+//! Covers force-push variants, history rewrites, hook / signing / credential
+//! bypasses, and env-var redirection. The authoritative rule list lives in
+//! `docs/design/policy-packs.md`. Each rule shares the [`GitRule`] adapter
+//! so the [`crate::rules::ConfigRule`] trait is implemented exactly once.
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
@@ -13,24 +13,48 @@ use crate::reason;
 
 use super::ConfigRule;
 
+mod argv;
+mod branch;
+mod bypass;
+mod clean;
+mod env_redirect;
+mod history;
+mod push;
+mod remote;
+mod reset;
+mod stash;
+
+pub use branch::BRANCH_DELETE_FORCE_RULE;
+pub use bypass::{CONFIG_OVERRIDE_BYPASS_RULE, ENV_BYPASS_RULE, NO_GPG_SIGN_RULE, NO_VERIFY_RULE};
+pub use clean::CLEAN_FDX_RULE;
+pub use env_redirect::{ENV_CREDENTIAL_HIJACK_RULE, ENV_PATH_REDIRECT_RULE};
+pub use history::{GC_PRUNE_NOW_RULE, REFLOG_EXPIRE_RULE, UPDATE_REF_DELETE_RULE};
+pub use push::{
+    FORCE_IF_INCLUDES_RULE, FORCE_PUSH_RULE, FORCE_PUSH_WITH_LEASE_RULE, PUSH_DELETE_REMOTE_RULE,
+    PUSH_MIRROR_RULE,
+};
+pub use remote::REMOTE_SET_URL_RULE;
+pub use reset::RESET_HARD_RULE;
+pub use stash::STASH_CLEAR_RULE;
+
 /// Per-rule wiring: matcher predicate + decision shape + reason text.
 ///
 /// `matcher` returns `true` when the supplied git invocation triggers
 /// the rule. The Bash facts layer feeds every command (and every
 /// `sudo`-unwrapped command) through `matcher` in
 /// [`GitRule::evaluate`].
-struct RuleSpec {
-    id: &'static str,
-    severity: Severity,
-    decision_kind: DecisionKind,
-    hard_deny: bool,
-    matcher: fn(&Argv) -> bool,
-    problem: &'static str,
-    alternatives: &'static [&'static str],
+pub(super) struct RuleSpec {
+    pub(super) id: &'static str,
+    pub(super) severity: Severity,
+    pub(super) decision_kind: DecisionKind,
+    pub(super) hard_deny: bool,
+    pub(super) matcher: fn(&Argv) -> bool,
+    pub(super) problem: &'static str,
+    pub(super) alternatives: &'static [&'static str],
 }
 
 pub struct GitRule {
-    spec: &'static RuleSpec,
+    pub(super) spec: &'static RuleSpec,
 }
 
 impl ConfigRule for GitRule {
@@ -89,519 +113,6 @@ fn invokes_matcher(argv: &Argv, matcher: fn(&Argv) -> bool) -> bool {
     }
     false
 }
-
-const GIT_HEADS: &[&str] = &["git", "/usr/bin/git", "/usr/local/bin/git"];
-
-fn is_git(head: &str) -> bool {
-    GIT_HEADS.contains(&head)
-}
-
-/// First non-flag argument after `git` — i.e. the subcommand
-/// (`push`, `reset`, `remote`, ...). `None` for `git --version`.
-///
-/// Skips git's value-taking global flags so that
-/// `git -c core.hooksPath=/dev/null commit` resolves to `commit`, not to
-/// the `-c`'s value.
-fn git_subcommand(argv: &Argv) -> Option<&str> {
-    if !is_git(&argv.head) {
-        return None;
-    }
-    let mut iter = argv.args.iter();
-    while let Some(a) = iter.next() {
-        match a.as_str() {
-            "-c" | "--config" | "-C" | "--git-dir" | "--work-tree" | "--namespace"
-            | "--exec-path" | "--super-prefix" => {
-                iter.next();
-                continue;
-            },
-            s if s.starts_with("--config=")
-                || s.starts_with("--git-dir=")
-                || s.starts_with("--work-tree=")
-                || s.starts_with("--namespace=")
-                || s.starts_with("--exec-path=")
-                || s.starts_with("--super-prefix=") =>
-            {
-                continue;
-            },
-            s if s.starts_with('-') => continue,
-            s => return Some(s),
-        }
-    }
-    None
-}
-
-fn args_after_subcommand<'a>(argv: &'a Argv, sub: &str) -> Vec<&'a str> {
-    let mut iter = argv.args.iter().map(String::as_str);
-    for a in iter.by_ref() {
-        if a == sub {
-            break;
-        }
-    }
-    iter.collect()
-}
-
-/// Gather the values of git's `-c key=val` / `--config key=val` /
-/// `--config=key=val` global options.
-fn config_overrides(argv: &Argv) -> impl Iterator<Item = &str> + '_ {
-    let mut iter = argv.args.iter();
-    std::iter::from_fn(move || {
-        while let Some(a) = iter.next() {
-            match a.as_str() {
-                "-c" | "--config" => {
-                    if let Some(v) = iter.next() {
-                        return Some(v.as_str());
-                    }
-                },
-                s => {
-                    if let Some(rest) = s.strip_prefix("--config=") {
-                        return Some(rest);
-                    }
-                },
-            }
-        }
-        None
-    })
-}
-
-#[derive(Clone, Copy)]
-enum BypassMatch {
-    Any,
-    Falsy,
-    Truthy,
-}
-
-fn is_falsy(v: &str) -> bool {
-    let v = v.trim();
-    ["false", "no", "off", "0", ""]
-        .iter()
-        .any(|t| v.eq_ignore_ascii_case(t))
-}
-
-fn is_truthy(v: &str) -> bool {
-    let v = v.trim();
-    ["true", "yes", "on", "1"]
-        .iter()
-        .any(|t| v.eq_ignore_ascii_case(t))
-}
-
-fn bypass_value_matches(mode: BypassMatch, value: &str) -> bool {
-    match mode {
-        BypassMatch::Any => !value.trim().is_empty(),
-        BypassMatch::Falsy => is_falsy(value),
-        BypassMatch::Truthy => is_truthy(value),
-    }
-}
-
-const NO_VERIFY_SUBCOMMANDS: &[&str] = &[
-    "commit",
-    "push",
-    "merge",
-    "rebase",
-    "pull",
-    "am",
-    "cherry-pick",
-    "revert",
-    "fetch",
-];
-
-const NO_GPG_SIGN_SUBCOMMANDS: &[&str] = &[
-    "commit",
-    "merge",
-    "rebase",
-    "cherry-pick",
-    "revert",
-    "tag",
-    "am",
-    "pull",
-];
-
-const BYPASS_SCOPE_SUBCOMMANDS: &[&str] = &[
-    "commit",
-    "push",
-    "merge",
-    "rebase",
-    "tag",
-    "am",
-    "cherry-pick",
-    "revert",
-    "pull",
-];
-
-const CONFIG_BYPASS_KEYS: &[(&str, BypassMatch)] = &[
-    ("core.hookspath", BypassMatch::Any),
-    ("commit.gpgsign", BypassMatch::Falsy),
-    ("tag.gpgsign", BypassMatch::Falsy),
-    ("merge.verifysignatures", BypassMatch::Falsy),
-    ("transfer.fsckobjects", BypassMatch::Falsy),
-    ("receive.fsckobjects", BypassMatch::Falsy),
-    ("fetch.fsckobjects", BypassMatch::Falsy),
-];
-
-const ENV_BYPASS_KEYS: &[(&str, BypassMatch)] = &[
-    ("HUSKY", BypassMatch::Falsy),
-    ("LEFTHOOK", BypassMatch::Falsy),
-    ("PRE_COMMIT_ALLOW_NO_CONFIG", BypassMatch::Truthy),
-    ("SKIP", BypassMatch::Any),
-    ("GIT_HOOK_SKIP", BypassMatch::Any),
-    ("CORE_HOOKSPATH", BypassMatch::Any),
-];
-
-/// Match `git push --force` / `git push -f` / `git push --force-with-lease`
-/// while letting only `--force-with-lease` fall to the lease-specific rule.
-fn matches_force_push(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("push") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "push");
-    rest.iter().any(|a| {
-        *a == "--force"
-            || a.starts_with("--force=")
-            || (a.starts_with('-')
-                && !a.starts_with("--")
-                && a.contains('f')
-                && !a.contains("force-with-lease"))
-    })
-}
-
-fn matches_force_push_with_lease(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("push") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "push");
-    rest.iter()
-        .any(|a| *a == "--force-with-lease" || a.starts_with("--force-with-lease="))
-}
-
-fn matches_reset_hard(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("reset") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "reset");
-    rest.contains(&"--hard")
-}
-
-fn matches_clean_fdx(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("clean") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "clean");
-    let mut has_force = false;
-    let mut has_dir = false;
-    let mut has_ignored = false;
-    let mut has_dry_run = false;
-
-    for arg in rest {
-        if arg == "--force" {
-            has_force = true;
-            continue;
-        }
-        if arg.starts_with("--") {
-            continue;
-        }
-        let Some(body) = arg.strip_prefix('-') else {
-            continue;
-        };
-        for flag in body.chars() {
-            if flag == 'e' {
-                break;
-            }
-            has_force |= flag == 'f';
-            has_dir |= flag == 'd';
-            has_ignored |= flag == 'x' || flag == 'X';
-            has_dry_run |= flag == 'n';
-        }
-    }
-
-    has_force && has_dir && has_ignored && !has_dry_run
-}
-
-fn matches_branch_delete_force(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("branch") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "branch");
-    rest.iter().any(|a| {
-        *a == "-D"
-            || (a.starts_with('-') && !a.starts_with("--") && a.contains('D'))
-            || *a == "--delete=force"
-    })
-}
-
-fn matches_stash_clear(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("stash") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "stash");
-    rest.contains(&"clear")
-}
-
-fn matches_remote_set_url(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("remote") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "remote");
-    let mut iter = rest.iter().filter(|a| !a.starts_with('-'));
-    iter.next() == Some(&"set-url")
-}
-
-fn matches_no_verify(argv: &Argv) -> bool {
-    let Some(sub) = git_subcommand(argv) else {
-        return false;
-    };
-    if !NO_VERIFY_SUBCOMMANDS.contains(&sub) {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, sub);
-    if rest.contains(&"--no-verify") {
-        return true;
-    }
-    // `-n` only means no-verify on `git commit`. On `push`/`pull`/`merge`/
-    // `rebase` it is `--dry-run` or `--no-stat`; on `tag` it sets the
-    // displayed line count.
-    if sub != "commit" {
-        return false;
-    }
-    rest.iter().any(|a| {
-        if !a.starts_with('-') || a.starts_with("--") {
-            return false;
-        }
-        a[1..].contains('n')
-    })
-}
-
-fn matches_no_gpg_sign(argv: &Argv) -> bool {
-    let Some(sub) = git_subcommand(argv) else {
-        return false;
-    };
-    if !NO_GPG_SIGN_SUBCOMMANDS.contains(&sub) {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, sub);
-    rest.contains(&"--no-gpg-sign")
-}
-
-fn matches_config_override_bypass(argv: &Argv) -> bool {
-    let Some(sub) = git_subcommand(argv) else {
-        return false;
-    };
-    if !BYPASS_SCOPE_SUBCOMMANDS.contains(&sub) {
-        return false;
-    }
-    for raw in config_overrides(argv) {
-        let Some(eq) = raw.find('=') else {
-            continue;
-        };
-        let key = raw[..eq].trim();
-        let value = &raw[eq + 1..];
-        for (target_key, mode) in CONFIG_BYPASS_KEYS {
-            if key.eq_ignore_ascii_case(target_key) && bypass_value_matches(*mode, value) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn matches_env_bypass(argv: &Argv) -> bool {
-    let Some(sub) = git_subcommand(argv) else {
-        return false;
-    };
-    if !BYPASS_SCOPE_SUBCOMMANDS.contains(&sub) {
-        return false;
-    }
-    for ea in &argv.env_assignments {
-        for (target, mode) in ENV_BYPASS_KEYS {
-            if ea.key.eq_ignore_ascii_case(target) && bypass_value_matches(*mode, &ea.value) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-const FORCE_PUSH: RuleSpec = RuleSpec {
-    id: "core.git.force-push",
-    severity: Severity::Critical,
-    decision_kind: DecisionKind::Deny,
-    hard_deny: true,
-    matcher: matches_force_push,
-    problem: "git push --force rewrites remote history and can destroy collaborators' work \
-         beyond local recovery.",
-    alternatives: &[
-        "Use git push --force-with-lease to refuse the push if the remote has moved.",
-        "Pull, rebase, and re-push with a regular fast-forward.",
-        "Ask the user to confirm an explicit force push before running it.",
-    ],
-};
-
-const FORCE_PUSH_WITH_LEASE: RuleSpec = RuleSpec {
-    id: "core.git.force-push-with-lease",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_force_push_with_lease,
-    problem: "git push --force-with-lease still rewrites the remote branch and is destructive \
-         when other collaborators rely on the previous tip.",
-    alternatives: &[
-        "Confirm with the user that the remote is yours alone before continuing.",
-        "Prefer a regular fast-forward push if possible.",
-    ],
-};
-
-const RESET_HARD: RuleSpec = RuleSpec {
-    id: "core.git.reset-hard",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_reset_hard,
-    problem: "git reset --hard discards uncommitted changes and rewrites HEAD without warning.",
-    alternatives: &[
-        "Stash or commit the working tree first (git stash push -u).",
-        "Use git reset --keep or git restore for a narrower change.",
-        "Ask the user to confirm before throwing away local work.",
-    ],
-};
-
-const CLEAN_FDX: RuleSpec = RuleSpec {
-    id: "core.git.clean-fdx",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_clean_fdx,
-    problem: "git clean -fdx removes every untracked and ignored file, including local-only \
-         secrets, build artefacts, and editor state.",
-    alternatives: &[
-        "Run git clean -ndx first to preview what would be removed.",
-        "Restrict cleaning to a specific path or pattern.",
-        "Ask the user before deleting ignored files.",
-    ],
-};
-
-const BRANCH_DELETE_FORCE: RuleSpec = RuleSpec {
-    id: "core.git.branch-delete-force",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_branch_delete_force,
-    problem: "git branch -D force-deletes a branch even if it has unmerged commits, which can \
-         lose work that lives only on that branch.",
-    alternatives: &[
-        "Verify the branch is fully merged with git branch --merged.",
-        "Use git branch -d to refuse deletion when commits would be lost.",
-        "Ask the user before removing a branch with unmerged commits.",
-    ],
-};
-
-const STASH_CLEAR: RuleSpec = RuleSpec {
-    id: "core.git.stash-clear",
-    severity: Severity::Medium,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_stash_clear,
-    problem: "git stash clear deletes every stashed change at once with no per-entry recovery.",
-    alternatives: &[
-        "List stashes first with git stash list and drop entries individually.",
-        "Apply or pop stashes that you still need before clearing.",
-        "Ask the user before discarding all stashes.",
-    ],
-};
-
-const REMOTE_SET_URL: RuleSpec = RuleSpec {
-    id: "core.git.remote-set-url",
-    severity: Severity::Medium,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_remote_set_url,
-    problem: "git remote set-url silently re-points push and fetch traffic, which can redirect \
-         pushes to an attacker-controlled host.",
-    alternatives: &[
-        "Verify the new URL with the user before changing it.",
-        "Inspect the change with git remote -v after running it.",
-        "Use a separate remote name (git remote add) when the original should stay.",
-    ],
-};
-
-const NO_VERIFY: RuleSpec = RuleSpec {
-    id: "core.git.no-verify",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Deny,
-    hard_deny: false,
-    matcher: matches_no_verify,
-    problem: "git --no-verify (or `commit -n`) skips pre-commit, commit-msg, pre-push and \
-         pre-rebase hooks, which are usually the project's first line of defence against \
-         broken or unsigned commits.",
-    alternatives: &[
-        "Run the hooks once and fix the failures rather than bypassing them.",
-        "If a hook is genuinely broken, fix it in the repo so the team benefits.",
-        "If a hot-fix truly needs the bypass, allowlist this rule with an explicit expiresAt.",
-    ],
-};
-
-const NO_GPG_SIGN: RuleSpec = RuleSpec {
-    id: "core.git.no-gpg-sign",
-    severity: Severity::Medium,
-    decision_kind: DecisionKind::Deny,
-    hard_deny: false,
-    matcher: matches_no_gpg_sign,
-    problem: "git --no-gpg-sign overrides a project- or user-level requirement to sign commits \
-         and tags, producing artefacts that downstream verification will reject.",
-    alternatives: &[
-        "Make sure your signing key is configured (gpg.format / user.signingkey) and re-run.",
-        "If signing is intentionally optional in this repo, drop commit.gpgsign from config rather than per-call --no-gpg-sign.",
-    ],
-};
-
-const CONFIG_OVERRIDE_BYPASS: RuleSpec = RuleSpec {
-    id: "core.git.config-override-bypass",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Deny,
-    hard_deny: false,
-    matcher: matches_config_override_bypass,
-    problem: "git -c <key>=<value> can disable hooks (core.hooksPath), turn off commit signing \
-         (commit.gpgsign=false), or relax fsck checks for a single invocation, which is \
-         almost always a bypass rather than a legitimate one-shot override.",
-    alternatives: &[
-        "Address the underlying check (fix the hook, install the signing key, etc.) instead.",
-        "If the override is genuinely needed, set it in repo config explicitly so it is reviewable.",
-        "Allowlist this rule with an expiry rather than embedding -c in scripts.",
-    ],
-};
-
-const ENV_BYPASS: RuleSpec = RuleSpec {
-    id: "core.git.env-bypass",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Deny,
-    hard_deny: false,
-    matcher: matches_env_bypass,
-    problem: "Inline environment assignments such as HUSKY=0, LEFTHOOK=0, or SKIP=<hook> in \
-         front of a git command turn off the project's commit hooks for this single \
-         invocation without leaving any trace in repo config.",
-    alternatives: &[
-        "Run the hooks and resolve the failures.",
-        "If a hook is broken on your machine only, fix it locally instead of routinely setting HUSKY=0.",
-        "Allowlist this rule with an expiry if a one-off bypass is genuinely warranted.",
-    ],
-};
-
-pub static FORCE_PUSH_RULE: GitRule = GitRule { spec: &FORCE_PUSH };
-pub static FORCE_PUSH_WITH_LEASE_RULE: GitRule = GitRule {
-    spec: &FORCE_PUSH_WITH_LEASE,
-};
-pub static RESET_HARD_RULE: GitRule = GitRule { spec: &RESET_HARD };
-pub static CLEAN_FDX_RULE: GitRule = GitRule { spec: &CLEAN_FDX };
-pub static BRANCH_DELETE_FORCE_RULE: GitRule = GitRule {
-    spec: &BRANCH_DELETE_FORCE,
-};
-pub static STASH_CLEAR_RULE: GitRule = GitRule { spec: &STASH_CLEAR };
-pub static REMOTE_SET_URL_RULE: GitRule = GitRule {
-    spec: &REMOTE_SET_URL,
-};
-pub static NO_VERIFY_RULE: GitRule = GitRule { spec: &NO_VERIFY };
-pub static NO_GPG_SIGN_RULE: GitRule = GitRule { spec: &NO_GPG_SIGN };
-pub static CONFIG_OVERRIDE_BYPASS_RULE: GitRule = GitRule {
-    spec: &CONFIG_OVERRIDE_BYPASS,
-};
-pub static ENV_BYPASS_RULE: GitRule = GitRule { spec: &ENV_BYPASS };
 
 #[cfg(test)]
 mod tests {
@@ -1252,13 +763,18 @@ mod tests {
             &RESET_HARD_RULE,
             &CLEAN_FDX_RULE,
             &BRANCH_DELETE_FORCE_RULE,
+            &PUSH_MIRROR_RULE,
+            &PUSH_DELETE_REMOTE_RULE,
+            &FORCE_IF_INCLUDES_RULE,
+            &UPDATE_REF_DELETE_RULE,
+            &REFLOG_EXPIRE_RULE,
         ] {
             assert!(!rule.hard_deny());
             assert_eq!(rule.severity(), Severity::High);
             assert_eq!(rule.default_decision(), DecisionKind::Ask);
         }
 
-        for rule in [&STASH_CLEAR_RULE, &REMOTE_SET_URL_RULE] {
+        for rule in [&STASH_CLEAR_RULE, &REMOTE_SET_URL_RULE, &GC_PRUNE_NOW_RULE] {
             assert!(!rule.hard_deny());
             assert_eq!(rule.severity(), Severity::Medium);
             assert_eq!(rule.default_decision(), DecisionKind::Ask);
@@ -1268,6 +784,8 @@ mod tests {
             &NO_VERIFY_RULE,
             &CONFIG_OVERRIDE_BYPASS_RULE,
             &ENV_BYPASS_RULE,
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            &ENV_PATH_REDIRECT_RULE,
         ] {
             assert!(!rule.hard_deny());
             assert_eq!(rule.severity(), Severity::High);
@@ -1315,7 +833,7 @@ mod tests {
     use crate::testing::proptest::{arbitrary_command, bash_command, non_bash_hook_input};
     use proptest::prelude::*;
 
-    fn all_git_rules() -> [&'static GitRule; 11] {
+    fn all_git_rules() -> [&'static GitRule; 19] {
         [
             &FORCE_PUSH_RULE,
             &FORCE_PUSH_WITH_LEASE_RULE,
@@ -1328,6 +846,14 @@ mod tests {
             &NO_GPG_SIGN_RULE,
             &CONFIG_OVERRIDE_BYPASS_RULE,
             &ENV_BYPASS_RULE,
+            &PUSH_MIRROR_RULE,
+            &PUSH_DELETE_REMOTE_RULE,
+            &FORCE_IF_INCLUDES_RULE,
+            &UPDATE_REF_DELETE_RULE,
+            &REFLOG_EXPIRE_RULE,
+            &GC_PRUNE_NOW_RULE,
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            &ENV_PATH_REDIRECT_RULE,
         ]
     }
 
@@ -1382,7 +908,7 @@ mod tests {
             head in "[a-z][a-z0-9]{0,5}",
             args in proptest::collection::vec("[a-zA-Z0-9_./-]{1,8}", 0..3),
         ) {
-            prop_assume!(!GIT_HEADS.contains(&head.as_str()) && head != "sudo");
+            prop_assume!(!argv::GIT_HEADS.contains(&head.as_str()) && head != "sudo");
             let cmd = if args.is_empty() {
                 head
             } else {
@@ -1479,7 +1005,7 @@ mod tests {
         severity: Severity::Low,
         decision_kind: DecisionKind::Monitor,
         hard_deny: false,
-        matcher: matches_force_push,
+        matcher: super::push::matches_force_push,
         problem: "synthetic monitor spec",
         alternatives: &[],
     };
@@ -1488,7 +1014,7 @@ mod tests {
         severity: Severity::Low,
         decision_kind: DecisionKind::Allow,
         hard_deny: false,
-        matcher: matches_force_push,
+        matcher: super::push::matches_force_push,
         problem: "synthetic allow spec",
         alternatives: &[],
     };
@@ -1527,5 +1053,284 @@ mod tests {
         // confirming evaluate doesn't panic exercises the `iter.next()
         // returned None` arm of `config_overrides`.
         let _ = CONFIG_OVERRIDE_BYPASS_RULE.evaluate(&facts, &input);
+    }
+
+    // --- force-push +refspec extension ----------------------------------
+
+    #[test]
+    fn force_push_denies_plus_refspec() {
+        for cmd in [
+            "git push origin +main:main",
+            "git push origin +main",
+            "git push origin +refs/heads/foo:refs/heads/foo",
+            "git push o +a:b +c:d",
+        ] {
+            assert_decision(&FORCE_PUSH_RULE, cmd, DecisionKind::Deny);
+        }
+    }
+
+    #[test]
+    fn force_push_plus_refspec_via_sudo() {
+        assert_decision(
+            &FORCE_PUSH_RULE,
+            "sudo git push origin +main:main",
+            DecisionKind::Deny,
+        );
+    }
+
+    #[test]
+    fn force_push_does_not_fire_on_bare_plus() {
+        // A bare `+` is not a refspec; only `+name` matters.
+        assert_allow(&FORCE_PUSH_RULE, "git push origin +");
+    }
+
+    // --- push-mirror ----------------------------------------------------
+
+    #[test]
+    fn push_mirror_asks_long_flag() {
+        assert_decision(&PUSH_MIRROR_RULE, "git push --mirror", DecisionKind::Ask);
+        assert_decision(
+            &PUSH_MIRROR_RULE,
+            "git push --mirror origin",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn push_mirror_allows_safe_push() {
+        assert_allow(&PUSH_MIRROR_RULE, "git push origin main");
+        assert_allow(&PUSH_MIRROR_RULE, "git push --tags origin");
+    }
+
+    #[test]
+    fn push_mirror_via_sudo() {
+        assert_decision(
+            &PUSH_MIRROR_RULE,
+            "sudo git push --mirror origin",
+            DecisionKind::Ask,
+        );
+    }
+
+    // --- push-delete-remote ---------------------------------------------
+
+    #[test]
+    fn push_delete_asks_long_flag() {
+        assert_decision(
+            &PUSH_DELETE_REMOTE_RULE,
+            "git push --delete origin foo",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn push_delete_asks_short_flag() {
+        assert_decision(
+            &PUSH_DELETE_REMOTE_RULE,
+            "git push -d origin foo",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn push_delete_asks_colon_refspec() {
+        assert_decision(
+            &PUSH_DELETE_REMOTE_RULE,
+            "git push origin :foo",
+            DecisionKind::Ask,
+        );
+        assert_decision(
+            &PUSH_DELETE_REMOTE_RULE,
+            "git push origin :refs/heads/foo",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn push_delete_allows_normal_push() {
+        assert_allow(&PUSH_DELETE_REMOTE_RULE, "git push origin main");
+        assert_allow(&PUSH_DELETE_REMOTE_RULE, "git push origin main:main");
+    }
+
+    // --- force-if-includes ----------------------------------------------
+
+    #[test]
+    fn force_if_includes_asks_long_flag() {
+        assert_decision(
+            &FORCE_IF_INCLUDES_RULE,
+            "git push --force-if-includes",
+            DecisionKind::Ask,
+        );
+        assert_decision(
+            &FORCE_IF_INCLUDES_RULE,
+            "git push --force-if-includes origin main",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn force_if_includes_does_not_fire_for_lease_or_force() {
+        assert_allow(
+            &FORCE_IF_INCLUDES_RULE,
+            "git push --force-with-lease origin main",
+        );
+        assert_allow(&FORCE_IF_INCLUDES_RULE, "git push --force origin main");
+        assert_allow(&FORCE_IF_INCLUDES_RULE, "git push origin main");
+    }
+
+    // --- update-ref-delete ----------------------------------------------
+
+    #[test]
+    fn update_ref_delete_asks_dash_d() {
+        assert_decision(
+            &UPDATE_REF_DELETE_RULE,
+            "git update-ref -d refs/heads/foo",
+            DecisionKind::Ask,
+        );
+        assert_decision(
+            &UPDATE_REF_DELETE_RULE,
+            "git update-ref --delete refs/heads/foo",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn update_ref_delete_allows_create_or_update() {
+        assert_allow(
+            &UPDATE_REF_DELETE_RULE,
+            "git update-ref refs/heads/foo HEAD",
+        );
+        assert_allow(&UPDATE_REF_DELETE_RULE, "git update-ref --stdin");
+    }
+
+    // --- reflog-expire --------------------------------------------------
+
+    #[test]
+    fn reflog_expire_asks_expire_now() {
+        for cmd in [
+            "git reflog expire --expire=now --all",
+            "git reflog expire --expire=0 --all",
+            "git reflog expire --expire-unreachable=now --all",
+        ] {
+            assert_decision(&REFLOG_EXPIRE_RULE, cmd, DecisionKind::Ask);
+        }
+    }
+
+    #[test]
+    fn reflog_expire_asks_delete_subcommand() {
+        assert_decision(
+            &REFLOG_EXPIRE_RULE,
+            "git reflog delete HEAD@{0}",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn reflog_expire_allows_read_only_ops() {
+        assert_allow(&REFLOG_EXPIRE_RULE, "git reflog show --all");
+        assert_allow(&REFLOG_EXPIRE_RULE, "git reflog");
+        assert_allow(
+            &REFLOG_EXPIRE_RULE,
+            "git reflog expire --expire=2.weeks.ago",
+        );
+    }
+
+    // --- gc-prune-now ---------------------------------------------------
+
+    #[test]
+    fn gc_prune_now_asks() {
+        assert_decision(&GC_PRUNE_NOW_RULE, "git gc --prune=now", DecisionKind::Ask);
+        assert_decision(&GC_PRUNE_NOW_RULE, "git gc --prune=all", DecisionKind::Ask);
+        assert_decision(
+            &GC_PRUNE_NOW_RULE,
+            "git gc --aggressive --prune=now",
+            DecisionKind::Ask,
+        );
+    }
+
+    #[test]
+    fn gc_prune_now_allows_safe_gc() {
+        assert_allow(&GC_PRUNE_NOW_RULE, "git gc");
+        assert_allow(&GC_PRUNE_NOW_RULE, "git gc --auto");
+        assert_allow(&GC_PRUNE_NOW_RULE, "git gc --prune=2.weeks.ago");
+    }
+
+    // --- env-credential-hijack ------------------------------------------
+
+    #[test]
+    fn env_credential_hijack_denies_ssh_command_on_push() {
+        assert_decision(
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            "GIT_SSH_COMMAND='ssh -i /tmp/k' git push origin main",
+            DecisionKind::Deny,
+        );
+    }
+
+    #[test]
+    fn env_credential_hijack_denies_askpass_on_fetch() {
+        assert_decision(
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            "GIT_ASKPASS=/tmp/x git fetch origin",
+            DecisionKind::Deny,
+        );
+    }
+
+    #[test]
+    fn env_credential_hijack_denies_on_clone_and_ls_remote() {
+        assert_decision(
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            "GIT_SSH_COMMAND=x git clone git@example.com:foo/bar.git",
+            DecisionKind::Deny,
+        );
+        assert_decision(
+            &ENV_CREDENTIAL_HIJACK_RULE,
+            "GIT_SSH=x git ls-remote origin",
+            DecisionKind::Deny,
+        );
+    }
+
+    #[test]
+    fn env_credential_hijack_silent_outside_network_scope() {
+        // `git status` is not a network op; the env var should not fire.
+        assert_allow(&ENV_CREDENTIAL_HIJACK_RULE, "GIT_SSH_COMMAND=x git status");
+        assert_allow(&ENV_CREDENTIAL_HIJACK_RULE, "git push origin main");
+    }
+
+    // --- env-path-redirect ----------------------------------------------
+
+    #[test]
+    fn env_path_redirect_denies_git_dir() {
+        assert_decision(
+            &ENV_PATH_REDIRECT_RULE,
+            "GIT_DIR=/tmp/x git log",
+            DecisionKind::Deny,
+        );
+    }
+
+    #[test]
+    fn env_path_redirect_denies_config_overrides() {
+        for cmd in [
+            "GIT_CONFIG=/tmp/c git commit -m foo",
+            "GIT_CONFIG_GLOBAL=/tmp/c git commit -m foo",
+            "GIT_CONFIG_SYSTEM=/tmp/c git push",
+            "GIT_WORK_TREE=/tmp/w git status",
+            "GIT_OBJECT_DIRECTORY=/tmp/o git fsck",
+            "GIT_INDEX_FILE=/tmp/i git diff",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES=/tmp/a git log",
+        ] {
+            assert_decision(&ENV_PATH_REDIRECT_RULE, cmd, DecisionKind::Deny);
+        }
+    }
+
+    #[test]
+    fn env_path_redirect_allows_unrelated_env() {
+        assert_allow(&ENV_PATH_REDIRECT_RULE, "SOMETHING=1 git log");
+        assert_allow(&ENV_PATH_REDIRECT_RULE, "git log");
+    }
+
+    #[test]
+    fn env_path_redirect_silent_on_non_git_head() {
+        // The redirect rule keys off git_subcommand(), so a non-git head
+        // (even with the same env var) should not fire.
+        assert_allow(&ENV_PATH_REDIRECT_RULE, "GIT_DIR=/tmp/x ls");
     }
 }

@@ -247,7 +247,7 @@ pub fn mode() -> impl Strategy<Value = Mode> {
     prop_oneof![Just(Mode::Enforce), Just(Mode::Monitor)]
 }
 
-/// All six [`ProtectedKind`] variants drawn uniformly.
+/// All eight [`ProtectedKind`] variants drawn uniformly.
 pub fn protected_kind() -> impl Strategy<Value = ProtectedKind> {
     prop_oneof![
         Just(ProtectedKind::Binary),
@@ -256,6 +256,8 @@ pub fn protected_kind() -> impl Strategy<Value = ProtectedKind> {
         Just(ProtectedKind::ClaudeSettings),
         Just(ProtectedKind::CodexSettings),
         Just(ProtectedKind::HookScript),
+        Just(ProtectedKind::CopilotSettings),
+        Just(ProtectedKind::KiroSettings),
     ]
 }
 

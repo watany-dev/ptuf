@@ -1,12 +1,16 @@
-//! `core.secrets.sensitive-read` — denies `Read`/`Edit` of credentials
-//! files.
+//! `core.secrets.sensitive-read` — denies `Read`/`Edit`/`Write`/`apply_patch`
+//! of credentials files (and the MCP equivalents).
 //!
 //! The Bash-only `core.secrets.sensitive-path-to-network` rule already
 //! catches commands that *exfiltrate* credentials through a network sink.
-//! v0.3 adds this companion rule for the new `Read`/`Edit` tool surface
-//! (`docs/design/policy-packs.md:60-66`): even reading a sensitive file is
-//! enough exposure that the agent should ask the user to read it
-//! themselves.
+//! This rule covers the file-tool surface: even reading a sensitive file
+//! is enough exposure that the agent should ask the user to inspect it
+//! themselves. Write-style tools (`Write`, `apply_patch`) are folded in
+//! because they can both create and overwrite credentials files —
+//! exposing the file via mode change is itself a leak, and writing
+//! arbitrary content into `~/.ssh/authorized_keys` or `~/.aws/credentials`
+//! is a privilege-escalation primitive
+//! (`docs/design/policy-packs.md` `core.secrets`).
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
@@ -37,9 +41,11 @@ impl ConfigRule for SensitiveRead {
     }
 
     fn evaluate(&self, facts: &Facts, input: &HookInput) -> Option<Decision> {
-        let is_read_like = matches!(input.tool_name.as_str(), "Read" | "Edit")
-            || (input.is_mcp_tool() && !facts.paths.is_empty());
-        if !is_read_like {
+        let is_file_tool = matches!(
+            input.tool_name.as_str(),
+            "Read" | "Edit" | "Write" | "apply_patch",
+        ) || (input.is_mcp_tool() && !facts.paths.is_empty());
+        if !is_file_tool {
             return None;
         }
         if facts.sensitive.is_empty() {
@@ -134,14 +140,76 @@ mod tests {
     }
 
     #[test]
-    fn does_not_fire_for_write_payloads_alone() {
-        // Write of a non-sensitive path with non-sensitive content stays
-        // out of this rule entirely.
+    fn does_not_fire_for_non_sensitive_write() {
+        // Ordinary source-file writes (non-sensitive path, non-sensitive
+        // content) must never trigger this rule.
         let input = HookInput {
             tool_name: "Write".into(),
             tool_input: serde_json::json!({
                 "file_path": "/repo/src/lib.rs",
                 "content": "fn main() {}",
+            }),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(SensitiveRead.evaluate(&facts, &input).is_none());
+    }
+
+    #[test]
+    fn denies_write_of_dotenv() {
+        let input = HookInput {
+            tool_name: "Write".into(),
+            tool_input: serde_json::json!({
+                "file_path": ".env",
+                "content": "API_KEY=value",
+            }),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(matches!(
+            SensitiveRead.evaluate(&facts, &input),
+            Some(Decision::Deny { ref rule_id, .. }) if rule_id == RULE_ID,
+        ));
+    }
+
+    #[test]
+    fn denies_write_of_pem_content_to_arbitrary_path() {
+        // Write of a non-sensitive path BUT with PEM content in the
+        // payload trips the content-side classifier.
+        let input = HookInput {
+            tool_name: "Write".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/foo.md",
+                "content": "-----BEGIN RSA PRIVATE KEY-----\nXYZ\n-----END RSA PRIVATE KEY-----",
+            }),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(matches!(
+            SensitiveRead.evaluate(&facts, &input),
+            Some(Decision::Deny { .. }),
+        ));
+    }
+
+    #[test]
+    fn denies_apply_patch_adding_dotenv() {
+        let input = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Add File: .env\n+API_KEY=value\n*** End Patch\n",
+            }),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(matches!(
+            SensitiveRead.evaluate(&facts, &input),
+            Some(Decision::Deny { ref rule_id, .. }) if rule_id == RULE_ID,
+        ));
+    }
+
+    #[test]
+    fn does_not_fire_for_non_sensitive_apply_patch() {
+        let input = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Add File: src/lib.rs\n+fn main() {}\n\
+                            *** End Patch\n",
             }),
         };
         let facts = crate::facts::extract(&input);
@@ -198,16 +266,16 @@ mod tests {
     use proptest::prelude::*;
 
     proptest! {
-        // Tools other than Read/Edit/MCP never fire this rule, even with
-        // a sensitive path attached. The regex `[A-Z][A-Za-z]{0,8}` only
-        // produces uppercase-leading names, so `mcp__*` is excluded by
-        // construction.
+        // Tools other than Read/Edit/Write/apply_patch/MCP never fire
+        // this rule, even with a sensitive path attached. The regex
+        // `[A-Z][A-Za-z]{0,8}` only produces uppercase-leading names, so
+        // `mcp__*` and `apply_patch` are excluded by construction.
         #[test]
-        fn pbt_non_read_edit_yields_none(
+        fn pbt_non_file_tool_yields_none(
             tool in "[A-Z][A-Za-z]{0,8}",
             fp in file_path(),
         ) {
-            prop_assume!(!matches!(tool.as_str(), "Read" | "Edit"));
+            prop_assume!(!matches!(tool.as_str(), "Read" | "Edit" | "Write"));
             let input = HookInput {
                 tool_name: tool,
                 tool_input: serde_json::json!({ "file_path": fp }),
@@ -244,11 +312,11 @@ mod tests {
             }
         }
 
-        // Read/Edit on any sensitive path classification fires the rule.
-        // Use known-sensitive paths to exercise the positive arm.
+        // Read/Edit/Write on any sensitive path classification fires the
+        // rule. Use known-sensitive paths to exercise the positive arm.
         #[test]
         fn pbt_sensitive_read_paths_always_fire(
-            tool in proptest::sample::select(&["Read", "Edit"][..]),
+            tool in proptest::sample::select(&["Read", "Edit", "Write"][..]),
             sensitive_fp in proptest::sample::select(
                 &[
                     "~/.ssh/id_rsa",

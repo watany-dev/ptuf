@@ -5,7 +5,7 @@ use crate::hook_input::HookInput;
 use crate::reason;
 
 use super::ConfigRule;
-use super::patterns::SENSITIVE_PATH;
+use super::patterns::{SENSITIVE_PATH, argv_references_sensitive};
 
 pub struct SensitivePathToNetwork;
 
@@ -60,7 +60,7 @@ fn bash_co_locates_sink_and_sensitive(bash: &Bash) -> bool {
         let commands = bash.commands();
         let mut commands = commands.into_iter();
         let has_sink = commands.clone().any(invokes_network_sink);
-        let has_sensitive = commands.any(references_sensitive_token);
+        let has_sensitive = commands.any(argv_references_sensitive);
         return has_sink && has_sensitive;
     }
     bash.segments.iter().any(pipeline_co_locates)
@@ -68,7 +68,7 @@ fn bash_co_locates_sink_and_sensitive(bash: &Bash) -> bool {
 
 fn pipeline_co_locates(pipe: &Pipeline) -> bool {
     let has_sink = pipe.commands.iter().any(invokes_network_sink);
-    let has_sensitive = pipe.commands.iter().any(references_sensitive_token)
+    let has_sensitive = pipe.commands.iter().any(argv_references_sensitive)
         || pipe.redirects.iter().any(redirect_target_is_sensitive);
     has_sink && has_sensitive
 }
@@ -85,23 +85,6 @@ fn invokes_network_sink(argv: &Argv) -> bool {
         && let Some(first) = argv.positional().next()
     {
         return NETWORK_SINK_HEADS.contains(&first);
-    }
-    false
-}
-
-fn references_sensitive_token(argv: &Argv) -> bool {
-    if SENSITIVE_PATH.is_match(&argv.head) {
-        return true;
-    }
-    if argv.args.iter().any(|a| SENSITIVE_PATH.is_match(a)) {
-        return true;
-    }
-    if argv
-        .env_assignments
-        .iter()
-        .any(|e| SENSITIVE_PATH.is_match(&e.value))
-    {
-        return true;
     }
     false
 }

@@ -48,6 +48,10 @@ impl RawConfig {
             .packs
             .get("core.project_hygiene")
             .and_then(|p| p.protected_branches.clone());
+        let additional_workspaces = self
+            .packs
+            .get("core.workspace")
+            .and_then(|p| p.additional_workspaces.clone());
         MergeLayer {
             mode: self.mode,
             fail_closed: self.fail_closed,
@@ -70,15 +74,17 @@ impl RawConfig {
             audit_include_denied: self.audit.include_denied,
             audit_redaction: self.audit.redaction,
             protected_branches,
+            additional_workspaces,
         }
     }
 }
 
 /// Per-pack toggle parsed from `packs: { <name>: { enabled: ... } }`.
 ///
-/// `protected_branches` is consumed only by `core.project_hygiene`;
-/// other packs ignore it. Keeping it on the shared `RawPack` keeps the
-/// YAML schema flat (one entry per pack) without a per-pack subtype.
+/// `protected_branches` is consumed only by `core.project_hygiene` and
+/// `additional_workspaces` only by `core.workspace`; other packs ignore
+/// them. Keeping these on the shared `RawPack` keeps the YAML schema
+/// flat (one entry per pack) without a per-pack subtype.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RawPack {
@@ -86,6 +92,8 @@ pub struct RawPack {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub protected_branches: Option<Vec<String>>,
+    #[serde(default)]
+    pub additional_workspaces: Option<Vec<String>>,
 }
 
 /// Per-rule override parsed from `rules: { <rule-id>: { ... } }`.
@@ -191,6 +199,7 @@ pub(super) struct MergeLayer {
     pub audit_include_denied: Option<bool>,
     pub audit_redaction: Option<RedactionMode>,
     pub protected_branches: Option<Vec<String>>,
+    pub additional_workspaces: Option<Vec<String>>,
 }
 
 impl<'de> Deserialize<'de> for RedactionMode {

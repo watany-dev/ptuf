@@ -13,6 +13,13 @@ pub mod copilot;
 pub mod kiro;
 pub mod verify;
 
+/// Return the first whitespace-delimited token of `cmd`, which is the
+/// executable path/name. Used by path-collection callers to extract the
+/// binary from a full hook command string.
+pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
+    cmd.split_whitespace().next()
+}
+
 /// Auto-detect every agent reachable from the given `cwd` and `home`.
 ///
 /// - `ClaudeCode`: requires `<home>/.claude/` to exist.
@@ -483,6 +490,27 @@ mod tests {
                 .map(|p| p.as_os_str().is_empty())
                 .unwrap_or(true)
         );
+    }
+
+    #[test]
+    fn sibling_temp_path_uses_snapshot_tmp_when_path_has_no_file_name() {
+        // Paths like ".." have no file_name(); the fallback must produce
+        // a path containing "snapshot.tmp" so the caller still gets a
+        // usable temp file name.
+        let p = Path::new("..");
+        let tmp = sibling_temp_path(p);
+        let s = tmp.to_string_lossy();
+        assert!(s.contains("snapshot.tmp"), "got {s}");
+    }
+
+    #[test]
+    fn capture_propagates_io_error_when_path_is_a_directory() {
+        let dir = workdir("capture-dir-as-file");
+        let blocker = dir.join("blocker");
+        fs::create_dir_all(&blocker).expect("mkdir blocker");
+        let err = capture(&[blocker.as_path()]).expect_err("reading a dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
