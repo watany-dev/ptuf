@@ -1,6 +1,6 @@
 [package]
 name = "ptuf"
-version = "0.1.0"
+version = "0.1.0-rc.2"
 edition = "2024"
 rust-version = "1.93.0"
 license = "Apache-2.0"
@@ -224,3 +224,15 @@ opt-level = 1
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+# cargo-binstall: fetch the same archives cargo-dist publishes on GitHub
+# releases so users on Rust toolchains can skip the source build.
+# Archive names follow `dist-workspace.toml` (`unix-archive = ".tar.gz"`,
+# `windows-archive = ".zip"`).
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
