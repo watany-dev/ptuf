@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use crate::Decision;
 use crate::engine::Engine;
 use crate::reason;
+use crate::update::UpdateOptions;
 
 mod copilot_input;
 mod input_helpers;
@@ -127,6 +128,11 @@ pub enum Command {
     /// PreToolUse hook entry. `agent = None` auto-detects every
     /// agent reachable from cwd / `$HOME`.
     Init(InitOptions),
+    /// `ptuf update [--check] [--version <TAG>] [--force]` — upgrade
+    /// the ptuf binary in place via either `cargo install` or the
+    /// prebuilt installer, auto-detected from the running binary's
+    /// location.
+    Update(UpdateOptions),
     /// `--help` / `-h`.
     Help,
     /// `--version` / `-V`.
@@ -178,12 +184,18 @@ pub fn parse(args: &[String]) -> Result<(GlobalFlags, Command), ParseError> {
         "check" => parse::parse_check(&mut iter)?,
         "plugin" => parse::parse_plugin(&mut iter)?,
         "init" => parse::parse_init(&mut iter)?,
+        "update" => parse::parse_update(&mut iter)?,
         other => return Err(ParseError::UnknownCommand(other.to_string())),
     };
 
     if globals.json && matches!(cmd, Command::HookPreToolUse { .. }) {
         return Err(ParseError::ConflictingFlags(
             "--json is meaningless for `hook`",
+        ));
+    }
+    if globals.json && matches!(cmd, Command::Update(_)) {
+        return Err(ParseError::ConflictingFlags(
+            "--json is meaningless for `update`",
         ));
     }
     Ok((globals, cmd))
@@ -202,6 +214,9 @@ USAGE:
         (evaluate a single tool call against the active policy)
     ptuf [--json] plugin check <PATH>
         (run a plugin's deny/allow tests)
+    ptuf update [--check] [--version <TAG>] [--force]
+        (update the ptuf binary in-place from the latest GitHub
+         release; auto-detects cargo install vs. prebuilt installer)
     ptuf --help | --version
 
 EXIT CODES:
@@ -226,6 +241,7 @@ pub fn run<R: Read, W1: Write, W2: Write>(
         Command::Check { tool, command } => run::run_check(&tool, &command, stdout, stderr),
         Command::PluginCheck { path } => run::run_plugin_check(&path, stdout, stderr),
         Command::Init(options) => run::run_init(globals, options, stdout, stderr),
+        Command::Update(options) => run::run_update(options, stdout, stderr),
         Command::Help => {
             let _ = writeln!(stdout, "{HELP}");
             0

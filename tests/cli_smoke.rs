@@ -868,3 +868,81 @@ fn init_codex_real_install_is_byte_for_byte_idempotent() {
     assert_eq!(hooks_first, hooks_second, "hooks.json must be stable");
     assert_eq!(config_first, config_second, "config.toml must be stable");
 }
+
+// `ptuf update` end-to-end coverage. Production code shells out to
+// `curl` / `cargo` / `sh`, so we plant fake binaries in a tempdir and
+// prepend that dir to `PATH` to keep the tests hermetic — no network
+// or real cargo invocation ever fires.
+
+#[cfg(unix)]
+fn write_fake_executable(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, body).expect("write fake binary");
+    let mut perms = std::fs::metadata(path).expect("stat").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).expect("chmod 755");
+}
+
+#[cfg(unix)]
+fn run_with_path(args: &[&str], path: &Path) -> (i32, String, String) {
+    let mut cmd = binary();
+    cmd.args(args)
+        .env("PATH", path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn ptuf");
+    drop(child.stdin.take().expect("stdin"));
+    let output = child.wait_with_output().expect("wait");
+    (
+        output.status.code().expect("exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn update_check_with_fake_curl_reports_latest_tag() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let bin_dir = dir.path();
+    write_fake_executable(
+        &bin_dir.join("curl"),
+        "#!/bin/sh\nprintf 'HTTP/2 302\\r\\nlocation: https://github.com/watany-dev/ptuf/releases/tag/v9.9.9\\r\\n\\r\\n'\n",
+    );
+    let (code, stdout, stderr) = run_with_path(&["update", "--check"], bin_dir);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("latest:  9.9.9"), "stdout: {stdout}");
+    assert!(stdout.contains("update available"), "stdout: {stdout}");
+}
+
+#[test]
+fn update_rejects_unknown_flag_with_exit_one() {
+    let (code, _stdout, stderr) = run(&["update", "--bogus"], "");
+    assert_eq!(code, 1);
+    assert!(stderr.contains("unexpected argument"), "stderr: {stderr}",);
+}
+
+#[test]
+fn update_check_conflicts_with_version_pin_with_exit_one() {
+    let (code, _stdout, stderr) = run(&["update", "--check", "--version", "v1"], "");
+    assert_eq!(code, 1);
+    assert!(stderr.contains("conflicting flags"), "stderr: {stderr}",);
+}
+
+#[test]
+fn update_rejects_global_json_with_exit_one() {
+    let (code, _stdout, stderr) = run(&["--json", "update", "--check"], "");
+    assert_eq!(code, 1);
+    assert!(stderr.contains("conflicting flags"), "stderr: {stderr}",);
+}
+
+#[cfg(unix)]
+#[test]
+fn update_curl_missing_is_friendly_error() {
+    // Empty PATH = nothing on disk, so `curl` will fail with NotFound.
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let (code, _stdout, stderr) = run_with_path(&["update", "--check"], dir.path());
+    assert_eq!(code, 1);
+    assert!(stderr.contains("requires curl on PATH"), "stderr: {stderr}",);
+}

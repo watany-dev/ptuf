@@ -12,6 +12,7 @@ pub mod plugin;
 pub mod reason;
 pub mod rules;
 pub mod self_paths;
+pub(crate) mod update;
 
 #[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
@@ -21,6 +22,7 @@ pub use decision::{Decision, aggregate};
 pub use engine::{Engine, EngineError, Outcome};
 pub use facts::Facts;
 pub use hook_input::HookInput;
+pub use update::UpdateOptions;
 
 /// Stateless decision API kept for backward compatibility.
 ///

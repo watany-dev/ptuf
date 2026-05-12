@@ -7,6 +7,8 @@
 
 use std::path::PathBuf;
 
+use crate::update::UpdateOptions;
+
 use super::{Command, HookAgent, InitOptions, ParseError};
 
 pub(super) fn parse_init<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -90,6 +92,37 @@ where
     Ok(Command::Check { tool, command })
 }
 
+pub(super) fn parse_update<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let mut check = false;
+    let mut force = false;
+    let mut version: Option<String> = None;
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--check" => check = true,
+            "--force" => force = true,
+            "--version" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--version"))?;
+                version = Some(value.clone());
+            },
+            other if other.starts_with("--version=") => {
+                version = Some(other.trim_start_matches("--version=").to_string());
+            },
+            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
+        }
+    }
+    if check && version.is_some() {
+        return Err(ParseError::ConflictingFlags("--check vs --version"));
+    }
+    Ok(Command::Update(UpdateOptions {
+        check,
+        version,
+        force,
+    }))
+}
+
 pub(super) fn parse_plugin<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
     I: Iterator<Item = &'a String>,
@@ -111,6 +144,8 @@ where
 mod tests {
 
     use std::path::PathBuf;
+
+    use crate::update::UpdateOptions;
 
     use super::super::test_support::s;
     use super::super::{Command, GlobalFlags, HookAgent, InitOptions, ParseError, parse};
@@ -405,6 +440,122 @@ mod tests {
         assert!(matches!(
             parse(&s(&["check", "--tool", "Bash", "ls", "--json"])),
             Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn parses_update_no_flags() {
+        assert_eq!(
+            cmd(&["update"]),
+            Command::Update(UpdateOptions {
+                check: false,
+                version: None,
+                force: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_update_check_flag() {
+        assert_eq!(
+            cmd(&["update", "--check"]),
+            Command::Update(UpdateOptions {
+                check: true,
+                version: None,
+                force: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_update_version_pin_separate_value() {
+        assert_eq!(
+            cmd(&["update", "--version", "v0.2.0"]),
+            Command::Update(UpdateOptions {
+                check: false,
+                version: Some("v0.2.0".to_string()),
+                force: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_update_version_pin_equals_form() {
+        assert_eq!(
+            cmd(&["update", "--version=v0.2.0"]),
+            Command::Update(UpdateOptions {
+                check: false,
+                version: Some("v0.2.0".to_string()),
+                force: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_update_force_flag() {
+        assert_eq!(
+            cmd(&["update", "--force"]),
+            Command::Update(UpdateOptions {
+                check: false,
+                version: None,
+                force: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_update_combines_force_and_version() {
+        assert_eq!(
+            cmd(&["update", "--version", "v0.2.0", "--force"]),
+            Command::Update(UpdateOptions {
+                check: false,
+                version: Some("v0.2.0".to_string()),
+                force: true,
+            })
+        );
+    }
+
+    #[test]
+    fn update_rejects_check_with_version() {
+        assert!(matches!(
+            parse(&s(&["update", "--check", "--version", "v0.2.0"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+        assert!(matches!(
+            parse(&s(&["update", "--version=v0.2.0", "--check"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn update_rejects_unknown_flag() {
+        assert!(matches!(
+            parse(&s(&["update", "--bogus"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn update_rejects_positional_argument() {
+        assert!(matches!(
+            parse(&s(&["update", "extra"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn update_requires_value_for_version_flag() {
+        assert!(matches!(
+            parse(&s(&["update", "--version"])),
+            Err(ParseError::MissingValue("--version"))
+        ));
+    }
+
+    #[test]
+    fn update_rejects_global_json() {
+        assert!(matches!(
+            parse(&s(&["--json", "update"])),
+            Err(ParseError::ConflictingFlags(_))
         ));
     }
 

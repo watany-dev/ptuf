@@ -17,6 +17,7 @@ ptuf [--json] init                       # auto-detect every agent
 ptuf [--json] init claude-code           # pin to one adapter
 ptuf [--json] init claude-code --no-verify
 ptuf [--json] init claude-code --dry-run
+ptuf update [--check] [--version <TAG>] [--force]
 ```
 
 | サブコマンド | 用途 |
@@ -25,6 +26,7 @@ ptuf [--json] init claude-code --dry-run
 | `ptuf check --tool <name> <command>` | 単発評価 |
 | `ptuf plugin check <path>` | plugin rule の `tests:` を実行 |
 | `ptuf init [<agent>] [--no-verify] [--dry-run]` | agent 側の hook 設定を配線 (verify は既定 ON、`--dry-run` 時は自動 OFF) |
+| `ptuf update [--check] [--version <TAG>] [--force]` | GitHub Releases から最新 tag を取得し、`cargo install --force` または cargo-dist 製 installer を auto-detect で起動して binary を差し替える |
 | `ptuf --help`, `ptuf --version` | 情報表示 |
 
 `--json` はトップレベルの global flag で、サブコマンド **の前** にのみ
@@ -53,7 +55,7 @@ install になる。
 | `Allow` / `Monitor` / Claude Code の `Ask` | `0` |
 | `Deny` (Claude Code / Codex / Kiro) | `2` |
 | Copilot の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
-| 内部エラー、引数不正、plugin check fail、init verify fail | `1` |
+| 内部エラー、引数不正、plugin check fail、init verify fail、update 失敗 (curl 不在 / updater 非ゼロ) | `1` |
 
 Codex / Kiro では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
 
@@ -420,3 +422,19 @@ JSON** で返す。これにより host 側で「ptuf が落ちたから fail-op
 Kiro adapter は Claude / Codex と同じく exit `2` で block するが、JSON
 envelope を持たないため reason は stderr のみで伝える。`Ask` は demote
 されて exit `2` になる。
+
+## Update の境界
+
+`ptuf update` は Decision エンジンを **経由しない**。`HookInput` を構築
+することなく `std::process::Command` で `curl` / `cargo` / `sh` /
+`powershell` を spawn するだけの薄い shell-out で、policy / plugin /
+audit 経路には一切触れない。fail-closed 契約 (`policy-load-failed`,
+`invalid-payload`) も適用されない — update の失敗はネットワーク不通や
+updater 非ゼロ exit などインフラ層の問題で、Decision 層の問題ではない。
+
+`self_paths::ProtectedPaths` の自己保護ルール (別の ptuf hook 経由で
+`~/.cargo/bin/ptuf` 等が書換対象となった場合に deny する) と `ptuf
+update` の binary 差し替えは互いに干渉しない: 前者は **他プロセス** の
+tool call を hook して block する経路で、後者は ptuf 自身が子プロセスを
+起動して updater に差し替えを委譲する経路だからである。同一バイナリを
+別ホスト経由で書こうとすれば self-protection が依然 deny する。
