@@ -14,6 +14,12 @@ use crate::reason;
 use super::ConfigRule;
 
 mod argv;
+mod push;
+
+pub use push::{
+    FORCE_IF_INCLUDES_RULE, FORCE_PUSH_RULE, FORCE_PUSH_WITH_LEASE_RULE, PUSH_DELETE_REMOTE_RULE,
+    PUSH_MIRROR_RULE,
+};
 
 use argv::{
     BypassMatch, args_after_subcommand, bypass_value_matches, config_overrides, git_subcommand,
@@ -26,18 +32,18 @@ use argv::{
 /// the rule. The Bash facts layer feeds every command (and every
 /// `sudo`-unwrapped command) through `matcher` in
 /// [`GitRule::evaluate`].
-struct RuleSpec {
-    id: &'static str,
-    severity: Severity,
-    decision_kind: DecisionKind,
-    hard_deny: bool,
-    matcher: fn(&Argv) -> bool,
-    problem: &'static str,
-    alternatives: &'static [&'static str],
+pub(super) struct RuleSpec {
+    pub(super) id: &'static str,
+    pub(super) severity: Severity,
+    pub(super) decision_kind: DecisionKind,
+    pub(super) hard_deny: bool,
+    pub(super) matcher: fn(&Argv) -> bool,
+    pub(super) problem: &'static str,
+    pub(super) alternatives: &'static [&'static str],
 }
 
 pub struct GitRule {
-    spec: &'static RuleSpec,
+    pub(super) spec: &'static RuleSpec,
 }
 
 impl ConfigRule for GitRule {
@@ -172,36 +178,6 @@ const PATH_REDIRECT_KEYS: &[(&str, BypassMatch)] = &[
     ("GIT_ALTERNATE_OBJECT_DIRECTORIES", BypassMatch::Any),
 ];
 
-/// Match `git push --force` / `git push -f` / `git push --force-with-lease`
-/// while letting only `--force-with-lease` fall to the lease-specific rule.
-///
-/// Also catches refspecs prefixed with `+` (e.g. `git push origin +main:main`),
-/// which is git's shell-quoting-friendly synonym for `--force`.
-fn matches_force_push(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("push") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "push");
-    rest.iter().any(|a| {
-        *a == "--force"
-            || a.starts_with("--force=")
-            || (a.starts_with('-')
-                && !a.starts_with("--")
-                && a.contains('f')
-                && !a.contains("force-with-lease"))
-            || (a.starts_with('+') && a.len() > 1)
-    })
-}
-
-fn matches_force_push_with_lease(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("push") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "push");
-    rest.iter()
-        .any(|a| *a == "--force-with-lease" || a.starts_with("--force-with-lease="))
-}
-
 fn matches_reset_hard(argv: &Argv) -> bool {
     if git_subcommand(argv) != Some("reset") {
         return false;
@@ -332,36 +308,6 @@ fn matches_config_override_bypass(argv: &Argv) -> bool {
     false
 }
 
-fn matches_push_mirror(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("push") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "push");
-    rest.iter()
-        .any(|a| *a == "--mirror" || a.starts_with("--mirror="))
-}
-
-fn matches_push_delete_remote(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("push") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "push");
-    rest.iter().any(|a| {
-        *a == "--delete"
-            || (a.starts_with('-') && !a.starts_with("--") && a.contains('d'))
-            || (a.starts_with(':') && a.len() > 1)
-    })
-}
-
-fn matches_force_if_includes(argv: &Argv) -> bool {
-    if git_subcommand(argv) != Some("push") {
-        return false;
-    }
-    let rest = args_after_subcommand(argv, "push");
-    rest.iter()
-        .any(|a| *a == "--force-if-includes" || a.starts_with("--force-if-includes="))
-}
-
 fn matches_update_ref_delete(argv: &Argv) -> bool {
     if git_subcommand(argv) != Some("update-ref") {
         return false;
@@ -418,35 +364,6 @@ fn matches_env_credential_hijack(argv: &Argv) -> bool {
 fn matches_env_path_redirect(argv: &Argv) -> bool {
     matches_env_keys(argv, None, PATH_REDIRECT_KEYS)
 }
-
-const FORCE_PUSH: RuleSpec = RuleSpec {
-    id: "core.git.force-push",
-    severity: Severity::Critical,
-    decision_kind: DecisionKind::Deny,
-    hard_deny: true,
-    matcher: matches_force_push,
-    problem: "git push --force rewrites remote history and can destroy collaborators' work \
-         beyond local recovery.",
-    alternatives: &[
-        "Use git push --force-with-lease to refuse the push if the remote has moved.",
-        "Pull, rebase, and re-push with a regular fast-forward.",
-        "Ask the user to confirm an explicit force push before running it.",
-    ],
-};
-
-const FORCE_PUSH_WITH_LEASE: RuleSpec = RuleSpec {
-    id: "core.git.force-push-with-lease",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_force_push_with_lease,
-    problem: "git push --force-with-lease still rewrites the remote branch and is destructive \
-         when other collaborators rely on the previous tip.",
-    alternatives: &[
-        "Confirm with the user that the remote is yours alone before continuing.",
-        "Prefer a regular fast-forward push if possible.",
-    ],
-};
 
 const RESET_HARD: RuleSpec = RuleSpec {
     id: "core.git.reset-hard",
@@ -583,49 +500,6 @@ const ENV_BYPASS: RuleSpec = RuleSpec {
     ],
 };
 
-const PUSH_MIRROR: RuleSpec = RuleSpec {
-    id: "core.git.push-mirror",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_push_mirror,
-    problem: "git push --mirror overwrites every ref on the remote with whatever exists \
-         locally, including deleted branches and tags — equivalent to a force push across \
-         the entire repository.",
-    alternatives: &[
-        "Push only the refs you actually want with explicit refspecs (git push origin <branch>).",
-        "If you really need a mirror sync, confirm with the user and verify the remote first.",
-    ],
-};
-
-const PUSH_DELETE_REMOTE: RuleSpec = RuleSpec {
-    id: "core.git.push-delete-remote",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_push_delete_remote,
-    problem: "git push --delete (or `:<ref>` refspec) removes a branch or tag on the remote, \
-         which is destructive and can break collaborators if the ref is shared.",
-    alternatives: &[
-        "Confirm with the user that the remote ref is safe to remove.",
-        "If the goal is to clean up a stale local branch, use git branch -d locally instead.",
-    ],
-};
-
-const FORCE_IF_INCLUDES: RuleSpec = RuleSpec {
-    id: "core.git.force-if-includes",
-    severity: Severity::High,
-    decision_kind: DecisionKind::Ask,
-    hard_deny: false,
-    matcher: matches_force_if_includes,
-    problem: "git push --force-if-includes still rewrites the remote branch when the local \
-         tip subsumes the remote, which can drop commits other collaborators expect to see.",
-    alternatives: &[
-        "Pull / rebase to incorporate the remote, then push normally.",
-        "Confirm with the user that overwriting the remote tip is intended.",
-    ],
-};
-
 const UPDATE_REF_DELETE: RuleSpec = RuleSpec {
     id: "core.git.update-ref-delete",
     severity: Severity::High,
@@ -700,10 +574,6 @@ const ENV_PATH_REDIRECT: RuleSpec = RuleSpec {
     ],
 };
 
-pub static FORCE_PUSH_RULE: GitRule = GitRule { spec: &FORCE_PUSH };
-pub static FORCE_PUSH_WITH_LEASE_RULE: GitRule = GitRule {
-    spec: &FORCE_PUSH_WITH_LEASE,
-};
 pub static RESET_HARD_RULE: GitRule = GitRule { spec: &RESET_HARD };
 pub static CLEAN_FDX_RULE: GitRule = GitRule { spec: &CLEAN_FDX };
 pub static BRANCH_DELETE_FORCE_RULE: GitRule = GitRule {
@@ -719,13 +589,6 @@ pub static CONFIG_OVERRIDE_BYPASS_RULE: GitRule = GitRule {
     spec: &CONFIG_OVERRIDE_BYPASS,
 };
 pub static ENV_BYPASS_RULE: GitRule = GitRule { spec: &ENV_BYPASS };
-pub static PUSH_MIRROR_RULE: GitRule = GitRule { spec: &PUSH_MIRROR };
-pub static PUSH_DELETE_REMOTE_RULE: GitRule = GitRule {
-    spec: &PUSH_DELETE_REMOTE,
-};
-pub static FORCE_IF_INCLUDES_RULE: GitRule = GitRule {
-    spec: &FORCE_IF_INCLUDES,
-};
 pub static UPDATE_REF_DELETE_RULE: GitRule = GitRule {
     spec: &UPDATE_REF_DELETE,
 };
@@ -1633,7 +1496,7 @@ mod tests {
         severity: Severity::Low,
         decision_kind: DecisionKind::Monitor,
         hard_deny: false,
-        matcher: matches_force_push,
+        matcher: super::push::matches_force_push,
         problem: "synthetic monitor spec",
         alternatives: &[],
     };
@@ -1642,7 +1505,7 @@ mod tests {
         severity: Severity::Low,
         decision_kind: DecisionKind::Allow,
         hard_deny: false,
-        matcher: matches_force_push,
+        matcher: super::push::matches_force_push,
         problem: "synthetic allow spec",
         alternatives: &[],
     };
