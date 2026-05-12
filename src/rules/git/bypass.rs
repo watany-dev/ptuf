@@ -38,7 +38,7 @@ const NO_GPG_SIGN_SUBCOMMANDS: &[&str] = &[
     "pull",
 ];
 
-pub(super) const BYPASS_SCOPE_SUBCOMMANDS: &[&str] = &[
+const BYPASS_SCOPE_SUBCOMMANDS: &[&str] = &[
     "commit",
     "push",
     "merge",
