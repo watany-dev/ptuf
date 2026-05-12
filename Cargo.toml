@@ -221,6 +221,17 @@ panic = "unwind"
 [profile.dev.package."*"]
 opt-level = 1
 
+# cargo-binstall metadata — points at the cargo-dist artifacts published
+# under `dist-workspace.toml`. Update both files together when changing
+# the archive naming convention or adding/removing targets.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
