@@ -13,6 +13,13 @@ use crate::reason;
 
 use super::ConfigRule;
 
+mod argv;
+
+use argv::{
+    BypassMatch, args_after_subcommand, bypass_value_matches, config_overrides, git_subcommand,
+    matches_env_keys,
+};
+
 /// Per-rule wiring: matcher predicate + decision shape + reason text.
 ///
 /// `matcher` returns `true` when the supplied git invocation triggers
@@ -88,108 +95,6 @@ fn invokes_matcher(argv: &Argv, matcher: fn(&Argv) -> bool) -> bool {
         return matcher(&unwrapped);
     }
     false
-}
-
-const GIT_HEADS: &[&str] = &["git", "/usr/bin/git", "/usr/local/bin/git"];
-
-fn is_git(head: &str) -> bool {
-    GIT_HEADS.contains(&head)
-}
-
-/// First non-flag argument after `git` — i.e. the subcommand
-/// (`push`, `reset`, `remote`, ...). `None` for `git --version`.
-///
-/// Skips git's value-taking global flags so that
-/// `git -c core.hooksPath=/dev/null commit` resolves to `commit`, not to
-/// the `-c`'s value.
-fn git_subcommand(argv: &Argv) -> Option<&str> {
-    if !is_git(&argv.head) {
-        return None;
-    }
-    let mut iter = argv.args.iter();
-    while let Some(a) = iter.next() {
-        match a.as_str() {
-            "-c" | "--config" | "-C" | "--git-dir" | "--work-tree" | "--namespace"
-            | "--exec-path" | "--super-prefix" => {
-                iter.next();
-                continue;
-            },
-            s if s.starts_with("--config=")
-                || s.starts_with("--git-dir=")
-                || s.starts_with("--work-tree=")
-                || s.starts_with("--namespace=")
-                || s.starts_with("--exec-path=")
-                || s.starts_with("--super-prefix=") =>
-            {
-                continue;
-            },
-            s if s.starts_with('-') => continue,
-            s => return Some(s),
-        }
-    }
-    None
-}
-
-fn args_after_subcommand<'a>(argv: &'a Argv, sub: &str) -> Vec<&'a str> {
-    let mut iter = argv.args.iter().map(String::as_str);
-    for a in iter.by_ref() {
-        if a == sub {
-            break;
-        }
-    }
-    iter.collect()
-}
-
-/// Gather the values of git's `-c key=val` / `--config key=val` /
-/// `--config=key=val` global options.
-fn config_overrides(argv: &Argv) -> impl Iterator<Item = &str> + '_ {
-    let mut iter = argv.args.iter();
-    std::iter::from_fn(move || {
-        while let Some(a) = iter.next() {
-            match a.as_str() {
-                "-c" | "--config" => {
-                    if let Some(v) = iter.next() {
-                        return Some(v.as_str());
-                    }
-                },
-                s => {
-                    if let Some(rest) = s.strip_prefix("--config=") {
-                        return Some(rest);
-                    }
-                },
-            }
-        }
-        None
-    })
-}
-
-#[derive(Clone, Copy)]
-enum BypassMatch {
-    Any,
-    Falsy,
-    Truthy,
-}
-
-fn is_falsy(v: &str) -> bool {
-    let v = v.trim();
-    ["false", "no", "off", "0", ""]
-        .iter()
-        .any(|t| v.eq_ignore_ascii_case(t))
-}
-
-fn is_truthy(v: &str) -> bool {
-    let v = v.trim();
-    ["true", "yes", "on", "1"]
-        .iter()
-        .any(|t| v.eq_ignore_ascii_case(t))
-}
-
-fn bypass_value_matches(mode: BypassMatch, value: &str) -> bool {
-    match mode {
-        BypassMatch::Any => !value.trim().is_empty(),
-        BypassMatch::Falsy => is_falsy(value),
-        BypassMatch::Truthy => is_truthy(value),
-    }
 }
 
 const NO_VERIFY_SUBCOMMANDS: &[&str] = &[
@@ -496,24 +401,6 @@ fn matches_gc_prune_now(argv: &Argv) -> bool {
     let rest = args_after_subcommand(argv, "gc");
     rest.iter()
         .any(|a| *a == "--prune=now" || *a == "--prune=all")
-}
-
-/// Shared env-var matcher. `scope = Some(list)` restricts to specific git
-/// subcommands; `scope = None` fires on any git subcommand.
-fn matches_env_keys(argv: &Argv, scope: Option<&[&str]>, keys: &[(&str, BypassMatch)]) -> bool {
-    let Some(sub) = git_subcommand(argv) else {
-        return false;
-    };
-    if let Some(allowed) = scope
-        && !allowed.contains(&sub)
-    {
-        return false;
-    }
-    argv.env_assignments.iter().any(|ea| {
-        keys.iter().any(|(target, mode)| {
-            ea.key.eq_ignore_ascii_case(target) && bypass_value_matches(*mode, &ea.value)
-        })
-    })
 }
 
 fn matches_env_bypass(argv: &Argv) -> bool {
@@ -1649,7 +1536,7 @@ mod tests {
             head in "[a-z][a-z0-9]{0,5}",
             args in proptest::collection::vec("[a-zA-Z0-9_./-]{1,8}", 0..3),
         ) {
-            prop_assume!(!GIT_HEADS.contains(&head.as_str()) && head != "sudo");
+            prop_assume!(!argv::GIT_HEADS.contains(&head.as_str()) && head != "sudo");
             let cmd = if args.is_empty() {
                 head
             } else {
