@@ -68,6 +68,10 @@ Decision: allow
 ## Install
 
 ```bash
+# Prebuilt binary (fastest — no Rust toolchain required)
+cargo binstall ptuf
+
+# Or build from source via crates.io (requires Rust 1.93+)
 cargo install ptuf
 ```
 

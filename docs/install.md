@@ -1,9 +1,11 @@
 # Installing ptuf
 
-`cargo install ptuf` is the fastest path. The verified-install instructions
-below pin a release, check the SHA-256 sum, and verify the GitHub artifact
-attestation before extracting — use them when you want a reproducible install
-or are deploying ptuf into a shared environment.
+`cargo binstall ptuf` downloads a prebuilt binary in seconds without a Rust
+toolchain; `cargo install ptuf` compiles the same release from crates.io when
+you already have Rust set up. The verified-install instructions below pin a
+release, check the SHA-256 sum, and verify the GitHub artifact attestation
+before extracting — use them when you want a reproducible install or are
+deploying ptuf into a shared environment.
 
 ## Requirements
 
@@ -91,6 +93,21 @@ Windows (PowerShell):
 $env:PTUF_VERSION = "v0.0.1"
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/download/$env:PTUF_VERSION/ptuf-installer.ps1 | iex"
 ```
+
+## With cargo-binstall (fastest, no toolchain)
+
+If you have [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall)
+installed, it downloads the same prebuilt archive cargo-dist publishes and
+skips compilation:
+
+```bash
+cargo binstall ptuf
+```
+
+cargo-binstall does not verify the SHA-256 sum or the GitHub artifact
+attestation. For pinned or shared-environment deployments, use the
+[Verified install](#verified-install-recommended-for-pinned-deployments)
+path above instead.
 
 ## From crates.io
 
