@@ -326,6 +326,19 @@ jobs:
             matches=(artifacts/$source_pattern)
             shopt -u nullglob
 
+            # cargo-dist 0.31.0 emits per-archive sidecars (.sha256, signatures,
+            # SBOM JSON) under the same prefix. The `.tar.*` glob picks them up
+            # along with the real archive, so drop known sidecar extensions.
+            local filtered=()
+            local m
+            for m in "${matches[@]}"; do
+              case "$m" in
+                *.sha256|*.sig|*.asc|*.minisig|*.spdx.json) continue ;;
+                *) filtered+=("$m") ;;
+              esac
+            done
+            matches=("${filtered[@]}")
+
             if [ "${#matches[@]}" -ne 1 ]; then
               printf 'expected exactly one artifact matching %s, found %s\n' "$source_pattern" "${#matches[@]}" >&2
               printf '%s\n' "${matches[@]}" >&2
