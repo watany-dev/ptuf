@@ -97,9 +97,8 @@ fn known_rule_ids() -> Vec<&'static str> {
 }
 
 proptest! {
-    /// hardDeny rules ignore every allowlist entry. Documented at
-    /// `docs/design/config-and-plugins.md:89` and enforced in
-    /// `src/engine/filter.rs:112-114`. The rule must still fire
+    /// hardDeny rules ignore every allowlist entry. Enforced in
+    /// `engine::filter::allowlist_hit_for`. The rule must still fire
     /// (rule_id surfaced) and `allowlist_id` must remain None even
     /// when `config_with_filters` happens to include a matching
     /// allowlist; mode-driven demotion to Monitor is independent.
@@ -240,7 +239,7 @@ proptest! {
 
     /// Pack-disable overlays cannot suppress a hardDeny rule. Mirrors
     /// the allowlist guarantee at the pack-override layer
-    /// (`src/engine/filter.rs:27-29`).
+    /// (`engine::filter::is_pack_disabled`).
     #[test]
     fn pbt_pack_disable_never_suppresses_hard_deny(
         overlays in proptest::collection::vec(

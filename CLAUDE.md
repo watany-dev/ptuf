@@ -19,7 +19,11 @@
 が `git push` 時に自動で `make check` を走らせ、CI ゲートが落ちる差分の
 push を物理的にブロックする。
 
-`make pbt` (`PROPTEST_CASES=10000 cargo test --features testing`) はリリース直前の深掘り PBT 用。
+PBT は 3 段の予算で同じ proptest ブロックを繰り返し打つ:
+
+- `make pbt-quick` (`PROPTEST_CASES=1024`) — PR CI ゲート相当、ローカル最短ループ
+- `make pbt` (`PROPTEST_CASES=10000`) — main push 時の `pbt-deep` job 相当、夜間 / リリース前に手動
+- `make pbt-deep` (`PROPTEST_CASES=100000`) — リリース前ソーク。CI には載せない
 
 `make e2e` (`tests/e2e_heavy.rs`, `--test-threads=1`) は実 `ptuf` を subprocess で連続 spawn し、
 fd / tempfile リーク・8 MiB stdin 境界・並列 hook と shared audit JSONL・4 層 config フル統合の
