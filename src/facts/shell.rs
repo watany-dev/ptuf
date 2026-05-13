@@ -1541,9 +1541,11 @@ mod tests {
         }
 
         // testing.md L48-49: heredoc body lives inside a single
-        // `Redirect` with op `Heredoc`. The body word must not contain
-        // the terminator literal (otherwise the heredoc never closes,
-        // which would be a parser bug).
+        // `Redirect` with op `Heredoc`. No body line may equal the
+        // terminator (after stripping leading tabs for `<<-TAG`) — that
+        // would mean the parser failed to close the heredoc. Substring
+        // matches like `EOFa` are legitimate body content and must not
+        // trigger this assertion.
         #[test]
         fn pbt_heredoc_body_is_one_redirect((cmd, tag) in bash_heredoc()) {
             let b = parse(&cmd);
@@ -1558,8 +1560,10 @@ mod tests {
             prop_assert!(!heredocs.is_empty());
             for r in heredocs {
                 prop_assert!(
-                    !r.target.contains(tag),
-                    "heredoc body still contains terminator {tag:?}: {:?}",
+                    !r.target
+                        .lines()
+                        .any(|l| l.trim_start_matches('\t') == tag),
+                    "heredoc body contains a line matching terminator {tag:?}: {:?}",
                     r.target
                 );
             }
