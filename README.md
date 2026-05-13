@@ -67,16 +67,29 @@ Decision: allow
 
 ## Install
 
-```bash
-# Prebuilt binary (fastest — no Rust toolchain required)
-cargo binstall ptuf
+Prebuilt binary, no Rust toolchain required. Pin `PTUF_VERSION` so
+CI / Docker builds are reproducible.
 
-# Or build from source via crates.io (requires Rust 1.93+)
-cargo install ptuf
+```bash
+# Linux / macOS
+PTUF_VERSION=v0.1.0
+curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
 ```
 
-For pinned releases with checksum + GitHub artifact attestation
-verification, see [`docs/install.md`](docs/install.md).
+```powershell
+# Windows (PowerShell)
+$env:PTUF_VERSION = "v0.1.0"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/download/$env:PTUF_VERSION/ptuf-installer.ps1 | iex"
+```
+
+The installer drops `ptuf` into `$CARGO_HOME/bin` (default
+`~/.cargo/bin`) — already on PATH if you use Rust, otherwise add that
+directory to PATH.
+
+For checksum + GitHub artifact attestation verification (recommended
+for pinned deployments), see [`docs/install.md`](docs/install.md).
+Rust users can alternatively run `cargo binstall ptuf` (prebuilt) or
+`cargo install ptuf` (build from source, Rust 1.93+).
 
 Once installed, `ptuf update` upgrades the binary in place — it
 auto-detects whether the current binary came from `cargo install` or
