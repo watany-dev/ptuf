@@ -14,24 +14,30 @@ use crate::facts::shell::Argv;
     reason = "static pattern literal validated by tests"
 )]
 pub static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
-    // `(?i)` defends case-insensitive filesystems and `.ENV`/`.SSH` variants.
-    // The PEM header sub-pattern is wrapped in `(?-i)` to honour RFC 7468's
-    // uppercase requirement. The dotenv anchor includes glob metacharacters
-    // (`*`, `?`, `[`, `]`) so literal-glob argv tokens are caught.
+    // ASCII case-insensitive matching is scoped to each literal path
+    // fragment via `(?i-u:…)` so case-variant filesystems still classify.
+    // The `-u` selects ASCII case folding so the regex compiles without
+    // the optional `unicode-case` feature (kept disabled per `Cargo.toml`).
+    // Surrounding `\s`/`\b`/`\S` stay Unicode-aware so the regex matches
+    // only valid UTF-8 and Unicode whitespace still anchors token
+    // boundaries. The PEM header branch is naturally case-sensitive,
+    // honouring RFC 7468's uppercase requirement. The dotenv anchor
+    // includes glob metacharacters (`*`, `?`, `[`, `]`) so literal-glob
+    // argv tokens are caught.
     Regex::new(concat!(
-        r"(?ix)",
+        r"(?x)",
         r"(?:",
-        r"(?:~|\$HOME|\$\{HOME\})/\.ssh(?:/|\b)",
-        r"|(?:~|\$HOME|\$\{HOME\})/\.aws(?:/|\b)",
-        r"|(?:~|\$HOME|\$\{HOME\})/\.config/gcloud(?:/|\b)",
-        r"|(?:~|\$HOME|\$\{HOME\})/\.kube/config\b",
-        r"|(?:~|\$HOME|\$\{HOME\})/\.docker/config\.json\b",
-        r"|\bid_(?:rsa|ed25519|ecdsa)\b",
-        r"|(?:^|/|\s|[*?\[\]=])\.env(?:\.[A-Za-z0-9_-]+)?\b",
-        r"|\b\.npmrc\b",
-        r"|\b\.pypirc\b",
-        r"|\S+\.tfstate\b",
-        r"|(?-i:-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----)",
+        r"(?:~|\$HOME|\$\{HOME\})/(?i-u:\.ssh)(?:/|\b)",
+        r"|(?:~|\$HOME|\$\{HOME\})/(?i-u:\.aws)(?:/|\b)",
+        r"|(?:~|\$HOME|\$\{HOME\})/(?i-u:\.config/gcloud)(?:/|\b)",
+        r"|(?:~|\$HOME|\$\{HOME\})/(?i-u:\.kube/config)\b",
+        r"|(?:~|\$HOME|\$\{HOME\})/(?i-u:\.docker/config\.json)\b",
+        r"|\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b",
+        r"|(?:^|/|\s|[*?\[\]=])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
+        r"|\b(?i-u:\.npmrc)\b",
+        r"|\b(?i-u:\.pypirc)\b",
+        r"|\S+(?i-u:\.tfstate)\b",
+        r"|-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----",
         r")",
     ))
     .expect("SENSITIVE_PATH regex")

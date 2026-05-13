@@ -82,29 +82,34 @@ fn build(pat: &str) -> Regex {
     Regex::new(pat).expect("sensitive variant regex")
 }
 
-// `(?i)` defends case-insensitive filesystems (macOS APFS, Windows NTFS)
-// where `.ENV`/`.Ssh` would otherwise bypass detection. PEM_BLOB stays
-// case-sensitive because RFC 7468 mandates uppercase header labels.
+// `(?i-u:…)` scopes ASCII case-insensitive matching to literal path
+// fragments so `.ENV`/`.Ssh` on case-insensitive filesystems (macOS APFS,
+// Windows NTFS) still classify. The `-u` selects ASCII case folding so
+// the regex compiles without the optional `unicode-case` feature (kept
+// disabled per `Cargo.toml [dependencies] regex` to keep the binary
+// minimal). Surrounding `\s`/`\b`/`\S` stay Unicode-aware. PEM_BLOB
+// remains case-sensitive because RFC 7468 mandates uppercase header
+// labels.
 static SSH_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?i)(?:^|[\s])(?:~|\$HOME|\$\{HOME\})/\.ssh(?:/|$|\b)"));
+    LazyLock::new(|| build(r"(?:^|\s)(?:~|\$HOME|\$\{HOME\})/(?i-u:\.ssh)(?:/|$|\b)"));
 static AWS_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?i)(?:^|[\s])(?:~|\$HOME|\$\{HOME\})/\.aws(?:/|$|\b)"));
+    LazyLock::new(|| build(r"(?:^|\s)(?:~|\$HOME|\$\{HOME\})/(?i-u:\.aws)(?:/|$|\b)"));
 static GCLOUD_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?i)(?:^|[\s])(?:~|\$HOME|\$\{HOME\})/\.config/gcloud(?:/|$|\b)"));
+    LazyLock::new(|| build(r"(?:^|\s)(?:~|\$HOME|\$\{HOME\})/(?i-u:\.config/gcloud)(?:/|$|\b)"));
 static KUBE_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?i)(?:~|\$HOME|\$\{HOME\})/\.kube/config\b"));
+    LazyLock::new(|| build(r"(?:~|\$HOME|\$\{HOME\})/(?i-u:\.kube/config)\b"));
 static DOCKER_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?i)(?:~|\$HOME|\$\{HOME\})/\.docker/config\.json\b"));
+    LazyLock::new(|| build(r"(?:~|\$HOME|\$\{HOME\})/(?i-u:\.docker/config\.json)\b"));
 static PRIVATE_KEY_FILE: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?i)\bid_(?:rsa|ed25519|ecdsa)\b"));
+    LazyLock::new(|| build(r"\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b"));
 // Anchor includes glob metacharacters and `=` so `cat *.env`,
 // `cp ?.env`, `rm [abc].env`, and `dd if=.env`/`--env-file=.env` style
 // flag values are caught at the token boundary.
 static DOTENV: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?i)(?:^|/|\s|[*?\[\]=])\.env(?:\.[A-Za-z0-9_-]+)?\b"));
-static NPMRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i)\.npmrc\b"));
-static PYPIRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i)\.pypirc\b"));
-static TFSTATE: LazyLock<Regex> = LazyLock::new(|| build(r"(?i)\S+\.tfstate\b"));
+    LazyLock::new(|| build(r"(?:^|/|\s|[*?\[\]=])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b"));
+static NPMRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i-u:\.npmrc)\b"));
+static PYPIRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i-u:\.pypirc)\b"));
+static TFSTATE: LazyLock<Regex> = LazyLock::new(|| build(r"\S+(?i-u:\.tfstate)\b"));
 static PEM_BLOB: LazyLock<Regex> =
     LazyLock::new(|| build(r"-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----"));
 
@@ -144,6 +149,25 @@ mod tests {
 
     fn kinds(s: &str) -> Vec<SensitiveKind> {
         classify(s).into_iter().map(|m| m.kind).collect()
+    }
+
+    #[test]
+    fn all_variant_regexes_compile() {
+        for re in [
+            &SSH_DIR,
+            &AWS_DIR,
+            &GCLOUD_DIR,
+            &KUBE_CONFIG,
+            &DOCKER_CONFIG,
+            &PRIVATE_KEY_FILE,
+            &DOTENV,
+            &NPMRC,
+            &PYPIRC,
+            &TFSTATE,
+            &PEM_BLOB,
+        ] {
+            LazyLock::force(re);
+        }
     }
 
     #[test]
