@@ -1241,4 +1241,121 @@ rules:
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn run_hook_copilot_adapter_rejects_oversize_stdin_payload() {
+        // E1: the 8 MiB ceiling must apply uniformly across agent
+        // adapters. Copilot keeps fail-closed semantics on exit 0 with a
+        // bare envelope (no `hookSpecificOutput` wrapper), per
+        // `decision_exit_code`.
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let payload = vec![b' '; MAX_HOOK_STDIN_BYTES as usize + 1];
+        let code = run(
+            GlobalFlags::default(),
+            Command::HookPreToolUse {
+                agent: HookAgent::Copilot,
+            },
+            payload.as_slice(),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "Copilot deny must exit 0 to stay fail-closed");
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}",
+        );
+        assert!(
+            !out_s.contains("hookSpecificOutput"),
+            "Copilot must emit a bare envelope: {out_s}",
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(
+            err_s.contains("hook payload exceeds 8388608 bytes"),
+            "stderr: {err_s}",
+        );
+        assert!(err_s.contains(INVALID_PAYLOAD_RULE), "stderr: {err_s}");
+    }
+
+    #[test]
+    fn run_hook_kiro_adapter_rejects_empty_stdin_payload() {
+        // E2: KiroInputError::Empty must surface as a fail-closed deny
+        // through the CLI layer (parser-level coverage only — until
+        // now — left this transition untested). Kiro emits no JSON
+        // envelope (`render_hook_response` returns None); deny surfaces
+        // as exit 2 + stderr reason only.
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            Command::HookPreToolUse {
+                agent: HookAgent::Kiro,
+            },
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 2);
+        assert!(
+            out.is_empty(),
+            "Kiro must not write stdout: {}",
+            String::from_utf8_lossy(&out),
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains(INVALID_PAYLOAD_RULE), "stderr: {err_s}");
+    }
+
+    use crate::testing::proptest::arbitrary_utf8_bytes;
+    use proptest::prelude::*;
+
+    proptest! {
+        // P5: for any byte slice, the ClaudeCode hook entry point either
+        // exits 0 / 1 with a valid engine outcome or exits 2 with an
+        // invalid-payload deny envelope. It must never panic — the
+        // adapter is the trust boundary between an external agent and
+        // the engine.
+        #[test]
+        fn pbt_run_hook_fails_closed_for_arbitrary_stdin(
+            bytes in arbitrary_utf8_bytes(),
+        ) {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = run(
+                GlobalFlags::default(),
+                Command::HookPreToolUse {
+                    agent: HookAgent::ClaudeCode,
+                },
+                bytes.as_slice(),
+                &mut out,
+                &mut err,
+            );
+            let out_s = String::from_utf8_lossy(&out);
+            let err_s = String::from_utf8_lossy(&err);
+            match code {
+                0 | 1 => {
+                    // Engine ran to completion. Allow or non-deny outcome:
+                    // stdout is either empty (allow) or a hook envelope
+                    // without invalid-payload rule.
+                    prop_assert!(
+                        !err_s.contains(INVALID_PAYLOAD_RULE),
+                        "exit {code} but stderr mentions invalid payload: {err_s}",
+                    );
+                },
+                2 => {
+                    // Fail-closed: every deny envelope carries the
+                    // hookSpecificOutput.permissionDecision marker so
+                    // downstream agents can parse it without ambiguity.
+                    prop_assert!(
+                        out_s.contains("\"permissionDecision\":\"deny\""),
+                        "exit 2 must produce a deny envelope: stdout={out_s} stderr={err_s}",
+                    );
+                },
+                other => prop_assert!(
+                    false,
+                    "unexpected exit code {other}: stdout={out_s} stderr={err_s}",
+                ),
+            }
+        }
+    }
 }

@@ -372,5 +372,53 @@ mod tests {
             let from_slice: Vec<&str> = RULES.iter().map(|r| r.id()).collect();
             prop_assert_eq!(from_iter, from_slice);
         }
+
+        // Per-rule (not aggregate): when any built-in rule fires on any
+        // input, the emitted decision's rule_id must match that rule's
+        // own id. The cross-cutting `pbt_decision_rule_ids_are_known`
+        // above only verifies membership in the static slice; this one
+        // pins identity per rule so a future copy-paste bug in
+        // rule_id strings is caught at the source.
+        #[test]
+        fn pbt_per_rule_decision_rule_id_matches_self_id(
+            input in richer_hook_input(),
+        ) {
+            let facts = crate::facts::extract(&input);
+            for rule in RULES {
+                if let Some(d) = rule.evaluate(&facts, &input) {
+                    prop_assert_eq!(
+                        d.rule_id(),
+                        Some(rule.id()),
+                        "rule {} emitted decision with mismatched rule_id: {:?}",
+                        rule.id(),
+                        d.rule_id(),
+                    );
+                }
+            }
+        }
+
+        // Per-rule: when a rule fires, the variant of the returned
+        // Decision must match the rule's `default_decision()`. Catches
+        // a rule that declares e.g. `default_decision = Deny` but emits
+        // `Decision::Ask` (which engine config overlays would then
+        // mis-promote).
+        #[test]
+        fn pbt_per_rule_decision_kind_matches_default(
+            input in richer_hook_input(),
+        ) {
+            let facts = crate::facts::extract(&input);
+            for rule in RULES {
+                if let Some(d) = rule.evaluate(&facts, &input) {
+                    prop_assert_eq!(
+                        d.kind(),
+                        rule.default_decision(),
+                        "rule {} returned {:?} but declares default_decision {:?}",
+                        rule.id(),
+                        d.kind(),
+                        rule.default_decision(),
+                    );
+                }
+            }
+        }
     }
 }

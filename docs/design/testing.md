@@ -70,6 +70,36 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
   `d` の variant は `default_decision()` と整合
 - 否定空間 (該当パターンを含まない入力) は `None` を返す
 
+最後の 2 件 (`rule_id == self.id`, `kind == default_decision`) は
+`src/rules/mod.rs` の `proptest!` 内で `for rule in RULES` の **横断版**
+として再表現する (`pbt_per_rule_decision_rule_id_matches_self_id`,
+`pbt_per_rule_decision_kind_matches_default`)。これにより将来 `RULES`
+slice に built-in rule が追加された際の自動カバーとして機能する。
+
+### Adapter 入口の fail-closed (全 agent)
+
+ClaudeCode / Copilot / Kiro の各 adapter parser と CLI hook entry point
+は、外部 agent との信頼境界として以下の不変を持つ。
+
+- `arbitrary_utf8_bytes()` から生成した任意のバイト列を `run` 関数に
+  ClaudeCode adapter として流すと、必ず exit `0`/`1`/`2` のいずれかを
+  返し panic しない。exit `2` の場合は stdout に
+  `"permissionDecision":"deny"` を含む (`src/cli/run.rs` の
+  `pbt_run_hook_fails_closed_for_arbitrary_stdin`)
+- `copilot_input::parse` / `kiro_input::parse` は任意の `&str` に対し
+  `Ok` / `Err(ParseProblem | KiroInputError)` を返し panic しない
+  (`pbt_parse_is_total_on_arbitrary_utf8`)
+- 非 object / `toolName`/`tool_name` 欠落 / Kiro の場合は
+  `hook_event_name != "preToolUse"` の各異常 envelope は対応する
+  parser error variant を返す (`pbt_invalid_envelope_returns_err`)
+- 例外として、Copilot の 8 MiB 超 stdin は adapter 経由でも exit `0` +
+  裸 envelope (no `hookSpecificOutput`) で fail-closed deny になり、
+  Kiro の空 stdin は exit `2` + stdout 空 + stderr に
+  `INVALID_PAYLOAD_RULE` で fail-closed deny になる
+  (`src/cli/run.rs` の `run_hook_copilot_adapter_rejects_oversize_stdin_payload`,
+  `run_hook_kiro_adapter_rejects_empty_stdin_payload`; CLI 全体を通した
+  end-to-end の example として、上記 PBT を補完する)
+
 ### `audit::redact_strict`
 
 - 冪等律: `redact_strict(redact_strict(s))` == `redact_strict(s)`
