@@ -338,7 +338,7 @@ mod giant_input {
             "policy load failed at N={N}: {}",
             r.stderr_string()
         );
-        assert!(r.elapsed < Duration::from_secs(60), "took {:?}", r.elapsed);
+        assert!(r.elapsed < Duration::from_mins(1), "took {:?}", r.elapsed);
     }
 }
 
@@ -372,7 +372,7 @@ mod concurrent {
         let total = started.elapsed();
         let per = total / SEQ_ITERATIONS as u32;
         assert!(
-            total < Duration::from_secs(120),
+            total < Duration::from_mins(2),
             "{SEQ_ITERATIONS} iters took {total:?} (avg {per:?})"
         );
     }
@@ -453,7 +453,7 @@ mod concurrent {
         });
         let elapsed = started.elapsed();
         assert!(
-            elapsed < Duration::from_secs(120),
+            elapsed < Duration::from_mins(2),
             "concurrent run took {elapsed:?}"
         );
 
