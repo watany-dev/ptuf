@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- `ptuf update` now passes `--locked` to `cargo install` so the
+  transitive dependency graph is pinned to the published `Cargo.lock`
+  rather than re-resolved at install time.
+- `ptuf update --version <older-tag>` is rejected unless `--force` is
+  also given, preventing accidental rollbacks to known-vulnerable
+  releases. Pre-release tags emit an advisory line and skip the guard
+  because they cannot be safely ordered against bare semver.
+
 ## [0.1.0] - 2026-05-10
 
 ### BREAKING

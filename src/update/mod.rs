@@ -238,6 +238,18 @@ fn strip_v_prefix(tag: &str) -> &str {
     tag.strip_prefix('v').unwrap_or(tag)
 }
 
+/// Compare two version strings as `Vec<u64>` of dotted numeric segments.
+/// Returns `None` if either side has a non-numeric / pre-release suffix
+/// (e.g. `0.2.0-rc.1`) — callers should treat `None` as "cannot compare,
+/// skip the guard rather than block legitimate updates".
+fn version_lt(lhs: &str, rhs: &str) -> Option<std::cmp::Ordering> {
+    let parse =
+        |s: &str| -> Option<Vec<u64>> { s.split('.').map(|seg| seg.parse::<u64>().ok()).collect() };
+    let l = parse(lhs)?;
+    let r = parse(rhs)?;
+    Some(l.cmp(&r))
+}
+
 #[derive(Debug)]
 pub struct InstallerCommand {
     pub program: String,
@@ -254,9 +266,14 @@ pub fn build_installer_command(
 ) -> InstallerCommand {
     match strategy {
         Strategy::CargoInstall => {
+            // `--locked` pins transitive deps to the published Cargo.lock so
+            // the binary the user lands on is bit-identical to the audited
+            // release tree. Without it `cargo install` re-resolves the graph,
+            // which a yanked / poisoned transitive could exploit.
             let mut args = vec![
                 "install".to_string(),
                 "ptuf".to_string(),
+                "--locked".to_string(),
                 "--force".to_string(),
             ];
             if pinned {
@@ -360,6 +377,30 @@ where
     if !opts.force && normalised == current {
         let _ = writeln!(stdout, "ptuf is already up to date ({current})");
         return 0;
+    }
+
+    // Downgrade guard: when the user pinned an older tag without `--force`,
+    // refuse rather than silently rolling back. `version_lt` returns None for
+    // pre-release suffixes (e.g. `-rc.1`) — in that case we cannot compare
+    // safely so we skip the guard and emit a single advisory line so the
+    // skip is auditable.
+    if pinned && !opts.force {
+        match version_lt(normalised, current) {
+            Some(std::cmp::Ordering::Less) => {
+                let _ = writeln!(
+                    stderr,
+                    "ptuf update: refusing to downgrade — installed {current} is newer than the requested {normalised}; pass --force to override",
+                );
+                return 1;
+            },
+            Some(_) => {},
+            None => {
+                let _ = writeln!(
+                    stderr,
+                    "ptuf update: could not compare versions ({current} vs {normalised}); skipping downgrade guard",
+                );
+            },
+        }
     }
 
     let (strategy, warning) = select_strategy(spawner, locator);
@@ -529,6 +570,7 @@ mod tests {
             vec![
                 "install".to_string(),
                 "ptuf".to_string(),
+                "--locked".to_string(),
                 "--force".to_string(),
             ],
         );
@@ -542,6 +584,7 @@ mod tests {
             vec![
                 "install".to_string(),
                 "ptuf".to_string(),
+                "--locked".to_string(),
                 "--force".to_string(),
                 "--version".to_string(),
                 "0.3.1".to_string(),
@@ -702,6 +745,7 @@ mod tests {
             vec![
                 "install".to_string(),
                 "ptuf".to_string(),
+                "--locked".to_string(),
                 "--force".to_string(),
             ],
         );
@@ -854,5 +898,86 @@ mod tests {
         assert!(std::error::Error::source(&err).is_some());
         let err = UpdateError::CurlMissing;
         assert!(std::error::Error::source(&err).is_none());
+    }
+
+    #[test]
+    fn version_lt_orders_dotted_numeric_segments() {
+        use std::cmp::Ordering;
+        assert_eq!(version_lt("0.1.0", "0.2.0"), Some(Ordering::Less));
+        assert_eq!(version_lt("0.2.0", "0.2.0"), Some(Ordering::Equal));
+        assert_eq!(version_lt("1.0.0", "0.9.9"), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn version_lt_returns_none_for_prerelease_or_garbage() {
+        assert_eq!(version_lt("0.2.0-rc.1", "0.2.0"), None);
+        assert_eq!(version_lt("0.2.0", "0.2.0-rc.1"), None);
+        assert_eq!(version_lt("nightly", "0.2.0"), None);
+    }
+
+    #[test]
+    fn run_refuses_downgrade_without_force() {
+        // current is `env!("CARGO_PKG_VERSION")`. Pin to v0.0.1 — strictly
+        // older — and verify ptuf refuses without invoking any updater.
+        let spawner = RecordingSpawner::new(vec![]);
+        let locator = system_locator();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let opts = UpdateOptions {
+            check: false,
+            version: Some("v0.0.1".to_string()),
+            force: false,
+        };
+        let code = run_with_platform(opts, &spawner, &locator, Platform::Unix, &mut out, &mut err);
+        assert_eq!(code, 1);
+        assert!(spawner.calls().is_empty(), "no updater must be spawned");
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("refusing to downgrade"), "stderr: {err_s}",);
+        assert!(err_s.contains("--force"), "stderr: {err_s}");
+    }
+
+    #[test]
+    fn run_allows_downgrade_with_force() {
+        let spawner = RecordingSpawner::new(vec![ok("")]);
+        let locator = system_locator();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let opts = UpdateOptions {
+            check: false,
+            version: Some("v0.0.1".to_string()),
+            force: true,
+        };
+        let code = run_with_platform(opts, &spawner, &locator, Platform::Unix, &mut out, &mut err);
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let calls = spawner.calls();
+        assert_eq!(calls.len(), 1, "installer should run with --force");
+        assert_eq!(calls[0].program, "sh");
+    }
+
+    #[test]
+    fn run_skips_downgrade_guard_for_prerelease_with_advisory() {
+        // Pre-release tags can't be ordered against bare semver, so the
+        // guard must skip rather than block — but emit an advisory line so
+        // the skip is auditable.
+        let spawner = RecordingSpawner::new(vec![ok("")]);
+        let locator = system_locator();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let opts = UpdateOptions {
+            check: false,
+            version: Some("v0.0.1-rc.1".to_string()),
+            force: false,
+        };
+        let code = run_with_platform(opts, &spawner, &locator, Platform::Unix, &mut out, &mut err);
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(
+            err_s.contains("could not compare versions"),
+            "stderr: {err_s}",
+        );
+        assert!(
+            err_s.contains("skipping downgrade guard"),
+            "stderr: {err_s}"
+        );
     }
 }

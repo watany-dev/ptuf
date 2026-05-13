@@ -128,9 +128,17 @@ cargo install --path .
 the install path and dispatches to the matching updater:
 
 - if `ptuf` lives under `$CARGO_HOME/bin` (or `~/.cargo/bin`) and `cargo`
-  is on PATH, it runs `cargo install ptuf --force`;
+  is on PATH, it runs `cargo install ptuf --locked --force` (the
+  `--locked` flag pins transitive deps to the published `Cargo.lock` so
+  the installed binary matches the audited release tree);
 - otherwise it pipes the cargo-dist installer (`ptuf-installer.sh` on
   Unix, `ptuf-installer.ps1` on Windows) for the requested release tag.
+
+When `--version` pins an older tag, `ptuf update` refuses by default and
+prints "refusing to downgrade — installed X is newer than the requested
+Y; pass --force to override". Pre-release tags (e.g. `v0.2.0-rc.1`)
+cannot be ordered against bare semver, so the guard is skipped with a
+single advisory line on stderr to keep the skip auditable.
 
 Common flags:
 
@@ -138,7 +146,8 @@ Common flags:
 ptuf update            # upgrade to the latest GitHub release
 ptuf update --check    # only print current vs. latest, no write
 ptuf update --version v0.2.0   # pin to a specific tag
-ptuf update --force    # reinstall even if already up to date
+ptuf update --force    # reinstall even if already up to date (also
+                       # required to roll back to an older tag)
 ```
 
 `ptuf update` shells out to `curl` (for the latest-release lookup) and
