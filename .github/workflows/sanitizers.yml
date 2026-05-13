@@ -1,0 +1,66 @@
+name: Sanitizers
+
+# Weekly AddressSanitizer + LeakSanitizer run on the test suite.
+# Bound to threat-model T-1/T-3/D-1/D-3 in docs/design/threat-model.md.
+#
+# `unsafe_code = "forbid"` rules out our own UB, but transitive crates
+# (regex, serde_yaml_ng's parser tape, libc-adjacent bits inside std)
+# can still leak / OOB. Asan catches use-after-free / OOB / double-free;
+# Lsan catches explicit allocations that survive process exit.
+#
+# Not part of `make check` or PR CI: the asan rebuild of `std` (-Zbuild-std)
+# adds ~5 min on a cold cache. Requires nightly Rust.
+
+on:
+  schedule:
+    # Sunday 05:00 UTC.
+    - cron: "0 5 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  sanitize:
+    name: ${{ matrix.sanitizer }} sanitizer
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, leak]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      # Nightly is required for `-Zsanitizer` and `-Zbuild-std`.
+      # Sanitizer flag stability is a known-nightly-only feature.
+      - uses: dtolnay/rust-toolchain@8f254839b3a8a3eba98c5430f1ab84d8c1ebbcfa # nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: sanitizer-${{ matrix.sanitizer }}
+      - name: Run tests under sanitizer
+        env:
+          # Asan rejects leaks by default. We want the asan run to focus
+          # on memory-safety bugs; explicit leak detection lives in the
+          # separate `leak` matrix cell. `abort_on_error=1` makes any
+          # finding fatal even when running under nextest.
+          ASAN_OPTIONS: "abort_on_error=1:detect_leaks=0"
+          LSAN_OPTIONS: "exitcode=1"
+          RUSTFLAGS: "-Zsanitizer=${{ matrix.sanitizer }} -Cforce-frame-pointers=yes"
+          RUSTDOCFLAGS: "-Zsanitizer=${{ matrix.sanitizer }}"
+        run: |
+          cargo +nightly test \
+            --target x86_64-unknown-linux-gnu \
+            --features testing \
+            -Z build-std \
+            -- --test-threads=1

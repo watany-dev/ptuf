@@ -1,0 +1,52 @@
+name: Mutation testing
+
+# Weekly mutation testing on security-critical modules. Surviving
+# mutants signal test gaps: the suite did not detect an injected
+# behaviour change. Bound to threat-model entries T-3 (redaction),
+# D-2/D-3 (engine resource limits) in docs/design/threat-model.md.
+#
+# Not part of `make check` or PR CI: a full run takes ~30 min and we
+# do not want PR latency to depend on it. Surviving-mutants triage is
+# a weekly maintenance task tracked by the resulting artifact.
+
+on:
+  schedule:
+    # Monday 04:00 UTC. Off-peak so the runner is available.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mutants:
+    name: cargo-mutants (engine + plugin + redaction)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      # Pin must match CARGO_MUTANTS_VERSION in the Makefile.
+      - uses: taiki-e/install-action@ec28e287910af896fd98e04056d31fa68607e7ad # v2.77.4
+        with:
+          tool: cargo-mutants@27.0.0
+      - name: Run mutation tests
+        run: make mutants
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-out
+          path: mutants.out/
+          if-no-files-found: ignore
+          retention-days: 30

@@ -1,0 +1,52 @@
+name: Reproducible build
+
+# Verifies that two consecutive `cargo build --release` invocations
+# produce byte-identical binaries under SOURCE_DATE_EPOCH pinning and
+# `--remap-path-prefix`. If they differ, the toolchain is leaking
+# build-host state (timestamps, paths, hostname, randomized symbols).
+#
+# Bound to threat-model entry E-4 in docs/design/threat-model.md:
+# binary substitution resistance depends on a reproducible canonical
+# build that downstream verifiers can re-derive.
+#
+# Runs:
+#   - on every push to main (cheap regression gate)
+#   - weekly Wednesday 03:00 UTC (catches toolchain drift)
+#   - workflow_dispatch for manual pre-release verification
+#
+# Not part of `make check` or PR CI: a release build with locked deps
+# takes ~3 min, and we only need to catch reproducibility drift, not
+# every PR commit. Linux-only.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Two-build SHA256 equality
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # We deliberately do NOT use rust-cache here: a warm incremental
+      # cache can mask non-determinism caused by build-graph state.
+      # Both builds inside the script use isolated CARGO_TARGET_DIRs.
+      - name: Verify reproducible build
+        run: make verify-reproducible
