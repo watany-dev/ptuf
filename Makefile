@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check check clean coverage deny doc pbt tools install-hooks
+.PHONY: build test lint fmt fmt-check check clean coverage deny doc e2e pbt tools install-hooks
 
 # Keep these aligned with .github/workflows/ci.yml:
 # - CARGO_DENY_VERSION must match the cargo-deny pinned in
@@ -54,6 +54,16 @@ doc:
 PBT_CASES ?= 10000
 pbt:
 	PROPTEST_CASES=$(PBT_CASES) cargo test --locked --features testing
+
+# Heavy E2E tests reproducing real-world ptuf invocation patterns
+# (fd / tempfile leak checks, 8 MiB stdin boundary, sequential and
+# parallel hook spawns, 4-layer config + plugin + audit end-to-end).
+# Not part of `make check` because each axis takes minutes; intended
+# for nightly CI and pre-release validation. `--test-threads=1` is
+# required: the fd-leak axis and the shared-audit axis interfere if
+# run in parallel.
+e2e:
+	cargo test --locked --features testing --test e2e_heavy -- --ignored --test-threads=1
 
 tools:
 ifeq ($(SKIP_TOOL_INSTALL),)
