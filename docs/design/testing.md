@@ -85,6 +85,13 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
   `proptest-regressions/` に固定化される。
 - **深掘り**: `make pbt` (デフォルト 10000 ケース、`PBT_CASES=N` で上書き可)
   をローカル / 夜間 / リリース直前に手動実行。
+- **重 E2E**: `make e2e` (`tests/e2e_heavy.rs`, `--test-threads=1`) は
+  実 `ptuf` バイナリを subprocess で連続 spawn し、fd / tempfile リーク
+  検出 (200 回 spawn 前後の `/proc/self/fd` 差分)、8 MiB stdin 境界、
+  10 worker × 100 並列 hook + 単一 audit JSONL の flock 整合性、
+  `/etc/ptuf` から project local まで 4 層 + plugin + audit を tempdir に
+  組み上げた end-to-end の計 15 ケースを `#[ignore]` で隔離する。
+  `make check` には含めず、nightly / リリース直前に手動実行する。
 - **再現性**: `proptest-regressions/` は git 管理。シュリンクで見つかった反例は
   全員のローカルと CI で同じシードで再現される。
 - **依存方針**: テスト用クレート (`proptest`, `tempfile`) は

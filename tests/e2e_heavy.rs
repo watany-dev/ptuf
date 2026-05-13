@@ -7,9 +7,12 @@
 //! Four axes:
 //! - `leak`            — fd / tempfile / child-process residue
 //! - `giant_input`     — 8 MiB stdin, 1000-stage pipeline, oversized configs
-//! - `concurrent`      — sequential 1000 and parallel 10×100 invocations
+//! - `concurrent`      — sequential 200 and parallel 10×100 invocations
 //! - `full_config_stack` — 4-layer config + plugin + audit end-to-end
 
+// Some inner-module helpers (e.g. `leak::ptuf_tempfile_names`) live
+// outside `#[test]` bodies and so fall outside `clippy.toml`'s
+// `allow-*-in-tests`. Relax explicitly.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod common;
@@ -24,6 +27,7 @@ const DENY_PAYLOAD: &[u8] = br#"{"tool_name":"Bash","tool_input":{"command":"rm 
 #[cfg(target_os = "linux")]
 mod leak {
     use super::common::{SpawnConfig, open_fd_count, spawn};
+    use std::collections::BTreeSet;
 
     const ITERATIONS: usize = 200;
 
@@ -34,6 +38,17 @@ mod leak {
             cwd: None,
             envs: &[],
         }
+    }
+
+    fn ptuf_tempfile_names() -> BTreeSet<String> {
+        std::fs::read_dir(std::env::temp_dir())
+            .expect("read temp_dir")
+            .filter_map(Result::ok)
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                name.starts_with("ptuf").then_some(name)
+            })
+            .collect()
     }
 
     #[test]
@@ -65,38 +80,12 @@ mod leak {
     #[test]
     #[ignore = "heavy E2E; run via `make e2e`"]
     fn repeated_hook_invocations_do_not_create_orphan_tempfiles() {
-        let tmp = std::env::temp_dir();
-        let before: std::collections::BTreeSet<_> = std::fs::read_dir(&tmp)
-            .expect("read temp_dir")
-            .filter_map(Result::ok)
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if name.starts_with("ptuf") {
-                    Some(name)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
+        let before = ptuf_tempfile_names();
         for _ in 0..ITERATIONS {
             let r = spawn(&allow_cfg());
             assert_eq!(r.code, 0);
         }
-
-        let after: std::collections::BTreeSet<_> = std::fs::read_dir(&tmp)
-            .expect("read temp_dir")
-            .filter_map(Result::ok)
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if name.starts_with("ptuf") {
-                    Some(name)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
+        let after = ptuf_tempfile_names();
         let leaked: Vec<_> = after.difference(&before).collect();
         assert!(
             leaked.is_empty(),
@@ -107,14 +96,14 @@ mod leak {
     #[test]
     #[ignore = "heavy E2E; run via `make e2e`"]
     fn audit_writer_releases_file_handle_after_each_spawn() {
-        use super::common::{LayerYaml, as_env_refs, envs_for, full_stack};
+        use super::common::{LayerYaml, as_env_refs, enforce_audit_yaml, envs_for, full_stack};
 
         let fix = full_stack(LayerYaml::empty());
-        let yaml = format!(
-            "version: 1\nmode: enforce\naudit:\n  path: {audit}\n  enabled: true\n  includeAllowed: false\n  includeDenied: true\n",
-            audit = fix.audit_path.display()
-        );
-        std::fs::write(fix.repo_root.join(".ptuf.yaml"), yaml).expect("write project yaml");
+        std::fs::write(
+            fix.repo_root.join(".ptuf.yaml"),
+            enforce_audit_yaml(&fix.audit_path),
+        )
+        .expect("write project yaml");
 
         let envs = envs_for(&fix);
         let env_refs = as_env_refs(&envs);
@@ -192,9 +181,8 @@ mod giant_input {
     #[test]
     #[ignore = "heavy E2E; run via `make e2e`"]
     fn hook_accepts_stdin_at_exactly_8mb() {
-        let body = br#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
         let mut payload = Vec::with_capacity(MAX_STDIN);
-        payload.extend_from_slice(body);
+        payload.extend_from_slice(super::ALLOW_PAYLOAD);
         payload.resize(MAX_STDIN, b' ');
         assert_eq!(payload.len(), MAX_STDIN);
 
@@ -359,7 +347,9 @@ mod giant_input {
 // ---------------------------------------------------------------------
 
 mod concurrent {
-    use super::common::{LayerYaml, SpawnConfig, as_env_refs, envs_for, full_stack, spawn};
+    use super::common::{
+        LayerYaml, SpawnConfig, as_env_refs, enforce_audit_yaml, envs_for, full_stack, spawn,
+    };
     use std::time::Duration;
 
     const SEQ_ITERATIONS: usize = 200;
@@ -368,7 +358,7 @@ mod concurrent {
 
     #[test]
     #[ignore = "heavy E2E; run via `make e2e`"]
-    fn sequential_thousand_invocations_complete_under_time_budget() {
+    fn sequential_invocations_complete_under_time_budget() {
         let started = std::time::Instant::now();
         for i in 0..SEQ_ITERATIONS {
             let r = spawn(&SpawnConfig {
@@ -425,16 +415,15 @@ mod concurrent {
     #[ignore = "heavy E2E; run via `make e2e`"]
     fn concurrent_writers_produce_well_formed_jsonl_lines() {
         let fix = full_stack(LayerYaml::empty());
-        let yaml = format!(
-            "version: 1\nmode: enforce\naudit:\n  path: {audit}\n  enabled: true\n  includeAllowed: false\n  includeDenied: true\n",
-            audit = fix.audit_path.display()
-        );
-        std::fs::write(fix.repo_root.join(".ptuf.yaml"), yaml).expect("write project yaml");
+        std::fs::write(
+            fix.repo_root.join(".ptuf.yaml"),
+            enforce_audit_yaml(&fix.audit_path),
+        )
+        .expect("write project yaml");
         let envs = envs_for(&fix);
         let env_refs = as_env_refs(&envs);
-        let cwd = fix.repo_root.clone();
-        let env_refs_ref = &env_refs;
-        let cwd_ref = &cwd;
+        let cwd: &std::path::Path = &fix.repo_root;
+        let env_refs: &[_] = &env_refs;
 
         let started = std::time::Instant::now();
         std::thread::scope(|s| {
@@ -445,8 +434,8 @@ mod concurrent {
                             let r = spawn(&SpawnConfig {
                                 args: &["hook", "claude-code"],
                                 stdin: super::DENY_PAYLOAD,
-                                cwd: Some(cwd_ref),
-                                envs: env_refs_ref,
+                                cwd: Some(cwd),
+                                envs: env_refs,
                             });
                             assert_eq!(
                                 r.code,
@@ -513,7 +502,9 @@ mod concurrent {
 // ---------------------------------------------------------------------
 
 mod full_config_stack {
-    use super::common::{LayerYaml, SpawnConfig, as_env_refs, envs_for, full_stack, spawn};
+    use super::common::{
+        LayerYaml, SpawnConfig, as_env_refs, enforce_audit_yaml, envs_for, full_stack, spawn,
+    };
 
     /// System: mode: monitor.
     /// User: empty.
@@ -604,10 +595,7 @@ mod full_config_stack {
         let custom_audit = fix.root.path().join("custom-audit.jsonl");
         std::fs::write(
             fix.repo_root.join(".ptuf.yaml"),
-            format!(
-                "version: 1\nmode: enforce\naudit:\n  path: {audit}\n  enabled: true\n  includeAllowed: false\n  includeDenied: true\n",
-                audit = custom_audit.display()
-            ),
+            enforce_audit_yaml(&custom_audit),
         )
         .expect("project yaml");
 

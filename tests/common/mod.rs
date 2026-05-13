@@ -34,17 +34,6 @@ pub struct SpawnConfig<'a> {
     pub envs: &'a [(&'a str, &'a OsStr)],
 }
 
-impl<'a> SpawnConfig<'a> {
-    pub fn new(args: &'a [&'a str]) -> Self {
-        Self {
-            args,
-            stdin: &[],
-            cwd: None,
-            envs: &[],
-        }
-    }
-}
-
 pub struct SpawnOutcome {
     pub code: i32,
     pub stdout: Vec<u8>,
@@ -65,9 +54,12 @@ pub fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ptuf"))
 }
 
-/// Spawn ptuf. stdin is written from a worker thread to avoid
-/// deadlock when the payload exceeds the OS pipe buffer (Linux
-/// default 64 KiB; an 8 MiB stdin would otherwise block on write).
+/// Spawn ptuf. stdin is written from a scoped worker thread to avoid
+/// deadlock when the payload exceeds the OS pipe buffer (Linux default
+/// 64 KiB; an 8 MiB stdin would otherwise block on write). The scoped
+/// thread borrows `cfg.stdin` directly so the 8 MiB ceiling case does
+/// not double-allocate. When stdin is empty the writer thread is
+/// skipped entirely.
 pub fn spawn(cfg: &SpawnConfig) -> SpawnOutcome {
     let mut cmd = binary();
     cmd.args(cfg.args)
@@ -83,14 +75,24 @@ pub fn spawn(cfg: &SpawnConfig) -> SpawnOutcome {
 
     let started = Instant::now();
     let mut child = cmd.spawn().expect("spawn ptuf");
-    let mut sin = child.stdin.take().expect("child stdin");
-    let payload = cfg.stdin.to_vec();
-    let writer = std::thread::spawn(move || {
-        let _ = sin.write_all(&payload);
+    let sin = child.stdin.take().expect("child stdin");
+
+    let output = if cfg.stdin.is_empty() {
         drop(sin);
-    });
-    let output = child.wait_with_output().expect("wait_with_output");
-    let _ = writer.join();
+        child.wait_with_output().expect("wait_with_output")
+    } else {
+        std::thread::scope(|s| {
+            let stdin_buf = cfg.stdin;
+            let writer = s.spawn(move || {
+                let mut sin = sin;
+                let _ = sin.write_all(stdin_buf);
+            });
+            let out = child.wait_with_output().expect("wait_with_output");
+            let _ = writer.join();
+            out
+        })
+    };
+
     SpawnOutcome {
         code: output.status.code().expect("exit code"),
         stdout: output.stdout,
@@ -99,14 +101,6 @@ pub fn spawn(cfg: &SpawnConfig) -> SpawnOutcome {
     }
 }
 
-/// Convenience wrapper matching the legacy `(i32, String, String)`
-/// shape used by `tests/cli_smoke.rs::run`.
-pub fn spawn_string(cfg: &SpawnConfig) -> (i32, String, String) {
-    let out = spawn(cfg);
-    (out.code, out.stdout_string(), out.stderr_string())
-}
-
-/// Per-layer YAML payloads. `None` means "no file for this layer".
 pub struct LayerYaml {
     pub system: Option<String>,
     pub user: Option<String>,
@@ -127,9 +121,6 @@ impl LayerYaml {
     }
 }
 
-/// Tempdir-rooted sandbox for the 4-layer config stack
-/// (`PTUF_ETC_DIR` / `PTUF_CONFIG_DIR` / project / project_local) plus
-/// plugins and audit output. `TempDir` cleans the whole tree on drop.
 pub struct FullStackFixture {
     pub root: TempDir,
     pub etc_dir: PathBuf,
@@ -179,9 +170,16 @@ pub fn full_stack(layers: LayerYaml) -> FullStackFixture {
     }
 }
 
-/// Env var tuples that fully sandbox ptuf away from the host
-/// `/etc/ptuf`, `~/.config/ptuf`, and `~/.local/share/ptuf`. Pass to
-/// `SpawnConfig::envs` via the `as_ref_pairs` helper.
+/// Project-layer YAML that enables `enforce` mode and routes audit
+/// output to `audit_path` with `includeDenied`. Used by every test
+/// that needs to inspect the audit file after running deny payloads.
+pub fn enforce_audit_yaml(audit_path: &Path) -> String {
+    format!(
+        "version: 1\nmode: enforce\naudit:\n  path: {audit}\n  enabled: true\n  includeAllowed: false\n  includeDenied: true\n",
+        audit = audit_path.display()
+    )
+}
+
 pub fn envs_for(fix: &FullStackFixture) -> Vec<(&'static str, OsString)> {
     vec![
         ("PTUF_ETC_DIR", fix.etc_dir.as_os_str().to_os_string()),
@@ -194,14 +192,13 @@ pub fn envs_for(fix: &FullStackFixture) -> Vec<(&'static str, OsString)> {
     ]
 }
 
-/// Convert `&[(&str, OsString)]` to `&[(&str, &OsStr)]` for
-/// `SpawnConfig::envs`. The intermediate `Vec` keeps the `OsStr`
-/// borrows alive for the duration of the spawn call.
+/// `SpawnConfig::envs` takes `&[(&str, &OsStr)]`; this borrows from
+/// the owned `OsString` vec returned by `envs_for` to satisfy that
+/// lifetime without cloning the values again.
 pub fn as_env_refs<'a>(envs: &'a [(&'static str, OsString)]) -> Vec<(&'a str, &'a OsStr)> {
     envs.iter().map(|(k, v)| (*k, v.as_os_str())).collect()
 }
 
-/// Count entries in `/proc/self/fd`. Linux-only.
 #[cfg(target_os = "linux")]
 pub fn open_fd_count() -> std::io::Result<usize> {
     let mut n = 0usize;

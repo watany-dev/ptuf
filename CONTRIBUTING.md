@@ -39,6 +39,18 @@ it without prior discussion.
 `make pbt` runs every `proptest!` block at 10 000 cases (`PROPTEST_CASES`
 override available). Run it before tagging a release.
 
+### Heavy end-to-end tests
+
+`make e2e` runs the `#[ignore]`d subprocess suite in
+`tests/e2e_heavy.rs`, exercising real-world ptuf invocation patterns:
+fd / tempfile leak detection over 200 spawns, the 8 MiB stdin boundary,
+sequential and parallel hook spawns sharing one audit file under
+`flock`, and a full 4-layer config + plugin + audit end-to-end build
+inside a tempdir. It is excluded from `make check` (each axis takes
+minutes) and intended for nightly CI or pre-release validation. The
+target passes `--test-threads=1`; the fd-leak and shared-audit axes
+interfere when run in parallel.
+
 ## Commit & PR Hygiene
 
 - One logical change per PR. Mechanical refactors (Tidy First) go in their
