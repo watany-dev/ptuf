@@ -325,4 +325,45 @@ mod tests {
             Some("x"),
         );
     }
+
+    use crate::testing::proptest::arbitrary_utf8_bytes;
+    use proptest::prelude::*;
+
+    proptest! {
+        // parse() must be total over arbitrary input strings: it returns
+        // Ok(HookInput) or Err(ParseProblem::*) and never panics. Drives
+        // the fail-closed contract at the adapter boundary.
+        #[test]
+        fn pbt_parse_is_total_on_arbitrary_utf8(bytes in arbitrary_utf8_bytes()) {
+            let body = String::from_utf8_lossy(&bytes);
+            let _ = parse(&body);
+        }
+
+        // Envelope shapes outside the documented `{ toolName | tool_name, ... }`
+        // contract must produce a structured error, not a half-populated
+        // HookInput. Pins the negative-space of the JSON envelope shape.
+        #[test]
+        fn pbt_invalid_envelope_returns_err(
+            body in prop_oneof![
+                Just("null".to_string()),
+                Just("true".to_string()),
+                Just("false".to_string()),
+                Just("0".to_string()),
+                Just("\"x\"".to_string()),
+                Just("[]".to_string()),
+                Just(r#"[{"toolName":"bash"}]"#.to_string()),
+                Just("{}".to_string()),
+                Just(r#"{"toolArgs":{}}"#.to_string()),
+                Just(r#"{"toolArgs":"{\"command\":\"ls\"}"}"#.to_string()),
+            ],
+        ) {
+            match parse(&body) {
+                Err(ParseProblem::NotAnObject | ParseProblem::MissingToolName) => {},
+                other => prop_assert!(
+                    false,
+                    "expected NotAnObject or MissingToolName for body {body:?}, got {other:?}",
+                ),
+            }
+        }
+    }
 }

@@ -406,4 +406,53 @@ mod tests {
                 .contains("postToolUse")
         );
     }
+
+    use crate::testing::proptest::arbitrary_utf8_bytes;
+    use proptest::prelude::*;
+
+    proptest! {
+        // parse() is total over arbitrary input strings: it returns
+        // Ok(HookInput) or one of the structured KiroInputError variants
+        // and never panics. Drives the fail-closed contract at the
+        // adapter boundary.
+        #[test]
+        fn pbt_parse_is_total_on_arbitrary_utf8(bytes in arbitrary_utf8_bytes()) {
+            let body = String::from_utf8_lossy(&bytes);
+            let _ = parse(&body);
+        }
+
+        // Envelope shapes outside the documented `{ hook_event_name?,
+        // tool_name, tool_input? }` contract must produce a structured
+        // error, never a half-populated HookInput. Includes the
+        // `hook_event_name != preToolUse` branch which Copilot does not
+        // have.
+        #[test]
+        fn pbt_invalid_envelope_returns_err(
+            body in prop_oneof![
+                Just("null".to_string()),
+                Just("true".to_string()),
+                Just("false".to_string()),
+                Just("0".to_string()),
+                Just("\"x\"".to_string()),
+                Just("[]".to_string()),
+                Just(r#"[{"tool_name":"shell"}]"#.to_string()),
+                Just("{}".to_string()),
+                Just(r#"{"tool_input":{}}"#.to_string()),
+                Just(r#"{"hook_event_name":"postToolUse","tool_name":"shell"}"#.to_string()),
+                Just(r#"{"hook_event_name":"sessionStart","tool_name":"shell"}"#.to_string()),
+            ],
+        ) {
+            match parse(&body) {
+                Err(
+                    KiroInputError::NotAnObject
+                    | KiroInputError::MissingToolName
+                    | KiroInputError::UnsupportedEvent(_),
+                ) => {},
+                other => prop_assert!(
+                    false,
+                    "expected NotAnObject / MissingToolName / UnsupportedEvent for body {body:?}, got {other:?}",
+                ),
+            }
+        }
+    }
 }
