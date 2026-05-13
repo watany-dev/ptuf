@@ -105,6 +105,7 @@ verify も行わない。
 | [`kiro-cli.md`](kiro-cli.md) | Kiro CLI adapter の正規化・fail-closed |
 | [`audit.md`](audit.md) | audit JSONL schema と redaction |
 | [`testing.md`](testing.md) | example-based test と PBT の役割分担 |
+| [`threat-model.md`](threat-model.md) | STRIDE による信頼境界・脅威・緩和策と residual risk |
 | [`roadmap.md`](roadmap.md) | M1〜M5 の到達点と今後の候補 |
 
 ## 言語規約

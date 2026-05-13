@@ -51,3 +51,26 @@ Out of scope (treat as feature requests, not vulnerabilities):
 
 Until a `1.0.0` release, only the latest published version receives
 security fixes.
+
+## No Telemetry
+
+`ptuf` is a guardrail layer that sits inside the trust boundary of every
+coding agent it filters. **It must not exfiltrate its own observations.**
+
+- ptuf does not send any telemetry, metrics, crash reports, opt-in pings,
+  or anonymous usage statistics, ever.
+- ptuf does not perform any network I/O on its own; the only outbound
+  bytes are those produced by commands the user-defined plugins
+  explicitly evaluate against the hook input.
+- The CLI does not phone home for update checks. Updates are explicit
+  via `ptuf update` (user-initiated) or the user's package manager.
+
+This is a permanent design constraint, not a default that can be turned
+on. See `docs/design/threat-model.md#information-disclosure` (I-3) for
+the rationale.
+
+## Threat Model
+
+The full STRIDE-based threat model — attacker types, trust boundaries,
+mitigations, and residual risk — lives in
+[`docs/design/threat-model.md`](docs/design/threat-model.md).
