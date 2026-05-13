@@ -96,7 +96,7 @@ fn build(pat: &str) -> Regex {
 static DOTENV: LazyLock<Regex> =
     LazyLock::new(|| build(r"(?:^|/|\s|[*?\[\]=])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b"));
 
-mod logic {
+pub(crate) mod logic {
     //! Hand-written ASCII scanners that replace per-variant regexes.
     //!
     //! Each `pub fn <kind>(token: &str) -> Vec<Range<usize>>` returns the
@@ -106,82 +106,58 @@ mod logic {
     //! boundary (`[A-Za-z0-9_]` on either side). Surrounding `\s` checks
     //! use `u8::is_ascii_whitespace`, which is sufficient for the path
     //! tokens this module classifies.
+    //!
+    //! `is_ascii_word_char` / `left_word_boundary` / `right_word_boundary`
+    //! are `pub` (re-exported only through this `pub(crate) mod logic`) so
+    //! `audit::redaction` can reuse the same boundary definition without
+    //! re-declaring it.
 
     use core::ops::Range;
 
-    fn is_ascii_word_char(b: u8) -> bool {
+    pub fn is_ascii_word_char(b: u8) -> bool {
         b.is_ascii_alphanumeric() || b == b'_'
     }
 
-    fn left_word_boundary(bytes: &[u8], at: usize) -> bool {
+    pub fn left_word_boundary(bytes: &[u8], at: usize) -> bool {
         at == 0 || !is_ascii_word_char(bytes[at - 1])
     }
 
-    fn right_word_boundary(bytes: &[u8], at: usize) -> bool {
+    pub fn right_word_boundary(bytes: &[u8], at: usize) -> bool {
         at == bytes.len() || !is_ascii_word_char(bytes[at])
     }
 
-    fn eq_ignore_ascii_case_slice(a: &[u8], b: &[u8]) -> bool {
-        a.len() == b.len()
-            && a.iter()
-                .zip(b.iter())
-                .all(|(x, y)| x.eq_ignore_ascii_case(y))
-    }
-
     fn starts_with_ignore_ascii_case(bytes: &[u8], at: usize, lit: &[u8]) -> bool {
-        at + lit.len() <= bytes.len() && eq_ignore_ascii_case_slice(&bytes[at..at + lit.len()], lit)
+        at + lit.len() <= bytes.len() && bytes[at..at + lit.len()].eq_ignore_ascii_case(lit)
     }
 
     // Home-prefix variants share the structure
     // `(prefix)/<dir>(/|end|\b)` with `prefix ∈ {~, $HOME, ${HOME}}`.
-    // `anchored` adds a `(^|\s)` left anchor (consumes the whitespace).
+    // `LeftAnchor::Whitespace` adds a `(^|\s)` requirement that also
+    // consumes the leading whitespace into the match.
     const HOME_PREFIXES: [&[u8]; 3] = [b"~", b"$HOME", b"${HOME}"];
 
-    fn matches_home_dir_anchored(token: &str, dir_literal: &[u8]) -> Vec<Range<usize>> {
-        let bytes = token.as_bytes();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < bytes.len() {
-            let mut advance = 1usize;
-            for prefix in &HOME_PREFIXES {
-                if !bytes[i..].starts_with(prefix) {
-                    continue;
-                }
-                let (left_ok, match_start) = if i == 0 {
-                    (true, 0)
-                } else if bytes[i - 1].is_ascii_whitespace() {
-                    (true, i - 1)
-                } else {
-                    (false, i)
-                };
-                if !left_ok {
-                    continue;
-                }
-                let after_prefix = i + prefix.len();
-                if bytes.get(after_prefix) != Some(&b'/') {
-                    continue;
-                }
-                let dir_start = after_prefix + 1;
-                if !starts_with_ignore_ascii_case(bytes, dir_start, dir_literal) {
-                    continue;
-                }
-                let dir_end = dir_start + dir_literal.len();
-                let right_ok = dir_end == bytes.len()
-                    || bytes[dir_end] == b'/'
-                    || !is_ascii_word_char(bytes[dir_end]);
-                if !right_ok {
-                    continue;
-                }
-                out.push(match_start..dir_end);
-                advance = dir_end - i;
-                break;
-            }
-            i += advance;
-        }
-        out
+    #[derive(Clone, Copy)]
+    enum LeftAnchor {
+        Whitespace,
+        None,
     }
 
-    fn matches_home_dir_loose(token: &str, dir_literal: &[u8]) -> Vec<Range<usize>> {
+    fn left_anchor_start(bytes: &[u8], at: usize, anchor: LeftAnchor) -> Option<usize> {
+        match anchor {
+            LeftAnchor::None => Some(at),
+            LeftAnchor::Whitespace => {
+                if at == 0 {
+                    Some(0)
+                } else if bytes[at - 1].is_ascii_whitespace() {
+                    Some(at - 1)
+                } else {
+                    None
+                }
+            },
+        }
+    }
+
+    fn matches_home_dir(token: &str, dir_literal: &[u8], anchor: LeftAnchor) -> Vec<Range<usize>> {
         let bytes = token.as_bytes();
         let mut out = Vec::new();
         let mut i = 0;
@@ -191,6 +167,9 @@ mod logic {
                 if !bytes[i..].starts_with(prefix) {
                     continue;
                 }
+                let Some(match_start) = left_anchor_start(bytes, i, anchor) else {
+                    continue;
+                };
                 let after_prefix = i + prefix.len();
                 if bytes.get(after_prefix) != Some(&b'/') {
                     continue;
@@ -203,7 +182,7 @@ mod logic {
                 if !right_word_boundary(bytes, dir_end) {
                     continue;
                 }
-                out.push(i..dir_end);
+                out.push(match_start..dir_end);
                 advance = dir_end - i;
                 break;
             }
@@ -213,19 +192,19 @@ mod logic {
     }
 
     pub(super) fn ssh_dir(token: &str) -> Vec<Range<usize>> {
-        matches_home_dir_anchored(token, b".ssh")
+        matches_home_dir(token, b".ssh", LeftAnchor::Whitespace)
     }
     pub(super) fn aws_dir(token: &str) -> Vec<Range<usize>> {
-        matches_home_dir_anchored(token, b".aws")
+        matches_home_dir(token, b".aws", LeftAnchor::Whitespace)
     }
     pub(super) fn gcloud_dir(token: &str) -> Vec<Range<usize>> {
-        matches_home_dir_anchored(token, b".config/gcloud")
+        matches_home_dir(token, b".config/gcloud", LeftAnchor::Whitespace)
     }
     pub(super) fn kube_config(token: &str) -> Vec<Range<usize>> {
-        matches_home_dir_loose(token, b".kube/config")
+        matches_home_dir(token, b".kube/config", LeftAnchor::None)
     }
     pub(super) fn docker_config(token: &str) -> Vec<Range<usize>> {
-        matches_home_dir_loose(token, b".docker/config.json")
+        matches_home_dir(token, b".docker/config.json", LeftAnchor::None)
     }
 
     pub(super) fn private_key_file(token: &str) -> Vec<Range<usize>> {
@@ -281,7 +260,7 @@ mod logic {
         let mut i = 0;
         while i + lit.len() <= bytes.len() {
             let mut advance = 1usize;
-            if eq_ignore_ascii_case_slice(&bytes[i..i + lit.len()], lit)
+            if bytes[i..i + lit.len()].eq_ignore_ascii_case(lit)
                 && i > 0
                 && !bytes[i - 1].is_ascii_whitespace()
             {

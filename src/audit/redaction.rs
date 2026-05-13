@@ -68,12 +68,6 @@ static STRIPE_KEY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b(?:(?:sk|pk|rk)_(?:live|test)|whsec)_[A-Za-z0-9]{16,}\b").expect("stripe key")
 });
 
-// `OPENAI_KEY`, `AWS_AKID`, and `PEM_BLOB` are now implemented as
-// hand-written ASCII scanners in [`logic`] below — their regex forms
-// (`\bsk-[A-Za-z0-9_-]{16,}\b`, `\bAKIA[0-9A-Z]{16}\b`, and
-// `-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`
-// respectively) are direct character-class translations.
-
 static JWT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b").expect("jwt")
 });
@@ -102,18 +96,7 @@ mod logic {
     //! match — matching the semantics of `Regex::replace_all`.
 
     use super::PLACEHOLDER;
-
-    fn is_ascii_word_char(b: u8) -> bool {
-        b.is_ascii_alphanumeric() || b == b'_'
-    }
-
-    fn left_word_boundary(bytes: &[u8], at: usize) -> bool {
-        at == 0 || !is_ascii_word_char(bytes[at - 1])
-    }
-
-    fn right_word_boundary(bytes: &[u8], at: usize) -> bool {
-        at == bytes.len() || !is_ascii_word_char(bytes[at])
-    }
+    use crate::facts::sensitive::logic::{left_word_boundary, right_word_boundary};
 
     /// Replace every `\bsk-[A-Za-z0-9_-]{16,}\b` match with `PLACEHOLDER`.
     pub(super) fn replace_openai_key(input: &str) -> String {
