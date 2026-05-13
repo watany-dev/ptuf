@@ -41,6 +41,11 @@ name = "rules_proptest"
 path = "tests/rules_proptest.rs"
 required-features = ["testing"]
 
+[[test]]
+name = "filter_proptest"
+path = "tests/filter_proptest.rs"
+required-features = ["testing"]
+
 [features]
 default = []
 testing = ["dep:proptest"]

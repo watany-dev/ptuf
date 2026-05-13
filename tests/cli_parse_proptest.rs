@@ -56,17 +56,19 @@ proptest! {
     }
 
     // `check --tool <NAME> <COMMAND>` succeeds for arbitrary command
-    // strings and surfaces the original tool / command verbatim.
+    // strings and surfaces the original tool / command verbatim. We
+    // pre-shape the command so it can never be flag-looking, avoiding
+    // the historical `prop_assume!` discard. The `--` → `x--` rewrite
+    // preserves the invariant under test (verbatim round-trip) because
+    // the rewritten string is itself an arbitrary command argument.
     #[test]
     fn pbt_parse_check_total(
         tool in proptest::sample::select(&["Bash", "Read", "Write", "Edit"][..])
             .prop_map(std::string::ToString::to_string),
-        cmd in arbitrary_command(),
+        cmd in arbitrary_command().prop_map(|c| {
+            if c.starts_with("--") { format!("x{c}") } else { c }
+        }),
     ) {
-        // Skip cases where the command happens to look like a flag —
-        // those are valid but exercise a different parser branch
-        // covered by `pbt_parse_is_total`.
-        prop_assume!(!cmd.starts_with("--"));
         let args = vec![
             "check".into(),
             "--tool".into(),
