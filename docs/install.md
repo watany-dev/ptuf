@@ -1,29 +1,66 @@
 # Installing ptuf
 
-`cargo binstall ptuf` downloads a prebuilt binary in seconds without a Rust
-toolchain; `cargo install ptuf` compiles the same release from crates.io when
-you already have Rust set up. The verified-install instructions below pin a
-release, check the SHA-256 sum, and verify the GitHub artifact attestation
-before extracting — use them when you want a reproducible install or are
-deploying ptuf into a shared environment.
+For most users the fastest path is the one-line installer script — it
+downloads the same prebuilt binary cargo-dist publishes to GitHub
+Releases, no Rust toolchain required. The verified-install path below
+adds SHA-256 and GitHub artifact attestation checks for pinned or
+shared-environment deployments.
 
 ## Requirements
 
-- Rust `1.93.0` or newer (only when building from source)
-- `lld` for the default Linux build profile (only when building from source)
-- `cargo-deny` and `cargo-tarpaulin` for the full local quality pipeline
-  (developers only)
+Quick install needs only `curl` (Unix) or `irm` (PowerShell). The
+following are required only when building from source:
+
+- Rust `1.93.0` or newer
+- `lld` for the default Linux build profile
+- `cargo-deny` and `cargo-tarpaulin` for the full local quality
+  pipeline (developers only)
+
+## Quick install
+
+Pin `PTUF_VERSION` so CI and Docker builds are reproducible.
+
+### Linux / macOS
+
+```bash
+PTUF_VERSION=v0.1.0
+curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
+```
+
+### Windows (PowerShell)
+
+```powershell
+$env:PTUF_VERSION = "v0.1.0"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/download/$env:PTUF_VERSION/ptuf-installer.ps1 | iex"
+```
+
+The installer is the official cargo-dist script published alongside
+each release. It installs `ptuf` into `$CARGO_HOME/bin` (default
+`~/.cargo/bin`).
+
+For a developer machine where you always want the newest release, the
+GitHub `latest` redirect also works (not recommended for CI / Docker
+because the resolved version drifts):
+
+```bash
+curl -LsSf https://github.com/watany-dev/ptuf/releases/latest/download/ptuf-installer.sh | sh
+```
+
+The Quick install path does not verify the SHA-256 sum or the GitHub
+artifact attestation. For pinned or shared-environment deployments,
+use the [Verified install](#verified-install-recommended-for-pinned-deployments)
+path below instead.
 
 ## Verified install (recommended for pinned deployments)
 
-Set the exact version and target you want, download the canonical archive,
-verify its checksum, and verify the GitHub artifact attestation before
-extracting.
+Set the exact version and target you want, download the canonical
+archive, verify its checksum, and verify the GitHub artifact
+attestation before extracting.
 
 ### Linux
 
 ```bash
-VERSION=v0.0.1
+VERSION=v0.1.0
 TARGET=x86_64-unknown-linux-musl
 ARCHIVE=ptuf-$TARGET.tar.gz
 BASE=https://github.com/watany-dev/ptuf/releases/download/$VERSION
@@ -41,7 +78,7 @@ install -m 0755 ptuf ~/.cargo/bin/ptuf
 ### macOS
 
 ```bash
-VERSION=v0.0.1
+VERSION=v0.1.0
 TARGET=aarch64-apple-darwin
 ARCHIVE=ptuf-$TARGET.tar.gz
 BASE=https://github.com/watany-dev/ptuf/releases/download/$VERSION
@@ -59,7 +96,7 @@ install -m 0755 ptuf ~/.cargo/bin/ptuf
 ### Windows (PowerShell)
 
 ```powershell
-$Version = "v0.0.1"
+$Version = "v0.1.0"
 $Target = "x86_64-pc-windows-msvc"
 $Archive = "ptuf-$Target.zip"
 $Base = "https://github.com/watany-dev/ptuf/releases/download/$Version"
@@ -75,30 +112,11 @@ gh attestation verify $Archive `
 Expand-Archive $Archive -DestinationPath .
 ```
 
-## Installer scripts (unverified)
-
-These remain available for compatibility. The verified-install path above is
-preferred for pinned deployments.
-
-Linux / macOS:
-
-```bash
-PTUF_VERSION=v0.0.1
-curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
-```
-
-Windows (PowerShell):
-
-```powershell
-$env:PTUF_VERSION = "v0.0.1"
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/download/$env:PTUF_VERSION/ptuf-installer.ps1 | iex"
-```
-
-## With cargo-binstall (fastest, no toolchain)
+## With cargo-binstall (Rust users, no compilation)
 
 If you have [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall)
-installed, it downloads the same prebuilt archive cargo-dist publishes and
-skips compilation:
+installed, it downloads the same prebuilt archive cargo-dist publishes
+and skips compilation:
 
 ```bash
 cargo binstall ptuf
@@ -145,4 +163,4 @@ ptuf update --force    # reinstall even if already up to date
 to either `cargo` or `sh` / `powershell` for the actual swap. It does
 not embed an HTTP client. If you want to reproduce the verified install
 manually (curl + SHA256SUMS + `gh attestation verify`), continue to
-follow the steps under [Verified install](#verified-install-recommended).
+follow the steps under [Verified install](#verified-install-recommended-for-pinned-deployments).
