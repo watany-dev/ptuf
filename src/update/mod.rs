@@ -1310,7 +1310,7 @@ mod tests {
         assert_eq!(code, 1);
         assert!(spawner.calls().is_empty(), "no updater must be spawned");
         let err_s = String::from_utf8_lossy(&err);
-        assert!(err_s.contains("refusing to downgrade"), "stderr: {err_s}",);
+        assert!(err_s.contains("refusing to downgrade"), "stderr: {err_s}");
         assert!(err_s.contains("--force"), "stderr: {err_s}");
     }
 
@@ -1515,5 +1515,196 @@ mod tests {
         assert_eq!(calls[0].program, "curl");
         let err_s = String::from_utf8_lossy(&err);
         assert!(err_s.contains("failed to download"), "stderr: {err_s}");
+    }
+
+    #[test]
+    fn run_prebuilt_fails_with_friendly_curl_missing_on_unix_download_spawn_notfound() {
+        // Reaches `plan.download.program == "curl"` && NotFound arm so the
+        // user sees the same `CurlMissing` text the latest-tag probe uses.
+        let spawner = RecordingSpawner::new(vec![Err(io::Error::from(io::ErrorKind::NotFound))]);
+        let locator = system_locator();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let opts = UpdateOptions {
+            check: false,
+            version: Some("v0.4.0".to_string()),
+            force: false,
+            skip_attestation: true,
+        };
+        let code = run_with_platform(opts, &spawner, &locator, Platform::Unix, &mut out, &mut err);
+        assert_eq!(code, 1);
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("requires curl on PATH"), "stderr: {err_s}");
+    }
+
+    #[test]
+    fn run_prebuilt_fails_with_updater_spawn_error_on_windows_download_spawn_notfound() {
+        // Windows download (powershell) NotFound must NOT collapse to
+        // CurlMissing — the friendly branch is curl-specific.
+        let spawner = RecordingSpawner::new(vec![Err(io::Error::from(io::ErrorKind::NotFound))]);
+        let locator = system_locator();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let opts = UpdateOptions {
+            check: false,
+            version: Some("v0.4.0".to_string()),
+            force: false,
+            skip_attestation: true,
+        };
+        let code = run_with_platform(
+            opts,
+            &spawner,
+            &locator,
+            Platform::Windows,
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 1);
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(
+            err_s.contains("powershell") && err_s.contains("failed to launch"),
+            "stderr: {err_s}",
+        );
+    }
+
+    #[test]
+    fn run_prebuilt_fails_with_updater_spawn_error_when_verify_spawn_io_error_other() {
+        // gh present but the spawn itself raises a non-NotFound IO error
+        // (eg. PermissionDenied) — must route through UpdaterSpawn, not
+        // the friendly AttestationToolMissing branch.
+        let spawner = RecordingSpawner::new(vec![
+            ok(""),
+            Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+        ]);
+        let locator = system_locator();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let opts = UpdateOptions {
+            check: false,
+            version: Some("v0.4.0".to_string()),
+            force: false,
+            skip_attestation: false,
+        };
+        let code = run_with_platform(opts, &spawner, &locator, Platform::Unix, &mut out, &mut err);
+        assert_eq!(code, 1);
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("gh"), "stderr: {err_s}");
+        assert!(err_s.contains("failed to launch"), "stderr: {err_s}");
+    }
+
+    #[test]
+    fn run_prebuilt_fails_when_execute_spawn_errors_after_verify() {
+        // Download + verify succeed but `sh` itself fails to spawn —
+        // must surface the UpdaterSpawn variant.
+        let spawner = RecordingSpawner::new(vec![
+            ok(""),
+            ok(""),
+            Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+        ]);
+        let locator = system_locator();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let opts = UpdateOptions {
+            check: false,
+            version: Some("v0.4.0".to_string()),
+            force: false,
+            skip_attestation: false,
+        };
+        let code = run_with_platform(opts, &spawner, &locator, Platform::Unix, &mut out, &mut err);
+        assert_eq!(code, 1);
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("sh"), "stderr: {err_s}");
+        assert!(err_s.contains("failed to launch"), "stderr: {err_s}");
+    }
+
+    #[test]
+    fn run_prebuilt_fails_when_execute_returns_nonzero() {
+        // Full pipeline runs but the installer script exits non-zero.
+        let spawner = RecordingSpawner::new(vec![
+            ok(""),
+            ok(""),
+            Ok(SpawnOutcome {
+                exit_code: 42,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            }),
+        ]);
+        let locator = system_locator();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let opts = UpdateOptions {
+            check: false,
+            version: Some("v0.4.0".to_string()),
+            force: false,
+            skip_attestation: false,
+        };
+        let code = run_with_platform(opts, &spawner, &locator, Platform::Unix, &mut out, &mut err);
+        assert_eq!(code, 1);
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("exited with status 42"), "stderr: {err_s}");
+    }
+
+    #[test]
+    fn run_cargo_strategy_fails_when_cargo_spawn_errors() {
+        // The cargo strategy is reached after the `cargo --version` probe
+        // succeeds, but the actual `cargo install` spawn raises an IO
+        // error. Exercises the run_inherited_step error branch.
+        let cargo_home = PathBuf::from("/ptuf-test/strategy/.cargo");
+        let spawner = RecordingSpawner::new(vec![
+            ok("cargo 1.93.0 (abc 2026-01-01)"),
+            Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+        ]);
+        let locator = cargo_locator(cargo_home);
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let opts = UpdateOptions {
+            check: false,
+            version: Some("v0.4.0".to_string()),
+            force: false,
+            skip_attestation: true,
+        };
+        let code = run_with_platform(opts, &spawner, &locator, Platform::Unix, &mut out, &mut err);
+        assert_eq!(code, 1);
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("cargo"), "stderr: {err_s}");
+        assert!(err_s.contains("failed to launch"), "stderr: {err_s}");
+    }
+
+    #[test]
+    fn select_strategy_returns_prebuilt_when_cargo_home_missing() {
+        // `cargo_home: None` short-circuits before the `cargo --version`
+        // probe and routes to the prebuilt strategy without warning.
+        let spawner = RecordingSpawner::new(vec![]);
+        let locator = FakeExeLocator {
+            exe: PathBuf::from("/usr/local/bin/ptuf"),
+            cargo_home: None,
+        };
+        let (strategy, warning) = select_strategy(&spawner, &locator);
+        assert_eq!(strategy, Strategy::PrebuiltInstaller);
+        assert!(warning.is_none());
+        assert!(
+            spawner.calls().is_empty(),
+            "cargo --version must not run when cargo_home is unknown"
+        );
+    }
+
+    #[test]
+    fn select_strategy_returns_prebuilt_when_current_exe_errors() {
+        // current_exe() failing (eg. on stripped binaries) routes to the
+        // safe prebuilt fallback rather than panicking.
+        struct ErroringLocator;
+        impl ExeLocator for ErroringLocator {
+            fn current_exe(&self) -> io::Result<PathBuf> {
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            }
+            fn cargo_home(&self) -> Option<PathBuf> {
+                Some(PathBuf::from("/tmp/.cargo"))
+            }
+        }
+        let spawner = RecordingSpawner::new(vec![]);
+        let locator = ErroringLocator;
+        let (strategy, warning) = select_strategy(&spawner, &locator);
+        assert_eq!(strategy, Strategy::PrebuiltInstaller);
+        assert!(warning.is_none());
     }
 }
