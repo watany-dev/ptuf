@@ -59,18 +59,25 @@ impl Write for FailingWriter {
 }
 
 /// RAII guard that swaps the process cwd for the duration of a test
-/// and restores it on drop. Tests using this helper rely on the
-/// `--test-threads=1` setting in `Makefile` / CI so concurrent cwd
-/// mutation cannot occur.
+/// and restores it on drop. Holds a process-wide mutex so concurrent
+/// callers (e.g. `cargo test` without `--test-threads=1`) serialise
+/// cwd mutation rather than racing.
 pub(super) struct CwdGuard {
     original: PathBuf,
+    _lock: std::sync::MutexGuard<'static, ()>,
 }
+
+static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl CwdGuard {
     pub(super) fn change_to(target: &std::path::Path) -> std::io::Result<Self> {
+        let lock = CWD_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let original = std::env::current_dir()?;
         std::env::set_current_dir(target)?;
-        Ok(Self { original })
+        Ok(Self {
+            original,
+            _lock: lock,
+        })
     }
 }
 

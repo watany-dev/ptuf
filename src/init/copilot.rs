@@ -217,7 +217,7 @@ fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
     body.push('\n');
 
     let tmp = sibling_temp_path(path);
-    fs::write(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
+    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
         path: tmp.clone(),
         source: e,
     })?;
@@ -639,5 +639,23 @@ mod tests {
             "no-parent input must yield no-parent temp path: {tmp:?}"
         );
         assert!(tmp.to_string_lossy().contains("ptuf.json.ptuf."));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_writes_hooks_with_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = workdir("perm-copilot");
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        fs::create_dir_all(dir.join(".github")).unwrap();
+        let targets = resolve_paths(Some(dir.as_path())).unwrap();
+        install(&targets, "/usr/local/bin/ptuf", false).unwrap();
+        let mode = fs::metadata(&targets.hooks_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "fresh hooks JSON must be owner-only");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

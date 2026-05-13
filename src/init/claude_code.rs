@@ -220,7 +220,7 @@ fn write_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
     body.push('\n');
 
     let tmp = sibling_temp_path(path);
-    fs::write(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
+    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
         path: tmp.clone(),
         source: e,
     })?;
@@ -635,6 +635,32 @@ mod tests {
         let target = blocker.join("nested").join("settings.json");
         let err = write_atomically(&target, &json!({})).expect_err("create_dir_all must fail");
         assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_writes_settings_with_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = workdir("perm-fresh");
+        let path = dir.join("settings.json");
+        install(&path, "/usr/local/bin/ptuf", false).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "fresh settings.json must be owner-only");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_tightens_mode_when_existing_file_was_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = workdir("perm-tighten");
+        let path = dir.join("settings.json");
+        fs::write(&path, "{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        install(&path, "/usr/local/bin/ptuf", false).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "re-install must tighten an existing 0644 file");
         let _ = fs::remove_dir_all(&dir);
     }
 }

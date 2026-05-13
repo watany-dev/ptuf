@@ -256,7 +256,7 @@ fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
     body.push('\n');
 
     let tmp = sibling_temp_path(path);
-    fs::write(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
+    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
         path: tmp.clone(),
         source: e,
     })?;
@@ -277,7 +277,7 @@ fn write_toml_atomically(path: &Path, doc: &DocumentMut) -> Result<(), InitError
     }
 
     let tmp = sibling_temp_path(path);
-    fs::write(&tmp, doc.to_string().as_bytes()).map_err(|e| InitError::Io {
+    crate::init::write_secure(&tmp, doc.to_string().as_bytes()).map_err(|e| InitError::Io {
         path: tmp.clone(),
         source: e,
     })?;
@@ -952,6 +952,21 @@ mod tests {
         let err = write_toml_atomically(&target, &DocumentMut::new())
             .expect_err("write onto dir must fail");
         assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_writes_hooks_and_config_with_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = workdir("perm-codex");
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        let targets = resolve_paths_with(Some(dir.as_path()), None).unwrap();
+        install(&targets, "/usr/local/bin/ptuf", false).unwrap();
+        for p in [&targets.hooks_path, &targets.config_path] {
+            let mode = fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{} must be 0600", p.display());
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 }

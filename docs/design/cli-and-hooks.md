@@ -210,6 +210,12 @@ codex_hooks = true
 - 既存ファイル中の未知 key (`model` / `temperature` / `prompt` /
   `allowedTools` / `resources` 等) は `serde_json::Value` のまま保持される
 - 書き込みは temp file + rename の原子的更新
+- Unix では temp file を `OpenOptions::create_new(true).mode(0o600)` で
+  生成し、rename 先のホスト設定ファイル (settings.json / hooks.json /
+  config.toml / agent.json) も owner-only (`0o600`) になる。process
+  umask に依存しないため、共有ホスト上で hook 設定が world-readable に
+  なる経路を塞ぐ。Windows では NTFS ACL を親ディレクトリから継承する
+  既存挙動をそのまま採用する
 
 ## install verification
 
@@ -426,11 +432,23 @@ envelope を持たないため reason は stderr のみで伝える。`Ask` は 
 ## Update の境界
 
 `ptuf update` は Decision エンジンを **経由しない**。`HookInput` を構築
-することなく `std::process::Command` で `curl` / `cargo` / `sh` /
+することなく `std::process::Command` で `curl` / `cargo` / `gh` / `sh` /
 `powershell` を spawn するだけの薄い shell-out で、policy / plugin /
 audit 経路には一切触れない。fail-closed 契約 (`policy-load-failed`,
 `invalid-payload`) も適用されない — update の失敗はネットワーク不通や
 updater 非ゼロ exit などインフラ層の問題で、Decision 層の問題ではない。
+
+ただし prebuilt installer 経路に限り **download → attestation verify →
+execute** の 3 段階が走る: ptuf は `curl` (Unix) / `iwr` (Windows) で
+installer script をプロセス専用 tmp に落とし、`gh attestation verify
+<tmp> --repo watany-dev/ptuf` で artifact attestation を検証してから
+ようやく `sh` / `powershell` で実行する。`gh` が PATH に無い場合は exit
+`1` で download 済みファイルを残置し、ユーザが GitHub CLI を入れて手動
+verify できるようにする。`--skip-attestation` (もしくは
+`PTUF_UPDATE_SKIP_ATTESTATION=1`) はこの check を skip し、stderr に
+`WARNING` を 1 行出して未検証 install であることを監査可能にする。
+cargo install 経路は `--locked` で transitive deps を pin する以外
+追加検証を持たない (cargo 自身が `.crate` の hash を検証するため)。
 
 `self_paths::ProtectedPaths` の自己保護ルール (別の ptuf hook 経由で
 `~/.cargo/bin/ptuf` 等が書換対象となった場合に deny する) と `ptuf
