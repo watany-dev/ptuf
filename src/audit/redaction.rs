@@ -68,11 +68,11 @@ static STRIPE_KEY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b(?:(?:sk|pk|rk)_(?:live|test)|whsec)_[A-Za-z0-9]{16,}\b").expect("stripe key")
 });
 
-static OPENAI_KEY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bsk-[A-Za-z0-9_-]{16,}\b").expect("openai key"));
-
-static AWS_AKID: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bAKIA[0-9A-Z]{16}\b").expect("aws akid"));
+// `OPENAI_KEY`, `AWS_AKID`, and `PEM_BLOB` are now implemented as
+// hand-written ASCII scanners in [`logic`] below — their regex forms
+// (`\bsk-[A-Za-z0-9_-]{16,}\b`, `\bAKIA[0-9A-Z]{16}\b`, and
+// `-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`
+// respectively) are direct character-class translations.
 
 static JWT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b").expect("jwt")
@@ -95,16 +95,158 @@ static BASIC_AUTH: LazyLock<Regex> = LazyLock::new(|| {
         .expect("basic auth")
 });
 
-static PEM_BLOB: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----")
-        .expect("pem blob")
-});
+mod logic {
+    //! Hand-written ASCII scanners for the simplest token shapes that no
+    //! longer warrant a compiled regex. Each `replace_*` walks the input
+    //! once, emitting `PLACEHOLDER` for every non-overlapping leftmost
+    //! match — matching the semantics of `Regex::replace_all`.
+
+    use super::PLACEHOLDER;
+
+    fn is_ascii_word_char(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+
+    fn left_word_boundary(bytes: &[u8], at: usize) -> bool {
+        at == 0 || !is_ascii_word_char(bytes[at - 1])
+    }
+
+    fn right_word_boundary(bytes: &[u8], at: usize) -> bool {
+        at == bytes.len() || !is_ascii_word_char(bytes[at])
+    }
+
+    /// Replace every `\bsk-[A-Za-z0-9_-]{16,}\b` match with `PLACEHOLDER`.
+    pub(super) fn replace_openai_key(input: &str) -> String {
+        let bytes = input.as_bytes();
+        let prefix: &[u8] = b"sk-";
+        replace_with_scanner(input, |i| {
+            if i + prefix.len() > bytes.len() || &bytes[i..i + prefix.len()] != prefix {
+                return None;
+            }
+            if !left_word_boundary(bytes, i) {
+                return None;
+            }
+            let mut end = i + prefix.len();
+            while end < bytes.len()
+                && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_' || bytes[end] == b'-')
+            {
+                end += 1;
+            }
+            let suffix_len = end - (i + prefix.len());
+            if suffix_len < 16 {
+                return None;
+            }
+            if !right_word_boundary(bytes, end) {
+                return None;
+            }
+            Some(end)
+        })
+    }
+
+    /// Replace every `\bAKIA[0-9A-Z]{16}\b` match with `PLACEHOLDER`.
+    pub(super) fn replace_aws_akid(input: &str) -> String {
+        let bytes = input.as_bytes();
+        let prefix: &[u8] = b"AKIA";
+        replace_with_scanner(input, |i| {
+            if i + prefix.len() > bytes.len() || &bytes[i..i + prefix.len()] != prefix {
+                return None;
+            }
+            if !left_word_boundary(bytes, i) {
+                return None;
+            }
+            let body_end = i + prefix.len() + 16;
+            if body_end > bytes.len() {
+                return None;
+            }
+            if !bytes[i + prefix.len()..body_end]
+                .iter()
+                .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase())
+            {
+                return None;
+            }
+            if !right_word_boundary(bytes, body_end) {
+                return None;
+            }
+            Some(body_end)
+        })
+    }
+
+    /// Replace every PEM block (`-----BEGIN [A-Z ]*PRIVATE KEY-----` …
+    /// `-----END [A-Z ]*PRIVATE KEY-----`, shortest enclosing pair) with
+    /// `PLACEHOLDER`. The intermediate body may span newlines.
+    pub(super) fn replace_pem_blob(input: &str) -> String {
+        let bytes = input.as_bytes();
+        replace_with_scanner(input, |i| pem_block_end(bytes, i))
+    }
+
+    fn pem_block_end(bytes: &[u8], i: usize) -> Option<usize> {
+        let begin: &[u8] = b"-----BEGIN ";
+        let end: &[u8] = b"-----END ";
+        let key_tail: &[u8] = b"PRIVATE KEY-----";
+        if !bytes.get(i..i + begin.len())?.eq(begin) {
+            return None;
+        }
+        let after_label = consume_label_then_tail(bytes, i + begin.len(), key_tail)?;
+        // Search for the shortest `-----END <label>PRIVATE KEY-----`.
+        let mut p = after_label;
+        while p + end.len() <= bytes.len() {
+            if &bytes[p..p + end.len()] == end
+                && let Some(close_end) = consume_label_then_tail(bytes, p + end.len(), key_tail)
+            {
+                return Some(close_end);
+            }
+            p += 1;
+        }
+        None
+    }
+
+    // After `-----BEGIN ` / `-----END `, consume zero or more `[A-Z ]`
+    // bytes followed by `PRIVATE KEY-----`, returning the index after
+    // the trailing `-----`.
+    fn consume_label_then_tail(bytes: &[u8], from: usize, tail: &[u8]) -> Option<usize> {
+        let mut k = from;
+        while k < bytes.len() && (bytes[k].is_ascii_uppercase() || bytes[k] == b' ') {
+            if k + tail.len() <= bytes.len() && &bytes[k..k + tail.len()] == tail {
+                return Some(k + tail.len());
+            }
+            k += 1;
+        }
+        // `[A-Z ]*` may be empty when the input is `-----BEGIN PRIVATE KEY-----`
+        // directly.
+        if k + tail.len() <= bytes.len() && &bytes[k..k + tail.len()] == tail {
+            return Some(k + tail.len());
+        }
+        None
+    }
+
+    fn replace_with_scanner<F>(input: &str, mut match_end: F) -> String
+    where
+        F: FnMut(usize) -> Option<usize>,
+    {
+        let bytes = input.as_bytes();
+        let mut out = String::with_capacity(input.len());
+        let mut i = 0;
+        let mut copy_from = 0;
+        while i < bytes.len() {
+            if let Some(end) = match_end(i) {
+                out.push_str(&input[copy_from..i]);
+                out.push_str(PLACEHOLDER);
+                i = end;
+                copy_from = end;
+            } else {
+                i += 1;
+            }
+        }
+        out.push_str(&input[copy_from..]);
+        out
+    }
+}
 
 /// Strict redactor used by the JSONL audit sink. The algorithm runs
 /// each pattern in turn — the order is from most specific (PEM blob,
 /// env assignments) to most generic (free-floating tokens).
 pub fn redact_strict(input: &str) -> String {
-    let mut out = PEM_BLOB.replace_all(input, PLACEHOLDER).into_owned();
+    let mut out = logic::replace_pem_blob(input);
 
     out = JSON_SENSITIVE_KEY
         .replace_all(&out, |caps: &regex::Captures| {
@@ -130,8 +272,8 @@ pub fn redact_strict(input: &str) -> String {
         .into_owned();
     out = SLACK_TOKEN.replace_all(&out, PLACEHOLDER).into_owned();
     out = STRIPE_KEY.replace_all(&out, PLACEHOLDER).into_owned();
-    out = OPENAI_KEY.replace_all(&out, PLACEHOLDER).into_owned();
-    out = AWS_AKID.replace_all(&out, PLACEHOLDER).into_owned();
+    out = logic::replace_openai_key(&out);
+    out = logic::replace_aws_akid(&out);
     out = JWT.replace_all(&out, PLACEHOLDER).into_owned();
 
     out

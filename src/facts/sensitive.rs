@@ -1,12 +1,19 @@
 //! Classify a string against the protected-credentials shapes defined in
 //! `docs/design/policy-packs.md` §`core.secrets`.
 //!
+//! Most variants are detected with hand-written ASCII scanners in the
+//! private `logic` submodule; [`SensitiveKind::Dotenv`] retains a compiled
+//! regex because its anchor
+//! set (line start / slash / whitespace / glob meta `*?[]` / `=`) plus the
+//! optional dotted suffix is awkward to express in plain code.
+//!
 //! The legacy [`crate::rules::patterns::SENSITIVE_PATH`] regex remains
 //! the source of truth for the existing `core.secrets.sensitive-path-to-network`
 //! rule. This module adds an *additive* per-variant view so other tools
 //! (`Read`, `Edit`, `Write`, plugin DSL) can match a typed
 //! [`SensitiveKind`] without disturbing the existing rule's tests.
 
+use core::ops::Range;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -82,60 +89,300 @@ fn build(pat: &str) -> Regex {
     Regex::new(pat).expect("sensitive variant regex")
 }
 
-// `(?i-u:…)` scopes ASCII case-insensitive matching to literal path
-// fragments so `.ENV`/`.Ssh` on case-insensitive filesystems (macOS APFS,
-// Windows NTFS) still classify. The `-u` selects ASCII case folding so
-// the regex compiles without the optional `unicode-case` feature (kept
-// disabled per `Cargo.toml [dependencies] regex` to keep the binary
-// minimal). Surrounding `\s`/`\b`/`\S` stay Unicode-aware. PEM_BLOB
-// remains case-sensitive because RFC 7468 mandates uppercase header
-// labels.
-static SSH_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|\s)(?:~|\$HOME|\$\{HOME\})/(?i-u:\.ssh)(?:/|$|\b)"));
-static AWS_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|\s)(?:~|\$HOME|\$\{HOME\})/(?i-u:\.aws)(?:/|$|\b)"));
-static GCLOUD_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|\s)(?:~|\$HOME|\$\{HOME\})/(?i-u:\.config/gcloud)(?:/|$|\b)"));
-static KUBE_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:~|\$HOME|\$\{HOME\})/(?i-u:\.kube/config)\b"));
-static DOCKER_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:~|\$HOME|\$\{HOME\})/(?i-u:\.docker/config\.json)\b"));
-static PRIVATE_KEY_FILE: LazyLock<Regex> =
-    LazyLock::new(|| build(r"\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b"));
-// Anchor includes glob metacharacters and `=` so `cat *.env`,
-// `cp ?.env`, `rm [abc].env`, and `dd if=.env`/`--env-file=.env` style
-// flag values are caught at the token boundary.
+// Dotenv keeps a regex because its anchor set (`^`, `/`, whitespace, glob
+// meta `*?[]`, and `=`) combined with the optional dotted suffix is
+// noticeably clearer as a regex than as hand-rolled scanner state. All
+// other variants are pure ASCII scanners in [`logic`].
 static DOTENV: LazyLock<Regex> =
     LazyLock::new(|| build(r"(?:^|/|\s|[*?\[\]=])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b"));
-static NPMRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i-u:\.npmrc)\b"));
-static PYPIRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i-u:\.pypirc)\b"));
-static TFSTATE: LazyLock<Regex> = LazyLock::new(|| build(r"\S+(?i-u:\.tfstate)\b"));
-static PEM_BLOB: LazyLock<Regex> =
-    LazyLock::new(|| build(r"-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----"));
+
+mod logic {
+    //! Hand-written ASCII scanners that replace per-variant regexes.
+    //!
+    //! Each `pub fn <kind>(token: &str) -> Vec<Range<usize>>` returns the
+    //! non-overlapping leftmost match ranges, matching the semantics of
+    //! `Regex::find_iter`. ASCII case-insensitive comparisons replace the
+    //! original `(?i-u:…)` scopes; `\b` is implemented as the ASCII word
+    //! boundary (`[A-Za-z0-9_]` on either side). Surrounding `\s` checks
+    //! use `u8::is_ascii_whitespace`, which is sufficient for the path
+    //! tokens this module classifies.
+
+    use core::ops::Range;
+
+    fn is_ascii_word_char(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+
+    fn left_word_boundary(bytes: &[u8], at: usize) -> bool {
+        at == 0 || !is_ascii_word_char(bytes[at - 1])
+    }
+
+    fn right_word_boundary(bytes: &[u8], at: usize) -> bool {
+        at == bytes.len() || !is_ascii_word_char(bytes[at])
+    }
+
+    fn eq_ignore_ascii_case_slice(a: &[u8], b: &[u8]) -> bool {
+        a.len() == b.len()
+            && a.iter()
+                .zip(b.iter())
+                .all(|(x, y)| x.eq_ignore_ascii_case(y))
+    }
+
+    fn starts_with_ignore_ascii_case(bytes: &[u8], at: usize, lit: &[u8]) -> bool {
+        at + lit.len() <= bytes.len() && eq_ignore_ascii_case_slice(&bytes[at..at + lit.len()], lit)
+    }
+
+    // Home-prefix variants share the structure
+    // `(prefix)/<dir>(/|end|\b)` with `prefix ∈ {~, $HOME, ${HOME}}`.
+    // `anchored` adds a `(^|\s)` left anchor (consumes the whitespace).
+    const HOME_PREFIXES: [&[u8]; 3] = [b"~", b"$HOME", b"${HOME}"];
+
+    fn matches_home_dir_anchored(token: &str, dir_literal: &[u8]) -> Vec<Range<usize>> {
+        let bytes = token.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let mut advance = 1usize;
+            for prefix in &HOME_PREFIXES {
+                if !bytes[i..].starts_with(prefix) {
+                    continue;
+                }
+                let (left_ok, match_start) = if i == 0 {
+                    (true, 0)
+                } else if bytes[i - 1].is_ascii_whitespace() {
+                    (true, i - 1)
+                } else {
+                    (false, i)
+                };
+                if !left_ok {
+                    continue;
+                }
+                let after_prefix = i + prefix.len();
+                if bytes.get(after_prefix) != Some(&b'/') {
+                    continue;
+                }
+                let dir_start = after_prefix + 1;
+                if !starts_with_ignore_ascii_case(bytes, dir_start, dir_literal) {
+                    continue;
+                }
+                let dir_end = dir_start + dir_literal.len();
+                let right_ok = dir_end == bytes.len()
+                    || bytes[dir_end] == b'/'
+                    || !is_ascii_word_char(bytes[dir_end]);
+                if !right_ok {
+                    continue;
+                }
+                out.push(match_start..dir_end);
+                advance = dir_end - i;
+                break;
+            }
+            i += advance;
+        }
+        out
+    }
+
+    fn matches_home_dir_loose(token: &str, dir_literal: &[u8]) -> Vec<Range<usize>> {
+        let bytes = token.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let mut advance = 1usize;
+            for prefix in &HOME_PREFIXES {
+                if !bytes[i..].starts_with(prefix) {
+                    continue;
+                }
+                let after_prefix = i + prefix.len();
+                if bytes.get(after_prefix) != Some(&b'/') {
+                    continue;
+                }
+                let dir_start = after_prefix + 1;
+                if !starts_with_ignore_ascii_case(bytes, dir_start, dir_literal) {
+                    continue;
+                }
+                let dir_end = dir_start + dir_literal.len();
+                if !right_word_boundary(bytes, dir_end) {
+                    continue;
+                }
+                out.push(i..dir_end);
+                advance = dir_end - i;
+                break;
+            }
+            i += advance;
+        }
+        out
+    }
+
+    pub(super) fn ssh_dir(token: &str) -> Vec<Range<usize>> {
+        matches_home_dir_anchored(token, b".ssh")
+    }
+    pub(super) fn aws_dir(token: &str) -> Vec<Range<usize>> {
+        matches_home_dir_anchored(token, b".aws")
+    }
+    pub(super) fn gcloud_dir(token: &str) -> Vec<Range<usize>> {
+        matches_home_dir_anchored(token, b".config/gcloud")
+    }
+    pub(super) fn kube_config(token: &str) -> Vec<Range<usize>> {
+        matches_home_dir_loose(token, b".kube/config")
+    }
+    pub(super) fn docker_config(token: &str) -> Vec<Range<usize>> {
+        matches_home_dir_loose(token, b".docker/config.json")
+    }
+
+    pub(super) fn private_key_file(token: &str) -> Vec<Range<usize>> {
+        let bytes = token.as_bytes();
+        let candidates: [&[u8]; 3] = [b"id_rsa", b"id_ed25519", b"id_ecdsa"];
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let mut advance = 1usize;
+            for cand in &candidates {
+                if starts_with_ignore_ascii_case(bytes, i, cand)
+                    && left_word_boundary(bytes, i)
+                    && right_word_boundary(bytes, i + cand.len())
+                {
+                    out.push(i..i + cand.len());
+                    advance = cand.len();
+                    break;
+                }
+            }
+            i += advance;
+        }
+        out
+    }
+
+    fn simple_suffix(token: &str, lit: &[u8]) -> Vec<Range<usize>> {
+        let bytes = token.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let mut advance = 1usize;
+            if starts_with_ignore_ascii_case(bytes, i, lit)
+                && right_word_boundary(bytes, i + lit.len())
+            {
+                out.push(i..i + lit.len());
+                advance = lit.len();
+            }
+            i += advance;
+        }
+        out
+    }
+
+    pub(super) fn npmrc(token: &str) -> Vec<Range<usize>> {
+        simple_suffix(token, b".npmrc")
+    }
+    pub(super) fn pypirc(token: &str) -> Vec<Range<usize>> {
+        simple_suffix(token, b".pypirc")
+    }
+
+    pub(super) fn tfstate(token: &str) -> Vec<Range<usize>> {
+        let bytes = token.as_bytes();
+        let lit: &[u8] = b".tfstate";
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i + lit.len() <= bytes.len() {
+            let mut advance = 1usize;
+            if eq_ignore_ascii_case_slice(&bytes[i..i + lit.len()], lit)
+                && i > 0
+                && !bytes[i - 1].is_ascii_whitespace()
+            {
+                let mut left = i;
+                while left > 0 && !bytes[left - 1].is_ascii_whitespace() {
+                    left -= 1;
+                }
+                let end = i + lit.len();
+                if right_word_boundary(bytes, end) {
+                    out.push(left..end);
+                    advance = end - i;
+                }
+            }
+            i += advance;
+        }
+        out
+    }
+
+    // RFC 7468 mandates uppercase headers, so this scanner is intentionally
+    // case-sensitive. Mirrors `-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----`:
+    // at least one whitespace after BEGIN, at least one upper/whitespace
+    // byte before PRIVATE, then `\s+KEY-----`.
+    pub(super) fn pem_blob(token: &str) -> Vec<Range<usize>> {
+        let bytes = token.as_bytes();
+        let begin: &[u8] = b"-----BEGIN";
+        let private_kw: &[u8] = b"PRIVATE";
+        let key_tail: &[u8] = b"KEY-----";
+        let mut out = Vec::new();
+        let mut i = 0;
+        'outer: while i + begin.len() <= bytes.len() {
+            if &bytes[i..i + begin.len()] != begin {
+                i += 1;
+                continue;
+            }
+            let mut j = i + begin.len();
+            if j >= bytes.len() || !bytes[j].is_ascii_whitespace() {
+                i += 1;
+                continue;
+            }
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            let mut p = j;
+            while p + private_kw.len() <= bytes.len() {
+                if &bytes[p..p + private_kw.len()] == private_kw
+                    && p > j
+                    && bytes[j..p]
+                        .iter()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_whitespace())
+                {
+                    let mut q = p + private_kw.len();
+                    if q < bytes.len() && bytes[q].is_ascii_whitespace() {
+                        while q < bytes.len() && bytes[q].is_ascii_whitespace() {
+                            q += 1;
+                        }
+                        if q + key_tail.len() <= bytes.len()
+                            && &bytes[q..q + key_tail.len()] == key_tail
+                        {
+                            let end = q + key_tail.len();
+                            out.push(i..end);
+                            i = end;
+                            continue 'outer;
+                        }
+                    }
+                }
+                p += 1;
+            }
+            i += 1;
+        }
+        out
+    }
+}
+
+fn dotenv_via_regex(token: &str) -> Vec<Range<usize>> {
+    DOTENV.find_iter(token).map(|m| m.range()).collect()
+}
 
 /// Inspect a single string token and return every sensitive shape it
 /// matches. The slice preserves variant declaration order for
 /// determinism.
 pub fn classify(token: &str) -> Vec<SensitivePath> {
-    let probes: &[(&LazyLock<Regex>, SensitiveKind)] = &[
-        (&SSH_DIR, SensitiveKind::SshDir),
-        (&AWS_DIR, SensitiveKind::AwsDir),
-        (&GCLOUD_DIR, SensitiveKind::GcloudDir),
-        (&KUBE_CONFIG, SensitiveKind::KubeConfig),
-        (&DOCKER_CONFIG, SensitiveKind::DockerConfig),
-        (&PRIVATE_KEY_FILE, SensitiveKind::PrivateKeyFile),
-        (&DOTENV, SensitiveKind::Dotenv),
-        (&NPMRC, SensitiveKind::Npmrc),
-        (&PYPIRC, SensitiveKind::Pypirc),
-        (&TFSTATE, SensitiveKind::Tfstate),
-        (&PEM_BLOB, SensitiveKind::PemBlob),
+    type Probe = fn(&str) -> Vec<Range<usize>>;
+    let probes: &[(Probe, SensitiveKind)] = &[
+        (logic::ssh_dir, SensitiveKind::SshDir),
+        (logic::aws_dir, SensitiveKind::AwsDir),
+        (logic::gcloud_dir, SensitiveKind::GcloudDir),
+        (logic::kube_config, SensitiveKind::KubeConfig),
+        (logic::docker_config, SensitiveKind::DockerConfig),
+        (logic::private_key_file, SensitiveKind::PrivateKeyFile),
+        (dotenv_via_regex, SensitiveKind::Dotenv),
+        (logic::npmrc, SensitiveKind::Npmrc),
+        (logic::pypirc, SensitiveKind::Pypirc),
+        (logic::tfstate, SensitiveKind::Tfstate),
+        (logic::pem_blob, SensitiveKind::PemBlob),
     ];
     let mut out = Vec::new();
-    for (re, kind) in probes {
-        for m in re.find_iter(token) {
+    for (probe, kind) in probes {
+        for range in probe(token) {
             out.push(SensitivePath {
                 kind: *kind,
-                raw: m.as_str().to_string(),
+                raw: token[range].to_string(),
             });
         }
     }
@@ -153,21 +400,9 @@ mod tests {
 
     #[test]
     fn all_variant_regexes_compile() {
-        for re in [
-            &SSH_DIR,
-            &AWS_DIR,
-            &GCLOUD_DIR,
-            &KUBE_CONFIG,
-            &DOCKER_CONFIG,
-            &PRIVATE_KEY_FILE,
-            &DOTENV,
-            &NPMRC,
-            &PYPIRC,
-            &TFSTATE,
-            &PEM_BLOB,
-        ] {
-            LazyLock::force(re);
-        }
+        // Only `Dotenv` retains a regex; the other variants are pure
+        // hand-written scanners exercised by the classification tests below.
+        LazyLock::force(&DOTENV);
     }
 
     #[test]
