@@ -25,6 +25,8 @@
 #   - third-party actions are SHA-pinned in this file
 #   - host job publishes canonical verified-install archives, SPDX JSON SBOM,
 #     SHA256SUMS, and separate GitHub provenance/SBOM attestations
+#   - publish-crates-io job appended after `announce` for crates.io publish
+#     (requires `CRATES_IO_TOKEN` secret with publish-new + publish-update scopes)
 # See CONTRIBUTING.md "Regenerating release.yml" for the runbook.
 
 name: Release
@@ -426,3 +428,40 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+
+  # Publish the released version to crates.io. Runs only after the GitHub
+  # Release (`host`) succeeds on a tag push, so the canonical installer
+  # archives are already public before `cargo install` / `cargo binstall`
+  # become resolvable.
+  publish-crates-io:
+    needs:
+      - plan
+      - host
+    if: ${{ always() && needs.host.result == 'success' && needs.plan.outputs.publishing == 'true' }}
+    runs-on: "ubuntu-22.04"
+    permissions:
+      contents: read
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${TAG#v}"
+          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="ptuf") | .version')
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "tag $TAG (=> $TAG_VERSION) does not match Cargo.toml version $CARGO_VERSION" >&2
+            exit 1
+          fi
+      - name: Install lld (matches release build profile)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lld
+      - name: cargo publish
+        run: cargo publish --locked
