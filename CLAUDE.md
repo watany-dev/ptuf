@@ -21,6 +21,10 @@ push を物理的にブロックする。
 
 `make pbt` (`PROPTEST_CASES=10000 cargo test --features testing`) はリリース直前の深掘り PBT 用。
 
+`make e2e` (`tests/e2e_heavy.rs`, `--test-threads=1`) は実 `ptuf` を subprocess で連続 spawn し、
+fd / tempfile リーク・8 MiB stdin 境界・並列 hook と shared audit JSONL・4 層 config フル統合の
+15 ケースを `#[ignore]` で実行する重 E2E。`make check` には含めず、nightly / リリース直前に手動実行する。
+
 ## アーキテクチャ規約
 
 - 設計詳細は `docs/design/overview.md` から辿る
