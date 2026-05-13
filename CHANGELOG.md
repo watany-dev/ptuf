@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also given, preventing accidental rollbacks to known-vulnerable
   releases. Pre-release tags emit an advisory line and skip the guard
   because they cannot be safely ordered against bare semver.
+- `ptuf init` now writes host configuration files
+  (`~/.claude/settings.json`, `<repo>/.codex/hooks.json`,
+  `<repo>/.codex/config.toml`, `<repo>/.github/hooks/ptuf.json`,
+  `<repo>/.kiro/agent.json`) with mode `0600` on Unix instead of relying
+  on the process umask. Prevents world-readable hook configurations on
+  shared hosts. Behaviour on Windows is unchanged (NTFS ACLs are
+  inherited from the parent directory).
 
 ## [0.1.0] - 2026-05-10
 

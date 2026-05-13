@@ -210,6 +210,12 @@ codex_hooks = true
 - 既存ファイル中の未知 key (`model` / `temperature` / `prompt` /
   `allowedTools` / `resources` 等) は `serde_json::Value` のまま保持される
 - 書き込みは temp file + rename の原子的更新
+- Unix では temp file を `OpenOptions::create_new(true).mode(0o600)` で
+  生成し、rename 先のホスト設定ファイル (settings.json / hooks.json /
+  config.toml / agent.json) も owner-only (`0o600`) になる。process
+  umask に依存しないため、共有ホスト上で hook 設定が world-readable に
+  なる経路を塞ぐ。Windows では NTFS ACL を親ディレクトリから継承する
+  既存挙動をそのまま採用する
 
 ## install verification
 

@@ -224,7 +224,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
         })?;
     }
     let tmp = sibling_temp_path(path);
-    fs::write(&tmp, bytes).map_err(|e| InitError::Io {
+    write_secure(&tmp, bytes).map_err(|e| InitError::Io {
         path: tmp.clone(),
         source: e,
     })?;
@@ -232,6 +232,45 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
         path: path.to_path_buf(),
         source: e,
     })
+}
+
+/// Create `tmp` with mode 0600 on Unix and write `bytes` to it. Used by
+/// every host adapter so freshly installed `settings.json` / `hooks.json`
+/// / `config.toml` files are not world-readable on shared hosts.
+///
+/// Falls back to `fs::write` on non-Unix where mode bits don't apply
+/// (NTFS ACLs are inherited from the parent directory).
+///
+/// `create_new` is used so a stale tmp from a previous run can't smuggle
+/// in a looser mode; if one is present we drop it once and retry — same-
+/// pid collisions are possible in tests that re-enter `install` rapidly.
+#[cfg(unix)]
+pub(crate) fn write_secure(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let open = || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(tmp)
+    };
+    let mut file = match open() {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(tmp)?;
+            open()?
+        },
+        Err(e) => return Err(e),
+    };
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn write_secure(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(tmp, bytes)
 }
 
 fn sibling_temp_path(path: &Path) -> PathBuf {
