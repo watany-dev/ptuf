@@ -7,32 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security
-- `ptuf update` now passes `--locked` to `cargo install` so the
-  transitive dependency graph is pinned to the published `Cargo.lock`
-  rather than re-resolved at install time.
-- `ptuf update --version <older-tag>` is rejected unless `--force` is
-  also given, preventing accidental rollbacks to known-vulnerable
-  releases. Pre-release tags emit an advisory line and skip the guard
-  because they cannot be safely ordered against bare semver.
-- `ptuf init` now writes host configuration files
-  (`~/.claude/settings.json`, `<repo>/.codex/hooks.json`,
-  `<repo>/.codex/config.toml`, `<repo>/.github/hooks/ptuf.json`,
-  `<repo>/.kiro/agent.json`) with mode `0600` on Unix instead of relying
-  on the process umask. Prevents world-readable hook configurations on
-  shared hosts. Behaviour on Windows is unchanged (NTFS ACLs are
-  inherited from the parent directory).
-- `ptuf update` now downloads the prebuilt installer to a tmp file and
-  runs `gh attestation verify <file> --repo watany-dev/ptuf` before
-  executing it, replacing the previous `curl … | sh` pipeline that
-  trusted the network response. Pass `--skip-attestation` (or set
-  `PTUF_UPDATE_SKIP_ATTESTATION=1`) to bypass the check on hosts without
-  GitHub CLI; the bypass emits a `WARNING` line to stderr so the
-  unverified install is auditable. When `gh` is missing without the
-  bypass flag, ptuf exits `1` and leaves the downloaded script on disk
-  for manual inspection. Cargo-managed installs are unaffected.
-
-## [0.1.0] - 2026-05-10
+## [0.1.0] - 2026-05-13
 
 ### BREAKING
 - **CLI surface — zero-base simplification.** `v0.1.0` rewires the
@@ -226,6 +201,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exhaustive struct destructuring (`FilePath { tool, raw, absolute }`)
   now requires `..` because the underlying `PathFact` adds `expanded`,
   `canonical_or_raw`, and `origin` (review D8).
+
+### Security
+- `ptuf update` now passes `--locked` to `cargo install` so the
+  transitive dependency graph is pinned to the published `Cargo.lock`
+  rather than re-resolved at install time.
+- `ptuf update --version <older-tag>` is rejected unless `--force` is
+  also given, preventing accidental rollbacks to known-vulnerable
+  releases. Pre-release tags emit an advisory line and skip the guard
+  because they cannot be safely ordered against bare semver.
+- `ptuf init` now writes host configuration files
+  (`~/.claude/settings.json`, `<repo>/.codex/hooks.json`,
+  `<repo>/.codex/config.toml`, `<repo>/.github/hooks/ptuf.json`,
+  `<repo>/.kiro/agent.json`) with mode `0600` on Unix instead of relying
+  on the process umask. Prevents world-readable hook configurations on
+  shared hosts. Behaviour on Windows is unchanged (NTFS ACLs are
+  inherited from the parent directory).
+- `ptuf update` now downloads the prebuilt installer to a tmp file and
+  runs `gh attestation verify <file> --repo watany-dev/ptuf` before
+  executing it, replacing the previous `curl … | sh` pipeline that
+  trusted the network response. Pass `--skip-attestation` (or set
+  `PTUF_UPDATE_SKIP_ATTESTATION=1`) to bypass the check on hosts without
+  GitHub CLI; the bypass emits a `WARNING` line to stderr so the
+  unverified install is auditable. When `gh` is missing without the
+  bypass flag, ptuf exits `1` and leaves the downloaded script on disk
+  for manual inspection. Cargo-managed installs are unaffected.
 
 ## [0.0.1] - 2026-05-05
 
