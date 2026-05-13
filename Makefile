@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check check clean coverage deny doc e2e pbt tools install-hooks
+.PHONY: build test lint fmt fmt-check check clean coverage deny doc e2e pbt pbt-quick pbt-deep tools install-hooks
 
 # Keep these aligned with .github/workflows/ci.yml:
 # - CARGO_DENY_VERSION must match the cargo-deny pinned in
@@ -47,13 +47,24 @@ deny:
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
 
-# Deep property-based testing run. Defaults to 10000 cases per
-# property; override with `make pbt PBT_CASES=N`. Runs every test
-# binary (lib unit tests + integration tests) so each module's
-# `proptest!` block is exercised at the configured case count.
+# Property-based testing tiers. Three case-count budgets that trade
+# breadth for runtime so the same `proptest!` blocks can be exercised
+# at the right depth for the layer they run in:
+#   - `pbt-quick` (1024) ............ PR CI gate (`.github/workflows/ci.yml`).
+#   - `pbt`        (10000) .......... default deep run, also nightly CI.
+#   - `pbt-deep`  (100000) .......... pre-release / local soak; not on CI.
+# Override per-tier with `make pbt-deep PBT_DEEP_CASES=N` etc.
+PBT_QUICK_CASES ?= 1024
+pbt-quick:
+	PROPTEST_CASES=$(PBT_QUICK_CASES) cargo test --locked --features testing
+
 PBT_CASES ?= 10000
 pbt:
 	PROPTEST_CASES=$(PBT_CASES) cargo test --locked --features testing
+
+PBT_DEEP_CASES ?= 100000
+pbt-deep:
+	PROPTEST_CASES=$(PBT_DEEP_CASES) cargo test --locked --features testing
 
 # Heavy E2E tests reproducing real-world ptuf invocation patterns
 # (fd / tempfile leak checks, 8 MiB stdin boundary, sequential and

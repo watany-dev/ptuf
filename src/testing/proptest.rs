@@ -25,7 +25,7 @@ use proptest::collection::vec;
 use proptest::prelude::*;
 use serde_json::json;
 
-use crate::config::Mode;
+use crate::config::{Allowlist, Config, Mode, PackOverride, RuleOverride};
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::sensitive::SensitiveKind;
 use crate::hook_input::HookInput;
@@ -74,9 +74,11 @@ pub fn decision() -> impl Strategy<Value = Decision> {
     ]
 }
 
-/// Bounded list of decisions for `aggregate` properties.
+/// Bounded list of decisions for `aggregate` properties. The upper
+/// bound is generous enough to expose ordering / commutativity bugs
+/// that only surface with several restrictive entries mixed in.
 pub fn decision_list() -> impl Strategy<Value = Vec<Decision>> {
-    vec(decision(), 0..8)
+    vec(decision(), 0..32)
 }
 
 /// Heads that the built-in rules treat as dangerous primitives.
@@ -136,10 +138,12 @@ const SUSPICIOUS_ARGS: &[&str] = &[
 
 /// Single bash word: either a safe identifier or a sample drawn from
 /// the suspicious-args list. Kept whitespace-free so the resulting
-/// command parses as a single argv entry.
+/// command parses as a single argv entry. The identifier branch is
+/// intentionally allowed to grow up to 64 characters so generators
+/// occasionally probe long-token paths.
 fn bash_word() -> impl Strategy<Value = String> {
     prop_oneof![
-        4 => "[a-zA-Z0-9_./-]{1,12}",
+        4 => "[a-zA-Z0-9_./-]{1,64}",
         1 => proptest::sample::select(SUSPICIOUS_ARGS).prop_map(std::string::ToString::to_string),
     ]
 }
@@ -167,10 +171,12 @@ fn bash_pipeline() -> impl Strategy<Value = String> {
     vec(bash_argv(), 1..3).prop_map(|cmds| cmds.join(" | "))
 }
 
-/// Compound command: pipelines joined by `;`, `&&`, or `||`.
+/// Compound command: pipelines joined by `;`, `&&`, or `||`. Up to
+/// six pipelines so generators occasionally produce long compound
+/// commands that stress the lexer's per-segment state machine.
 pub fn bash_command() -> impl Strategy<Value = String> {
     let sep = prop_oneof![Just("; "), Just(" && "), Just(" || ")];
-    (vec(bash_pipeline(), 1..3), vec(sep, 0..3)).prop_map(|(parts, seps)| {
+    (vec(bash_pipeline(), 1..6), vec(sep, 0..6)).prop_map(|(parts, seps)| {
         let mut out = String::new();
         for (i, part) in parts.iter().enumerate() {
             if i > 0 {
@@ -183,33 +189,46 @@ pub fn bash_command() -> impl Strategy<Value = String> {
     })
 }
 
-/// Adversarial bash-string generator: any printable ASCII plus the
-/// metacharacters the lexer cares about. Used for panic-safety
-/// properties where structure of the output is not asserted.
+/// Adversarial bash-string generator. Mixes four input regions so the
+/// lexer / parser get probed across realistic-shape and adversarial
+/// shapes: printable ASCII (the historical default), arbitrary
+/// Unicode (CJK, accented letters), C0 control bytes (NUL, BEL, …),
+/// and short runs of replacement-char-tagged garbage that surface from
+/// `String::from_utf8_lossy` on the stdin reader. Used for panic-safety
+/// properties; structure of the output is not asserted.
 pub fn arbitrary_command() -> impl Strategy<Value = String> {
-    "[ -~]{0,40}"
+    prop_oneof![
+        4 => "[ -~]{0,40}",
+        2 => "\\PC{0,32}",
+        1 => "[\\x00-\\x1f]{0,16}",
+        1 => arbitrary_utf8_bytes()
+            .prop_map(|b| String::from_utf8_lossy(&b).into_owned()),
+    ]
 }
 
-/// Hook tool names. Bash is over-represented because that is the
-/// surface every built-in rule cares about.
+/// Hook tool names. Bash is the most-tested surface but kept at parity
+/// with structured tools so non-Bash facts (`path`, `url`) get an
+/// equal share of generated cases.
 fn tool_name() -> impl Strategy<Value = String> {
     prop_oneof![
-        4 => Just("Bash".to_string()),
-        1 => proptest::sample::select(&["Read", "Write", "Edit", "Glob", "Grep"][..])
+        2 => Just("Bash".to_string()),
+        2 => proptest::sample::select(&["Read", "Write", "Edit", "Glob", "Grep"][..])
             .prop_map(std::string::ToString::to_string),
         1 => "[A-Z][A-Za-z]{0,8}",
     ]
 }
 
 /// `HookInput` covering Bash payloads with a `command` string and
-/// non-Bash payloads with miscellaneous JSON shapes.
+/// non-Bash payloads with miscellaneous JSON shapes. The bias is
+/// rebalanced from the historical 4:1:1 (Bash-dominant) to 2:2:1 so
+/// `Read`/`Write`/`Edit` paths see meaningful coverage.
 pub fn hook_input() -> impl Strategy<Value = HookInput> {
     prop_oneof![
-        4 => bash_command().prop_map(|command| HookInput {
+        2 => bash_command().prop_map(|command| HookInput {
             tool_name: "Bash".to_string(),
             tool_input: json!({ "command": command }),
         }),
-        1 => (tool_name(), bash_command()).prop_map(|(tool_name, command)| HookInput {
+        2 => (tool_name(), bash_command()).prop_map(|(tool_name, command)| HookInput {
             tool_name,
             tool_input: json!({ "command": command }),
         }),
@@ -322,12 +341,34 @@ pub fn file_path() -> impl Strategy<Value = String> {
         ][..],
     )
     .prop_map(std::string::ToString::to_string);
+    // Path-escape / normalisation corner cases: `..` traversal, mixed
+    // separators, redundant slashes, `~`-relative escapes. The path
+    // canonicaliser and workspace-boundary check must stay correct
+    // when these reach `facts::path` extraction.
+    let traversal_paths = proptest::sample::select(
+        &[
+            "..",
+            "../",
+            "../..",
+            "../../etc/passwd",
+            "..\\..\\windows\\system32",
+            "/etc/../etc/passwd",
+            "///etc/passwd",
+            "~/../",
+            "$HOME/../",
+            "/repo/.ptuf.yaml/../../etc/passwd",
+            "./././foo",
+            "/repo//.//file",
+        ][..],
+    )
+    .prop_map(std::string::ToString::to_string);
     prop_oneof![
         2 => safe_abs,
         2 => project_rel,
         1 => home_form,
         2 => home_with_suffix,
         2 => sensitive_paths,
+        2 => traversal_paths,
     ]
 }
 
@@ -607,25 +648,32 @@ pub fn bash_wrapper_nested(depth: usize) -> impl Strategy<Value = String> {
     })
 }
 
-/// Adversarial byte vector that contains valid printable ASCII most
-/// of the time but mixes in invalid UTF-8 sequences (lone surrogate
-/// markers, naked 0xFF, an incomplete continuation byte) about 30%
-/// of the time. Used to drive fail-closed PBT for the hook stdin
-/// reader, which must surface an error rather than panic.
+/// Adversarial byte vector mixing four shapes: printable ASCII, NUL /
+/// control bytes (binary-protocol corner), invalid UTF-8 sequences
+/// (lone surrogate markers, naked 0xFF, incomplete continuations), and
+/// arbitrary `Vec<u8>` (no UTF-8 guarantee). Used to drive fail-closed
+/// PBT for the hook stdin reader, which must surface an error rather
+/// than panic.
 pub fn arbitrary_utf8_bytes() -> impl Strategy<Value = Vec<u8>> {
     let printable = "[ -~]{0,40}".prop_map(|s| s.into_bytes());
+    // Includes 0x00 (NUL) and the C0 / DEL band that can break naive
+    // string handling (`CString::new`, line-oriented readers).
+    let control = vec(0u8..=0x1f, 0..16);
     let bad = prop_oneof![
         Just(vec![0xFFu8]),
         Just(vec![0xC2u8]),           // dangling 2-byte lead.
         Just(vec![0xED, 0xA0, 0x80]), // UTF-8-encoded surrogate U+D800.
         Just(vec![0xE0, 0x80]),       // truncated 3-byte sequence.
     ];
+    let raw = vec(any::<u8>(), 0..256);
     prop_oneof![
-        7 => printable,
-        3 => (bad, "[ -~]{0,8}").prop_map(|(mut b, tail)| {
+        5 => printable,
+        2 => control,
+        2 => (bad, "[ -~]{0,8}").prop_map(|(mut b, tail)| {
             b.extend_from_slice(tail.as_bytes());
             b
         }),
+        1 => raw,
     ]
 }
 
@@ -662,4 +710,136 @@ pub fn safe_command_string() -> impl Strategy<Value = String> {
         "[a-zA-Z0-9_./-]{1,8}".prop_map(|s| s.to_string()),
     ];
     (head, arg).prop_map(|(h, a)| if a.is_empty() { h } else { format!("{h} {a}") })
+}
+
+/// Heads accessible from outside the crate; mirrors the private
+/// `SAFE_HEADS` constant. Used by `tests/rules_proptest.rs` to assert
+/// that no built-in rule fires on a head this generator declares safe.
+pub fn safe_heads() -> &'static [&'static str] {
+    SAFE_HEADS
+}
+
+// --- Config filter strategies ------------------------------------------------
+//
+// These power `tests/filter_proptest.rs`. They generate the four
+// dimensions the engine's filter pipeline composes (`Mode`,
+// `pack_overrides`, `rule_overrides`, `allowlists`) so PBT can probe
+// every interaction without enumerating handcrafted combinations.
+
+/// `PackOverride` overlay drawn uniformly across the three
+/// `enabled` shapes.
+pub fn pack_override() -> impl Strategy<Value = PackOverride> {
+    prop_oneof![
+        Just(PackOverride { enabled: None }),
+        Just(PackOverride {
+            enabled: Some(false),
+        }),
+        Just(PackOverride {
+            enabled: Some(true),
+        }),
+    ]
+}
+
+/// `RuleOverride` overlay covering every (enabled × decision × severity)
+/// combination, including the all-`None` no-op overlay.
+pub fn rule_override() -> impl Strategy<Value = RuleOverride> {
+    let enabled = prop_oneof![Just(None), Just(Some(false)), Just(Some(true))];
+    let decision = prop_oneof![Just(None), decision_kind().prop_map(Some),];
+    let sev = prop_oneof![Just(None), severity().prop_map(Some)];
+    (enabled, decision, sev).prop_map(|(enabled, decision, severity)| RuleOverride {
+        enabled,
+        decision,
+        severity,
+    })
+}
+
+/// Expiry-timestamp variants for `Allowlist.expires_at`. Spans the
+/// four branches of `allowlist_covers`: future (allowed), past
+/// (expired), malformed (treated as expired), and absent (never
+/// expires).
+pub fn expiry_string() -> impl Strategy<Value = Option<String>> {
+    prop_oneof![
+        1 => Just(None),
+        1 => Just(Some("2099-12-31T23:59:59Z".to_string())),
+        1 => Just(Some("2000-01-01T00:00:00Z".to_string())),
+        1 => Just(Some("not-a-timestamp".to_string())),
+    ]
+}
+
+fn rule_id_picker(known: Vec<&'static str>) -> impl Strategy<Value = String> {
+    // 3:1 in favour of the caller-supplied rule id pool so generated
+    // overlays / allowlists actually intersect the rules under test.
+    if known.is_empty() {
+        return "[a-z][a-z0-9_]{1,8}\\.[a-z][a-z0-9_]{1,8}"
+            .prop_map(|s: String| s)
+            .boxed();
+    }
+    let pool = proptest::sample::select(known);
+    prop_oneof![
+        3 => pool.prop_map(std::string::ToString::to_string),
+        1 => "[a-z][a-z0-9_]{1,8}\\.[a-z][a-z0-9_]{1,8}".prop_map(|s: String| s),
+    ]
+    .boxed()
+}
+
+/// `Allowlist` entry whose `rule_ids` are biased toward
+/// `known_rule_ids` so the entry actually intersects the rule under
+/// test. `when` is always `None` to keep the generator decoupled from
+/// plugin DSL evaluation; the `when`-suppression branches are covered
+/// by dedicated unit tests in `src/engine/filter.rs`.
+pub fn allowlist_entry(known_rule_ids: Vec<&'static str>) -> impl Strategy<Value = Allowlist> {
+    let id = "[a-z][a-z0-9_-]{0,8}";
+    let rule_ids = vec(rule_id_picker(known_rule_ids), 1..4);
+    let reason = prop_oneof![Just(None), "[ -~]{0,30}".prop_map(Some)];
+    (id, rule_ids, expiry_string(), reason).prop_map(|(id, rule_ids, expires_at, reason)| {
+        Allowlist {
+            id,
+            rule_ids,
+            when: None,
+            expires_at,
+            reason,
+        }
+    })
+}
+
+fn pack_name_picker() -> impl Strategy<Value = String> {
+    prop_oneof![
+        Just("pack.demo".to_string()),
+        Just("core.filesystem".to_string()),
+        Just("core.network".to_string()),
+        "[a-z][a-z0-9_]{1,8}\\.[a-z][a-z0-9_]{1,8}".prop_map(|s| s),
+    ]
+}
+
+/// `Config` with arbitrary filter shapes — `Mode`, `pack_overrides`,
+/// `rule_overrides`, and `allowlists`. Other fields are left at
+/// `Config::default()` so the engine builder always succeeds.
+///
+/// `known_rule_ids` should include the rule ids the surrounding
+/// property cares about (e.g. `core.filesystem.destructive-rm`,
+/// `pack.demo.no-curl`); the generator biases overlays / allowlists
+/// toward them so most generated configs actually exercise the
+/// matching code paths.
+pub fn config_with_filters(known_rule_ids: Vec<&'static str>) -> impl Strategy<Value = Config> {
+    let known_for_overrides = known_rule_ids.clone();
+    let known_for_allowlists = known_rule_ids;
+    let pack_overlays = vec((pack_name_picker(), pack_override()), 0..4);
+    let rule_overlays = vec((rule_id_picker(known_for_overrides), rule_override()), 0..4);
+    let allowlists = vec(allowlist_entry(known_for_allowlists), 0..4);
+    (mode(), pack_overlays, rule_overlays, allowlists).prop_map(
+        |(mode, pack_overlays, rule_overlays, allowlists)| {
+            let mut cfg = Config {
+                mode,
+                ..Config::default()
+            };
+            for (k, v) in pack_overlays {
+                cfg.pack_overrides.insert(k, v);
+            }
+            for (k, v) in rule_overlays {
+                cfg.rule_overrides.insert(k, v);
+            }
+            cfg.allowlists = allowlists;
+            cfg
+        },
+    )
 }

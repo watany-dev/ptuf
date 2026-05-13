@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc de128519db9dba3df995e5048efb6b0d91ebddf93543d25de8b9ef79c27fdc26 # shrinks to cfg = Config { mode: Monitor, fail_closed: true, pack_overrides: {"core.project_hygiene": PackOverride { enabled: Some(false) }, "core.workspace": PackOverride { enabled: Some(false) }}, rule_overrides: {}, allowlists: [], plugin_paths: [], audit: AuditConfig { enabled: true, path: None, include_allowed: false, include_denied: true, redaction: Strict }, protected_branches: ["main", "master", "release/*"], additional_workspaces: [] }
+cc aca7ef37f5b320616e4a147ae557b6bdd6f657b3609b08ac25a9e5b726a0be2f # shrinks to cfg = Config { mode: Enforce, fail_closed: true, pack_overrides: {"core.project_hygiene": PackOverride { enabled: Some(false) }, "core.workspace": PackOverride { enabled: Some(false) }}, rule_overrides: {}, allowlists: [Allowlist { id: "a", rule_ids: ["core.filesystem.destructive-rm"], when: None, expires_at: None, reason: None }], plugin_paths: [], audit: AuditConfig { enabled: true, path: None, include_allowed: false, include_denied: true, redaction: Strict }, protected_branches: ["main", "master", "release/*"], additional_workspaces: [] }
+cc 1ed24df81d7392f7115d49d839de8bee49288f4743af7a4d6e8be2532c8119c3 # shrinks to overlays = [("core.filesystem", PackOverride { enabled: Some(false) })]

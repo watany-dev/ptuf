@@ -32,7 +32,12 @@ pub enum Severity {
 /// Variant tag of [`Decision`] without the carried payload. Lets a rule
 /// declare its `defaultDecision` independently from the per-call
 /// `rule_id` / `reason`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// The variant order (`Allow < Monitor < Ask < Deny`) intentionally
+/// matches the internal `DecisionRank` so callers (and integration-test
+/// PBT) can compare strictness without crossing the `pub(crate)`
+/// boundary on `Decision::rank`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DecisionKind {
     Allow,

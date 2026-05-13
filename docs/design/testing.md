@@ -19,7 +19,9 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 所有する Tidy First 方針に従う。複数モジュールにまたがる統合層の PBT のみ
 `tests/` 配下に独立して置く: engine end-to-end は `tests/engine_proptest.rs`、
 全 rule にまたがる否定空間は `tests/rules_proptest.rs`、CLI argv 解析は
-`tests/cli_parse_proptest.rs`。
+`tests/cli_parse_proptest.rs`、`engine::filter` の合成則
+(`hard_deny` × `allowlist` × `rule_override` × `pack_override` × Mode demote)
+は `tests/filter_proptest.rs`。
 
 ## 主要な不変条件
 
@@ -80,11 +82,22 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 
 ## ランタイム / CI 構成
 
-- **デフォルト**: `cargo test --features testing` (`make check`, CI) は
-  proptest をデフォルト 256 ケースで実行。失敗ケースは
-  `proptest-regressions/` に固定化される。
-- **深掘り**: `make pbt` (デフォルト 10000 ケース、`PBT_CASES=N` で上書き可)
-  をローカル / 夜間 / リリース直前に手動実行。
+PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。case 数の
+階層は `Makefile` の `pbt-quick` / `pbt` / `pbt-deep` ターゲットおよび
+`.github/workflows/ci.yml` の `test` / `pbt-deep` job に対応する。
+
+- **PR ゲート (`pbt-quick`)**: PR 用 CI (`test` job) は
+  `PROPTEST_CASES=1024` を明示し、proptest デフォルトの 256 ケースより
+  4 倍深く property を回す。`make pbt-quick` がローカル等価コマンド。
+  失敗ケースは `proptest-regressions/` に固定化される。
+- **`make check` (ローカル)**: `cargo test --features testing` は
+  proptest をデフォルト 256 ケースで実行。Tidy First の最短ループ用。
+- **深掘り (`pbt`)**: `make pbt` (デフォルト 10000 ケース、`PBT_CASES=N` で
+  上書き可) をローカル / 夜間 / リリース直前に手動実行。同じ 10000 ケース
+  予算の `pbt-deep` job が main push 時に CI で走る。
+- **ソーク (`pbt-deep`)**: `make pbt-deep` (デフォルト 100000 ケース、
+  `PBT_DEEP_CASES=N` で上書き可) はリリース前 / 個別調査向け。CI では
+  動かさず、ローカル実行のみ。
 - **重 E2E**: `make e2e` (`tests/e2e_heavy.rs`, `--test-threads=1`) は
   実 `ptuf` バイナリを subprocess で連続 spawn し、fd / tempfile リーク
   検出 (200 回 spawn 前後の `/proc/self/fd` 差分)、8 MiB stdin 境界、
@@ -104,12 +117,23 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 `src/testing/proptest.rs` に共通戦略 (Decision / Severity / HookInput /
 bash_command / bash_with_quoting / bash_redirects / bash_heredoc /
 bash_process_subst / combined_short_opts / bash_wrapper_nested /
-mcp_nested_input / arbitrary_utf8_bytes / safe_command_string) を集約し、
+mcp_nested_input / arbitrary_utf8_bytes / safe_command_string /
+safe_heads / pack_override / rule_override / allowlist_entry /
+config_with_filters) を集約し、
 `#[cfg(any(test, feature = "testing"))] pub mod testing` で各モジュールの
 テストブロックと `tests/` 配下の統合 PBT (`engine_proptest.rs` /
-`rules_proptest.rs` / `cli_parse_proptest.rs`) の両方から参照する。
-`testing` feature は optional `proptest` 依存だけを有効化し、通常の
-`cargo build --release` では出荷バイナリに含まれない。
+`rules_proptest.rs` / `cli_parse_proptest.rs` / `filter_proptest.rs`) の
+両方から参照する。`testing` feature は optional `proptest` 依存だけを
+有効化し、通常の `cargo build --release` では出荷バイナリに含まれない。
+
+`arbitrary_command()` は ASCII printable / Unicode (`\PC`) / 制御文字
+(NUL 含む) / `String::from_utf8_lossy` 経由の lossy ASCII の 4 領域を
+混ぜて返す。`file_path()` は `safe_paths` / `sensitive_paths` /
+`traversal_paths` (`..`, `../../etc/passwd`, `..\\..\\windows\\system32`,
+`///etc/passwd` 等 12 件) / 任意文字列の 4 領域から重み付きで選ぶ。
+`tool_name()` / `hook_input()` は Bash / 構造化 tool / 任意文字列を
+`2:2:1` で混ぜ、Bash 偏重を緩和して Read / Write / WebFetch 系の
+fact カバレッジを確保する。
 
 ## 契約テスト
 
