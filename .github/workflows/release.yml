@@ -356,7 +356,13 @@ jobs:
 
             case "$source" in
               *.tar.gz)
-                cp "$source" "artifacts/$dest"
+                # cargo-dist 0.31.0 already emits canonical names, so the
+                # source path may equal "artifacts/$dest". cp would fail with
+                # "same file" in that case; skip the copy when there is
+                # nothing to rename.
+                if [ "$source" != "artifacts/$dest" ]; then
+                  cp "$source" "artifacts/$dest"
+                fi
                 ;;
               *.tar.xz)
                 tmpdir="$(mktemp -d)"
@@ -376,9 +382,17 @@ jobs:
             esac
           }
 
+          copy_zip_if_different() {
+            local src="$1"
+            local dest="artifacts/$2"
+            if [ "$src" != "$dest" ]; then
+              cp "$src" "$dest"
+            fi
+          }
+
           canonical_tar_gz 'ptuf-*x86_64-unknown-linux-musl.tar.*' 'ptuf-x86_64-unknown-linux-musl.tar.gz'
           canonical_tar_gz 'ptuf-*aarch64-apple-darwin.tar.*' 'ptuf-aarch64-apple-darwin.tar.gz'
-          cp "$(find_one_artifact 'ptuf-*x86_64-pc-windows-msvc.zip')" 'artifacts/ptuf-x86_64-pc-windows-msvc.zip'
+          copy_zip_if_different "$(find_one_artifact 'ptuf-*x86_64-pc-windows-msvc.zip')" 'ptuf-x86_64-pc-windows-msvc.zip'
       - name: Generate SPDX JSON SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
