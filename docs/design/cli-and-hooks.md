@@ -432,11 +432,23 @@ envelope を持たないため reason は stderr のみで伝える。`Ask` は 
 ## Update の境界
 
 `ptuf update` は Decision エンジンを **経由しない**。`HookInput` を構築
-することなく `std::process::Command` で `curl` / `cargo` / `sh` /
+することなく `std::process::Command` で `curl` / `cargo` / `gh` / `sh` /
 `powershell` を spawn するだけの薄い shell-out で、policy / plugin /
 audit 経路には一切触れない。fail-closed 契約 (`policy-load-failed`,
 `invalid-payload`) も適用されない — update の失敗はネットワーク不通や
 updater 非ゼロ exit などインフラ層の問題で、Decision 層の問題ではない。
+
+ただし prebuilt installer 経路に限り **download → attestation verify →
+execute** の 3 段階が走る: ptuf は `curl` (Unix) / `iwr` (Windows) で
+installer script をプロセス専用 tmp に落とし、`gh attestation verify
+<tmp> --repo watany-dev/ptuf` で artifact attestation を検証してから
+ようやく `sh` / `powershell` で実行する。`gh` が PATH に無い場合は exit
+`1` で download 済みファイルを残置し、ユーザが GitHub CLI を入れて手動
+verify できるようにする。`--skip-attestation` (もしくは
+`PTUF_UPDATE_SKIP_ATTESTATION=1`) はこの check を skip し、stderr に
+`WARNING` を 1 行出して未検証 install であることを監査可能にする。
+cargo install 経路は `--locked` で transitive deps を pin する以外
+追加検証を持たない (cargo 自身が `.crate` の hash を検証するため)。
 
 `self_paths::ProtectedPaths` の自己保護ルール (別の ptuf hook 経由で
 `~/.cargo/bin/ptuf` 等が書換対象となった場合に deny する) と `ptuf

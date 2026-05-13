@@ -98,11 +98,13 @@ where
 {
     let mut check = false;
     let mut force = false;
+    let mut skip_attestation = false;
     let mut version: Option<String> = None;
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--check" => check = true,
             "--force" => force = true,
+            "--skip-attestation" => skip_attestation = true,
             "--version" => {
                 let value = iter.next().ok_or(ParseError::MissingValue("--version"))?;
                 version = Some(value.clone());
@@ -120,6 +122,7 @@ where
         check,
         version,
         force,
+        skip_attestation,
     }))
 }
 
@@ -451,6 +454,7 @@ mod tests {
                 check: false,
                 version: None,
                 force: false,
+                skip_attestation: false,
             })
         );
     }
@@ -463,6 +467,7 @@ mod tests {
                 check: true,
                 version: None,
                 force: false,
+                skip_attestation: false,
             })
         );
     }
@@ -475,6 +480,7 @@ mod tests {
                 check: false,
                 version: Some("v0.2.0".to_string()),
                 force: false,
+                skip_attestation: false,
             })
         );
     }
@@ -487,6 +493,7 @@ mod tests {
                 check: false,
                 version: Some("v0.2.0".to_string()),
                 force: false,
+                skip_attestation: false,
             })
         );
     }
@@ -499,6 +506,7 @@ mod tests {
                 check: false,
                 version: None,
                 force: true,
+                skip_attestation: false,
             })
         );
     }
@@ -511,6 +519,20 @@ mod tests {
                 check: false,
                 version: Some("v0.2.0".to_string()),
                 force: true,
+                skip_attestation: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_update_skip_attestation_flag() {
+        assert_eq!(
+            cmd(&["update", "--skip-attestation"]),
+            Command::Update(UpdateOptions {
+                check: false,
+                version: None,
+                force: false,
+                skip_attestation: true,
             })
         );
     }

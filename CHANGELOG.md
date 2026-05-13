@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the process umask. Prevents world-readable hook configurations on
   shared hosts. Behaviour on Windows is unchanged (NTFS ACLs are
   inherited from the parent directory).
+- `ptuf update` now downloads the prebuilt installer to a tmp file and
+  runs `gh attestation verify <file> --repo watany-dev/ptuf` before
+  executing it, replacing the previous `curl … | sh` pipeline that
+  trusted the network response. Pass `--skip-attestation` (or set
+  `PTUF_UPDATE_SKIP_ATTESTATION=1`) to bypass the check on hosts without
+  GitHub CLI; the bypass emits a `WARNING` line to stderr so the
+  unverified install is auditable. When `gh` is missing without the
+  bypass flag, ptuf exits `1` and leaves the downloaded script on disk
+  for manual inspection. Cargo-managed installs are unaffected.
 
 ## [0.1.0] - 2026-05-10
 

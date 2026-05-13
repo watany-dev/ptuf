@@ -131,8 +131,25 @@ the install path and dispatches to the matching updater:
   is on PATH, it runs `cargo install ptuf --locked --force` (the
   `--locked` flag pins transitive deps to the published `Cargo.lock` so
   the installed binary matches the audited release tree);
-- otherwise it pipes the cargo-dist installer (`ptuf-installer.sh` on
-  Unix, `ptuf-installer.ps1` on Windows) for the requested release tag.
+- otherwise it downloads the cargo-dist installer
+  (`ptuf-installer.sh` on Unix, `ptuf-installer.ps1` on Windows) to a
+  process-scoped tmp file, verifies its GitHub artifact attestation with
+  `gh attestation verify <file> --repo watany-dev/ptuf`, and only then
+  executes it.
+
+The prebuilt path therefore runs three sub-processes in order:
+
+| step | command (Unix) | command (Windows) |
+| ---- | -------------- | ----------------- |
+| download | `curl --proto =https --tlsv1.2 -fLsS -o <tmp>/installer.sh <url>` | `powershell ... iwr -useb <url> -OutFile <tmp>` |
+| verify | `gh attestation verify <tmp>/installer.sh --repo watany-dev/ptuf` | same |
+| execute | `sh <tmp>/installer.sh` | `powershell -ExecutionPolicy Bypass -File <tmp>` |
+
+If `gh` is missing on PATH, ptuf exits `1` and leaves the downloaded
+script on disk so you can install GitHub CLI and re-verify it manually.
+Pass `--skip-attestation` (or set `PTUF_UPDATE_SKIP_ATTESTATION=1`) to
+bypass the check on hosts where `gh` cannot be installed; the bypass
+emits a `WARNING` line to stderr so the unverified install is auditable.
 
 When `--version` pins an older tag, `ptuf update` refuses by default and
 prints "refusing to downgrade — installed X is newer than the requested
@@ -143,15 +160,18 @@ single advisory line on stderr to keep the skip auditable.
 Common flags:
 
 ```bash
-ptuf update            # upgrade to the latest GitHub release
-ptuf update --check    # only print current vs. latest, no write
-ptuf update --version v0.2.0   # pin to a specific tag
-ptuf update --force    # reinstall even if already up to date (also
-                       # required to roll back to an older tag)
+ptuf update                        # upgrade to the latest GitHub release
+ptuf update --check                # only print current vs. latest, no write
+ptuf update --version v0.2.0       # pin to a specific tag
+ptuf update --force                # reinstall even if already up to date (also
+                                   # required to roll back to an older tag)
+ptuf update --skip-attestation     # skip `gh attestation verify` (CI/sandbox)
 ```
 
-`ptuf update` shells out to `curl` (for the latest-release lookup) and
-to either `cargo` or `sh` / `powershell` for the actual swap. It does
-not embed an HTTP client. If you want to reproduce the verified install
-manually (curl + SHA256SUMS + `gh attestation verify`), continue to
-follow the steps under [Verified install](#verified-install-recommended).
+`ptuf update` shells out to `curl` (for the latest-release lookup and
+the prebuilt download) and to either `cargo`, `gh`, `sh`, or
+`powershell` for the verify / swap steps. It does not embed an HTTP
+client. The verify step is the same one documented under
+[Verified install](#verified-install-recommended-for-pinned-deployments),
+so the auto-update path now matches the manual recommendation by
+default.
