@@ -31,3 +31,6 @@ lcov.info
 .codex/config.toml
 .codex/hooks.json
 .github/hooks/
+
+# actionlint binary downloaded locally for workflow linting
+/actionlint
