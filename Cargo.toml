@@ -6,6 +6,7 @@ rust-version = "1.93.0"
 license = "Apache-2.0"
 description = "PreToolUseFilter: a generic guardrail layer for coding agents"
 repository = "https://github.com/watany-dev/ptuf"
+homepage = "https://github.com/watany-dev/ptuf"
 readme = "README.md"
 keywords = ["claude-code", "guardrail", "hook", "pretooluse", "agent"]
 categories = ["command-line-utilities", "development-tools"]
