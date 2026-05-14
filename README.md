@@ -91,10 +91,34 @@ for pinned deployments), see [`docs/install.md`](docs/install.md).
 Rust users can alternatively run `cargo binstall ptuf` (prebuilt) or
 `cargo install ptuf` (build from source, Rust 1.93+).
 
-Once installed, `ptuf update` upgrades the binary in place — it
-auto-detects whether the current binary came from `cargo install` or
-the prebuilt installer and shells out to the matching updater (no
-`--cargo` / `--prebuilt` flag to remember).
+### Homebrew (macOS / Linux)
+
+```bash
+brew install watany-dev/tap/ptuf
+```
+
+Tracks the latest tagged release. Use `brew upgrade ptuf` to update;
+`ptuf update` does NOT detect Homebrew installs. For checksum +
+attestation verification, use the Verified install path in
+[`docs/install.md`](docs/install.md) instead.
+
+### mise / aqua
+
+```bash
+# mise — pulls the matching archive from GitHub Releases via the ubi backend
+mise use -g ubi:watany-dev/ptuf@latest
+```
+
+For aqua, add a `github_release` entry to your repo-local `aqua.yaml`
+pointing at `watany-dev/ptuf` with asset
+`ptuf-{{.OS}}-{{.Arch}}.tar.gz`. Both paths consume the existing
+release archives — no extra packaging is required.
+
+Once installed via `cargo install` or the prebuilt installer, `ptuf update`
+upgrades the binary in place — it auto-detects which of those two paths
+was used and shells out to the matching updater (no `--cargo` / `--prebuilt`
+flag to remember). Homebrew / mise / aqua installs are managed by their
+own update commands.
 
 ## Wire it into your agent
 

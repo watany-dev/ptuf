@@ -8,7 +8,15 @@ cargo-dist-version = "0.31.0"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["shell", "powershell"]
+installers = ["shell", "powershell", "homebrew"]
+# Homebrew tap to publish the generated formula into. The repo name must
+# start with `homebrew-` so `brew tap watany-dev/tap` resolves correctly
+# (Homebrew strips the `homebrew-` prefix on tap references).
+tap = "watany-dev/homebrew-tap"
+formula = "ptuf"
+# Required to actually push the formula on tagged releases. Without this
+# the formula is generated but never committed to the tap.
+publish-jobs = ["homebrew"]
 # Archive formats to publish for Unix and Windows targets
 unix-archive = ".tar.gz"
 windows-archive = ".zip"

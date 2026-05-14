@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Homebrew tap distribution wired into `dist-workspace.toml` and
+  `.github/workflows/release.yml` via the new `publish-homebrew-formula`
+  job. `brew install watany-dev/tap/ptuf` becomes available on the next
+  tagged release once the maintainer creates `watany-dev/homebrew-tap`
+  and adds the `HOMEBREW_TAP_TOKEN` Actions secret. See
+  `docs/RELEASING.md` "One-time setup" for the runbook.
+- `homepage` added to `Cargo.toml` (required by cargo-dist for Homebrew
+  formula generation).
+- README and `docs/install.md` now document mise (`ubi` backend) and aqua
+  (`github_release`) as no-curl install paths consuming the existing
+  release archives.
+
 ## [0.1.0] - 2026-05-13
 
 ### BREAKING
