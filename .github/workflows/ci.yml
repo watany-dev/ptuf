@@ -17,7 +17,7 @@ env:
 jobs:
   fmt:
     name: Format check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -31,7 +31,7 @@ jobs:
 
   lint:
     name: Clippy + doc warnings
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -57,7 +57,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-14]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -67,6 +67,29 @@ jobs:
       - uses: taiki-e/install-action@ec28e287910af896fd98e04056d31fa68607e7ad # v2.77.4
         with:
           tool: cargo-nextest@0.9.133
+      # On macos-14 hosted images something between rust-cache and
+      # install-action replaces $CARGO_HOME/bin/cargo with the bare
+      # rustup-init binary, so `cargo nextest run` reports
+      # `Usage: rustup-init[EXE]` and dies. Re-assert the multiplexer
+      # shim by symlinking cargo/rustc/rustdoc back to the rustup binary
+      # right before the test step. Idempotent on Linux.
+      - name: Diagnose and repair cargo shim
+        shell: bash
+        run: |
+          set -x
+          echo "PATH=$PATH"
+          which -a cargo || true
+          ls -la "$CARGO_HOME/bin" || true
+          file "$CARGO_HOME/bin/cargo" 2>/dev/null || true
+          if ! cargo --version >/dev/null 2>&1; then
+            echo "::warning::cargo shim broken after install-action; repairing"
+            rustup_bin=$(command -v rustup)
+            for shim in cargo rustc rustdoc; do
+              ln -sf "$rustup_bin" "$CARGO_HOME/bin/$shim"
+            done
+          fi
+          cargo --version
+          rustc --version
       - name: Test (PR-tier PBT, PROPTEST_CASES=1024)
         env:
           PROPTEST_CASES: 1024
@@ -81,7 +104,7 @@ jobs:
     # local soak / pre-release validation.
     name: PBT deep (10k cases)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -99,7 +122,7 @@ jobs:
 
   coverage:
     name: Coverage (tarpaulin)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -136,7 +159,7 @@ jobs:
 
   msrv:
     name: MSRV check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -149,7 +172,7 @@ jobs:
 
   actionlint:
     name: actionlint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -162,7 +185,7 @@ jobs:
 
   zizmor:
     name: zizmor
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write  # upload SARIF to Code Scanning
@@ -179,7 +202,7 @@ jobs:
 
   security:
     name: cargo-deny
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -189,7 +212,7 @@ jobs:
 
   machete:
     name: cargo-machete
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
