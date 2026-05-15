@@ -63,21 +63,33 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      # Guard against macOS hosted-image states where rustup is present but
-      # no toolchain is set as default, leaving $CARGO_HOME/bin/cargo as a
-      # bare rustup-init shim. Idempotent on Linux where dtolnay already
-      # set a default. See PR #89 for the rustup-init[EXE] symptom.
-      - name: Ensure default rust toolchain
-        shell: bash
-        run: |
-          set -eux
-          rustup show active-toolchain || rustup default stable
-          cargo --version
-          rustc --version
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - uses: taiki-e/install-action@ec28e287910af896fd98e04056d31fa68607e7ad # v2.77.4
         with:
           tool: cargo-nextest@0.9.133
+      # On macos-14 hosted images something between rust-cache and
+      # install-action replaces $CARGO_HOME/bin/cargo with the bare
+      # rustup-init binary, so `cargo nextest run` reports
+      # `Usage: rustup-init[EXE]` and dies. Re-assert the multiplexer
+      # shim by symlinking cargo/rustc/rustdoc back to the rustup binary
+      # right before the test step. Idempotent on Linux.
+      - name: Diagnose and repair cargo shim
+        shell: bash
+        run: |
+          set -x
+          echo "PATH=$PATH"
+          which -a cargo || true
+          ls -la "$CARGO_HOME/bin" || true
+          file "$CARGO_HOME/bin/cargo" 2>/dev/null || true
+          if ! cargo --version >/dev/null 2>&1; then
+            echo "::warning::cargo shim broken after install-action; repairing"
+            rustup_bin=$(command -v rustup)
+            for shim in cargo rustc rustdoc; do
+              ln -sf "$rustup_bin" "$CARGO_HOME/bin/$shim"
+            done
+          fi
+          cargo --version
+          rustc --version
       - name: Test (PR-tier PBT, PROPTEST_CASES=1024)
         env:
           PROPTEST_CASES: 1024
