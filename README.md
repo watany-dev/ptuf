@@ -33,8 +33,9 @@ runs the call. A few examples of what fires by default:
 - **`core.injection.invisible-chars`** — asks before `Read`/`Edit`, a
   path-bearing MCP call, or a Bash reader (`cat`, `head`, …) ingests a
   file whose contents hide characters invisible to a human reviewer:
-  zero-width spaces, BiDi overrides (Trojan Source), Unicode Tag chars
-  (ASCII smuggling), C0/C1 controls. Catches indirect prompt injection
+  zero-width spaces, BiDi overrides and directional marks (Trojan
+  Source), Unicode Tag chars (ASCII smuggling), variation selectors
+  (data smuggling), C0/C1 controls. Catches indirect prompt injection
   that looks harmless in review.
 - **`core.project_hygiene.lock-mismatch-pnpm` / `lock-mismatch-uv`**
   *(opt-in)* — blocks `npm install` when `pnpm-lock.yaml` is present (or
