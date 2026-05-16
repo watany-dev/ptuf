@@ -363,4 +363,41 @@ rules:
             other => panic!("expected Compile error, got {other:?}"),
         }
     }
+
+    use proptest::prelude::*;
+
+    // Plugin YAML inputs: mostly arbitrary noise, plus partially-valid
+    // documents that drive each validation branch (apiVersion / kind,
+    // capability facts, rule `when:` compilation).
+    fn plugin_source() -> impl Strategy<Value = String> {
+        prop_oneof![
+            3 => crate::testing::proptest::arbitrary_command(),
+            1 => ("[A-Za-z0-9./]{1,16}", "[A-Za-z]{1,12}", "[a-z.]{1,16}").prop_map(
+                |(api, kind, name)| format!(
+                    "apiVersion: {api}\nkind: {kind}\nmetadata:\n  name: {name}\n",
+                ),
+            ),
+            1 => "[a-z.]{1,16}".prop_map(|fact| format!(
+                "apiVersion: ptuf.dev/v1\nkind: Plugin\nmetadata:\n  name: x\n\
+                 capabilities:\n  requires: [{fact}]\n",
+            )),
+            1 => "[a-z.]{1,16}".prop_map(|rule_id| format!(
+                "apiVersion: ptuf.dev/v1\nkind: Plugin\nmetadata:\n  name: pack.demo\n\
+                 rules:\n  - id: {rule_id}\n    severity: high\n    \
+                 defaultDecision: deny\n    when:\n      all:\n        - tool: Bash\n    \
+                 reason: r\n",
+            )),
+        ]
+    }
+
+    proptest! {
+        // `load_str` is total: any input — binary noise or
+        // partially-valid plugin YAML — yields `Ok` or `Err`, never a
+        // panic. This is the plugin trust boundary; a panic here would
+        // crash the hook instead of failing closed.
+        #[test]
+        fn pbt_load_str_is_total_on_arbitrary_input(source in plugin_source()) {
+            let _ = load_str(&p(), &source);
+        }
+    }
 }
