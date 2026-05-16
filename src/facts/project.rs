@@ -221,4 +221,66 @@ mod tests {
         assert!(!f.on_protected_branch);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        // `wildcard_match` is reflexive: every pattern matches itself,
+        // whether it ends in `/*`, a bare `*`, or neither.
+        #[test]
+        fn pbt_wildcard_match_is_reflexive(
+            p in crate::testing::proptest::arbitrary_command(),
+        ) {
+            prop_assert!(wildcard_match(&p, &p));
+        }
+
+        // `wildcard_match` is total: arbitrary Unicode pattern/value
+        // pairs never panic. The `/*` branch slices `value` at
+        // `prefix.len()`, and the `starts_with` guard keeps that index
+        // on a UTF-8 char boundary.
+        #[test]
+        fn pbt_wildcard_match_never_panics(
+            pattern in crate::testing::proptest::arbitrary_command(),
+            value in crate::testing::proptest::arbitrary_command(),
+        ) {
+            let _ = wildcard_match(&pattern, &value);
+        }
+
+        // A bare trailing `*` is a pure prefix test: `prefix*` matches
+        // `value` exactly when `value` starts with `prefix`.
+        #[test]
+        fn pbt_wildcard_match_bare_star_is_prefix(
+            prefix in "[A-Za-z0-9_.-]{0,8}",
+            value in crate::testing::proptest::arbitrary_command(),
+        ) {
+            let pattern = format!("{prefix}*");
+            prop_assert_eq!(
+                wildcard_match(&pattern, &value),
+                value.starts_with(prefix.as_str()),
+            );
+        }
+
+        // A trailing `/*` matches any sub-path `prefix/<tail>` but never
+        // the bare `prefix` itself.
+        #[test]
+        fn pbt_wildcard_match_slash_star_matches_subpaths(
+            prefix in "[A-Za-z0-9_.-]{0,8}",
+            tail in "[A-Za-z0-9_./-]{0,12}",
+        ) {
+            let pattern = format!("{prefix}/*");
+            let subpath = format!("{prefix}/{tail}");
+            prop_assert!(wildcard_match(&pattern, &subpath));
+            prop_assert!(!wildcard_match(&pattern, &prefix));
+        }
+
+        // With no trailing `*`, `wildcard_match` degenerates to exact
+        // string equality.
+        #[test]
+        fn pbt_wildcard_match_exact_pattern_is_equality(
+            pattern in "[A-Za-z0-9/_.-]{0,10}",
+            value in crate::testing::proptest::arbitrary_command(),
+        ) {
+            prop_assert_eq!(wildcard_match(&pattern, &value), pattern == value);
+        }
+    }
 }
