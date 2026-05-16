@@ -9,7 +9,7 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) と `v0.1.0` (
 次を実装済み:
 
 - `PreToolUse` 向け CLI とライブラリ
-- Claude Code / Codex / GitHub Copilot / Kiro CLI adapter (frozen)
+- Claude Code / Codex / GitHub Copilot / Kiro CLI / Cline adapter (frozen)
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
   `core.self_protection` / `core.engine` / `core.injection` /
@@ -65,6 +65,7 @@ CLI 経路はこれと異なり fail-closed で動作する。
 - `ptuf hook codex`
 - `ptuf hook copilot`
 - `ptuf hook kiro`
+- `ptuf hook cline`
 - `ptuf [--json] check --tool <name> <command>`
 - `ptuf [--json] plugin check <path>`
 - `ptuf [--json] init [<agent>] [--no-verify] [--dry-run]`
@@ -105,7 +106,7 @@ verify も行わない。
 | [`kiro-cli.md`](kiro-cli.md) | Kiro CLI adapter の正規化・fail-closed |
 | [`audit.md`](audit.md) | audit JSONL schema と redaction |
 | [`testing.md`](testing.md) | example-based test と PBT の役割分担 |
-| [`roadmap.md`](roadmap.md) | M1〜M5 の到達点と今後の候補 |
+| [`roadmap.md`](roadmap.md) | 各マイルストーンの到達点と今後の候補 |
 
 ## 言語規約
 

@@ -78,20 +78,21 @@ slice に built-in rule が追加された際の自動カバーとして機能�
 
 ### Adapter 入口の fail-closed (全 agent)
 
-ClaudeCode / Copilot / Kiro の各 adapter parser と CLI hook entry point
-は、外部 agent との信頼境界として以下の不変を持つ。
+ClaudeCode / Copilot / Kiro / Cline の各 adapter parser と CLI hook entry
+point は、外部 agent との信頼境界として以下の不変を持つ。
 
 - `arbitrary_utf8_bytes()` から生成した任意のバイト列を `run` 関数に
   ClaudeCode adapter として流すと、必ず exit `0`/`1`/`2` のいずれかを
   返し panic しない。exit `2` の場合は stdout に
   `"permissionDecision":"deny"` を含む (`src/cli/run.rs` の
   `pbt_run_hook_fails_closed_for_arbitrary_stdin`)
-- `copilot_input::parse` / `kiro_input::parse` は任意の `&str` に対し
-  `Ok` / `Err(ParseProblem | KiroInputError)` を返し panic しない
-  (`pbt_parse_is_total_on_arbitrary_utf8`)
-- 非 object / `toolName`/`tool_name` 欠落 / Kiro の場合は
-  `hook_event_name != "preToolUse"` の各異常 envelope は対応する
-  parser error variant を返す (`pbt_invalid_envelope_returns_err`)
+- `copilot_input::parse` / `kiro_input::parse` / `cline_input::parse` は
+  任意の `&str` に対し `Ok` / `Err(ParseProblem | KiroInputError |
+  ClineInputError)` を返し panic しない (`pbt_parse_is_total_on_arbitrary_utf8`)
+- 非 object / `toolName`/`tool_name` 欠落 / Kiro の `hook_event_name !=
+  "preToolUse"` / Cline の `tool_call`・`preToolUse` 双方欠落や非対応
+  `hookName` といった各異常 envelope は対応する parser error variant を
+  返す (`pbt_invalid_envelope_returns_err`)
 - 例外として、Copilot の 8 MiB 超 stdin は adapter 経由でも exit `0` +
   裸 envelope (no `hookSpecificOutput`) で fail-closed deny になり、
   Kiro の空 stdin は exit `2` + stdout 空 + stderr に
@@ -181,6 +182,9 @@ fact カバレッジを確保する。
   全 Decision exit `0` / fail-closed (`core.engine.invalid-payload` /
   `core.engine.policy-load-failed`) を 9 ケースで固定
   (`tests/contracts.rs` の `copilot_*` 群)
+- Cline adapter の cancel JSON envelope / `Allow` での `{}` 出力 /
+  `Ask` → `Deny` demote / invalid payload を含む全経路で exit `0` /
+  `shouldContinue` 非出力を `tests/contracts.rs` の `cline_*` 群で固定
 - `rules::iter()` の出力順 (38 件) は `tests/rules_iter_order.rs` で fixture
   固定する。audit のルール表示順、`severity_for` 検索順、`engine::aggregate`
   の決定取捨選択が暗黙に順序に依存しているため、`src/rules/mod.rs::RULES`
