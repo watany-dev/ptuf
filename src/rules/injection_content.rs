@@ -119,7 +119,7 @@ fn scan_candidates(facts: &Facts, input: &HookInput) -> Vec<PathBuf> {
     if input.tool_name == "Bash" {
         return bash_reader_targets(facts.bash.as_ref());
     }
-    if input.tool_name == "Read" || input.tool_name == "Edit" || input.is_mcp_tool() {
+    if matches!(input.tool_name.as_str(), "Read" | "Edit") || input.is_mcp_tool() {
         return facts
             .paths
             .iter()

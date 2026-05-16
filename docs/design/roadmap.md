@@ -80,6 +80,22 @@
 - `facts.collect_sensitive` で `expanded` / `canonical_or_raw` も
   classify (symlink bypass を塞ぐ)
 
+### M9 — ファイル中身のインジェクション検査 (実装済み, post-`v0.1.0`)
+
+- `core.injection.invisible-chars` (Ask / High / overridable) 追加。
+  ptuf で初めて評価中に対象ファイルを開き、中身をバイト単位で静的検査
+  する rule。レビュアーには無害に見えるファイルに不可視文字を仕込む
+  間接プロンプトインジェクションを検出する
+- 検出カテゴリは 4 種: zero-width / 不可視 Unicode、BiDi 制御文字
+  (Trojan Source)、Unicode Tag 文字 (ASCII smuggling)、C0/C1 制御文字
+- 対象は `Read` / `Edit` / path 持ち MCP tool / Bash の reader head
+  (`sensitive-bash-read` と同じ allowlist)。`Write` / `apply_patch` は
+  agent 自身が書く内容のため対象外
+- 新 pack `core.injection` を既定 enabled で追加
+- I/O は best-effort fail-open。ファイル欠如・非通常ファイル・バイナリ
+  (NUL バイト / denylist 拡張子)・非 UTF-8 はすべて素通り、scan は
+  先頭 1 MiB のみ
+
 ### M7 — CLI ゼロベース簡素化 (実装済み, `v0.1.0` 予定 / breaking)
 
 - `ptuf init` を引数なしで auto-detect (cwd の repo root と `$HOME` から
