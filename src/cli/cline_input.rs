@@ -645,6 +645,104 @@ mod tests {
         assert!(format!("{}", ClineInputError::EmptyToolName).contains("tool name is empty"));
     }
 
+    #[test]
+    fn cline_command_alias_cmd_is_promoted() {
+        let body = r#"{
+            "hookName": "tool_call",
+            "tool_call": { "name": "run_commands", "input": { "cmd": "ls -la" } }
+        }"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.bash_command(), Some("ls -la"));
+    }
+
+    #[test]
+    fn cline_command_alias_shell_command_is_promoted() {
+        let body = r#"{
+            "hookName": "tool_call",
+            "tool_call": { "name": "bash", "input": { "shellCommand": "whoami" } }
+        }"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.bash_command(), Some("whoami"));
+    }
+
+    #[test]
+    fn cline_empty_commands_array_leaves_command_unset() {
+        let body = r#"{
+            "hookName": "tool_call",
+            "tool_call": { "name": "run_commands", "input": { "commands": [] } }
+        }"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert!(input.tool_input.get("command").is_none());
+    }
+
+    #[test]
+    fn cline_mcp_tool_without_server_keeps_raw_name() {
+        let body = r#"{
+            "hookName": "tool_call",
+            "tool_call": {
+                "name": "use_mcp_tool",
+                "input": { "tool_name": "t", "arguments": { "path": ".env" } }
+            }
+        }"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "use_mcp_tool");
+        // arguments are still merged up even when the MCP name cannot be built.
+        assert_eq!(input.tool_input["path"], ".env");
+    }
+
+    #[test]
+    fn cline_mcp_resource_without_server_keeps_raw_name() {
+        let body = r#"{
+            "hookName": "tool_call",
+            "tool_call": { "name": "access_mcp_resource", "input": { "uri": "x" } }
+        }"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "access_mcp_resource");
+    }
+
+    #[test]
+    fn cline_mcp_arguments_non_object_value_is_kept() {
+        let body = r#"{
+            "hookName": "tool_call",
+            "tool_call": {
+                "name": "use_mcp_tool",
+                "input": { "server_name": "s", "tool_name": "t", "arguments": [1, 2] }
+            }
+        }"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "mcp__s__t");
+        assert_eq!(input.tool_input["arguments"], serde_json::json!([1, 2]));
+    }
+
+    #[test]
+    fn cline_unknown_tool_with_url_field_falls_back_to_webfetch() {
+        let body = r#"{
+            "hookName": "tool_call",
+            "tool_call": { "name": "mystery_fetcher", "input": { "href": "https://x" } }
+        }"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "WebFetch");
+        assert_eq!(input.web_fetch_url(), Some("https://x"));
+    }
+
+    #[test]
+    fn cline_unknown_tool_with_content_and_path_falls_back_to_write() {
+        let body = r#"{
+            "hookName": "tool_call",
+            "tool_call": {
+                "name": "mystery_writer",
+                "input": { "absolutePath": "/tmp/x", "content": "data" }
+            }
+        }"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Write");
+        assert_eq!(input.file_path(), Some("/tmp/x"));
+        assert_eq!(input.write_payload(), Some("data"));
+    }
+
     use crate::testing::proptest::arbitrary_utf8_bytes;
     use proptest::prelude::*;
 
