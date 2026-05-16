@@ -181,22 +181,28 @@ ptuf の他 rule は tool 入力 (path 文字列・コマンド文字列) を判
 本 rule は唯一「対象ファイルを開いて中身を検査する」rule。レビュアーには
 無害に見えるファイルに不可視文字を仕込み、agent の context にだけ隠れた
 指示を流し込む間接プロンプトインジェクション (Trojan Source / ASCII
-smuggling) を検出する。検出カテゴリは 4 種:
+smuggling) を検出する。検出カテゴリは 5 種:
 
 - **zero-width / 不可視 Unicode** — ZWSP (U+200B), ZWNJ, ZWJ, WORD
-  JOINER, SOFT HYPHEN, HANGUL filler 等。先頭の U+FEFF は正規の BOM
-  として除外する
-- **BiDi 制御文字** — U+202A–202E / U+2066–2069 (Trojan Source)
+  JOINER, 不可視数学演算子 (U+2061–2064), SOFT HYPHEN, COMBINING
+  GRAPHEME JOINER (U+034F), HANGUL filler 等。先頭の U+FEFF は正規の
+  BOM として除外する
+- **BiDi 制御文字** — U+202A–202E / U+2066–2069 の override / isolate と
+  方向マーク LRM / RLM / ALM (U+200E / U+200F / U+061C) (Trojan Source)
 - **Unicode Tag 文字** — U+E0000–E007F (ASCII smuggling)
+- **variation selector** — Variation Selectors Supplement
+  (U+E0100–E01EF) (data smuggling)。標準の U+FE00–FE0F は絵文字異体字で
+  多用されるため意図的に検出対象外
 - **C0/C1 制御文字** — TAB / LF / CR と NUL を除く制御バイト
 
 I/O は best-effort で fail-open する。ファイル欠如・権限エラー・非通常
 ファイル (ディレクトリ / FIFO / デバイス)・バイナリ (NUL バイトまたは
 denylist 拡張子)・非 UTF-8 はすべて `None` (素通り) になる。巨大ファイルは
 先頭 1 MiB のみ scan する。`Write` / `apply_patch` は agent 自身が書く
-内容のため対象外。Bash は reader head (`cat` / `head` 等、
-`sensitive-bash-read` と同じ allowlist) の positional 引数のみを対象とし、
-`< file` redirect 経由は本イテレーション範囲外。
+内容のため対象外。Bash は reader head (`cat` / `head` 等) の positional
+引数のみを対象とする。allowlist は `sensitive-bash-read` と共通だが、
+hex ダンプ系 (`xxd` / `od` / `hexdump`) は隠し文字を可視化するため対象から
+除外する。`< file` redirect 経由は本イテレーション範囲外。
 
 Ask 採用のため soft hyphen 等を含む正当なファイルでも発火しうるが、
 `.ptuf.yaml` の `overrides.allow` で project-local に suppress できる。

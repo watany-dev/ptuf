@@ -8,9 +8,10 @@
 //! benign in a normal editor or code review can hide instructions from
 //! the reviewer while still feeding them into the agent's context —
 //! zero-width spaces, bidirectional (BiDi) overrides (the "Trojan
-//! Source" attack), Unicode Tag characters (ASCII smuggling), or raw
-//! C0/C1 control bytes. When the agent reads such a file the hidden
-//! payload becomes an indirect prompt injection.
+//! Source" attack), Unicode Tag characters (ASCII smuggling),
+//! variation selectors (data smuggling), or raw C0/C1 control bytes.
+//! When the agent reads such a file the hidden payload becomes an
+//! indirect prompt injection.
 //!
 //! Scope: `Read` / `Edit`, path-bearing MCP tool calls, and Bash
 //! "reader" heads (`cat`, `head`, …) — i.e. the surfaces that pull file
@@ -68,6 +69,7 @@ enum Category {
     ZeroWidth,
     BidiControl,
     UnicodeTag,
+    VariationSelector,
     ControlChar,
 }
 
@@ -77,6 +79,7 @@ impl Category {
             Self::ZeroWidth => "zero-width / invisible Unicode character",
             Self::BidiControl => "bidirectional (BiDi) control character",
             Self::UnicodeTag => "Unicode Tag character (ASCII smuggling)",
+            Self::VariationSelector => "Unicode variation selector (used to smuggle hidden data)",
             Self::ControlChar => "C0/C1 control character",
         }
     }
@@ -143,13 +146,28 @@ fn bash_reader_targets(bash: Option<&Bash>) -> Vec<PathBuf> {
     out
 }
 
+/// Reader heads from `READER_HEADS` that this rule must *not* treat as
+/// content readers. `xxd` / `od` / `hexdump` render bytes as a hex
+/// dump, so a hidden character shows up plainly in their output instead
+/// of slipping into the agent's context unseen — the threat model does
+/// not apply. `xxd` is also exactly what `build_reason` recommends as
+/// the remediation, so flagging it would be self-defeating.
+const HEX_DUMP_HEADS: &[&str] = &["xxd", "od", "hexdump"];
+
+/// True when a Bash command head pulls file *contents* into the
+/// transcript verbatim. Reuses the `sensitive-bash-read` allowlist but
+/// drops the hex-dump heads (see `HEX_DUMP_HEADS`).
+fn is_content_reader(head: &str) -> bool {
+    READER_HEADS.contains(&head) && !HEX_DUMP_HEADS.contains(&head)
+}
+
 fn collect_reader_args(argv: &Argv, out: &mut Vec<PathBuf>) {
-    if READER_HEADS.contains(&argv.head.as_str()) {
+    if is_content_reader(&argv.head) {
         out.extend(argv.positional().map(resolve_candidate));
         return;
     }
     if let Some(inner) = crate::facts::shell::unwrap_sudo(argv)
-        && READER_HEADS.contains(&inner.head.as_str())
+        && is_content_reader(&inner.head)
     {
         out.extend(inner.positional().map(resolve_candidate));
     }
@@ -223,15 +241,34 @@ fn classify(ch: char, is_first_char: bool) -> Option<Category> {
         return None;
     }
     match ch {
-        // Zero-width / invisible format characters.
-        '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}' | '\u{00AD}'
-        | '\u{180E}' | '\u{115F}' | '\u{1160}' | '\u{3164}' | '\u{FFA0}' => {
-            Some(Category::ZeroWidth)
-        },
-        // Strong BiDi overrides and isolates (Trojan Source).
-        '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => Some(Category::BidiControl),
+        // Zero-width / invisible format characters, including the
+        // invisible math operators U+2061-2064 (U+2060 is WORD JOINER)
+        // and U+034F COMBINING GRAPHEME JOINER.
+        '\u{200B}'
+        | '\u{200C}'
+        | '\u{200D}'
+        | '\u{2060}'..='\u{2064}'
+        | '\u{FEFF}'
+        | '\u{00AD}'
+        | '\u{034F}'
+        | '\u{180E}'
+        | '\u{115F}'
+        | '\u{1160}'
+        | '\u{3164}'
+        | '\u{FFA0}' => Some(Category::ZeroWidth),
+        // Strong BiDi overrides and isolates plus the directional marks
+        // LRM / RLM / ALM (Trojan Source).
+        '\u{202A}'..='\u{202E}'
+        | '\u{2066}'..='\u{2069}'
+        | '\u{200E}'
+        | '\u{200F}'
+        | '\u{061C}' => Some(Category::BidiControl),
         // Unicode Tag block.
         '\u{E0000}'..='\u{E007F}' => Some(Category::UnicodeTag),
+        // Variation Selectors Supplement — a data-smuggling vector. The
+        // standard selectors U+FE00-FE0F are deliberately not flagged:
+        // they are ubiquitous in legitimate emoji variation sequences.
+        '\u{E0100}'..='\u{E01EF}' => Some(Category::VariationSelector),
         // C0 controls (TAB / LF / CR allowed; NUL handled as binary) and C1 controls.
         '\u{0001}'..='\u{0008}'
         | '\u{000B}'
@@ -530,6 +567,140 @@ mod tests {
         assert!(text.contains("BiDi"));
     }
 
+    #[test]
+    fn is_content_reader_excludes_hex_dumps() {
+        assert!(is_content_reader("cat"));
+        assert!(is_content_reader("grep"));
+        assert!(!is_content_reader("xxd"));
+        assert!(!is_content_reader("od"));
+        assert!(!is_content_reader("hexdump"));
+        // A head that is not a reader at all stays false.
+        assert!(!is_content_reader("rm"));
+    }
+
+    #[test]
+    fn silent_for_bash_hex_dump_heads() {
+        let dir = TempDir::new().expect("tempdir");
+        for head in ["xxd", "od", "hexdump"] {
+            let path = write_file(&dir, &format!("{head}.txt"), "x\u{200B}y\n".as_bytes());
+            assert_silent(&bash(&format!("{head} {}", path.display())));
+        }
+    }
+
+    #[test]
+    fn silent_for_bash_sudo_xxd() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = write_file(&dir, "sudo-xxd.txt", "a\u{200B}b\n".as_bytes());
+        assert_silent(&bash(&format!("sudo xxd {}", path.display())));
+    }
+
+    #[test]
+    fn asks_for_bash_head_still_fires() {
+        // `head` is a reader head but not a hex dumper, so the exclusion
+        // must not over-reach.
+        let dir = TempDir::new().expect("tempdir");
+        let path = write_file(&dir, "head.txt", "x\u{200B}y\n".as_bytes());
+        assert_ask(&bash(&format!("head {}", path.display())));
+    }
+
+    #[test]
+    fn asks_for_directional_marks() {
+        let dir = TempDir::new().expect("tempdir");
+        for (name, ch) in [
+            ("lrm.txt", '\u{200E}'),
+            ("rlm.txt", '\u{200F}'),
+            ("alm.txt", '\u{061C}'),
+        ] {
+            let path = write_file(&dir, name, format!("head{ch}tail\n").as_bytes());
+            assert_ask(&read_input(&path));
+        }
+    }
+
+    #[test]
+    fn asks_for_invisible_math_operators() {
+        let dir = TempDir::new().expect("tempdir");
+        for (name, ch) in [
+            ("func.txt", '\u{2061}'),
+            ("times.txt", '\u{2062}'),
+            ("plus.txt", '\u{2064}'),
+        ] {
+            let path = write_file(&dir, name, format!("a{ch}b\n").as_bytes());
+            assert_ask(&read_input(&path));
+        }
+    }
+
+    #[test]
+    fn asks_for_combining_grapheme_joiner() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = write_file(&dir, "cgj.txt", "a\u{034F}b\n".as_bytes());
+        assert_ask(&read_input(&path));
+    }
+
+    #[test]
+    fn asks_for_variation_selector_supplement() {
+        let dir = TempDir::new().expect("tempdir");
+        for (name, ch) in [("vs-lo.txt", '\u{E0100}'), ("vs-hi.txt", '\u{E01EF}')] {
+            let path = write_file(&dir, name, format!("x{ch}y\n").as_bytes());
+            assert_ask(&read_input(&path));
+        }
+    }
+
+    #[test]
+    fn asks_for_new_categories_via_bash_and_mcp() {
+        // A new category must fire on every ingestion surface, not just
+        // the `Read` path.
+        let dir = TempDir::new().expect("tempdir");
+        let bash_path = write_file(&dir, "bash-new.txt", "x\u{200E}y\n".as_bytes());
+        assert_ask(&bash(&format!("cat {}", bash_path.display())));
+
+        let mcp_path = write_file(&dir, "mcp-new.txt", "x\u{E0100}y\n".as_bytes());
+        assert_ask(&HookInput {
+            tool_name: "mcp__filesystem__read_file".into(),
+            tool_input: serde_json::json!({ "path": mcp_path.to_string_lossy() }),
+        });
+    }
+
+    #[test]
+    fn allows_standard_variation_selectors() {
+        // U+FE00-FE0F are ubiquitous in emoji variation sequences and
+        // are deliberately left undetected.
+        let dir = TempDir::new().expect("tempdir");
+        for (name, ch) in [("vs00.txt", '\u{FE00}'), ("vs0f.txt", '\u{FE0F}')] {
+            let path = write_file(&dir, name, format!("emoji\u{2764}{ch}\n").as_bytes());
+            assert_silent(&read_input(&path));
+        }
+    }
+
+    #[test]
+    fn allows_codepoints_adjacent_to_new_ranges() {
+        // U+2065 is right after the invisible math operators; U+E0090
+        // sits in the gap between the Tag block and the VS Supplement;
+        // U+E01F0 is right after the VS Supplement. None must fire.
+        let dir = TempDir::new().expect("tempdir");
+        for (name, ch) in [
+            ("past-math.txt", '\u{2065}'),
+            ("tag-gap.txt", '\u{E0090}'),
+            ("past-vs.txt", '\u{E01F0}'),
+        ] {
+            let path = write_file(&dir, name, format!("x{ch}y\n").as_bytes());
+            assert_silent(&read_input(&path));
+        }
+    }
+
+    #[test]
+    fn reason_names_variation_selector_category() {
+        let finding = Finding {
+            category: Category::VariationSelector,
+            codepoint: 0xE0100,
+            line: 3,
+        };
+        let text = build_reason(&finding);
+        assert!(text.contains("core.injection.invisible-chars"));
+        assert!(text.contains("U+E0100"));
+        assert!(text.contains("line 3"));
+        assert!(text.contains("variation selector"));
+    }
+
     use crate::testing::proptest::richer_hook_input;
     use proptest::prelude::*;
 
@@ -561,6 +732,30 @@ mod tests {
         #[test]
         fn pbt_scan_bytes_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
             let _ = scan_bytes(&bytes);
+        }
+
+        // A hex-dump head yields no scan candidates regardless of its
+        // arguments, so the rule can never fire on `xxd` / `od` /
+        // `hexdump`.
+        #[test]
+        fn pbt_hex_dump_heads_yield_no_candidates(
+            idx in 0usize..HEX_DUMP_HEADS.len(),
+            args in proptest::collection::vec("[a-zA-Z0-9_./-]{1,12}", 0..4),
+        ) {
+            let cmd = format!("{} {}", HEX_DUMP_HEADS[idx], args.join(" "));
+            let input = bash(&cmd);
+            let facts = crate::facts::extract(&input);
+            prop_assert!(scan_candidates(&facts, &input).is_empty());
+        }
+
+        // Printable ASCII plus the standard variation selectors
+        // U+FE00-FE0F never trips the scanner — emoji variation
+        // sequences must not be flagged.
+        #[test]
+        fn pbt_standard_variation_selectors_never_flagged(
+            text in "[ -~\u{FE00}-\u{FE0F}]{0,256}",
+        ) {
+            prop_assert!(scan_bytes(text.as_bytes()).is_none());
         }
     }
 }
