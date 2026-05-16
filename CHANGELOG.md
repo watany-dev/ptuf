@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New rule `core.injection.invisible-chars` (pack `core.injection`,
+  default-enabled). Statically inspects the *contents* of files an agent
+  is about to read — `Read`/`Edit`, path-bearing MCP tools, and Bash
+  reader heads (`cat`, `head`, …) — and returns `Ask` when it finds
+  characters invisible to a human reviewer: zero-width/invisible
+  Unicode, BiDi controls (Trojan Source), Unicode Tag chars (ASCII
+  smuggling), and C0/C1 control bytes. This is the first ptuf rule that
+  opens the target file during evaluation; I/O is best-effort and
+  fail-open (missing/binary/non-UTF-8/oversize files pass through),
+  scanning at most the first 1 MiB. `Write`/`apply_patch` are out of
+  scope. See `docs/design/policy-packs.md` "core.injection".
 - Homebrew tap distribution wired into `dist-workspace.toml` and
   `.github/workflows/release.yml` via the new `publish-homebrew-formula`
   job. `brew install watany-dev/tap/ptuf` becomes available on the next

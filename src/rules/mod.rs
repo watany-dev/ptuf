@@ -5,6 +5,7 @@ use crate::{Decision, HookInput};
 pub mod destructive_rm;
 pub mod dynamic_eval;
 pub mod git;
+pub mod injection_content;
 pub mod patterns;
 pub mod project_hygiene;
 pub mod remote_pipe;
@@ -78,6 +79,7 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &self_protection::COPILOT_SETTINGS_RULE,
     &self_protection::KIRO_SETTINGS_RULE,
     &sensitive_read::SensitiveRead,
+    &injection_content::InvisibleChars,
     &project_hygiene::LockMismatchPnpm,
     &project_hygiene::LockMismatchUv,
     &project_hygiene::ProtectedBranchDestructiveGit,
@@ -172,6 +174,7 @@ mod tests {
         assert!(ids.contains(&"core.secrets.sensitive-read"));
         assert!(ids.contains(&"core.secrets.sensitive-bash-read"));
         assert!(ids.contains(&"core.engine.dynamic-eval"));
+        assert!(ids.contains(&"core.injection.invisible-chars"));
         for hyg_id in [
             "core.project_hygiene.lock-mismatch-pnpm",
             "core.project_hygiene.lock-mismatch-uv",

@@ -11,6 +11,7 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 | `core.git` | enabled | 危険な git 操作と bypass |
 | `core.self_protection` | enabled | ptuf 自身と hook 設定の保護 |
 | `core.engine` | enabled | 動的コード評価 (`bash -c` / `eval` 等) の確認 |
+| `core.injection` | enabled | 読み込むファイル中身の不可視文字インジェクション検査 |
 | `core.project_hygiene` | disabled | lockfile / protected branch 規約 |
 | `core.workspace` | disabled | workspace 外への Read/Write/redirect/MCP path |
 
@@ -169,6 +170,36 @@ opaque なので、`core.engine.dynamic-eval` が `Ask` を返してユーザに
 `bash --login` や `python file.py` のような通常起動は発火しない。allowlist
 (`overrides.allow` の glob) や `rule_overrides.disable` で project-local に
 抑制できる。
+
+## `core.injection`
+
+| Rule id | Decision | hardDeny | severity | 対象 |
+| --- | --- | --- | --- | --- |
+| `core.injection.invisible-chars` | ask | false | high | `Read` / `Edit` / path を持つ MCP tool / Bash の reader head が読み込むファイルの中身に、人間のレビュアーには見えない文字が含まれる |
+
+ptuf の他 rule は tool 入力 (path 文字列・コマンド文字列) を判定するが、
+本 rule は唯一「対象ファイルを開いて中身を検査する」rule。レビュアーには
+無害に見えるファイルに不可視文字を仕込み、agent の context にだけ隠れた
+指示を流し込む間接プロンプトインジェクション (Trojan Source / ASCII
+smuggling) を検出する。検出カテゴリは 4 種:
+
+- **zero-width / 不可視 Unicode** — ZWSP (U+200B), ZWNJ, ZWJ, WORD
+  JOINER, SOFT HYPHEN, HANGUL filler 等。先頭の U+FEFF は正規の BOM
+  として除外する
+- **BiDi 制御文字** — U+202A–202E / U+2066–2069 (Trojan Source)
+- **Unicode Tag 文字** — U+E0000–E007F (ASCII smuggling)
+- **C0/C1 制御文字** — TAB / LF / CR と NUL を除く制御バイト
+
+I/O は best-effort で fail-open する。ファイル欠如・権限エラー・非通常
+ファイル (ディレクトリ / FIFO / デバイス)・バイナリ (NUL バイトまたは
+denylist 拡張子)・非 UTF-8 はすべて `None` (素通り) になる。巨大ファイルは
+先頭 1 MiB のみ scan する。`Write` / `apply_patch` は agent 自身が書く
+内容のため対象外。Bash は reader head (`cat` / `head` 等、
+`sensitive-bash-read` と同じ allowlist) の positional 引数のみを対象とし、
+`< file` redirect 経由は本イテレーション範囲外。
+
+Ask 採用のため soft hyphen 等を含む正当なファイルでも発火しうるが、
+`.ptuf.yaml` の `overrides.allow` で project-local に suppress できる。
 
 ## `core.project_hygiene`
 

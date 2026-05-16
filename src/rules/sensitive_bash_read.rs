@@ -43,7 +43,7 @@ const RULE_ID: &str = "core.secrets.sensitive-bash-read";
 ///   command feeds tee; tee itself is a sink, not a source.
 /// - `>`, `>>`, `2>`, `&>` redirect targets — write destinations,
 ///   covered by `core.secrets.sensitive-read` (via Write payloads).
-const READER_HEADS: &[&str] = &[
+pub(crate) const READER_HEADS: &[&str] = &[
     "cat", "head", "tail", "less", "more", "view", "bat", "xxd", "od", "hexdump", "strings",
     "base64", "base32", "grep", "egrep", "fgrep", "awk", "gawk", "mawk", "sed", "cut", "tr",
     "sort", "uniq", "wc", "nl", "tac", "rev", "column", "file", "dd", "source", ".",
