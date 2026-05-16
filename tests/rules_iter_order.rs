@@ -45,6 +45,7 @@ fn rules_iter_order_matches_fixture() {
         "core.self_protection.copilot-settings",
         "core.self_protection.kiro-settings",
         "core.secrets.sensitive-read",
+        "core.injection.invisible-chars",
         "core.project_hygiene.lock-mismatch-pnpm",
         "core.project_hygiene.lock-mismatch-uv",
         "core.project_hygiene.protected-branch-destructive-git",

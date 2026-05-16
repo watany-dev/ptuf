@@ -12,7 +12,7 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合) と `v0.1.0` (
 - Claude Code / Codex / GitHub Copilot / Kiro CLI adapter (frozen)
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
-  `core.self_protection` / `core.engine` /
+  `core.self_protection` / `core.engine` / `core.injection` /
   `core.project_hygiene` (opt-in)
 - facts 抽出:
   `shell.*`, `path`, `url`, `sensitive_path`, `protected`, `project`

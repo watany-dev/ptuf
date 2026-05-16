@@ -30,6 +30,12 @@ runs the call. A few examples of what fires by default:
 - **`core.engine.dynamic-eval`** — asks before opaque interpreter calls
   (`bash -c '…'`, `python -c '…'`, `node -e '…'`, `eval`) where other rules
   cannot inspect what actually runs.
+- **`core.injection.invisible-chars`** — asks before `Read`/`Edit`, a
+  path-bearing MCP call, or a Bash reader (`cat`, `head`, …) ingests a
+  file whose contents hide characters invisible to a human reviewer:
+  zero-width spaces, BiDi overrides (Trojan Source), Unicode Tag chars
+  (ASCII smuggling), C0/C1 controls. Catches indirect prompt injection
+  that looks harmless in review.
 - **`core.project_hygiene.lock-mismatch-pnpm` / `lock-mismatch-uv`**
   *(opt-in)* — blocks `npm install` when `pnpm-lock.yaml` is present (or
   analogously for `uv`), preventing silent dependency drift.
