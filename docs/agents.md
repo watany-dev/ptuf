@@ -1,8 +1,8 @@
 # Wiring ptuf into a coding agent
 
 ptuf ships first-class adapters for **Claude Code**, **Codex**, **GitHub
-Copilot**, and **Kiro CLI**. The same policy engine and YAML plugins back
-every host; only the hook-protocol envelope differs.
+Copilot**, **Kiro CLI**, and **Cline**. The same policy engine and YAML
+plugins back every host; only the hook-protocol envelope differs.
 
 This page is the user-facing how-to. For the underlying hook protocol, exit
 codes per agent, and the full payload contract, see the design notes:
@@ -23,9 +23,10 @@ codes per agent, and the full payload contract, see the design notes:
 | Codex       | `<repo>/.codex/` or `$HOME/.codex/`              | `<repo>/.codex/{hooks.json,config.toml}`  |
 | Copilot     | `<repo>/.github/`                                | `<repo>/.github/hooks/ptuf.json`          |
 | Kiro        | `<repo>/.kiro/` or `$HOME/.kiro/`                | `<repo>/.kiro/agents/ptuf-guarded.json`   |
+| Cline       | `<repo>/.clinerules/`, `<repo>/.cline/`, `$HOME/Documents/Cline/`, or `$HOME/.cline/` | `<repo>/.clinerules/hooks/PreToolUse` |
 
 Pin to a single adapter with `ptuf init <agent>` (`claude-code` / `codex`
-/ `copilot` / `kiro`).
+/ `copilot` / `kiro` / `cline`).
 
 ## Common flags
 
@@ -102,6 +103,40 @@ etc.). See `docs/design/kiro-cli.md` for the full normalization table. As
 with Codex and Copilot, `Ask` decisions become `Deny` because Kiro
 `preToolUse` does not define an interactive prompt channel.
 
+## Cline
+
+```bash
+ptuf init cline                  # writes <repo>/.clinerules/hooks/PreToolUse
+ptuf init cline --dry-run
+ptuf init cline --no-verify
+```
+
+The installer writes a Cline `PreToolUse` file hook:
+
+- Unix / macOS: `<repo>/.clinerules/hooks/PreToolUse`
+- Windows: `<repo>/.clinerules/hooks/PreToolUse.ps1`
+- Global fallback (no repo root): `~/Documents/Cline/Hooks/PreToolUse[.ps1]`
+
+Unlike the other hosts, the Cline hook is an *executable wrapper script*
+(installed mode `0700` on Unix) rather than a config-file command entry.
+The wrapper `exec`s `<absolute>/ptuf hook cline`. Re-running the installer
+is idempotent — it recognises a ptuf-managed wrapper by the
+`ptuf-managed: cline PreToolUse` marker and refuses to overwrite an
+unmanaged `PreToolUse` hook.
+
+Cline delivers its payload inside a `hookName` envelope, in either the SDK
+`tool_call` form or the legacy `preToolUse` form; the adapter accepts both
+and normalises tool names / input keys before the engine sees them
+(`run_commands` / `execute_command` → `Bash`, `read_files` → `Read`,
+`write_file` → `Write`, `use_mcp_tool` → `mcp__server__tool`, etc.). Cline
+file hooks are fail-open on process failures in some paths, so the adapter
+always exits `0` and expresses blocks with `{"cancel":true,…}` JSON. `Ask`
+decisions become `Deny` because Cline `PreToolUse` file hooks have no
+uniformly reliable interactive review channel.
+
+> Cline hooks are not a sandbox. If Cline is run with hooks disabled or in
+> a mode that bypasses hooks, ptuf cannot inspect or block tool calls.
+
 ## Behavior summary
 
 | Host | Allow / Monitor | Ask | Deny | Failure mode |
@@ -110,6 +145,7 @@ with Codex and Copilot, `Ask` decisions become `Deny` because Kiro
 | Codex | exit `0`, no JSON | converted to **deny** | exit `2`, `permissionDecision: "deny"` + reason on stderr | `core.engine.invalid-payload` deny at exit `2` |
 | GitHub Copilot | exit `0`, empty stdout | converted to **deny** | exit `0`, bare `{"permissionDecision":"deny",…}` JSON + reason on stderr | bare deny JSON at exit `0` |
 | Kiro CLI | exit `0`, empty stdout | converted to **deny** | exit `2`, reason on stderr only (no envelope) | `core.engine.invalid-payload` deny at exit `2` |
+| Cline | exit `0`, stdout `{}` | converted to **deny**, exit `0`, cancel JSON | exit `0`, `{"cancel":true,…}` JSON + reason on stderr | `core.engine.invalid-payload` cancel JSON at exit `0` |
 
 Hook stdin payloads are capped at 8 MiB across every host. Unreadable,
 oversized, or invalid-JSON stdin is rejected with the reserved
