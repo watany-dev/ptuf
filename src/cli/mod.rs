@@ -16,6 +16,7 @@ use crate::reason;
 
 pub use crate::update::UpdateOptions;
 
+mod cline_input;
 mod copilot_input;
 mod input_helpers;
 mod kiro_input;
@@ -42,6 +43,7 @@ pub enum HookAgent {
     Codex,
     Copilot,
     Kiro,
+    Cline,
 }
 
 impl HookAgent {
@@ -51,6 +53,7 @@ impl HookAgent {
             Self::Codex => "codex",
             Self::Copilot => "copilot",
             Self::Kiro => "kiro",
+            Self::Cline => "cline",
         }
     }
 }
@@ -208,7 +211,8 @@ USAGE:
     ptuf [--json] init [<AGENT>] [--no-verify] [--dry-run]
         (auto-detect every agent under cwd / $HOME and install the
          PreToolUse hook with verify enabled by default. AGENT pins
-         to a single adapter: claude-code | codex | copilot | kiro)
+         to a single adapter: claude-code | codex | copilot | kiro
+         | cline)
     ptuf hook <AGENT>
         (run as the agent's PreToolUse hook over stdin/stdout)
     ptuf [--json] check --tool <NAME> <COMMAND>
@@ -265,5 +269,6 @@ mod tests {
         assert_eq!(HookAgent::Codex.audit_name(), "codex");
         assert_eq!(HookAgent::Copilot.audit_name(), "copilot");
         assert_eq!(HookAgent::Kiro.audit_name(), "kiro");
+        assert_eq!(HookAgent::Cline.audit_name(), "cline");
     }
 }
