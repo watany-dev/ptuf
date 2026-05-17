@@ -259,10 +259,9 @@ pub(crate) fn unwrap_privilege_wrapper(argv: &Argv) -> Option<Argv> {
             break;
         }
         if let Some(flag) = arg.strip_prefix("--") {
-            if let Some(name) = flag.split('=').next()
-                && wrapper.is_long_value_flag(name)
-                && !flag.contains('=')
-            {
+            // `--flag VALUE` carries the value in the next token; the
+            // `--flag=VALUE` form embeds it, so only the former skips ahead.
+            if !flag.contains('=') && wrapper.is_long_value_flag(flag) {
                 i += 1;
             }
             i += 1;
