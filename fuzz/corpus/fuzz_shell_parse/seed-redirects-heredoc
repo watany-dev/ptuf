@@ -1,0 +1,3 @@
+awk '{print}' < .env > out.txt 2>&1; cat <<EOF
+body
+EOF

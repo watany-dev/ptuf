@@ -136,6 +136,46 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   `/etc/ptuf` から project local まで 4 層 + plugin + audit を tempdir に
   組み上げた end-to-end の計 15 ケースを `#[ignore]` で隔離する。
   `make check` には含めず、nightly / リリース直前に手動実行する。
+- **Fuzzing (nightly / on demand)**: `make fuzz` は `cargo-fuzz`
+  (coverage-guided, nightly toolchain 必須) で 4 つの信頼境界を打つ
+  — `fuzz_shell_parse` (shell tokenizer), `fuzz_hook_pipeline`
+  (hook stdin JSON → `decide`), `fuzz_config_merge` (4 層 YAML config
+  パース + merge), `fuzz_plugin_dsl` (plugin DSL コンパイラ)。
+  `fuzz/` は独立 workspace のため `make check` / `cargo clippy
+  --all-targets` / `cargo-deny` / crates.io パッケージに干渉しない。
+  PBT が proptest 戦略から「構造化された」入力を生成するのに対し、
+  fuzzing は任意バイト列を coverage-guided で当て続け panic 安全 /
+  forward-progress / hang 無しを検証する。`make fuzz-soak
+  FUZZ_TARGET=<name>` で単一ターゲットを長時間走らせる。クラッシュ
+  再現入力は `fuzz/artifacts/` に最小化のうえ git 管理し、
+  `proptest-regressions/` と同様に恒久回帰種とする。CI では
+  `.github/workflows/nightly.yml` の `fuzz` job が各ターゲットを
+  300 秒ずつ実行する。
+- **Mutation testing (nightly / on demand)**: `make mutants` は
+  `cargo-mutants` でソースを機械的に変異させ、テストがその変異を
+  捕捉できる (= 振る舞いを検証している) かを測る。95% カバレッジは
+  「行が実行された」を測るが「テストが振る舞いを検証しているか」は
+  測らない。スコープは `.cargo/mutants.toml` の `examine_globs` で
+  セキュリティ中核 (`src/decision.rs` / `src/rules/**` /
+  `src/engine/**`) に限定する。生き残った (`MISSED`) ミュータントは
+  テストが見逃す実バイパスに直結するため、example-based テストで
+  潰す。`nightly.yml` の `mutants` job が full スコープで実行し
+  mutation report を artifact 出力する。
+- **Bypass 回帰コーパス (`make check` 内)**: `tests/bypass/corpus.jsonl`
+  は版管理された敵対的入力の負テストスイートで、`tests/bypass_corpus.rs`
+  が通常の `cargo test` (= `make check` の `test` step) で実行する。
+  各ケースは `must_catch` (指定 rank 以上で必ず捕捉) か `known_gap`
+  (ADR 0001 の既知限界 — 現状の振る舞いを固定し、改善・退行の双方を
+  test 失敗として可視化) の期待値を持つ。fuzzing や監査で新規バイパスを
+  発見するたび corpus に追記する。
+- **新ツールの tier**: `cargo-fuzz` / `cargo-mutants` /
+  `cargo-semver-checks` は `make tools` で版固定インストールする
+  (`Makefile` の `CARGO_*_VERSION`)。`cargo-semver-checks` は高速な
+  ため `ci.yml` の PR ゲート (`semver` job) に載せ、公開 API
+  (`decide` / `try_decide` / `Engine` / `Decision` 等) の SemVer
+  破壊を検知する。`cargo-fuzz` / `cargo-mutants` は重いため
+  `make check` に含めず nightly に隔離する (`make e2e` / `pbt-deep`
+  と同じ予算階層)。
 - **再現性**: `proptest-regressions/` は git 管理。シュリンクで見つかった反例は
   全員のローカルと CI で同じシードで再現される。
 - **依存方針**: テスト用クレート (`proptest`, `tempfile`) は

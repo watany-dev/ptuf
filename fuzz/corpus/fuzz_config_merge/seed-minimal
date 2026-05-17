@@ -1,0 +1,3 @@
+version: 1
+mode: enforce
+failClosed: true

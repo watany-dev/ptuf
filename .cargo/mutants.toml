@@ -1,0 +1,28 @@
+# cargo-mutants configuration.
+#
+# Mutation testing measures whether the test suite actually *verifies*
+# behaviour, not merely whether lines are executed (which 95% line
+# coverage already guarantees). A mutant that survives — the source was
+# changed but every test still passed — is a hole the tests do not
+# catch, and on a security guardrail that hole maps directly to a real
+# bypass.
+#
+# The full ~31k-line crate is too slow to mutate on every run, so the
+# scope is pinned to the security-critical decision core:
+#   - src/decision.rs  — decision aggregation (deny > ask > monitor > allow)
+#   - src/rules/**     — every built-in rule matcher / threshold
+#   - src/engine/**    — filter composition, aggregate, mode demotion
+#
+# Run via `make mutants`; CI runs the full scope nightly (see
+# .github/workflows/nightly.yml). Not part of `make check`.
+
+examine_globs = [
+    "src/decision.rs",
+    "src/rules/**/*.rs",
+    "src/engine/**/*.rs",
+]
+
+# The proptest-backed integration tests are gated behind the `testing`
+# feature; build and run the suite with it enabled so mutation runs see
+# the same coverage `make check` does.
+additional_cargo_args = ["--features", "testing"]
