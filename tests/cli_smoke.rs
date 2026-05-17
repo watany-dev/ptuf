@@ -215,6 +215,58 @@ fn kiro_hook_invalid_json_fails_closed_with_stderr_only() {
 }
 
 #[test]
+fn cline_hook_denies_destructive_rm_with_cancel_json_and_zero_exit() {
+    let payload = r#"{"hookName":"tool_call","tool_call":{"id":"1","name":"run_commands","input":{"command":"rm -rf /"}}}"#;
+    let (code, stdout, stderr) = run(&["hook", "cline"], payload);
+    assert_eq!(
+        code, 0,
+        "Cline blocks via cancel JSON, never a non-zero exit"
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Cline must emit valid JSON");
+    assert_eq!(value["cancel"], true, "stdout: {stdout}");
+    assert!(
+        value["errorMessage"]
+            .as_str()
+            .is_some_and(|m| m.contains("core.filesystem.destructive-rm")),
+        "stdout: {stdout}",
+    );
+    assert!(
+        !stdout.contains("shouldContinue"),
+        "Cline must never emit shouldContinue: {stdout}",
+    );
+    assert!(stderr.contains("Blocked by ptuf rule"), "stderr: {stderr}");
+}
+
+#[test]
+fn cline_hook_allows_safe_payload_with_empty_object() {
+    let payload = r#"{"hookName":"tool_call","tool_call":{"id":"1","name":"run_commands","input":{"command":"ls"}}}"#;
+    let (code, stdout, stderr) = run(&["hook", "cline"], payload);
+    assert_eq!(code, 0);
+    assert_eq!(
+        stdout, "{}\n",
+        "Cline allow must emit exactly an empty object"
+    );
+    assert!(stderr.is_empty(), "stderr: {stderr}");
+}
+
+#[test]
+fn cline_hook_invalid_json_fails_closed_with_cancel_json() {
+    let (code, stdout, stderr) = run(&["hook", "cline"], "not-json");
+    assert_eq!(code, 0, "fail-closed still exits 0 for Cline");
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Cline must emit valid JSON");
+    assert_eq!(value["cancel"], true, "stdout: {stdout}");
+    assert!(
+        value["errorMessage"]
+            .as_str()
+            .is_some_and(|m| m.contains("core.engine.invalid-payload")),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("invalid hook payload"), "stderr: {stderr}");
+}
+
+#[test]
 fn no_args_returns_one_with_missing_subcommand_error() {
     let (code, stdout, stderr) = run(&[], "");
     assert_eq!(code, 1);
@@ -867,6 +919,125 @@ fn init_codex_real_install_is_byte_for_byte_idempotent() {
     let config_second = std::fs::read(&config_path).expect("read config after second install");
     assert_eq!(hooks_first, hooks_second, "hooks.json must be stable");
     assert_eq!(config_first, config_second, "config.toml must be stable");
+}
+
+#[test]
+fn init_cline_dry_run_targets_repo_local_hook() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+
+    let (code, stdout, _stderr) = run_in(&["init", "cline", "--dry-run"], dir_path, None, "");
+    assert_eq!(code, 0, "stdout: {stdout}");
+    assert!(
+        stdout.contains(".clinerules/hooks/PreToolUse"),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("would register hook"), "stdout: {stdout}");
+    assert!(!dir_path.join(".clinerules/hooks/PreToolUse").exists());
+}
+
+#[test]
+fn init_cline_writes_hook_and_passes_verify() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+    let hook = dir_path.join(".clinerules/hooks/PreToolUse");
+
+    let (code, stdout, stderr) = run_in(&["init", "cline"], dir_path, None, "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(hook.exists(), "hook must persist on success");
+    let body = std::fs::read_to_string(&hook).expect("read hook");
+    assert!(
+        body.contains("ptuf-managed: cline PreToolUse"),
+        "body: {body}"
+    );
+    assert!(body.contains("hook cline"), "body: {body}");
+    assert!(stdout.contains("Verify:"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("Synthetic deny test: passed"),
+        "stdout: {stdout}",
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&hook).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "Cline wrapper must be owner-executable");
+    }
+}
+
+#[test]
+fn init_cline_real_install_is_idempotent() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+    let hook = dir_path.join(".clinerules/hooks/PreToolUse");
+
+    let (code1, _stdout1, stderr1) = run_in(&["init", "cline", "--no-verify"], dir_path, None, "");
+    assert_eq!(code1, 0, "stderr: {stderr1}");
+    let after_first = std::fs::read(&hook).expect("read hook after first install");
+
+    let (code2, stdout2, stderr2) = run_in(&["init", "cline", "--no-verify"], dir_path, None, "");
+    assert_eq!(code2, 0, "stderr: {stderr2}");
+    assert!(
+        stdout2.contains("already contains") || stdout2.contains("registered hook"),
+        "stdout: {stdout2}",
+    );
+    let after_second = std::fs::read(&hook).expect("read hook after second install");
+    assert_eq!(after_first, after_second, "second install must not rewrite");
+}
+
+#[test]
+fn init_cline_refuses_to_overwrite_unmanaged_hook() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+    let hooks_dir = dir_path.join(".clinerules/hooks");
+    std::fs::create_dir_all(&hooks_dir).expect("mkdir hooks");
+    let hook = hooks_dir.join("PreToolUse");
+    std::fs::write(&hook, "#!/bin/sh\necho hand-written\n").expect("write hook");
+
+    let (code, stdout, stderr) = run_in(&["init", "cline", "--no-verify"], dir_path, None, "");
+    assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
+    assert!(stderr.contains("not managed by ptuf"), "stderr: {stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&hook).expect("read hook"),
+        "#!/bin/sh\necho hand-written\n",
+        "the user's hook must be left untouched",
+    );
+}
+
+#[test]
+fn init_cline_json_install_passes_checks() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir_path = dir.path();
+    std::fs::create_dir_all(dir_path.join(".git")).expect("mkdir .git");
+
+    let (code, stdout, stderr) = run_in(&["--json", "init", "cline"], dir_path, None, "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid verify json");
+    assert_eq!(value["installed"], true);
+    assert_eq!(value["rolledBack"], false);
+    assert_eq!(value["agent"], "cline");
+    assert_eq!(value["verify"]["syntheticDeny"]["status"], "passed");
+}
+
+#[test]
+fn init_auto_detect_finds_cline_via_repo_clinerules() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
+    std::fs::create_dir_all(cwd.join(".clinerules")).expect("mkdir .clinerules");
+
+    let (code, stdout, stderr) = run_in(&["init", "--dry-run"], cwd, Some(&home), "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(
+        stdout.contains("detected agents: cline"),
+        "stdout: {stdout}"
+    );
 }
 
 // `ptuf update` end-to-end coverage. Production code shells out to

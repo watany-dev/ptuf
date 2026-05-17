@@ -1,8 +1,8 @@
 # CLI と Hook 統合
 
 ptuf は CLI バイナリとして配布され、同時に Claude Code / Codex / GitHub
-Copilot / Kiro CLI の `PreToolUse` hook adapter を提供する。Kiro 固有の
-正規化や fail-closed 経路の詳細は [`kiro-cli.md`](kiro-cli.md) を参照。
+Copilot / Kiro CLI / Cline の `PreToolUse` hook adapter を提供する。Kiro
+固有の正規化や fail-closed 経路の詳細は [`kiro-cli.md`](kiro-cli.md) を参照。
 
 ## 実装済みサブコマンド
 
@@ -11,6 +11,7 @@ ptuf hook claude-code
 ptuf hook codex
 ptuf hook copilot
 ptuf hook kiro
+ptuf hook cline
 ptuf [--json] check --tool Bash 'git reset --hard HEAD~1'
 ptuf [--json] plugin check ./ptuf-plugin.yaml
 ptuf [--json] init                       # auto-detect every agent
@@ -41,6 +42,7 @@ ptuf update [--check] [--version <TAG>] [--force]
 | Codex | `<repo>/.codex/` または `$HOME/.codex/` | repo 配下の `.codex/` |
 | Copilot | `<repo>/.github/` | `<repo>/.github/hooks/ptuf.json` |
 | Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | 該当 `.kiro/agents/ptuf-guarded.json` |
+| Cline | `<repo>/.clinerules/` `.cline/`、または `$HOME/Documents/Cline/` `.cline/` | repo 配下 `.clinerules/hooks/PreToolUse` または `$HOME/Documents/Cline/Hooks/PreToolUse` |
 
 検出 0 件 → exit `1` + `no agent detected` を stderr に出す。1 件以上
 → 全部 install + verify。verify がいずれかで失敗すれば exit `1`。
@@ -54,7 +56,7 @@ install になる。
 | --- | --- |
 | `Allow` / `Monitor` / Claude Code の `Ask` | `0` |
 | `Deny` (Claude Code / Codex / Kiro) | `2` |
-| Copilot の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
+| Copilot / Cline の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
 | 内部エラー、引数不正、plugin check fail、init verify fail、update 失敗 (curl 不在 / updater 非ゼロ) | `1` |
 
 Codex / Kiro では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
@@ -67,9 +69,14 @@ Copilot は protocol 上 non-zero exit が hook failure として扱われ得る
 Kiro hook は JSON envelope を持たず、`Ask` / `Deny` の reason は stderr のみで
 通知する。stdout は常に空。
 
+Cline file hook はプロセス失敗が経路によって fail-open になり得るため、
+Copilot と同じく **すべての Decision で exit `0`** に固定し、block は stdout
+の `{"cancel":true,…}` JSON で表現する。Allow / Monitor でも空 object `{}` を
+stdout に書く。
+
 `ptuf hook <agent>` の stdin payload は最大 8 MiB。上限を超えた場合は JSON parse
-に進まず exit `1` とし、stderr に size limit error を出す (Copilot 経路では
-exit `0` + `core.engine.invalid-payload` の bare deny JSON にフォールバック
+に進まず exit `1` とし、stderr に size limit error を出す (Copilot / Cline 経路
+では exit `0` + `core.engine.invalid-payload` の deny JSON にフォールバック
 する — fail-open を避けるため)。
 
 ## Claude Code への登録
@@ -217,6 +224,45 @@ codex_hooks = true
   なる経路を塞ぐ。Windows では NTFS ACL を親ディレクトリから継承する
   既存挙動をそのまま採用する
 
+## Cline への登録
+
+`ptuf init cline` は他の 4 adapter と異なり、設定ファイルへ command 文字列を
+登録するのではなく **実行可能な wrapper script** を書く。Cline の file hook は
+スクリプトそのものを実行する仕組みのため。
+
+- repo root が見つかった場合: `<repo>/.clinerules/hooks/PreToolUse`
+  (Windows は `PreToolUse.ps1`)
+- repo root が無い場合: `$HOME/Documents/Cline/Hooks/PreToolUse[.ps1]` へ
+  fallback する。`$HOME` も解決できない場合は `InitError::HomeNotSet`
+
+Unix の wrapper:
+
+```sh
+#!/usr/bin/env sh
+# ptuf-managed: cline PreToolUse
+exec '/usr/local/bin/ptuf' hook cline
+```
+
+Windows の wrapper (`PreToolUse.ps1`):
+
+```powershell
+# ptuf-managed: cline PreToolUse
+& '/usr/local/bin/ptuf' hook cline
+exit $LASTEXITCODE
+```
+
+実装上の契約:
+
+- Unix では wrapper をモード `0700` で書く (owner のみ実行可)。temp file +
+  rename の原子的更新
+- 既存 entry の検出は `ptuf-managed: cline PreToolUse` marker で行う。marker
+  を持つ既存ファイルは binary path 差異があれば再生成、内容一致なら
+  `AlreadyPresent`
+- marker を持たない既存 `PreToolUse` は上書きせず `InitError::HookFileConflict`
+  を返す
+- binary path の quoting は sh では single-quote (`'` → `'\''`)、PowerShell
+  では single-quote (`'` → `''`) で行う
+
 ## install verification
 
 `ptuf init <agent>` は配線を書いたあと、内部 Engine を起動して
@@ -332,7 +378,22 @@ GitHub Copilot (bare envelope, `hookSpecificOutput` wrap なし):
 Kiro CLI は JSON envelope を持たない。`Ask` / `Deny` reason は stderr のみで
 通知し、stdout は常に空。`Ask` は `Deny` へ demote する。
 
-`Allow` と `Monitor` は hook response を出さない (4 agent 共通)。
+Cline (`hookSpecificOutput` wrap なし、`shouldContinue` / `review` /
+`overrideInput` は出さない):
+
+```json
+{
+  "cancel": true,
+  "errorMessage": "...",
+  "context": "...",
+  "contextModification": "..."
+}
+```
+
+`Allow` と `Monitor` は hook response を出さない (Claude Code / Codex /
+Copilot / Kiro)。Cline だけは Allow / Monitor でも空 object `{}` を stdout
+に書き、block 時のみ `cancel: true` envelope を出す。`Ask` は `Deny` へ
+demote する。
 
 agent 別の Decision → exit / 出力契約:
 
@@ -342,6 +403,7 @@ agent 別の Decision → exit / 出力契約:
 | Codex | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `2`) | exit `2`, `hookSpecificOutput` deny | exit `2`, deny |
 | Copilot | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `0`, bare JSON) | exit `0`, bare deny JSON | exit `0`, bare deny JSON |
 | Kiro | exit `0`, 空 stdout / 空 stderr | `Ask` → `Deny` に demote (exit `2`, stderr reason のみ) | exit `2`, stderr reason のみ | exit `2`, stderr reason のみ |
+| Cline | exit `0`, stdout `{}` | `Ask` → `Deny` に demote (exit `0`, cancel JSON) | exit `0`, cancel JSON | exit `0`, cancel JSON |
 
 Copilot の `Ask` demote 文言は仕様で固定:
 
@@ -353,9 +415,15 @@ Kiro の `Ask` demote 文言も仕様で固定:
 > `Kiro CLI PreToolUse hooks do not define an interactive ask channel;
 > ptuf is blocking this request instead.`
 
+Cline の `Ask` demote 文言も仕様で固定:
+
+> `Cline PreToolUse file hooks do not currently provide a uniformly
+> reliable interactive review channel; ptuf is blocking this request
+> instead.`
+
 reserved rule `core.engine.invalid-payload` / `core.engine.policy-load-failed`
-は 4 agent で共通だが、Copilot では bare JSON + exit `0`、Kiro では stderr +
-exit `2` で出す。
+は 5 agent で共通だが、Copilot では bare JSON + exit `0`、Kiro では stderr +
+exit `2`、Cline では cancel JSON + exit `0` で出す。
 
 ## MCP fact 抽出
 
@@ -407,6 +475,45 @@ Kiro CLI の `preToolUse` payload は `{"hook_event_name":"preToolUse",
 `hook_event_name` が `preToolUse` 以外の場合は `core.engine.invalid-payload`
 で fail-closed する。空 payload / 非 object payload / `tool_name` 欠落も同様。
 
+## Cline 入力正規化
+
+Cline の file hook payload は `hookName` envelope に包まれており、2 つの形を
+取る。`src/cli/cline_input.rs` が両方を受け、canonical shape に正規化する。
+
+- SDK / CLI file-hook 形: `{"hookName":"tool_call","tool_call":{"id","name",
+  "input"}}`
+- legacy extension 形: `{"hookName":"PreToolUse","preToolUse":{"toolName",
+  "parameters"}}`
+
+`tool_call` と `preToolUse` が両方あれば `tool_call` を常に優先する。
+
+| Cline tool 名 | canonical |
+| --- | --- |
+| `execute_command` / `run_command` / `run_commands` / `bash` | `Bash` |
+| `read_file` / `read_files` | `Read` |
+| `editor` / `replace_in_file` / `edit_file` | `Edit` |
+| `write_file` | `Write` |
+| `apply_patch` | `apply_patch` |
+| `fetch_web` / `fetch_web_content` / `web_fetch` | `WebFetch` |
+| `use_mcp_tool` | `mcp__<server>__<tool>` |
+| `access_mcp_resource` | `mcp__<server>__access_resource` |
+| その他 | input field から推測 (`command` 系 → `Bash`、`url` 系 → `WebFetch`、`content`+path → `Write`)、推測不能ならそのまま |
+
+`input` / `parameters` の正規化:
+
+- `Bash`: `command` が無ければ `cmd` → `shellCommand` の順、さらに無ければ
+  `commands[]` を改行連結して `command` に複製する
+- `Read` / `Edit` / `Write`: `file_path` が無ければ `filePath` → `path` →
+  `absolutePath` → `relativePath` の順で `file_path` に複製する
+- `WebFetch`: `url` が無ければ `uri` → `href` の順で `url` に複製する
+- `use_mcp_tool` / `access_mcp_resource`: `arguments` (object もしくは
+  JSON 文字列) を tool input へ flatten する。元の alias key は保持する
+
+正規化後、`_cline_tool_name` に元の tool 名を、SDK 形なら `_cline_tool_call_id`
+に `tool_call.id` を付与する。非 JSON / 非対応 `hookName` / `tool_call` も
+`preToolUse` も無い / tool 名が空 のいずれも `core.engine.invalid-payload`
+で fail-closed する。
+
 ## fail-closed
 
 `hook` と `check` は engine 構築に失敗すると
@@ -428,6 +535,11 @@ JSON** で返す。これにより host 側で「ptuf が落ちたから fail-op
 Kiro adapter は Claude / Codex と同じく exit `2` で block するが、JSON
 envelope を持たないため reason は stderr のみで伝える。`Ask` は demote
 されて exit `2` になる。
+
+Cline adapter は Copilot と同じ理由付けを取る — Cline の file hook は経路に
+よってプロセス失敗が fail-open になり得るため、reserved rule の deny も
+含めて **すべて exit `0` + `cancel: true` JSON** で返す。`Ask` は demote
+されて cancel JSON になる。`shouldContinue` は一切出さない。
 
 ## Update の境界
 

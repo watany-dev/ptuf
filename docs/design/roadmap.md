@@ -63,6 +63,20 @@
   `collect_event_paths` で重複排除しつつ収集する additive 拡張
 - audit `agent: "kiro"` を許容
 
+### M7 — Cline adapter (実装済み, post-`v0.1.0`)
+
+- `ptuf hook cline` (Cline SDK `tool_call` / legacy `preToolUse` payload
+  正規化、tool 名 alias と `use_mcp_tool` の MCP 化、`Ask` → `Deny` demote、
+  `Allow` / `Monitor` は `{}` / `Deny` は cancel JSON envelope を stdout に
+  書きすべての Decision で exit `0`、`shouldContinue` 非出力、`core.engine.*`
+  reserved rule を流用する fail-closed 経路)
+- `ptuf init cline` (`<repo>/.clinerules/hooks/PreToolUse` への `0700`
+  wrapper script を idempotent / atomic に書き込む。repo root が無ければ
+  `~/Documents/Cline/Hooks/` へ fallback、Windows は `PreToolUse.ps1`、
+  非 ptuf hook は `HookFileConflict` で保護)
+- `ptuf init` auto-detect が Cline を検出
+- audit `agent: "cline"` を許容
+
 ### M8 — `.env` 保護穴塞ぎ (実装済み, post-`v0.1.0`)
 
 詳細は `docs/adr/0001-env-protection-gaps.md`。

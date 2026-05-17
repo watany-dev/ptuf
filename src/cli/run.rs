@@ -17,6 +17,7 @@ use crate::update::exe::RealExeLocator;
 use crate::update::spawn::ProcessSpawner;
 use crate::update::{self, UpdateOptions};
 
+use super::cline_input;
 use super::copilot_input;
 use super::kiro_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
@@ -94,13 +95,16 @@ fn invalid_payload_deny(problem: &str) -> Decision {
 /// payload routes through `cli::copilot_input::parse` for normalisation
 /// before the engine sees it. Kiro uses a snake_case shape but with its
 /// own tool-name vocabulary (`shell`, `read`, `write`, `@server/tool`,
-/// etc.), so its payload routes through `cli::kiro_input::parse`.
+/// etc.), so its payload routes through `cli::kiro_input::parse`. Cline
+/// wraps its tool call in a `hookName` envelope (`tool_call` or legacy
+/// `preToolUse`), so its payload routes through `cli::cline_input::parse`.
 fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
     match agent {
         HookAgent::ClaudeCode | HookAgent::Codex => serde_json::from_str::<HookInput>(body)
             .map_err(|err| format!("hook payload is not valid JSON ({err})")),
         HookAgent::Copilot => copilot_input::parse(body).map_err(|err| err.to_string()),
         HookAgent::Kiro => kiro_input::parse(body).map_err(|err| err.to_string()),
+        HookAgent::Cline => cline_input::parse(body).map_err(|err| err.to_string()),
     }
 }
 
@@ -195,7 +199,7 @@ where
         if detected.is_empty() {
             let _ = writeln!(
                 stderr,
-                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro)",
+                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro | cline)",
             );
             return 1;
         }
@@ -395,6 +399,16 @@ impl AgentPlan {
                     install: Box::new(move |dry_run| {
                         let binary = init::kiro::detect_binary();
                         init::kiro::install(&targets, &binary, dry_run)
+                    }),
+                })
+            },
+            HookAgent::Cline => {
+                let targets = init::cline::resolve_paths(cwd)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.hook_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::cline::detect_binary();
+                        init::cline::install(&targets, &binary, dry_run)
                     }),
                 })
             },

@@ -382,6 +382,95 @@ fn copilot_unknown_tool_never_panics() {
     assert_eq!(code, 0);
 }
 
+// ---------------------------------------------------------------
+// Cline adapter contracts.
+//
+// Cline's `PreToolUse` file hook is fail-open on process failures in
+// some paths, so the CLI expresses every Decision via stdout JSON and
+// fixes the exit code at 0. A block is `{"cancel":true,...}`; Allow /
+// Monitor is the bare `{}` object. The renderer never emits
+// `shouldContinue` (which would let the call proceed).
+// ---------------------------------------------------------------
+
+#[test]
+fn cline_deny_outputs_cancel_json_and_exit_zero() {
+    let payload = r#"{"hookName":"tool_call","tool_call":{"id":"c1","name":"run_commands","input":{"command":"rm -rf /"}}}"#;
+    let (code, stdout, stderr) = run(&["hook", "cline"], payload);
+    assert_eq!(code, 0, "Cline must return exit 0 even for deny");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["cancel"], true);
+    assert!(value.get("shouldContinue").is_none(), "stdout: {stdout}");
+    assert!(
+        value.get("hookSpecificOutput").is_none(),
+        "stdout: {stdout}"
+    );
+    assert!(
+        value["errorMessage"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.filesystem.destructive-rm")),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("core.filesystem.destructive-rm"));
+}
+
+#[test]
+fn cline_allow_outputs_empty_object_and_exit_zero() {
+    let payload = r#"{"hookName":"tool_call","tool_call":{"id":"c1","name":"run_commands","input":{"command":"ls"}}}"#;
+    let (code, stdout, stderr) = run(&["hook", "cline"], payload);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "{}\n", "Allow must produce the bare {{}} object");
+    assert!(stderr.is_empty(), "stderr: {stderr}");
+}
+
+#[test]
+fn cline_invalid_payload_outputs_cancel_json_and_exit_zero() {
+    let dir = repo();
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "cline"], "not json");
+    assert_eq!(code, 0, "Cline fail-closed must keep exit 0");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["cancel"], true);
+    assert!(value.get("shouldContinue").is_none());
+    assert!(
+        value["errorMessage"]
+            .as_str()
+            .expect("reason string")
+            .contains("core.engine.invalid-payload"),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("invalid hook payload"), "stderr: {stderr}");
+}
+
+#[test]
+fn cline_ask_demotes_to_cancel_with_note() {
+    let dir = repo();
+    std::fs::write(
+        dir.path().join(".ptuf.yaml"),
+        "plugins:\n  - path: ./ask-plugin.yaml\n",
+    )
+    .expect("write yaml");
+    std::fs::write(
+        dir.path().join("ask-plugin.yaml"),
+        "apiVersion: ptuf.dev/v1\nkind: Plugin\nmetadata:\n  name: pack.ask\nrules:\n  - id: pack.ask.confirm-curl\n    severity: medium\n    defaultDecision: ask\n    when:\n      shell.argv:\n        headAny: [curl]\n    reason: please confirm\n",
+    )
+    .expect("write plugin");
+
+    let payload = r#"{"hookName":"tool_call","tool_call":{"id":"c1","name":"run_commands","input":{"command":"curl https://example.com"}}}"#;
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "cline"], payload);
+    assert_eq!(code, 0, "Cline Ask demote must keep exit 0");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(
+        value["cancel"], true,
+        "Ask must demote to cancel under Cline"
+    );
+    let reason = value["errorMessage"].as_str().expect("reason string");
+    assert!(reason.contains("please confirm"), "stdout: {stdout}");
+    assert!(
+        reason.contains("Cline PreToolUse file hooks"),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("please confirm"), "stderr: {stderr}");
+}
+
 #[test]
 fn workspace_outside_access_denies_read_outside_repo_when_pack_enabled() {
     let dir = repo();

@@ -5,7 +5,7 @@ agent's `PreToolUse` event and blocks dangerous tool calls — destructive
 `rm`, piping `curl` into a shell, leaking `~/.ssh` over the network — using
 rules, not LLM heuristics.
 
-Supported hosts: **Claude Code**, **Codex**, **GitHub Copilot**, **Kiro CLI**.
+Supported hosts: **Claude Code**, **Codex**, **GitHub Copilot**, **Kiro CLI**, **Cline**.
 
 ## What it stops
 
@@ -154,6 +154,14 @@ ptuf init copilot
 
 ```bash
 ptuf init kiro
+```
+
+**Cline** — writes a `PreToolUse` file hook into
+`<repo>/.clinerules/hooks/PreToolUse` (`PreToolUse.ps1` on Windows). With
+no repo root it falls back to `~/Documents/Cline/Hooks/`:
+
+```bash
+ptuf init cline
 ```
 
 `ptuf init` with no agent auto-detects every reachable host under cwd /

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::cli::HookAgent;
 
 pub mod claude_code;
+pub mod cline;
 pub mod codex;
 pub mod copilot;
 pub mod kiro;
@@ -26,6 +27,8 @@ pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
 /// - `Codex`: `<repo>/.codex/` or `<home>/.codex/`.
 /// - `Copilot`: `<repo>/.github/`.
 /// - `Kiro`: `<repo>/.kiro/` or `<home>/.kiro/`.
+/// - `Cline`: `<repo>/.clinerules/` or `<repo>/.cline/`, or
+///   `<home>/Documents/Cline/` or `<home>/.cline/`.
 ///
 /// Returns agents in a stable order so callers can install / report
 /// deterministically. Production callers pass `std::env::var_os("HOME")`
@@ -48,6 +51,13 @@ pub fn detect_agents(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> 
         || home.is_some_and(|h| h.join(".kiro").is_dir())
     {
         found.push(HookAgent::Kiro);
+    }
+    if repo
+        .as_deref()
+        .is_some_and(|r| r.join(".clinerules").is_dir() || r.join(".cline").is_dir())
+        || home.is_some_and(|h| h.join("Documents/Cline").is_dir() || h.join(".cline").is_dir())
+    {
+        found.push(HookAgent::Cline);
     }
     found
 }
@@ -74,6 +84,9 @@ pub enum InitError {
     /// No repository root could be discovered and the caller did not
     /// provide enough explicit Codex target paths to proceed.
     RepoRootNotFound,
+    /// A host hook file already exists at `path` but ptuf did not write
+    /// it, so overwriting it would clobber the user's own hook.
+    HookFileConflict { path: PathBuf },
 }
 
 impl std::fmt::Display for InitError {
@@ -103,6 +116,11 @@ impl std::fmt::Display for InitError {
             Self::RepoRootNotFound => write!(
                 f,
                 "could not discover a repository root; run ptuf init from inside a git working tree"
+            ),
+            Self::HookFileConflict { path } => write!(
+                f,
+                "existing Cline PreToolUse hook is not managed by ptuf: {}; move or remove it, then re-run ptuf init cline",
+                path.display()
             ),
         }
     }
@@ -273,6 +291,41 @@ pub(crate) fn write_secure(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(tmp, bytes)
 }
 
+/// Like [`write_secure`], but creates `tmp` with mode 0700 so the file
+/// is owner-only *executable* — used by the Cline adapter, whose hook is
+/// a wrapper script the host runs directly rather than a config entry.
+///
+/// On non-Unix the mode bits don't apply; NTFS ACLs are inherited from
+/// the parent directory just as with [`write_secure`].
+#[cfg(unix)]
+pub(crate) fn write_executable(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let open = || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(tmp)
+    };
+    let mut file = match open() {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(tmp)?;
+            open()?
+        },
+        Err(e) => return Err(e),
+    };
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn write_executable(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(tmp, bytes)
+}
+
 fn sibling_temp_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().map_or_else(
         || std::ffi::OsString::from("snapshot.tmp"),
@@ -335,6 +388,15 @@ mod tests {
         );
         assert!(format!("{}", InitError::HomeNotSet).contains("HOME"));
         assert!(format!("{}", InitError::RepoRootNotFound).contains("repository root"));
+        assert!(
+            format!(
+                "{}",
+                InitError::HookFileConflict {
+                    path: PathBuf::from("/p/PreToolUse")
+                }
+            )
+            .contains("not managed by ptuf")
+        );
     }
 
     #[test]
@@ -627,12 +689,33 @@ mod tests {
     }
 
     #[test]
-    fn detect_agents_returns_all_four_in_stable_order() {
+    fn detect_agents_finds_cline_via_repo_clinerules() {
+        let dir = workdir("detect-cline-repo");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        fs::create_dir_all(dir.join(".clinerules")).expect("mkdir .clinerules");
+        let home = dir.join("home");
+        fs::create_dir_all(&home).expect("mkdir home");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Cline]);
+    }
+
+    #[test]
+    fn detect_agents_finds_cline_via_home_documents_cline() {
+        let dir = workdir("detect-cline-home");
+        let home = dir.join("home");
+        fs::create_dir_all(home.join("Documents/Cline")).expect("mkdir home/Documents/Cline");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Cline]);
+    }
+
+    #[test]
+    fn detect_agents_returns_all_five_in_stable_order() {
         let dir = workdir("detect-all");
         fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         fs::create_dir_all(dir.join(".codex")).expect("mkdir .codex");
         fs::create_dir_all(dir.join(".github")).expect("mkdir .github");
         fs::create_dir_all(dir.join(".kiro")).expect("mkdir .kiro");
+        fs::create_dir_all(dir.join(".clinerules")).expect("mkdir .clinerules");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".claude")).expect("mkdir home/.claude");
         let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
@@ -643,6 +726,7 @@ mod tests {
                 HookAgent::Codex,
                 HookAgent::Copilot,
                 HookAgent::Kiro,
+                HookAgent::Cline,
             ],
         );
     }

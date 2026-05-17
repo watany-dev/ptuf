@@ -80,12 +80,13 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 
 ## Agent adapter
 
-現在の adapter は 4 つ。
+現在の adapter は 5 つ。
 
 - `claude-code`
 - `codex`
 - `copilot` (GitHub Copilot)
 - `kiro` (Kiro CLI)
+- `cline` (Cline)
 
 adapter は stdin payload をまず `RawHookInput` として受け、内部では
 normalized `Event { agent, event, tool, inputs, paths, urls, content }`
@@ -104,6 +105,13 @@ normalized `Event { agent, event, tool, inputs, paths, urls, content }`
 - Kiro: hook protocol が JSON envelope を持たないため、stdout は常に空。
   `Ask` / `Deny` の reason は stderr に書き、`Deny` (および demote された
   `Ask`) は exit `2`。reserved rule の fail-closed も同経路で扱う。
+- Cline: `Ask` は `Deny` へ demote。すべての Decision で exit `0` を返す。
+  `Allow` / `Monitor` は stdout に `{}`、`Deny` (および demote された
+  `Ask`) は `{"cancel":true,"errorMessage":"…"}` JSON を stdout に書く。
+  Cline の file hook が non-zero exit を hook *failure* として扱い得るため、
+  reserved rule (`core.engine.invalid-payload` /
+  `core.engine.policy-load-failed`) も exit `0` + cancel JSON で fail-closed
+  する。`shouldContinue` は一切出さない。
 
 Copilot 入力は CLI 層の `src/cli/copilot_input.rs` で snake (`tool_name` /
 `tool_input`) と camel (`toolName` / `toolArgs`) の両形を正規化し、tool 名
@@ -118,6 +126,16 @@ Kiro 入力は CLI 層の `src/cli/kiro_input.rs` で `hook_event_name == "preTo
 `command` (`cmd` / `script` をフォールバック)、`file_path` (`path` / `paths[0]`
 / `operations[0].path` 等をフォールバック)、`content` (`text` / `new_content`
 をフォールバック) のキーに正規化する。
+
+Cline 入力は CLI 層の `src/cli/cline_input.rs` で SDK 形 (`tool_call`) と
+legacy 形 (`preToolUse`) の両 envelope を正規化する。`tool_call` がある場合は
+`hookName == "tool_call"` を要求して優先採用し、無ければ `preToolUse` を
+`hookName ∈ {"PreToolUse","tool_call"}` で採用する。tool 名 mapping
+(`run_commands` / `execute_command` / `bash`→`Bash`、`read_files`→`Read`、
+`write_file`→`Write`、`use_mcp_tool`→`mcp__server__tool` 等) を適用し、
+alias キー (`command` / `file_path` / `content` 等) を非破壊的に正規化する。
+canonical 化した tool 名と `tool_call` の id は `_cline_tool_name` /
+`_cline_tool_call_id` として `tool_input` に保持する。
 
 判定 engine 自体は agent 非依存で、adapter 拡張は CLI 層に閉じている。
 
@@ -146,6 +164,7 @@ stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit 
 | `ptuf hook codex` | `Deny` のときだけ `hookSpecificOutput` JSON | deny reason | `0` or `2` |
 | `ptuf hook copilot` | `Deny` のときだけ bare JSON envelope (no `hookSpecificOutput`) | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
 | `ptuf hook kiro` | 常に空 (Kiro hook には JSON envelope が無い) | `Ask` / `Deny` reason | `0` or `2` |
+| `ptuf hook cline` | `Allow` / `Monitor` は `{}`、`Deny` は cancel JSON envelope | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
 
 ### check
 

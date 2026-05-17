@@ -138,6 +138,76 @@ pub mod kiro {
     }
 }
 
+pub mod cline {
+    use serde::Serialize;
+
+    use super::append_demote_note;
+    use crate::Decision;
+
+    /// Note appended to a deny reason whenever a Cline `Ask` decision is
+    /// demoted to `Deny`. Cline `PreToolUse` file hooks have no reliable
+    /// interactive review channel, so ptuf surfaces the demotion
+    /// explicitly in the cancel JSON.
+    const ASK_UNAVAILABLE_NOTE: &str = "Cline PreToolUse file hooks do not currently provide a uniformly reliable interactive review channel; ptuf is blocking this request instead.";
+
+    /// Cline `PreToolUse` hook response. Allow / Monitor serialise to the
+    /// bare `{}` object (every field skipped); deny / demoted-ask
+    /// serialise to a `cancel: true` envelope. The renderer never emits
+    /// `shouldContinue`, `review`, or `overrideInput`.
+    #[derive(Debug, Serialize)]
+    pub struct ClineResponse {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cancel: Option<bool>,
+
+        #[serde(rename = "errorMessage", skip_serializing_if = "Option::is_none")]
+        pub error_message: Option<String>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub context: Option<String>,
+
+        #[serde(
+            rename = "contextModification",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub context_modification: Option<String>,
+    }
+
+    impl ClineResponse {
+        fn empty() -> Self {
+            Self {
+                cancel: None,
+                error_message: None,
+                context: None,
+                context_modification: None,
+            }
+        }
+
+        fn cancel(reason: String) -> Self {
+            Self {
+                cancel: Some(true),
+                error_message: Some(reason.clone()),
+                context: Some(reason.clone()),
+                context_modification: Some(reason),
+            }
+        }
+    }
+
+    /// Build a Cline hook response from a decision. `Allow` / `Monitor`
+    /// produce the empty `{}` object; `Deny` produces a cancel envelope;
+    /// `Ask` is demoted to a cancel envelope with the demotion note.
+    pub fn from_decision(decision: &Decision) -> ClineResponse {
+        match decision {
+            Decision::Allow | Decision::Monitor { .. } => ClineResponse::empty(),
+            Decision::Ask { reason, .. } => ClineResponse::cancel(deny_reason_for_ask(reason)),
+            Decision::Deny { reason, .. } => ClineResponse::cancel(reason.clone()),
+        }
+    }
+
+    pub fn deny_reason_for_ask(reason: &str) -> String {
+        append_demote_note(reason, ASK_UNAVAILABLE_NOTE)
+    }
+}
+
 pub use claude_code::from_decision;
 
 #[cfg(test)]
@@ -222,6 +292,53 @@ mod tests {
         let s = kiro::deny_reason_for_ask("please confirm");
         assert!(s.starts_with("please confirm"));
         assert!(s.contains("Kiro CLI PreToolUse hooks do not define an interactive ask channel"));
+    }
+
+    #[test]
+    fn cline_allow_outputs_empty_object() {
+        let resp = cline::from_decision(&Decision::Allow);
+        let json = serde_json::to_string(&resp).expect("serialise");
+        assert_eq!(json, "{}");
+    }
+
+    #[test]
+    fn cline_monitor_outputs_empty_object() {
+        let d = Decision::Monitor {
+            rule_id: "core.m".into(),
+        };
+        let resp = cline::from_decision(&d);
+        let json = serde_json::to_string(&resp).expect("serialise");
+        assert_eq!(json, "{}");
+    }
+
+    #[test]
+    fn cline_deny_outputs_cancel_json() {
+        let d = Decision::Deny {
+            rule_id: "core.x".into(),
+            reason: "blocked".into(),
+        };
+        let resp = cline::from_decision(&d);
+        let json = serde_json::to_value(resp).expect("serialise");
+        assert_eq!(json["cancel"], true);
+        assert_eq!(json["errorMessage"], "blocked");
+        assert_eq!(json["context"], "blocked");
+        assert_eq!(json["contextModification"], "blocked");
+        assert!(json.get("shouldContinue").is_none());
+        assert!(json.get("review").is_none());
+    }
+
+    #[test]
+    fn cline_ask_is_demoted_to_cancel() {
+        let d = Decision::Ask {
+            rule_id: "core.x".into(),
+            reason: "confirm".into(),
+        };
+        let resp = cline::from_decision(&d);
+        let json = serde_json::to_value(resp).expect("serialise");
+        assert_eq!(json["cancel"], true);
+        let msg = json["errorMessage"].as_str().expect("errorMessage string");
+        assert!(msg.starts_with("confirm"));
+        assert!(msg.contains("Cline PreToolUse file hooks"));
     }
 
     #[test]

@@ -22,6 +22,12 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         HookAgent::Copilot => {
             hook_output::copilot::from_decision(&adapted).map(|r| serde_json::to_string(&r))
         },
+        // Cline always emits a JSON object on stdout, even for allow
+        // (`{}`). Blocks are expressed via `cancel: true` JSON, never a
+        // non-zero exit.
+        HookAgent::Cline => Some(serde_json::to_string(&hook_output::cline::from_decision(
+            &adapted,
+        ))),
         HookAgent::ClaudeCode | HookAgent::Codex => {
             render_hook_response(agent, &adapted).map(|r| serde_json::to_string(&r))
         },
@@ -66,6 +72,9 @@ pub(super) fn render_hook_response(
         // Kiro emits no JSON envelope at all; deny/ask are surfaced via
         // stderr reason + non-zero exit only.
         HookAgent::Kiro => None,
+        // Cline uses a Cline-specific cancel envelope; `emit_decision`
+        // dispatches through `hook_output::cline` directly.
+        HookAgent::Cline => None,
     }
 }
 
@@ -83,6 +92,10 @@ pub(super) fn adapt_hook_decision(agent: HookAgent, decision: &Decision) -> Deci
             rule_id: rule_id.clone(),
             reason: hook_output::kiro::deny_reason_for_ask(reason),
         },
+        (HookAgent::Cline, Decision::Ask { rule_id, reason }) => Decision::Deny {
+            rule_id: rule_id.clone(),
+            reason: hook_output::cline::deny_reason_for_ask(reason),
+        },
         _ => decision.clone(),
     }
 }
@@ -93,8 +106,9 @@ pub(super) fn decision_exit_code(agent: HookAgent, decision: &Decision) -> u8 {
     // open. We therefore express fail-closed via the stdout JSON
     // (`permissionDecision: "deny"`) and keep the exit code at 0 for
     // every Decision under the Copilot adapter — initialisation failures
-    // (invalid payload / policy load failure) included.
-    if matches!(agent, HookAgent::Copilot) {
+    // (invalid payload / policy load failure) included. Cline behaves the
+    // same way: blocks are carried by `cancel: true` JSON, not exit code.
+    if matches!(agent, HookAgent::Copilot | HookAgent::Cline) {
         return 0;
     }
     match (agent, decision) {
@@ -336,6 +350,98 @@ mod tests {
                 }
             ),
             2
+        );
+    }
+
+    #[test]
+    fn cline_deny_emits_cancel_json_with_zero_exit() {
+        let decision = Decision::Deny {
+            rule_id: "core.filesystem.destructive-rm".into(),
+            reason: "blocked".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Cline, &decision, &mut out, &mut err);
+        assert_eq!(code, 0, "Cline deny must exit 0 to stay fail-closed");
+        let json: serde_json::Value =
+            serde_json::from_slice(&out).expect("Cline stdout must be JSON");
+        assert_eq!(json["cancel"], true);
+        assert_eq!(json["errorMessage"], "blocked");
+        assert!(json.get("shouldContinue").is_none());
+        assert!(String::from_utf8_lossy(&err).contains("blocked"));
+    }
+
+    #[test]
+    fn cline_allow_emits_empty_object_with_zero_exit() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Cline, &Decision::Allow, &mut out, &mut err);
+        assert_eq!(code, 0);
+        assert_eq!(String::from_utf8_lossy(&out), "{}\n");
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn cline_monitor_emits_empty_object_with_zero_exit() {
+        let monitor = Decision::Monitor {
+            rule_id: "core.test.monitor".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Cline, &monitor, &mut out, &mut err);
+        assert_eq!(code, 0);
+        assert_eq!(String::from_utf8_lossy(&out), "{}\n");
+    }
+
+    #[test]
+    fn cline_ask_is_demoted_to_cancel_with_zero_exit() {
+        let decision = Decision::Ask {
+            rule_id: "core.test.ask".into(),
+            reason: "please confirm".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Cline, &decision, &mut out, &mut err);
+        assert_eq!(code, 0, "Cline must demote Ask without a non-zero exit");
+        let json: serde_json::Value =
+            serde_json::from_slice(&out).expect("Cline stdout must be JSON");
+        assert_eq!(json["cancel"], true);
+        let msg = json["errorMessage"].as_str().expect("errorMessage");
+        assert!(msg.contains("please confirm"));
+        assert!(msg.contains("Cline PreToolUse file hooks"));
+    }
+
+    #[test]
+    fn render_hook_response_is_none_for_cline() {
+        let decision = Decision::Deny {
+            rule_id: "core.x".into(),
+            reason: "r".into(),
+        };
+        assert!(render_hook_response(HookAgent::Cline, &decision).is_none());
+    }
+
+    #[test]
+    fn decision_exit_code_cline_matrix() {
+        assert_eq!(decision_exit_code(HookAgent::Cline, &Decision::Allow), 0);
+        assert_eq!(
+            decision_exit_code(
+                HookAgent::Cline,
+                &Decision::Ask {
+                    rule_id: "x".into(),
+                    reason: "r".into()
+                }
+            ),
+            0
+        );
+        assert_eq!(
+            decision_exit_code(
+                HookAgent::Cline,
+                &Decision::Deny {
+                    rule_id: "x".into(),
+                    reason: "r".into()
+                }
+            ),
+            0
         );
     }
 

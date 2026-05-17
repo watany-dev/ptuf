@@ -22,7 +22,7 @@ where
         match arg.as_str() {
             "--dry-run" => dry_run = true,
             "--no-verify" => no_verify = true,
-            "claude-code" | "codex" | "copilot" | "kiro" => {
+            "claude-code" | "codex" | "copilot" | "kiro" | "cline" => {
                 if agent.is_some() {
                     return Err(ParseError::UnexpectedArgument(arg.clone()));
                 }
@@ -48,6 +48,7 @@ fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
         "codex" => Ok(HookAgent::Codex),
         "copilot" => Ok(HookAgent::Copilot),
         "kiro" => Ok(HookAgent::Kiro),
+        "cline" => Ok(HookAgent::Cline),
         other => Err(ParseError::UnknownAgent(other.to_string())),
     }
 }
@@ -203,6 +204,12 @@ mod tests {
                 agent: HookAgent::Kiro
             }
         );
+        assert_eq!(
+            cmd(&["hook", "cline"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::Cline
+            }
+        );
     }
 
     #[test]
@@ -350,6 +357,7 @@ mod tests {
             ("codex", HookAgent::Codex),
             ("copilot", HookAgent::Copilot),
             ("kiro", HookAgent::Kiro),
+            ("cline", HookAgent::Cline),
         ] {
             let c = cmd(&["init", token]);
             assert_eq!(
