@@ -1,6 +1,6 @@
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::Argv;
+use crate::facts::shell::{Argv, unwrap_sudo};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -61,6 +61,9 @@ impl ConfigRule for DestructiveRm {
 }
 
 fn is_destructive_rm_invocation(argv: &Argv) -> bool {
+    if let Some(inner) = unwrap_sudo(argv) {
+        return is_destructive_rm_invocation(&inner);
+    }
     is_rm_head(&argv.head)
         && has_recursive_force_flag(argv)
         && argv.positional().any(is_destructive_target)
@@ -273,6 +276,20 @@ mod tests {
         assert_deny("/usr/bin/rm -rf /etc");
         assert_deny("/bin/rm -Rf /");
         assert_deny("/usr/bin/rm --recursive --force /");
+    }
+
+    #[test]
+    fn denies_sudo_wrapped_rm() {
+        assert_deny("sudo rm -rf /");
+        // `sudo -u root` interposes a value-taking flag before `rm`;
+        // unwrapping must skip the flag value, not stop at `root`.
+        assert_deny("sudo -u root rm -rf /etc");
+    }
+
+    #[test]
+    fn allows_safe_sudo_rm_invocations() {
+        assert_allow("sudo rm file.txt");
+        assert_allow("sudo");
     }
 
     #[test]

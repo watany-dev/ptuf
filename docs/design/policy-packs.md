@@ -22,7 +22,8 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 | `core.filesystem.destructive-rm` | deny | true | critical |
 
 現在は `rm -rf /`, `rm -rf ~`, repo root や親 directory への危険な再帰削除を
-主対象にする。
+主対象にする。`sudo rm -rf /` や `sudo -u root rm -rf /etc` のような sudo 経由も
+`unwrap_sudo` で剥がして評価する (value-taking sudo option も skip する)。
 
 ## `core.network`
 
@@ -34,6 +35,9 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 
 - `curl ... | bash`
 - `wget -qO- ... | sh`
+
+`... | sudo bash` や `... | sudo -u root bash` のような sudo 経由の interpreter も
+`unwrap_sudo` で剥がして判定する (value-taking sudo option も skip する)。
 
 ## `core.secrets`
 
@@ -53,7 +57,8 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 `sensitive-path-to-network` は segment (`;` / `&&` / `||` 区切り) ごとに判定する
 ため `ls ~/.ssh; curl https://example.com` のように無関係な segment を並べた
 shape では発火しない。一方 pipeline 内の redirect (`curl https://x > ~/.ssh/foo`
-など) は同一 pipeline として扱う。`$(...)` を含む command は parser から body
+など) は同一 pipeline として扱う。network sink が `sudo` / `sudo -u root` 経由で
+起動される場合も `unwrap_sudo` で剥がして判定する。`$(...)` を含む command は parser から body
 が見えないため、従来どおり command-wide co-occurrence で pessimistic に判定
 する (false positive を選ぶ既存方針)。`sensitive-bash-read` も同じ
 pessimistic 戦略 + Ask 設計を採用するため、reader head が外側の argv に
