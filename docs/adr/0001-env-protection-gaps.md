@@ -41,8 +41,9 @@ Accepted (2026-05-11).
     `column`/`file`/`dd`/`source`/`.`) のいずれかが head で、かつ
     argv.args いずれかが `SENSITIVE_PATH` にマッチ、もしくは pipeline 内
     Stdin redirect (`<`) の target が機密 path にマッチした場合に発火。
-  - sudo は `unwrap_sudo` で剥がしてから再判定。`bash -c '...'`, `xargs`,
-    `find -exec`, `eval` の `inner_argv` も再帰走査。
+  - `sudo` / `doas` / `pkexec` / `run0` などの権限昇格ラッパーは
+    `unwrap_privilege_wrapper` で剥がしてから再判定。`su -c '...'`,
+    `bash -c '...'`, `xargs`, `find -exec`, `eval` の `inner_argv` も再帰走査。
   - `$(...)` を含む場合は pessimistic mode (`bash.commands()` フラット列で
     reader argv と sensitive argv の coexistence を要求)。外側が非 reader
     で内側に reader が隠れる shape (`echo $(cat .env)`) は parser 制約に
@@ -113,6 +114,13 @@ Accepted (2026-05-11).
 - `echo $(cat .env)` のように、外側 argv head が非 reader で内側に
   reader が隠れる command-substitution shape は parser 制約により
   pessimistic mode でも取り逃す (`cat $(echo .env)` 型は cover)。
+- 権限昇格ラッパーは `nesting_budget = 2` の範囲で剥がす。
+  `su -c 'bash -c "su -c ..."'` のように 3 段を超えるネストは
+  最深層を取り逃す (`tests/bypass/corpus.jsonl` で固定)。
+- plugin DSL の `shell.pipeline` (`ShellPipelineFromTo`) は `pipe.commands`
+  を直走査するため `inner_argv` が見えず、`su -c '... | sink'` 経由の
+  pipeline は捕捉できない。prefix ラッパー (`sudo` 等) は
+  `unwrap_privilege_wrapper` で対応済み。
 
 ## Implementation map
 

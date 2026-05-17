@@ -264,10 +264,10 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
                     if to.contains(&cmd.head) {
                         return true;
                     }
-                    // sudo <interpreter> ...
-                    if cmd.head == "sudo"
-                        && let Some(first) = cmd.positional().next()
-                        && to.iter().any(|t| first == *t)
+                    // privilege-escalation wrapper around the sink
+                    // (`sudo <interpreter> ...`).
+                    if let Some(inner) = crate::facts::shell::unwrap_privilege_wrapper(cmd)
+                        && to.contains(&inner.head)
                     {
                         return true;
                     }

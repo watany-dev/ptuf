@@ -148,27 +148,105 @@ impl Bash {
     }
 }
 
-const SUDO_VALUE_SHORT_FLAGS: &[char] = &['C', 'g', 'h', 'p', 'T', 't', 'U', 'u'];
-const SUDO_VALUE_LONG_FLAGS: &[&str] = &[
-    "close-from",
-    "chdir",
-    "group",
-    "host",
-    "login-class",
-    "prompt",
-    "role",
-    "type",
-    "user",
+/// A privilege-escalation wrapper that prefixes its inner command argv
+/// (`sudo CMD`, `doas CMD`, `pkexec CMD`, `run0 CMD`).
+///
+/// `su` is deliberately *not* a prefix wrapper: its payload is shell code
+/// carried by `-c`, surfaced through `augment_inner_commands` instead.
+struct PrefixWrapper {
+    /// Wrapper command basename (`sudo`, `doas`, `pkexec`, `run0`).
+    name: &'static str,
+    /// Value-taking options as `(short, long)` pairs. Either side may be
+    /// `None` when the wrapper offers only one spelling. Listing each
+    /// option exactly once keeps the short and long views symmetric by
+    /// construction — the asymmetry this guards against was a real
+    /// bypass (`sudo -D /tmp rm -rf /`).
+    value_flags: &'static [(Option<char>, Option<&'static str>)],
+}
+
+impl PrefixWrapper {
+    fn short_value_flag(&self, arg: &str) -> Option<char> {
+        let flag = arg.strip_prefix('-')?.chars().next()?;
+        self.value_flags
+            .iter()
+            .any(|(short, _)| *short == Some(flag))
+            .then_some(flag)
+    }
+
+    fn is_long_value_flag(&self, name: &str) -> bool {
+        self.value_flags.iter().any(|(_, long)| *long == Some(name))
+    }
+}
+
+/// `sudo` value-taking options (`sudo(8)`): complete and symmetric.
+const SUDO_VALUE_FLAGS: &[(Option<char>, Option<&str>)] = &[
+    (Some('C'), Some("close-from")),
+    (Some('c'), Some("login-class")),
+    (Some('D'), Some("chdir")),
+    (Some('g'), Some("group")),
+    (Some('h'), Some("host")),
+    (Some('p'), Some("prompt")),
+    (Some('R'), Some("chroot")),
+    (Some('r'), Some("role")),
+    (Some('T'), Some("command-timeout")),
+    (Some('t'), Some("type")),
+    (Some('U'), Some("other-user")),
+    (Some('u'), Some("user")),
 ];
 
-/// Return the command that `sudo` would execute.
+/// `doas` value-taking options (`doas(1)`): `doas` has no long options.
+const DOAS_VALUE_FLAGS: &[(Option<char>, Option<&str>)] =
+    &[(Some('a'), None), (Some('C'), None), (Some('u'), None)];
+
+/// `pkexec` value-taking options (`pkexec(1)`): `--user` is the only one.
+const PKEXEC_VALUE_FLAGS: &[(Option<char>, Option<&str>)] = &[(None, Some("user"))];
+
+/// `run0` value-taking options (`run0(1)`), a conservative subset. The
+/// `--key=value` spelling needs no entry — the inline-`=` branch handles
+/// it — and unknown flags are assumed value-less, which surfaces the
+/// inner command early (the safe direction for a deny filter).
+const RUN0_VALUE_FLAGS: &[(Option<char>, Option<&str>)] = &[
+    (Some('u'), Some("user")),
+    (Some('g'), Some("group")),
+    (Some('D'), Some("chdir")),
+    (None, Some("working-directory")),
+    (None, Some("setenv")),
+    (None, Some("machine")),
+];
+
+const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
+    PrefixWrapper {
+        name: "sudo",
+        value_flags: SUDO_VALUE_FLAGS,
+    },
+    PrefixWrapper {
+        name: "doas",
+        value_flags: DOAS_VALUE_FLAGS,
+    },
+    PrefixWrapper {
+        name: "pkexec",
+        value_flags: PKEXEC_VALUE_FLAGS,
+    },
+    PrefixWrapper {
+        name: "run0",
+        value_flags: RUN0_VALUE_FLAGS,
+    },
+];
+
+/// Return the command a privilege-escalation prefix wrapper
+/// (`sudo`/`doas`/`pkexec`/`run0`) would execute.
 ///
-/// This intentionally understands common value-taking sudo options so
-/// `sudo -u root git ...` unwraps to `git ...`, not to `root ...`.
-pub(crate) fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
-    if argv.head != "sudo" {
-        return None;
-    }
+/// Each wrapper's common value-taking options are understood so
+/// `sudo -u root git ...` unwraps to `git ...`, not to `root ...`. A
+/// full-path head (`/usr/bin/sudo`) matches on its basename; unknown
+/// flags are assumed to take no value.
+///
+/// `su` is handled elsewhere: its payload is shell code in `-c`, surfaced
+/// through `augment_inner_commands` as `inner_argv`.
+pub(crate) fn unwrap_privilege_wrapper(argv: &Argv) -> Option<Argv> {
+    let wrapper = PREFIX_WRAPPERS
+        .iter()
+        .find(|w| w.name == head_basename(&argv.head))?;
 
     let mut i = 0;
     while i < argv.args.len() {
@@ -182,7 +260,7 @@ pub(crate) fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
         }
         if let Some(flag) = arg.strip_prefix("--") {
             if let Some(name) = flag.split('=').next()
-                && SUDO_VALUE_LONG_FLAGS.contains(&name)
+                && wrapper.is_long_value_flag(name)
                 && !flag.contains('=')
             {
                 i += 1;
@@ -190,7 +268,7 @@ pub(crate) fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
             i += 1;
             continue;
         }
-        if let Some(value_flag) = short_sudo_value_flag(arg)
+        if let Some(value_flag) = wrapper.short_value_flag(arg)
             && arg.len() == 2
             && arg.ends_with(value_flag)
         {
@@ -209,16 +287,6 @@ pub(crate) fn unwrap_sudo(argv: &Argv) -> Option<Argv> {
         inner_code: Vec::new(),
         inner_redirects: Vec::new(),
     })
-}
-
-fn short_sudo_value_flag(arg: &str) -> Option<char> {
-    let mut chars = arg.strip_prefix('-')?.chars();
-    let flag = chars.next()?;
-    if SUDO_VALUE_SHORT_FLAGS.contains(&flag) {
-        Some(flag)
-    } else {
-        None
-    }
 }
 
 fn is_flag(a: &str) -> bool {
@@ -689,6 +757,9 @@ fn augment_inner_commands(argv: &mut Argv, nesting_budget: usize) {
     if let Some(code) = extract_shell_dash_c(argv) {
         merge_inner_shell(argv, &code, nesting_budget);
     }
+    if let Some(code) = extract_su_command(argv) {
+        merge_inner_shell(argv, &code, nesting_budget);
+    }
     if let Some(code) = extract_eval_code(argv) {
         merge_inner_shell(argv, &code, nesting_budget);
     }
@@ -730,8 +801,31 @@ fn extract_shell_dash_c(argv: &Argv) -> Option<String> {
     if !is_shell_dash_c_head(&argv.head) {
         return None;
     }
-    let mut iter = argv.args.iter();
+    extract_dash_c_payload(&argv.args)
+}
+
+/// Pull the payload from a `su -c CODE` invocation. `su` carries the
+/// command to run as shell code (possibly a whole pipeline), so it is
+/// surfaced as `inner_*` rather than unwrapped like the prefix wrappers.
+fn extract_su_command(argv: &Argv) -> Option<String> {
+    if head_basename(&argv.head) != "su" {
+        return None;
+    }
+    extract_dash_c_payload(&argv.args)
+}
+
+/// Pull the code string following a `-c` option. Handles short-flag
+/// clusters (`-c`, `-lc`), the `--command VALUE` long form, and the
+/// inline `--command=VALUE` form.
+fn extract_dash_c_payload(args: &[String]) -> Option<String> {
+    let mut iter = args.iter();
     while let Some(arg) = iter.next() {
+        if let Some(value) = arg.strip_prefix("--command=") {
+            return Some(value.to_string());
+        }
+        if arg == "--command" {
+            return iter.next().cloned();
+        }
         if short_flag_cluster_contains(arg, 'c') {
             return iter.next().cloned();
         }
@@ -1401,6 +1495,125 @@ mod tests {
             let (_, advanced, _) = read_word(&buf);
             assert!(advanced > 0, "read_word stalled on byte {byte:#x}");
         }
+    }
+
+    #[test]
+    fn unwrap_privilege_wrapper_strips_prefix_wrappers() {
+        for wrapper in ["sudo", "doas", "pkexec", "run0"] {
+            let inner = unwrap_privilege_wrapper(&argv(wrapper, &["rm", "-rf", "/"]))
+                .unwrap_or_else(|| panic!("{wrapper} should unwrap"));
+            assert_eq!(inner, argv("rm", &["-rf", "/"]));
+        }
+    }
+
+    #[test]
+    fn unwrap_privilege_wrapper_skips_value_flags() {
+        // Each wrapper hides the inner `rm` head behind a value-taking
+        // flag (short, long, and inline-`=` spellings).
+        let cases: &[(&str, &[&str])] = &[
+            ("sudo", &["-u", "root", "rm", "-rf", "/"]),
+            ("sudo", &["-D", "/tmp", "rm", "-rf", "/"]),
+            ("sudo", &["-R", "/mnt", "rm", "-rf", "/"]),
+            ("sudo", &["-r", "unconfined_r", "rm", "-rf", "/"]),
+            ("sudo", &["-c", "admin", "rm", "-rf", "/"]),
+            ("sudo", &["--chdir", "/tmp", "rm", "-rf", "/"]),
+            ("sudo", &["--chdir=/tmp", "rm", "-rf", "/"]),
+            ("doas", &["-u", "root", "rm", "-rf", "/"]),
+            ("doas", &["-C", "/etc/doas.conf", "rm", "-rf", "/"]),
+            ("pkexec", &["--user", "root", "rm", "-rf", "/"]),
+            ("run0", &["-u", "root", "rm", "-rf", "/"]),
+            ("run0", &["--user=root", "rm", "-rf", "/"]),
+        ];
+        for &(wrapper, args) in cases {
+            let inner = unwrap_privilege_wrapper(&argv(wrapper, args))
+                .unwrap_or_else(|| panic!("{wrapper} {args:?} should unwrap"));
+            assert_eq!(inner, argv("rm", &["-rf", "/"]), "{wrapper} {args:?}");
+        }
+    }
+
+    #[test]
+    fn unwrap_privilege_wrapper_matches_full_path_head() {
+        let inner = unwrap_privilege_wrapper(&argv("/usr/bin/sudo", &["rm", "-rf", "/"]))
+            .expect("full-path sudo unwraps");
+        assert_eq!(inner, argv("rm", &["-rf", "/"]));
+    }
+
+    #[test]
+    fn unwrap_privilege_wrapper_honours_double_dash() {
+        let inner = unwrap_privilege_wrapper(&argv("sudo", &["--", "rm", "-rf", "/"]))
+            .expect("-- separator unwraps");
+        assert_eq!(inner, argv("rm", &["-rf", "/"]));
+    }
+
+    #[test]
+    fn unwrap_privilege_wrapper_returns_none_for_non_wrapper() {
+        assert_eq!(unwrap_privilege_wrapper(&argv("rm", &["-rf", "/"])), None);
+        // `su` is not a prefix wrapper — its payload is handled via `-c`.
+        assert_eq!(
+            unwrap_privilege_wrapper(&argv("su", &["-c", "rm -rf /"])),
+            None
+        );
+    }
+
+    #[test]
+    fn unwrap_privilege_wrapper_returns_none_when_only_flags() {
+        assert_eq!(
+            unwrap_privilege_wrapper(&argv("sudo", &["-u", "root"])),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_su_command_pulls_dash_c_payload() {
+        let cases: &[&[&str]] = &[
+            &["-c", "rm -rf /"],
+            &["-lc", "rm -rf /"],
+            &["root", "-c", "rm -rf /"],
+            &["--command", "rm -rf /"],
+        ];
+        for &args in cases {
+            let payload = extract_su_command(&argv("su", args))
+                .unwrap_or_else(|| panic!("su {args:?} should carry a -c payload"));
+            assert_eq!(payload, "rm -rf /");
+        }
+        let eq = extract_su_command(&argv("su", &["--command=rm -rf /"]))
+            .expect("--command= inline form");
+        assert_eq!(eq, "rm -rf /");
+    }
+
+    #[test]
+    fn extract_su_command_returns_none_without_dash_c() {
+        assert_eq!(extract_su_command(&argv("su", &["root"])), None);
+        // A non-`su` head is left to `extract_shell_dash_c`.
+        assert_eq!(extract_su_command(&argv("sudo", &["-c", "x"])), None);
+    }
+
+    #[test]
+    fn parses_su_dash_c_inner_command() {
+        let b = parse("su -c 'rm -rf /'");
+        let inner = &b.segments[0].commands[0].inner_argv;
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0], argv("rm", &["-rf", "/"]));
+        let heads: Vec<_> = b.commands().into_iter().map(|a| a.head.as_str()).collect();
+        assert!(heads.contains(&"rm"), "got heads: {heads:?}");
+    }
+
+    #[test]
+    fn parses_su_username_dash_c_inner_command() {
+        let b = parse("su root -c 'rm -rf /'");
+        let inner = &b.segments[0].commands[0].inner_argv;
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0], argv("rm", &["-rf", "/"]));
+    }
+
+    #[test]
+    fn unwraps_multi_level_prefix_wrappers() {
+        let b = parse("sudo doas rm -rf /");
+        let outer = &b.segments[0].commands[0];
+        let layer1 = unwrap_privilege_wrapper(outer).expect("sudo unwraps");
+        assert_eq!(layer1.head, "doas");
+        let layer2 = unwrap_privilege_wrapper(&layer1).expect("doas unwraps");
+        assert_eq!(layer2, argv("rm", &["-rf", "/"]));
     }
 
     use crate::testing::proptest::{

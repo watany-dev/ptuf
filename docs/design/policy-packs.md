@@ -22,8 +22,10 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 | `core.filesystem.destructive-rm` | deny | true | critical |
 
 現在は `rm -rf /`, `rm -rf ~`, repo root や親 directory への危険な再帰削除を
-主対象にする。`sudo rm -rf /` や `sudo -u root rm -rf /etc` のような sudo 経由も
-`unwrap_sudo` で剥がして評価する (value-taking sudo option も skip する)。
+主対象にする。`sudo rm -rf /` や `doas -u root rm -rf /etc` のような権限昇格
+ラッパー (`sudo` / `doas` / `pkexec` / `run0`) 経由も `unwrap_privilege_wrapper`
+で剥がして評価し (value-taking option も skip する)、`su -c '...'` の内側コードは
+再 parse して `inner_argv` 経由で同じ rule に流す。
 
 ## `core.network`
 
@@ -36,8 +38,9 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 - `curl ... | bash`
 - `wget -qO- ... | sh`
 
-`... | sudo bash` や `... | sudo -u root bash` のような sudo 経由の interpreter も
-`unwrap_sudo` で剥がして判定する (value-taking sudo option も skip する)。
+`... | sudo bash` や `... | doas -u root bash` のような権限昇格ラッパー経由の
+interpreter も `unwrap_privilege_wrapper` で剥がして判定する (value-taking
+option も skip する)。
 
 ## `core.secrets`
 
@@ -57,8 +60,9 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 `sensitive-path-to-network` は segment (`;` / `&&` / `||` 区切り) ごとに判定する
 ため `ls ~/.ssh; curl https://example.com` のように無関係な segment を並べた
 shape では発火しない。一方 pipeline 内の redirect (`curl https://x > ~/.ssh/foo`
-など) は同一 pipeline として扱う。network sink が `sudo` / `sudo -u root` 経由で
-起動される場合も `unwrap_sudo` で剥がして判定する。`$(...)` を含む command は parser から body
+など) は同一 pipeline として扱う。network sink が `sudo` / `doas` などの権限昇格
+ラッパー経由で起動される場合も `unwrap_privilege_wrapper` で剥がして判定する。
+`$(...)` を含む command は parser から body
 が見えないため、従来どおり command-wide co-occurrence で pessimistic に判定
 する (false positive を選ぶ既存方針)。`sensitive-bash-read` も同じ
 pessimistic 戦略 + Ask 設計を採用するため、reader head が外側の argv に
@@ -108,10 +112,10 @@ hook / signing / fsck bypass を block する rule (`core.git.no-verify` /
 `core.git.no-gpg-sign` / `core.git.config-override-bypass` /
 `core.git.env-bypass`) と、credential / path redirection 系
 (`core.git.env-credential-hijack` / `core.git.env-path-redirect`)
-が 6 件。`sudo` 経由の git 実行も同じ matcher に通す。
+が 6 件。`sudo` などの権限昇格ラッパー経由の git 実行も同じ matcher に通す。
 `sudo -u root git ...` や `sudo --user=root git ...` のような
-value-taking sudo option は、option 値を command head と誤認しないように
-unwrap してから評価する。
+value-taking option は、option 値を command head と誤認しないように
+unwrap してから評価し、`sudo doas git ...` のような多段ネストも 1 段ずつ剥がす。
 `core.git.clean-fdx` は `git clean -fdx` だけでなく、`git clean -f -d -x` や
 `git clean --force -d -x` のように分割された flag も検出する。`-n` dry-run は
 発火しない。
@@ -171,7 +175,8 @@ bounded depth の再 parse により inner command と redirect が既存 rule
 (`destructive-rm`, self-protection など) にも流れる。一方で `python -c`,
 `node -e`, `perl -e`, `ruby -e` のような interpreter 組み込みコードは依然
 opaque なので、`core.engine.dynamic-eval` が `Ask` を返してユーザに inner code
-確認を求める。`sudo bash -c …` のような sudo 経由も unwrap して評価する。
+確認を求める。`sudo bash -c …` のような権限昇格ラッパー経由も unwrap して
+評価する。
 `bash --login` や `python file.py` のような通常起動は発火しない。allowlist
 (`overrides.allow` の glob) や `rule_overrides.disable` で project-local に
 抑制できる。

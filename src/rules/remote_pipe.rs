@@ -1,6 +1,6 @@
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, Pipeline, unwrap_sudo};
+use crate::facts::shell::{Argv, Pipeline, unwrap_privilege_wrapper};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -81,7 +81,7 @@ fn is_interpreter_invocation(argv: &Argv) -> bool {
     if is_interpreter(&argv.head) {
         return true;
     }
-    if let Some(inner) = unwrap_sudo(argv) {
+    if let Some(inner) = unwrap_privilege_wrapper(argv) {
         return is_interpreter(&inner.head);
     }
     false

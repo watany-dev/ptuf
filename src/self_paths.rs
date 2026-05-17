@@ -455,11 +455,12 @@ fn candidate_targets<'a>(
     if let Some(cmd) = event.command {
         let bash = crate::facts::shell::parse(cmd);
         let writer_heads = ["rm", "mv", "cp", "chmod", "chown", "tee", "ln"];
-        for argv in bash.commands() {
-            let head = match argv.head.as_str() {
-                "sudo" => argv.positional().next().unwrap_or(""),
-                other => other,
-            };
+        for outer in bash.commands() {
+            // Peel a privilege-escalation wrapper (`sudo rm ...`) so the
+            // writer head and its destinations are the inner command's.
+            let unwrapped = crate::facts::shell::unwrap_privilege_wrapper(outer);
+            let argv = unwrapped.as_ref().unwrap_or(outer);
+            let head = argv.head.as_str();
             let head_base = std::path::Path::new(head)
                 .file_name()
                 .and_then(|s| s.to_str())

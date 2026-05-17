@@ -8,7 +8,7 @@
 §1.5 / §5.6 / §2 / D4 / D10 / D12 を解消)。
 
 現行 parser は redirect / heredoc / process substitution 検出に加え、
-`bash -c` / `eval` / `xargs` / `find -exec` の bounded inner parse と
+`bash -c` / `su -c` / `eval` / `xargs` / `find -exec` の bounded inner parse と
 `inner_code` / `inner_redirects` 抽出を実装済み。残る parser リスクは
 完全な shell 解釈ではなく、command substitution / process substitution の中身を
 opaque な flag surface として扱う点に限定される。
@@ -23,27 +23,29 @@ opaque な flag surface として扱う点に限定される。
 
 | 状態 | 項目 |
 | --- | --- |
-| Resolved in current HEAD | §2 / D4 parser wrapper・redirect 系、D10 adapter 分離、D12 contract test 拡充、§5.4 Claude Code hook stable marker、§6.1 proptest strategy feature gate、§4.3 reason temporary allocation、§4.5 self-protection label allocation、D11 大型ファイル分割 (engine / cli / doctor) |
+| Resolved in current HEAD | §2 / D4 parser wrapper・redirect 系、D10 adapter 分離、D12 contract test 拡充、§5.4 Claude Code hook stable marker、§6.1 proptest strategy feature gate、§4.3 reason temporary allocation、§4.5 self-protection label allocation、D11 大型ファイル分割 (engine / cli / doctor)、§1 権限昇格ラッパー unwrap 一般化 (sudo/doas/pkexec/run0/su) |
 | Deferred architecture backlog | §1.3 / §4.1 data model・borrowed shell AST、§4.4 plugin cache、§5.1 CLI parser、§1.1 / §1.2 builtin rule / DSL 統合 |
 | Deferred design choice | §6.2 coverage 95% 方針転換候補 |
 
 ## 1. Concrete bugs (P0)
 
-- **監査 2026-05-17** `sudo` 以外の権限昇格ラッパーが unwrap されず、
-  hard-deny ルール (`core.filesystem.destructive-rm` /
-  `core.network.remote-script-pipe` / `core.secrets.sensitive-path-to-network`)
-  を回避できる。`unwrap_sudo` (`src/facts/shell.rs:168`) は
-  `argv.head != "sudo"` で即 `None` を返すため、`su -c 'rm -rf /'` /
-  `doas rm -rf /` / `pkexec rm -rf /` / `run0 rm -rf /` がいずれも allow に
-  なる (実機確認済み)。加えて `SUDO_VALUE_SHORT_FLAGS` (`shell.rs:151`) と
-  `SUDO_VALUE_LONG_FLAGS` (`shell.rs:152`) が非対称で、`-D`/`--chdir`、
-  `-R`/`--chroot`、`-r`/`--role`、`-c`/`--login-class` の値付きフラグを
-  取りこぼし、`sudo -D /tmp rm -rf /` 等も allow になる。値を取る未知フラグが
-  1 つでもあると、次のトークンを command head と誤認して回避が成立する。
-  回帰固定として `tests/bypass/corpus.jsonl` に `known_gap` 6 件を追加済み。
-  修正方針: `unwrap_sudo` を権限昇格ラッパー全般を扱う汎用ヘルパに一般化し
-  (`doas`/`pkexec`/`run0` は prefix、`su` は `-c` 内側コードの再パースが必要)、
-  short/long フラグ表を完全・対称にする。優先度: P0
+(該当なし — 2026-05-17 監査の権限昇格ラッパー網羅問題は解消済み。
+`unwrap_sudo` を `unwrap_privilege_wrapper` (`src/facts/shell.rs`) に一般化し、
+`sudo` / `doas` / `pkexec` / `run0` を data-driven な prefix ラッパー表で剥がす。
+値フラグ表は `(short, long)` ペアの単一 source-of-truth にして非対称バグを
+構造的に排除した。フルパス head (`/usr/bin/sudo`) は basename 一致、多段ネスト
+(`sudo doas ...`) は 1 段ずつ剥がす。`su -c '...'` は `augment_inner_commands`
+で内側コードを再 parse し `inner_argv` 経由で全 rule に surface する。
+`tests/bypass/corpus.jsonl` の `known_gap` 6 件を `must_catch` に昇格し、
+新規 13 件を追加。)
+
+残存ギャップ (P2):
+
+- 権限昇格ラッパーのネストは `nesting_budget = 2` の範囲のみ剥がす。
+  3 段超 (`su -c 'bash -c "su -c ..."'`) は最深層を取り逃す。
+- plugin DSL の `shell.pipeline` (`ShellPipelineFromTo`) は `pipe.commands`
+  を直走査するため `inner_argv` が見えず、`su -c '... | sink'` 経由の
+  pipeline を捕捉できない (prefix ラッパーは対応済み)。
 
 (§3.3 / §3.5 は解消済み。`Bash::has_command_substitution`
 で command substitution を pessimistic 扱いに surface できるようになった。
