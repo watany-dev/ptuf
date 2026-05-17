@@ -45,3 +45,13 @@
 {"id":"gap-cmdsubst-outer-nonreader","category":"command-substitution","description":"ADR 0001 — outer head non-reader hides `cat` from the parser","hook_input":{"tool_name":"Bash","tool_input":{"command":"echo $(cat .env)"}},"expect":{"kind":"known_gap","decision":"allow"}}
 {"id":"gap-brace-expansion","category":"glob-literal","description":"ADR 0001 — brace expansion `{a,b}.env` is not anchor-matched","hook_input":{"tool_name":"Bash","tool_input":{"command":"cat {a,b}.env"}},"expect":{"kind":"known_gap","decision":"allow"}}
 {"id":"gap-unicode-homoglyph","category":"unicode-homoglyph","description":"ADR 0001 — Cyrillic-e homoglyph `.еnv` evades the ASCII regex","hook_input":{"tool_name":"Bash","tool_input":{"command":"cat .еnv"}},"expect":{"kind":"known_gap","decision":"allow"}}
+# --- known_gap: privilege-escalation wrappers beyond `sudo` (open-issues.md §1)
+# `unwrap_sudo` only strips `sudo`; `su`/`doas`/`pkexec`/`run0` and several
+# value-taking `sudo` flags are not yet unwrapped, so the inner dangerous
+# command stays hidden. Pins current behaviour until the helper is generalised.
+{"id":"gap-wrapper-su-dash-c","category":"privilege-wrapper","description":"su -c carries the command; su is not unwrapped","hook_input":{"tool_name":"Bash","tool_input":{"command":"su -c 'rm -rf /'"}},"expect":{"kind":"known_gap","decision":"allow"}}
+{"id":"gap-wrapper-doas","category":"privilege-wrapper","description":"doas prefix wrapper is not unwrapped","hook_input":{"tool_name":"Bash","tool_input":{"command":"doas rm -rf /"}},"expect":{"kind":"known_gap","decision":"allow"}}
+{"id":"gap-wrapper-pkexec","category":"privilege-wrapper","description":"pkexec prefix wrapper is not unwrapped","hook_input":{"tool_name":"Bash","tool_input":{"command":"pkexec rm -rf /"}},"expect":{"kind":"known_gap","decision":"allow"}}
+{"id":"gap-wrapper-run0","category":"privilege-wrapper","description":"run0 prefix wrapper is not unwrapped","hook_input":{"tool_name":"Bash","tool_input":{"command":"run0 rm -rf /"}},"expect":{"kind":"known_gap","decision":"allow"}}
+{"id":"gap-sudo-chdir-flag","category":"privilege-wrapper","description":"sudo -D (chdir) value flag missing from SUDO_VALUE_SHORT_FLAGS","hook_input":{"tool_name":"Bash","tool_input":{"command":"sudo -D /tmp rm -rf /"}},"expect":{"kind":"known_gap","decision":"allow"}}
+{"id":"gap-sudo-role-flag","category":"privilege-wrapper","description":"sudo -r (role) value flag missing from SUDO_VALUE_SHORT_FLAGS","hook_input":{"tool_name":"Bash","tool_input":{"command":"sudo -r unconfined_r rm -rf /"}},"expect":{"kind":"known_gap","decision":"allow"}}

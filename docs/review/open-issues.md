@@ -29,7 +29,23 @@ opaque な flag surface として扱う点に限定される。
 
 ## 1. Concrete bugs (P0)
 
-(該当なし — §3.3 / §3.5 は解消済み。`Bash::has_command_substitution`
+- **監査 2026-05-17** `sudo` 以外の権限昇格ラッパーが unwrap されず、
+  hard-deny ルール (`core.filesystem.destructive-rm` /
+  `core.network.remote-script-pipe` / `core.secrets.sensitive-path-to-network`)
+  を回避できる。`unwrap_sudo` (`src/facts/shell.rs:168`) は
+  `argv.head != "sudo"` で即 `None` を返すため、`su -c 'rm -rf /'` /
+  `doas rm -rf /` / `pkexec rm -rf /` / `run0 rm -rf /` がいずれも allow に
+  なる (実機確認済み)。加えて `SUDO_VALUE_SHORT_FLAGS` (`shell.rs:151`) と
+  `SUDO_VALUE_LONG_FLAGS` (`shell.rs:152`) が非対称で、`-D`/`--chdir`、
+  `-R`/`--chroot`、`-r`/`--role`、`-c`/`--login-class` の値付きフラグを
+  取りこぼし、`sudo -D /tmp rm -rf /` 等も allow になる。値を取る未知フラグが
+  1 つでもあると、次のトークンを command head と誤認して回避が成立する。
+  回帰固定として `tests/bypass/corpus.jsonl` に `known_gap` 6 件を追加済み。
+  修正方針: `unwrap_sudo` を権限昇格ラッパー全般を扱う汎用ヘルパに一般化し
+  (`doas`/`pkexec`/`run0` は prefix、`su` は `-c` 内側コードの再パースが必要)、
+  short/long フラグ表を完全・対称にする。優先度: P0
+
+(§3.3 / §3.5 は解消済み。`Bash::has_command_substitution`
 で command substitution を pessimistic 扱いに surface できるようになった。
 `tokenize` の `read_word` 呼び出しに `debug_assert!(advanced > 0)` を
 追加して forward-progress 不変条件を明示。)
