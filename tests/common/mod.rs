@@ -68,7 +68,7 @@ pub fn binary() -> Command {
 /// (even the 8 MiB stdin case under a debug build) finishes
 /// comfortably, short enough that a genuine hang surfaces as a test
 /// failure instead of wedging `make e2e` forever.
-pub const DEFAULT_SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
+pub const DEFAULT_SPAWN_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Spawn ptuf with [`DEFAULT_SPAWN_TIMEOUT`]. Thin wrapper over
 /// [`spawn_with_timeout`] kept signature-compatible with the original
