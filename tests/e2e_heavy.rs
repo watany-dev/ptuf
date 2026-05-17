@@ -648,7 +648,8 @@ mod adapter_parity {
     const COPILOT_DENY: &[u8] = br#"{"toolName":"bash","toolArgs":{"command":"rm -rf /"}}"#;
     const COPILOT_ALLOW: &[u8] = br#"{"toolName":"bash","toolArgs":{"command":"ls"}}"#;
     const KIRO_DENY: &[u8] = br#"{"hook_event_name":"preToolUse","tool_name":"shell","tool_input":{"command":"rm -rf /"}}"#;
-    const KIRO_ALLOW: &[u8] = br#"{"hook_event_name":"preToolUse","tool_name":"shell","tool_input":{"command":"ls"}}"#;
+    const KIRO_ALLOW: &[u8] =
+        br#"{"hook_event_name":"preToolUse","tool_name":"shell","tool_input":{"command":"ls"}}"#;
     const CLINE_DENY: &[u8] = br#"{"hookName":"tool_call","tool_call":{"id":"c1","name":"execute_command","input":{"command":"rm -rf /"}}}"#;
     const CLINE_ALLOW: &[u8] = br#"{"hookName":"tool_call","tool_call":{"id":"c1","name":"execute_command","input":{"command":"ls"}}}"#;
     const CLINE_LEGACY_DENY: &[u8] = br#"{"hookName":"PreToolUse","preToolUse":{"toolName":"execute_command","parameters":{"command":"rm -rf /"}}}"#;
@@ -674,7 +675,10 @@ mod adapter_parity {
             out.contains(r#""permissionDecision":"deny""#),
             "claude-code stdout: {out}"
         );
-        assert!(out.contains("hookSpecificOutput"), "claude-code must wrap: {out}");
+        assert!(
+            out.contains("hookSpecificOutput"),
+            "claude-code must wrap: {out}"
+        );
 
         // Codex: same shape and exit as Claude Code.
         let r = hook("codex", super::DENY_PAYLOAD);
@@ -697,7 +701,10 @@ mod adapter_parity {
             out.contains(r#""permissionDecision":"deny""#),
             "copilot stdout: {out}"
         );
-        assert!(!out.contains("hookSpecificOutput"), "copilot must be bare: {out}");
+        assert!(
+            !out.contains("hookSpecificOutput"),
+            "copilot must be bare: {out}"
+        );
 
         // Kiro: exit 2, no JSON envelope — reason on stderr only.
         let r = hook("kiro", KIRO_DENY);
@@ -794,7 +801,8 @@ mod adapter_parity {
             let r = hook("copilot", payload);
             assert_clean_exit(&r);
             assert_eq!(
-                r.code, 0,
+                r.code,
+                0,
                 "{label}: copilot must exit 0: {}",
                 r.stderr_string()
             );
@@ -803,7 +811,10 @@ mod adapter_parity {
                 out.contains(r#""permissionDecision":"deny""#),
                 "{label}: stdout {out}"
             );
-            assert!(!out.contains("hookSpecificOutput"), "{label}: must be bare: {out}");
+            assert!(
+                !out.contains("hookSpecificOutput"),
+                "{label}: must be bare: {out}"
+            );
         }
     }
 
@@ -819,7 +830,8 @@ mod adapter_parity {
             let r = hook("cline", payload);
             assert_clean_exit(&r);
             assert_eq!(
-                r.code, 0,
+                r.code,
+                0,
                 "{label}: cline must exit 0: {}",
                 r.stderr_string()
             );
@@ -838,7 +850,8 @@ mod adapter_parity {
         );
         assert_clean_exit(&r);
         assert_eq!(
-            r.code, 2,
+            r.code,
+            2,
             "kiro wrong-event must fail closed: {}",
             r.stderr_string()
         );
@@ -859,7 +872,8 @@ mod adapter_parity {
         );
         assert_clean_exit(&r);
         assert_eq!(
-            r.code, 2,
+            r.code,
+            2,
             "kiro missing-tool_name must fail closed: {}",
             r.stderr_string()
         );
@@ -1323,7 +1337,8 @@ rules:
         let r = run(&["plugin", "check", &path_str]);
         assert_clean_exit(&r);
         assert_ne!(
-            r.code, 0,
+            r.code,
+            0,
             "broken YAML must be rejected: stdout={}",
             r.stdout_string()
         );
@@ -1371,7 +1386,8 @@ rules:
                 });
                 assert_clean_exit(&r);
                 assert_eq!(
-                    r.code, 0,
+                    r.code,
+                    0,
                     "{agent} round {round}: stderr={}",
                     r.stderr_string()
                 );
@@ -1399,7 +1415,8 @@ rules:
         });
         assert_clean_exit(&r);
         assert_eq!(
-            r.code, 1,
+            r.code,
+            1,
             "init must refuse an unmanaged hook: stderr={}",
             r.stderr_string()
         );
@@ -1461,7 +1478,8 @@ rules:
         let r = run(&["definitely-not-a-subcommand"]);
         assert_clean_exit(&r);
         assert_eq!(
-            r.code, 1,
+            r.code,
+            1,
             "unknown subcommand must exit 1: stderr={}",
             r.stderr_string()
         );
