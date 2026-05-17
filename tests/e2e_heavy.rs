@@ -11,6 +11,7 @@
 //! - `full_config_stack` — 4-layer config + plugin + audit end-to-end
 //! - `adapter_parity`  — all 5 agents in their native payload shapes
 //! - `pathological_input` — malformed / oversized / deeply nested payloads
+//! - `latency_budget`  — per-call delay budget, warm / burst / parallel
 //!
 //! The shared `common::spawn` helper kills and reaps the child once a
 //! timeout elapses, so a hung ptuf surfaces as a test *failure* rather
@@ -1090,5 +1091,170 @@ mod pathological_input {
                 assert_eq!(r.code, 2, "{tag}: must fail closed to deny");
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Axis 7: per-call latency budget — delay detection distinct from hang
+// ---------------------------------------------------------------------
+
+/// Measures per-call latency across warm, burst, heavy-config, and
+/// parallel conditions. A hang is already caught by `common::spawn`'s
+/// 60 s timeout; this axis catches the milder failure where ptuf still
+/// answers but takes far longer than it should. Budgets are kept well
+/// above a healthy debug-build call yet far below the hang timeout so
+/// the two failure modes stay distinguishable.
+mod latency_budget {
+    use super::common::{
+        LayerYaml, SpawnConfig, as_env_refs, assert_clean_exit, envs_for, full_stack, spawn,
+    };
+    use std::time::Duration;
+
+    /// Per-call delay ceiling for a warm hook invocation. A healthy
+    /// debug-build call returns in tens of milliseconds; 2 s is far
+    /// above that yet far below the 60 s hang timeout, so a genuine
+    /// slowdown fails as a *delay* distinctly from a *hang*.
+    const PER_CALL_BUDGET: Duration = Duration::from_secs(2);
+
+    /// Looser ceiling for one call made while a 4-layer config plus
+    /// 100 plugins is parsed from disk on every invocation.
+    const CONFIG_STACK_BUDGET: Duration = Duration::from_secs(8);
+
+    /// Worst-case ceiling for a single call under 10-way parallel
+    /// spawn contention; generous to absorb CI scheduler jitter.
+    const PARALLEL_BUDGET: Duration = Duration::from_secs(10);
+
+    fn allow_cfg() -> SpawnConfig<'static> {
+        SpawnConfig {
+            args: &["hook", "claude-code"],
+            stdin: super::ALLOW_PAYLOAD,
+            cwd: None,
+            envs: &[],
+        }
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn single_warm_call_stays_under_budget() {
+        // First spawn primes lazy resources (binary page cache, etc.)
+        // so the measured call reflects steady state.
+        let _ = spawn(&allow_cfg());
+        let r = spawn(&allow_cfg());
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 0, "stderr={}", r.stderr_string());
+        assert!(
+            r.elapsed < PER_CALL_BUDGET,
+            "warm call took {:?}, over budget {PER_CALL_BUDGET:?}",
+            r.elapsed
+        );
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn hundred_call_burst_every_call_under_budget() {
+        const N: usize = 100;
+        let _ = spawn(&allow_cfg());
+        let mut elapsed = Vec::with_capacity(N);
+        for i in 0..N {
+            let r = spawn(&allow_cfg());
+            assert_clean_exit(&r);
+            assert_eq!(r.code, 0, "iter {i}: stderr={}", r.stderr_string());
+            assert!(
+                r.elapsed < PER_CALL_BUDGET,
+                "iter {i} took {:?}, over budget {PER_CALL_BUDGET:?}",
+                r.elapsed
+            );
+            elapsed.push(r.elapsed);
+        }
+        elapsed.sort_unstable();
+        let p95 = elapsed[(N * 95) / 100];
+        let max = *elapsed.last().expect("non-empty burst");
+        println!("burst latency: p95={p95:?} max={max:?} (budget {PER_CALL_BUDGET:?})");
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn call_under_full_config_and_plugin_load_within_budget() {
+        const PLUGINS: usize = 100;
+        let mut plugin_files = Vec::with_capacity(PLUGINS);
+        let mut project = String::from("version: 1\nmode: enforce\nplugins:\n");
+        for i in 0..PLUGINS {
+            plugin_files.push((
+                format!("p{i}.yaml"),
+                format!(
+                    "apiVersion: ptuf.dev/v1\nkind: Plugin\nmetadata:\n  name: pack.p{i}\nrules:\n  - id: pack.p{i}.noop\n    severity: low\n    defaultDecision: monitor\n    when:\n      tool: NoSuchTool{i}\n    reason: noop-{i}\n"
+                ),
+            ));
+            project.push_str(&format!("  - path: .ptuf/plugins/p{i}.yaml\n"));
+        }
+        let fix = full_stack(LayerYaml {
+            system: Some("version: 1\nmode: monitor\n".to_string()),
+            user: Some("version: 1\n".to_string()),
+            project: Some(project),
+            project_local: Some("version: 1\nmode: enforce\n".to_string()),
+            plugins: plugin_files,
+        });
+        let envs = envs_for(&fix);
+        let env_refs = as_env_refs(&envs);
+        let cfg = SpawnConfig {
+            args: &["hook", "claude-code"],
+            stdin: super::ALLOW_PAYLOAD,
+            cwd: Some(&fix.repo_root),
+            envs: &env_refs,
+        };
+        // Warm the OS page cache for the config / plugin files.
+        let _ = spawn(&cfg);
+        let r = spawn(&cfg);
+        assert_clean_exit(&r);
+        assert!(
+            r.code == 0 || r.code == 2,
+            "unexpected exit {}: {}",
+            r.code,
+            r.stderr_string()
+        );
+        assert!(
+            !r.stderr_string().contains("policy-load-failed"),
+            "policy load failed: {}",
+            r.stderr_string()
+        );
+        assert!(
+            r.elapsed < CONFIG_STACK_BUDGET,
+            "call under full config stack took {:?}, over budget {CONFIG_STACK_BUDGET:?}",
+            r.elapsed
+        );
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn parallel_calls_worst_case_within_budget() {
+        const WORKERS: usize = 10;
+        const PER_WORKER: usize = 20;
+        let _ = spawn(&allow_cfg());
+        let worst = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..WORKERS)
+                .map(|w| {
+                    s.spawn(move || {
+                        let mut worst = Duration::ZERO;
+                        for i in 0..PER_WORKER {
+                            let r = spawn(&allow_cfg());
+                            assert_clean_exit(&r);
+                            assert_eq!(r.code, 0, "worker {w} iter {i}: {}", r.stderr_string());
+                            worst = worst.max(r.elapsed);
+                        }
+                        worst
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("worker panicked"))
+                .max()
+                .unwrap_or(Duration::ZERO)
+        });
+        println!("parallel worst-case latency: {worst:?} (budget {PARALLEL_BUDGET:?})");
+        assert!(
+            worst < PARALLEL_BUDGET,
+            "worst parallel call took {worst:?}, over budget {PARALLEL_BUDGET:?}"
+        );
     }
 }
