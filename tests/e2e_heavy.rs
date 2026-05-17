@@ -4,11 +4,12 @@
 //! them. Run via `make e2e` (or
 //! `cargo test --features testing --test e2e_heavy -- --ignored --test-threads=1`).
 //!
-//! Five axes:
+//! Six axes:
 //! - `leak`            — fd / tempfile / child-process residue
 //! - `giant_input`     — 8 MiB stdin, 1000-stage pipeline, oversized configs
 //! - `concurrent`      — sequential 200 and parallel 10×100 invocations
 //! - `full_config_stack` — 4-layer config + plugin + audit end-to-end
+//! - `adapter_parity`  — all 5 agents in their native payload shapes
 //! - `pathological_input` — malformed / oversized / deeply nested payloads
 //!
 //! The shared `common::spawn` helper kills and reaps the child once a
@@ -626,6 +627,260 @@ mod full_config_stack {
             !default_audit.exists(),
             "default audit path leaked despite override: {default_audit:?}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------
+// Axis 5: cross-adapter parity — every agent's native shape end-to-end
+// ---------------------------------------------------------------------
+
+/// Drives all five adapters (claude-code / codex / copilot / kiro /
+/// cline) through real process boundaries in their native payload
+/// shapes and pins the per-agent exit-code and stdout/stderr contract
+/// from `docs/design/cli-and-hooks.md`. The leak / concurrent / giant
+/// axes only ever exercise `claude-code`; this axis guards the other
+/// four against silent contract drift.
+mod adapter_parity {
+    use super::common::{SpawnConfig, SpawnOutcome, assert_clean_exit, spawn};
+
+    const COPILOT_DENY: &[u8] = br#"{"toolName":"bash","toolArgs":{"command":"rm -rf /"}}"#;
+    const COPILOT_ALLOW: &[u8] = br#"{"toolName":"bash","toolArgs":{"command":"ls"}}"#;
+    const KIRO_DENY: &[u8] = br#"{"hook_event_name":"preToolUse","tool_name":"shell","tool_input":{"command":"rm -rf /"}}"#;
+    const KIRO_ALLOW: &[u8] = br#"{"hook_event_name":"preToolUse","tool_name":"shell","tool_input":{"command":"ls"}}"#;
+    const CLINE_DENY: &[u8] = br#"{"hookName":"tool_call","tool_call":{"id":"c1","name":"execute_command","input":{"command":"rm -rf /"}}}"#;
+    const CLINE_ALLOW: &[u8] = br#"{"hookName":"tool_call","tool_call":{"id":"c1","name":"execute_command","input":{"command":"ls"}}}"#;
+    const CLINE_LEGACY_DENY: &[u8] = br#"{"hookName":"PreToolUse","preToolUse":{"toolName":"execute_command","parameters":{"command":"rm -rf /"}}}"#;
+
+    fn hook(agent: &str, stdin: &[u8]) -> SpawnOutcome {
+        spawn(&SpawnConfig {
+            args: &["hook", agent],
+            stdin,
+            cwd: None,
+            envs: &[],
+        })
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn every_adapter_denies_destructive_rm_per_contract() {
+        // Claude Code: exit 2, hookSpecificOutput-wrapped deny JSON.
+        let r = hook("claude-code", super::DENY_PAYLOAD);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 2, "claude-code deny: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(
+            out.contains(r#""permissionDecision":"deny""#),
+            "claude-code stdout: {out}"
+        );
+        assert!(out.contains("hookSpecificOutput"), "claude-code must wrap: {out}");
+
+        // Codex: same shape and exit as Claude Code.
+        let r = hook("codex", super::DENY_PAYLOAD);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 2, "codex deny: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(
+            out.contains(r#""permissionDecision":"deny""#),
+            "codex stdout: {out}"
+        );
+        assert!(out.contains("hookSpecificOutput"), "codex must wrap: {out}");
+
+        // Copilot: exit 0 (a non-zero exit would be read as a hook
+        // failure and fail open), bare envelope with no wrap.
+        let r = hook("copilot", COPILOT_DENY);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 0, "copilot deny must exit 0: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(
+            out.contains(r#""permissionDecision":"deny""#),
+            "copilot stdout: {out}"
+        );
+        assert!(!out.contains("hookSpecificOutput"), "copilot must be bare: {out}");
+
+        // Kiro: exit 2, no JSON envelope — reason on stderr only.
+        let r = hook("kiro", KIRO_DENY);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 2, "kiro deny: {}", r.stderr_string());
+        assert!(
+            r.stdout_string().trim().is_empty(),
+            "kiro stdout must be empty: {}",
+            r.stdout_string()
+        );
+        assert!(
+            !r.stderr_string().trim().is_empty(),
+            "kiro deny reason must be on stderr"
+        );
+
+        // Cline: exit 0, cancel-envelope JSON on stdout.
+        let r = hook("cline", CLINE_DENY);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 0, "cline deny must exit 0: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(out.contains(r#""cancel":true"#), "cline stdout: {out}");
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn every_adapter_allows_benign_ls_per_contract() {
+        // Claude Code / Codex: exit 0, empty stdout.
+        for agent in ["claude-code", "codex"] {
+            let r = hook(agent, super::ALLOW_PAYLOAD);
+            assert_clean_exit(&r);
+            assert_eq!(r.code, 0, "{agent} allow: {}", r.stderr_string());
+            assert!(
+                r.stdout_string().trim().is_empty(),
+                "{agent} allow stdout must be empty: {}",
+                r.stdout_string()
+            );
+        }
+
+        // Copilot: exit 0, empty stdout.
+        let r = hook("copilot", COPILOT_ALLOW);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 0, "copilot allow: {}", r.stderr_string());
+        assert!(
+            r.stdout_string().trim().is_empty(),
+            "copilot allow stdout must be empty: {}",
+            r.stdout_string()
+        );
+
+        // Kiro: exit 0, empty stdout AND empty stderr.
+        let r = hook("kiro", KIRO_ALLOW);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 0, "kiro allow: {}", r.stderr_string());
+        assert!(
+            r.stdout_string().trim().is_empty(),
+            "kiro allow stdout: {}",
+            r.stdout_string()
+        );
+        assert!(
+            r.stderr_string().trim().is_empty(),
+            "kiro allow stderr must be empty: {}",
+            r.stderr_string()
+        );
+
+        // Cline: exit 0, empty-object `{}` on stdout.
+        let r = hook("cline", CLINE_ALLOW);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 0, "cline allow: {}", r.stderr_string());
+        assert_eq!(
+            r.stdout_string().trim(),
+            "{}",
+            "cline allow must emit an empty object"
+        );
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn copilot_normalizes_camelcase_string_and_vscode_shapes() {
+        // All three documented Copilot input shapes must reach the
+        // same destructive-rm deny: object toolArgs (camelCase), a
+        // JSON-encoded string toolArgs, and the VS Code snake_case
+        // tool_input form.
+        let shapes: [(&str, &[u8]); 3] = [
+            ("camelCase object toolArgs", COPILOT_DENY),
+            (
+                "JSON-encoded string toolArgs",
+                br#"{"toolName":"bash","toolArgs":"{\"command\":\"rm -rf /\"}"}"#,
+            ),
+            (
+                "VS Code snake_case tool_input",
+                br#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#,
+            ),
+        ];
+        for (label, payload) in shapes {
+            let r = hook("copilot", payload);
+            assert_clean_exit(&r);
+            assert_eq!(
+                r.code, 0,
+                "{label}: copilot must exit 0: {}",
+                r.stderr_string()
+            );
+            let out = r.stdout_string();
+            assert!(
+                out.contains(r#""permissionDecision":"deny""#),
+                "{label}: stdout {out}"
+            );
+            assert!(!out.contains("hookSpecificOutput"), "{label}: must be bare: {out}");
+        }
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn cline_normalizes_sdk_and_legacy_envelopes() {
+        // SDK tool_call envelope and legacy preToolUse envelope must
+        // both reach the same deny + cancel JSON.
+        for (label, payload) in [
+            ("SDK tool_call envelope", CLINE_DENY),
+            ("legacy preToolUse envelope", CLINE_LEGACY_DENY),
+        ] {
+            let r = hook("cline", payload);
+            assert_clean_exit(&r);
+            assert_eq!(
+                r.code, 0,
+                "{label}: cline must exit 0: {}",
+                r.stderr_string()
+            );
+            let out = r.stdout_string();
+            assert!(out.contains(r#""cancel":true"#), "{label}: stdout {out}");
+        }
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn kiro_rejects_malformed_events_fail_closed() {
+        // Wrong hook_event_name → core.engine.invalid-payload deny.
+        let r = hook(
+            "kiro",
+            br#"{"hook_event_name":"postToolUse","tool_name":"shell","tool_input":{"command":"ls"}}"#,
+        );
+        assert_clean_exit(&r);
+        assert_eq!(
+            r.code, 2,
+            "kiro wrong-event must fail closed: {}",
+            r.stderr_string()
+        );
+        assert!(
+            r.stdout_string().trim().is_empty(),
+            "kiro fail-closed stdout must be empty: {}",
+            r.stdout_string()
+        );
+        assert!(
+            !r.stderr_string().trim().is_empty(),
+            "kiro fail-closed reason must be on stderr"
+        );
+
+        // Missing tool_name → same fail-closed path.
+        let r = hook(
+            "kiro",
+            br#"{"hook_event_name":"preToolUse","tool_input":{"command":"ls"}}"#,
+        );
+        assert_clean_exit(&r);
+        assert_eq!(
+            r.code, 2,
+            "kiro missing-tool_name must fail closed: {}",
+            r.stderr_string()
+        );
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn fifty_sequential_invocations_per_adapter_stay_clean() {
+        const N: usize = 50;
+        let allow: [(&str, &[u8]); 5] = [
+            ("claude-code", super::ALLOW_PAYLOAD),
+            ("codex", super::ALLOW_PAYLOAD),
+            ("copilot", COPILOT_ALLOW),
+            ("kiro", KIRO_ALLOW),
+            ("cline", CLINE_ALLOW),
+        ];
+        for (agent, payload) in allow {
+            for i in 0..N {
+                let r = hook(agent, payload);
+                assert_clean_exit(&r);
+                assert_eq!(r.code, 0, "{agent} iter {i}: {}", r.stderr_string());
+            }
+        }
     }
 }
 
