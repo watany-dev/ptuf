@@ -86,7 +86,9 @@ fn merge_rule_override(into: &mut RuleOverride, from: RuleOverride) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::schema::{RawAllowlist, RawAllowlistApplies, RawAudit, RawConfig, RawPack};
+    use super::super::schema::{
+        RawAllowlist, RawAllowlistApplies, RawAudit, RawConfig, RawPack, RawPluginRef,
+    };
     use super::super::{Allowlist, Config, Mode};
     use super::*;
     use std::collections::BTreeMap;
@@ -287,7 +289,6 @@ mod tests {
 
     #[test]
     fn plugin_paths_concatenate_across_layers_and_skip_disabled() {
-        use super::super::schema::RawPluginRef;
         let lower = RawConfig {
             plugins: vec![RawPluginRef {
                 path: PathBuf::from("/etc/p1.yaml"),
@@ -396,5 +397,147 @@ mod tests {
             RawConfig::default(),
         ]);
         assert_eq!(cfg.audit.path, Some(PathBuf::from("/tmp/lower.jsonl")));
+    }
+
+    use proptest::collection::{btree_map, vec};
+    use proptest::prelude::*;
+
+    fn opt_bool() -> impl Strategy<Value = Option<bool>> {
+        prop_oneof![Just(None), Just(Some(true)), Just(Some(false))]
+    }
+
+    fn mode_strategy() -> impl Strategy<Value = Option<Mode>> {
+        prop_oneof![
+            Just(None),
+            Just(Some(Mode::Enforce)),
+            Just(Some(Mode::Monitor))
+        ]
+    }
+
+    fn raw_pack_strategy() -> impl Strategy<Value = RawPack> {
+        opt_bool().prop_map(|enabled| RawPack {
+            enabled,
+            protected_branches: None,
+            additional_workspaces: None,
+        })
+    }
+
+    fn raw_allowlist_strategy() -> impl Strategy<Value = RawAllowlist> {
+        ("[a-z]{1,8}", vec("[a-z.]{1,12}", 0..3)).prop_map(|(id, rules)| RawAllowlist {
+            id,
+            applies_to: RawAllowlistApplies { rules },
+            when: None,
+            expires_at: None,
+            reason: None,
+        })
+    }
+
+    fn raw_plugin_ref_strategy() -> impl Strategy<Value = RawPluginRef> {
+        ("/[a-z]{1,8}\\.yaml", opt_bool()).prop_map(|(path, enabled)| RawPluginRef {
+            path: PathBuf::from(path),
+            enabled,
+        })
+    }
+
+    fn raw_config_strategy() -> impl Strategy<Value = RawConfig> {
+        (
+            mode_strategy(),
+            opt_bool(),
+            btree_map("[a-z.]{1,12}", raw_pack_strategy(), 0..3),
+            vec(raw_allowlist_strategy(), 0..3),
+            vec(raw_plugin_ref_strategy(), 0..3),
+        )
+            .prop_map(
+                |(mode, fail_closed, packs, allowlists, plugins)| RawConfig {
+                    version: None,
+                    mode,
+                    fail_closed,
+                    packs,
+                    rules: BTreeMap::new(),
+                    allowlists,
+                    plugins,
+                    audit: RawAudit::default(),
+                },
+            )
+    }
+
+    proptest! {
+        // Appending a fully-default layer contributes nothing: every
+        // scalar is `None` and every map/list empty, so the fold is a
+        // noop regardless of the layers below it.
+        #[test]
+        fn pbt_merge_append_default_layer_is_noop(
+            layers in vec(raw_config_strategy(), 0..5),
+        ) {
+            let baseline = merge(layers.clone());
+            let mut extended = layers;
+            extended.push(RawConfig::default());
+            prop_assert_eq!(merge(extended), baseline);
+        }
+
+        // Prepending a default layer is likewise a noop: it only ever
+        // sees the pristine `Config::default()` accumulator.
+        #[test]
+        fn pbt_merge_prepend_default_layer_is_noop(
+            layers in vec(raw_config_strategy(), 0..5),
+        ) {
+            let baseline = merge(layers.clone());
+            let mut extended = vec![RawConfig::default()];
+            extended.extend(layers);
+            prop_assert_eq!(merge(extended), baseline);
+        }
+
+        // Scalars are last-write-wins: the merged value is the last
+        // layer that set `Some`, falling back to the builtin default.
+        #[test]
+        fn pbt_merge_scalars_are_last_write_wins(
+            layers in vec(raw_config_strategy(), 0..5),
+        ) {
+            let cfg = merge(layers.clone());
+            let expected_mode = layers
+                .iter()
+                .rev()
+                .find_map(|l| l.mode)
+                .unwrap_or(Mode::Enforce);
+            let expected_fail_closed = layers
+                .iter()
+                .rev()
+                .find_map(|l| l.fail_closed)
+                .unwrap_or(true);
+            prop_assert_eq!(cfg.mode, expected_mode);
+            prop_assert_eq!(cfg.fail_closed, expected_fail_closed);
+        }
+
+        // Allowlists concatenate in scope order across every layer.
+        #[test]
+        fn pbt_merge_allowlists_concatenate_in_scope_order(
+            layers in vec(raw_config_strategy(), 0..5),
+        ) {
+            let cfg = merge(layers.clone());
+            let expected: Vec<Allowlist> = layers
+                .into_iter()
+                .flat_map(|l| l.allowlists.into_iter().map(Allowlist::from))
+                .collect();
+            prop_assert_eq!(cfg.allowlists, expected);
+        }
+
+        // Plugin paths concatenate in scope order, keeping only refs
+        // that are enabled (absent `enabled` defaults to enabled).
+        #[test]
+        fn pbt_merge_plugin_paths_concatenate_enabled_only(
+            layers in vec(raw_config_strategy(), 0..5),
+        ) {
+            let cfg = merge(layers.clone());
+            let expected: Vec<PathBuf> = layers
+                .into_iter()
+                .flat_map(|l| {
+                    l.plugins
+                        .into_iter()
+                        .filter(|p| p.enabled.unwrap_or(true))
+                        .map(|p| p.path)
+                })
+                .collect();
+            prop_assert_eq!(cfg.plugin_paths, expected);
+        }
     }
 }

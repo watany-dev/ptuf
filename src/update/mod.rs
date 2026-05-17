@@ -1707,4 +1707,97 @@ mod tests {
         assert_eq!(strategy, Strategy::PrebuiltInstaller);
         assert!(warning.is_none());
     }
+
+    // `proptest::prelude::*` would glob in a `Strategy` trait that
+    // collides with this module's `Strategy` enum, so import selectively
+    // (the trait is bound as `_` purely for its `prop_map` method).
+    use proptest::collection::vec;
+    use proptest::prelude::{Strategy as _, prop_assert, prop_assert_eq, prop_assert_ne, proptest};
+
+    // A dotted run of small numbers, e.g. `3.7.0` — always parseable by
+    // `version_lt`, so the ordering properties have a defined answer.
+    fn numeric_version() -> impl proptest::strategy::Strategy<Value = String> {
+        vec(0u64..40, 1..=4).prop_map(|segs| {
+            segs.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(".")
+        })
+    }
+
+    proptest! {
+        // `version_lt` is reflexive: a version compares Equal to itself.
+        #[test]
+        fn pbt_version_lt_is_reflexive(v in numeric_version()) {
+            prop_assert_eq!(version_lt(&v, &v), Some(std::cmp::Ordering::Equal));
+        }
+
+        // `version_lt` is antisymmetric: swapping the operands reverses
+        // the ordering.
+        #[test]
+        fn pbt_version_lt_is_antisymmetric(
+            a in numeric_version(),
+            b in numeric_version(),
+        ) {
+            let forward = version_lt(&a, &b);
+            let backward = version_lt(&b, &a);
+            prop_assert_eq!(backward, forward.map(std::cmp::Ordering::reverse));
+        }
+
+        // `version_lt` is transitive: `a <= b` and `b <= c` imply
+        // `a <= c`.
+        #[test]
+        fn pbt_version_lt_is_transitive(
+            a in numeric_version(),
+            b in numeric_version(),
+            c in numeric_version(),
+        ) {
+            let ab = version_lt(&a, &b).expect("numeric versions compare");
+            let bc = version_lt(&b, &c).expect("numeric versions compare");
+            let ac = version_lt(&a, &c).expect("numeric versions compare");
+            if ab != std::cmp::Ordering::Greater && bc != std::cmp::Ordering::Greater {
+                prop_assert_ne!(ac, std::cmp::Ordering::Greater);
+            }
+        }
+
+        // Numeric versions are always comparable: `version_lt` yields
+        // `Some` for any pair of dotted-numeric strings.
+        #[test]
+        fn pbt_version_lt_is_total_for_numeric(
+            a in numeric_version(),
+            b in numeric_version(),
+        ) {
+            prop_assert!(version_lt(&a, &b).is_some());
+        }
+
+        // A well-formed `releases/tag/<TAG>` Location header round-trips
+        // through `parse_redirect_tag` back to the original tag. The
+        // noise lines carry no colon, so they never form competing
+        // headers.
+        #[test]
+        fn pbt_parse_redirect_tag_recovers_well_formed_tag(
+            tag in "[A-Za-z0-9.][A-Za-z0-9._-]{0,20}",
+            noise in vec("[A-Za-z0-9 /-]{0,20}", 0..4),
+        ) {
+            let mut headers = String::new();
+            for line in &noise {
+                headers.push_str(line);
+                headers.push_str("\r\n");
+            }
+            headers.push_str("location: ");
+            headers.push_str(RELEASES_TAG_URL_PREFIX);
+            headers.push_str(&tag);
+            headers.push_str("\r\n\r\n");
+            prop_assert_eq!(parse_redirect_tag(&headers).ok(), Some(tag));
+        }
+
+        // `parse_redirect_tag` is total: arbitrary header text yields
+        // `Ok` or `Err`, never a panic.
+        #[test]
+        fn pbt_parse_redirect_tag_is_total(
+            headers in crate::testing::proptest::arbitrary_command(),
+        ) {
+            let _ = parse_redirect_tag(&headers);
+        }
+    }
 }

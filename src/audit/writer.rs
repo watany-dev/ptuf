@@ -202,4 +202,76 @@ mod tests {
             .and_then(|s| s.trim().parse::<u32>().ok())
             == Some(0)
     }
+
+    use proptest::prelude::*;
+
+    fn command_redacted() -> impl Strategy<Value = String> {
+        prop_oneof![
+            crate::testing::proptest::arbitrary_command(),
+            "[ -~\n\t\r]{0,48}",
+        ]
+    }
+
+    // Arbitrary audit records, including ones whose redacted command
+    // carries raw newlines / control bytes.
+    fn audit_record() -> impl Strategy<Value = AuditRecord> {
+        use crate::testing::proptest::{decision, mode, richer_hook_input, severity};
+        (
+            0u64..4_000_000_000,
+            decision(),
+            mode(),
+            any::<bool>(),
+            richer_hook_input(),
+            proptest::option::of(severity()),
+            command_redacted(),
+            proptest::option::of("[A-Za-z0-9-]{0,16}"),
+            proptest::collection::vec("[a-z0-9.@/-]{0,20}", 0..4),
+        )
+            .prop_map(
+                |(secs, decision, mode, demoted, input, severity, cmd, allow, plugins)| {
+                    AuditRecord::build(
+                        UNIX_EPOCH + std::time::Duration::from_secs(secs),
+                        &decision,
+                        mode,
+                        demoted,
+                        &input,
+                        None,
+                        severity,
+                        cmd,
+                        allow,
+                        "claude-code",
+                        plugins,
+                    )
+                },
+            )
+    }
+
+    proptest! {
+        // `append_record` emits exactly one line: the output ends with a
+        // single `\n`, and the JSON body before it holds no raw newline
+        // even when the record carries newline-laden fields (serde
+        // escapes them into `\n` escape sequences).
+        #[test]
+        fn pbt_append_record_emits_one_terminated_line(record in audit_record()) {
+            let mut buf = Vec::new();
+            append_record(&mut buf, &record).expect("append");
+            let text = String::from_utf8(buf).expect("utf8");
+            prop_assert!(text.ends_with('\n'));
+            prop_assert_eq!(text.matches('\n').count(), 1);
+            let body = &text[..text.len() - 1];
+            prop_assert!(!body.contains('\n'));
+        }
+
+        // The line body always parses back as a JSON object.
+        #[test]
+        fn pbt_append_record_body_is_valid_json(record in audit_record()) {
+            let mut buf = Vec::new();
+            append_record(&mut buf, &record).expect("append");
+            let text = String::from_utf8(buf).expect("utf8");
+            let body = text.strip_suffix('\n').expect("newline-terminated");
+            let value = serde_json::from_str::<serde_json::Value>(body)
+                .expect("valid JSON");
+            prop_assert!(value.is_object());
+        }
+    }
 }

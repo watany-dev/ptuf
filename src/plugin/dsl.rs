@@ -1133,4 +1133,132 @@ all:
             }
         }
     }
+
+    fn leaf_when_node() -> impl Strategy<Value = WhenNode> {
+        let name = "[A-Za-z]{0,8}";
+        let list = || proptest::collection::vec("[A-Za-z]{0,8}", 0..3);
+        prop_oneof![
+            name.prop_map(WhenNode::Event),
+            name.prop_map(WhenNode::Tool),
+            list().prop_map(WhenNode::ToolAny),
+            list().prop_map(WhenNode::ShellArgvHeadAny),
+            (list(), list()).prop_map(|(from, to)| WhenNode::ShellPipelineFromTo { from, to }),
+            list().prop_map(WhenNode::PathFilePathPrefixAny),
+            list().prop_map(WhenNode::UrlSchemeAny),
+            list().prop_map(WhenNode::UrlHostAny),
+            list().prop_map(WhenNode::SensitivePathAny),
+        ]
+    }
+
+    // Arbitrary `WhenNode` trees: leaves wrapped in up to three levels
+    // of `All` / `Any` / `Not` combinators.
+    fn when_node() -> impl Strategy<Value = WhenNode> {
+        leaf_when_node().prop_recursive(3, 24, 3, |inner| {
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 1..4).prop_map(WhenNode::All),
+                proptest::collection::vec(inner.clone(), 1..4).prop_map(WhenNode::Any),
+                inner.prop_map(|n| WhenNode::Not(Box::new(n))),
+            ]
+        })
+    }
+
+    proptest! {
+        // Double negation is identity: wrapping any node in two `Not`s
+        // evaluates exactly like the bare node.
+        #[test]
+        fn pbt_double_negation_is_identity(
+            node in when_node(),
+            input in richer_hook_input(),
+        ) {
+            let facts = crate::facts::extract(&input);
+            let doubled =
+                WhenNode::Not(Box::new(WhenNode::Not(Box::new(node.clone()))));
+            prop_assert_eq!(
+                evaluate(&doubled, &facts, &input),
+                evaluate(&node, &facts, &input),
+            );
+        }
+
+        // De Morgan: NOT(x1 AND ... AND xn) is equivalent to
+        // (NOT x1) OR ... OR (NOT xn).
+        #[test]
+        fn pbt_de_morgan_not_all(
+            children in proptest::collection::vec(when_node(), 1..4),
+            input in richer_hook_input(),
+        ) {
+            let facts = crate::facts::extract(&input);
+            let not_all = WhenNode::Not(Box::new(WhenNode::All(children.clone())));
+            let any_not = WhenNode::Any(
+                children
+                    .into_iter()
+                    .map(|c| WhenNode::Not(Box::new(c)))
+                    .collect(),
+            );
+            prop_assert_eq!(
+                evaluate(&not_all, &facts, &input),
+                evaluate(&any_not, &facts, &input),
+            );
+        }
+
+        // De Morgan: NOT(x1 OR ... OR xn) is equivalent to
+        // (NOT x1) AND ... AND (NOT xn).
+        #[test]
+        fn pbt_de_morgan_not_any(
+            children in proptest::collection::vec(when_node(), 1..4),
+            input in richer_hook_input(),
+        ) {
+            let facts = crate::facts::extract(&input);
+            let not_any = WhenNode::Not(Box::new(WhenNode::Any(children.clone())));
+            let all_not = WhenNode::All(
+                children
+                    .into_iter()
+                    .map(|c| WhenNode::Not(Box::new(c)))
+                    .collect(),
+            );
+            prop_assert_eq!(
+                evaluate(&not_any, &facts, &input),
+                evaluate(&all_not, &facts, &input),
+            );
+        }
+
+        // `All` is flat: nesting two `All`s evaluates the same as one
+        // `All` over the concatenated children.
+        #[test]
+        fn pbt_all_flattens(
+            xs in proptest::collection::vec(when_node(), 0..3),
+            ys in proptest::collection::vec(when_node(), 0..3),
+            input in richer_hook_input(),
+        ) {
+            let facts = crate::facts::extract(&input);
+            let nested = WhenNode::All(vec![
+                WhenNode::All(xs.clone()),
+                WhenNode::All(ys.clone()),
+            ]);
+            let flat = WhenNode::All(xs.into_iter().chain(ys).collect());
+            prop_assert_eq!(
+                evaluate(&nested, &facts, &input),
+                evaluate(&flat, &facts, &input),
+            );
+        }
+
+        // `Any` is flat: nesting two `Any`s evaluates the same as one
+        // `Any` over the concatenated children.
+        #[test]
+        fn pbt_any_flattens(
+            xs in proptest::collection::vec(when_node(), 0..3),
+            ys in proptest::collection::vec(when_node(), 0..3),
+            input in richer_hook_input(),
+        ) {
+            let facts = crate::facts::extract(&input);
+            let nested = WhenNode::Any(vec![
+                WhenNode::Any(xs.clone()),
+                WhenNode::Any(ys.clone()),
+            ]);
+            let flat = WhenNode::Any(xs.into_iter().chain(ys).collect());
+            prop_assert_eq!(
+                evaluate(&nested, &facts, &input),
+                evaluate(&flat, &facts, &input),
+            );
+        }
+    }
 }

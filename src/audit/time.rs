@@ -202,4 +202,52 @@ mod tests {
         assert!(parse_rfc3339_to_secs("2024-01-01T00:00.00Z").is_none());
         assert!(parse_rfc3339_to_secs("2024-01-01T00:00:00X").is_none());
     }
+
+    use proptest::prelude::*;
+
+    // Stay well inside the `time` crate's representable range (~year
+    // 3000) so generated instants never approach the year-9999 ceiling
+    // where the format would no longer be 20 characters wide.
+    const MAX_EPOCH_SECS: u64 = 32_503_680_000;
+
+    proptest! {
+        // Formatting an epoch-second instant and parsing it back must
+        // recover the exact same second.
+        #[test]
+        fn pbt_rfc3339_round_trips_through_parse(secs in 0..=MAX_EPOCH_SECS) {
+            let formatted = rfc3339_utc(from_secs(secs));
+            prop_assert_eq!(parse_rfc3339_to_secs(&formatted), Some(secs));
+        }
+
+        // Sub-second precision is dropped: an instant with arbitrary
+        // nanoseconds formats identically to its truncated second.
+        #[test]
+        fn pbt_rfc3339_truncates_subsecond(
+            secs in 0..=MAX_EPOCH_SECS,
+            nanos in 0u32..1_000_000_000,
+        ) {
+            let precise = UNIX_EPOCH + Duration::new(secs, nanos);
+            prop_assert_eq!(rfc3339_utc(precise), rfc3339_utc(from_secs(secs)));
+        }
+
+        // Any instant before the Unix epoch clamps to the epoch string
+        // rather than panicking or yielding a negative timestamp.
+        #[test]
+        fn pbt_rfc3339_pre_epoch_clamps_to_epoch(back in 1u64..4_000_000_000) {
+            let pre = UNIX_EPOCH - Duration::from_secs(back);
+            prop_assert_eq!(rfc3339_utc(pre), "1970-01-01T00:00:00Z");
+        }
+
+        // `parse_rfc3339_to_secs` is total: arbitrary input either
+        // parses or returns `None`, and never panics.
+        #[test]
+        fn pbt_parse_is_total_on_arbitrary_strings(
+            s in prop_oneof![
+                crate::testing::proptest::arbitrary_command(),
+                "[0-9:.+TZ-]{0,30}",
+            ],
+        ) {
+            let _ = parse_rfc3339_to_secs(&s);
+        }
+    }
 }

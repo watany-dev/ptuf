@@ -291,4 +291,35 @@ allowlists:
             other => panic!("expected Yaml error, got {other:?}"),
         }
     }
+
+    use proptest::prelude::*;
+
+    // Config YAML inputs: mostly arbitrary noise, plus partially-valid
+    // documents that drive the scalar / allowlist / pack code paths.
+    fn yaml_source() -> impl Strategy<Value = String> {
+        prop_oneof![
+            3 => crate::testing::proptest::arbitrary_command(),
+            1 => "[a-z]{1,10}".prop_map(|mode| format!("mode: {mode}\n")),
+            1 => (0u32..3, "[a-z]{0,8}").prop_map(|(version, mode)| format!(
+                "version: {version}\nfailClosed: true\nmode: {mode}\n",
+            )),
+            1 => "[a-z.]{1,16}".prop_map(|rule| format!(
+                "allowlists:\n  - id: a\n    appliesTo:\n      rules: [{rule}]\n    \
+                 when:\n      tool: Bash\n",
+            )),
+            1 => ("[a-z.]{1,16}", any::<bool>()).prop_map(|(pack, enabled)| format!(
+                "packs:\n  {pack}:\n    enabled: {enabled}\n",
+            )),
+        ]
+    }
+
+    proptest! {
+        // `parse_str` is the config trust boundary: arbitrary YAML —
+        // junk bytes or partially-valid documents — must yield `Ok` or
+        // a `ConfigError`, and never panic.
+        #[test]
+        fn pbt_parse_str_is_total_on_arbitrary_input(source in yaml_source()) {
+            let _ = parse_str(&p(), &source);
+        }
+    }
 }
