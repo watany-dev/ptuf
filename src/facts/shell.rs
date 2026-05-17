@@ -148,6 +148,34 @@ impl Bash {
     }
 }
 
+/// A value-taking option of a privilege-escalation wrapper. Modelling the
+/// spelling as an enum — rather than an `(Option<char>, Option<&str>)`
+/// pair — makes the "neither short nor long" state unrepresentable.
+enum ValueFlag {
+    /// Short-only spelling, e.g. `doas -a`.
+    Short(char),
+    /// Long-only spelling, e.g. `pkexec --user`.
+    Long(&'static str),
+    /// Both spellings, e.g. `sudo -u` / `sudo --user`.
+    Both(char, &'static str),
+}
+
+impl ValueFlag {
+    fn short(&self) -> Option<char> {
+        match self {
+            Self::Short(c) | Self::Both(c, _) => Some(*c),
+            Self::Long(_) => None,
+        }
+    }
+
+    fn long(&self) -> Option<&'static str> {
+        match self {
+            Self::Long(s) | Self::Both(_, s) => Some(*s),
+            Self::Short(_) => None,
+        }
+    }
+}
+
 /// A privilege-escalation wrapper that prefixes its inner command argv
 /// (`sudo CMD`, `doas CMD`, `pkexec CMD`, `run0 CMD`).
 ///
@@ -156,12 +184,11 @@ impl Bash {
 struct PrefixWrapper {
     /// Wrapper command basename (`sudo`, `doas`, `pkexec`, `run0`).
     name: &'static str,
-    /// Value-taking options as `(short, long)` pairs. Either side may be
-    /// `None` when the wrapper offers only one spelling. Listing each
-    /// option exactly once keeps the short and long views symmetric by
-    /// construction — the asymmetry this guards against was a real
-    /// bypass (`sudo -D /tmp rm -rf /`).
-    value_flags: &'static [(Option<char>, Option<&'static str>)],
+    /// Value-taking options, each listed exactly once in whichever
+    /// spellings the wrapper accepts. A single source of truth keeps the
+    /// short and long views symmetric by construction — the asymmetry
+    /// this guards against was a real bypass (`sudo -D /tmp rm -rf /`).
+    value_flags: &'static [ValueFlag],
 }
 
 impl PrefixWrapper {
@@ -169,49 +196,54 @@ impl PrefixWrapper {
         let flag = arg.strip_prefix('-')?.chars().next()?;
         self.value_flags
             .iter()
-            .any(|(short, _)| *short == Some(flag))
+            .filter_map(ValueFlag::short)
+            .any(|c| c == flag)
             .then_some(flag)
     }
 
     fn is_long_value_flag(&self, name: &str) -> bool {
-        self.value_flags.iter().any(|(_, long)| *long == Some(name))
+        self.value_flags
+            .iter()
+            .filter_map(ValueFlag::long)
+            .any(|long| long == name)
     }
 }
 
+use ValueFlag::{Both, Long, Short};
+
 /// `sudo` value-taking options (`sudo(8)`): complete and symmetric.
-const SUDO_VALUE_FLAGS: &[(Option<char>, Option<&str>)] = &[
-    (Some('C'), Some("close-from")),
-    (Some('c'), Some("login-class")),
-    (Some('D'), Some("chdir")),
-    (Some('g'), Some("group")),
-    (Some('h'), Some("host")),
-    (Some('p'), Some("prompt")),
-    (Some('R'), Some("chroot")),
-    (Some('r'), Some("role")),
-    (Some('T'), Some("command-timeout")),
-    (Some('t'), Some("type")),
-    (Some('U'), Some("other-user")),
-    (Some('u'), Some("user")),
+const SUDO_VALUE_FLAGS: &[ValueFlag] = &[
+    Both('C', "close-from"),
+    Both('c', "login-class"),
+    Both('D', "chdir"),
+    Both('g', "group"),
+    Both('h', "host"),
+    Both('p', "prompt"),
+    Both('R', "chroot"),
+    Both('r', "role"),
+    Both('T', "command-timeout"),
+    Both('t', "type"),
+    Both('U', "other-user"),
+    Both('u', "user"),
 ];
 
 /// `doas` value-taking options (`doas(1)`): `doas` has no long options.
-const DOAS_VALUE_FLAGS: &[(Option<char>, Option<&str>)] =
-    &[(Some('a'), None), (Some('C'), None), (Some('u'), None)];
+const DOAS_VALUE_FLAGS: &[ValueFlag] = &[Short('a'), Short('C'), Short('u')];
 
 /// `pkexec` value-taking options (`pkexec(1)`): `--user` is the only one.
-const PKEXEC_VALUE_FLAGS: &[(Option<char>, Option<&str>)] = &[(None, Some("user"))];
+const PKEXEC_VALUE_FLAGS: &[ValueFlag] = &[Long("user")];
 
 /// `run0` value-taking options (`run0(1)`), a conservative subset. The
 /// `--key=value` spelling needs no entry — the inline-`=` branch handles
 /// it — and unknown flags are assumed value-less, which surfaces the
 /// inner command early (the safe direction for a deny filter).
-const RUN0_VALUE_FLAGS: &[(Option<char>, Option<&str>)] = &[
-    (Some('u'), Some("user")),
-    (Some('g'), Some("group")),
-    (Some('D'), Some("chdir")),
-    (None, Some("working-directory")),
-    (None, Some("setenv")),
-    (None, Some("machine")),
+const RUN0_VALUE_FLAGS: &[ValueFlag] = &[
+    Both('u', "user"),
+    Both('g', "group"),
+    Both('D', "chdir"),
+    Long("working-directory"),
+    Long("setenv"),
+    Long("machine"),
 ];
 
 const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
@@ -1494,6 +1526,16 @@ mod tests {
             let (_, advanced, _) = read_word(&buf);
             assert!(advanced > 0, "read_word stalled on byte {byte:#x}");
         }
+    }
+
+    #[test]
+    fn value_flag_accessors_expose_each_spelling() {
+        assert_eq!(ValueFlag::Short('a').short(), Some('a'));
+        assert_eq!(ValueFlag::Short('a').long(), None);
+        assert_eq!(ValueFlag::Long("user").short(), None);
+        assert_eq!(ValueFlag::Long("user").long(), Some("user"));
+        assert_eq!(ValueFlag::Both('u', "user").short(), Some('u'));
+        assert_eq!(ValueFlag::Both('u', "user").long(), Some("user"));
     }
 
     #[test]
