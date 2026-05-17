@@ -22,7 +22,7 @@
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
 use crate::facts::project::LockKind;
-use crate::facts::shell::{Argv, unwrap_sudo};
+use crate::facts::shell::{Argv, unwrap_privilege_wrapper};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -169,7 +169,7 @@ const PIP_HEADS: &[&str] = &[
 const GIT_HEADS: &[&str] = &["git", "/usr/bin/git", "/usr/local/bin/git"];
 
 fn is_npm_or_yarn_install(argv: &Argv) -> bool {
-    if let Some(unwrapped) = unwrap_sudo(argv) {
+    if let Some(unwrapped) = unwrap_privilege_wrapper(argv) {
         return is_npm_or_yarn_install(&unwrapped);
     }
     let head = argv.head.as_str();
@@ -187,7 +187,7 @@ fn is_npm_or_yarn_install(argv: &Argv) -> bool {
 }
 
 fn is_pip_install(argv: &Argv) -> bool {
-    if let Some(unwrapped) = unwrap_sudo(argv) {
+    if let Some(unwrapped) = unwrap_privilege_wrapper(argv) {
         return is_pip_install(&unwrapped);
     }
     if !PIP_HEADS.contains(&argv.head.as_str()) {
@@ -197,7 +197,7 @@ fn is_pip_install(argv: &Argv) -> bool {
 }
 
 fn invokes_destructive_git(argv: &Argv) -> bool {
-    if let Some(unwrapped) = unwrap_sudo(argv) {
+    if let Some(unwrapped) = unwrap_privilege_wrapper(argv) {
         return invokes_destructive_git(&unwrapped);
     }
     if !GIT_HEADS.contains(&argv.head.as_str()) {

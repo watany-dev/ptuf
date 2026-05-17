@@ -7,7 +7,7 @@
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, unwrap_sudo};
+use crate::facts::shell::{Argv, unwrap_privilege_wrapper};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -102,14 +102,19 @@ impl ConfigRule for GitRule {
     }
 }
 
-/// Run `matcher` against `argv` directly; if `argv` is `sudo git ...`,
-/// rebuild a synthetic `git ...` invocation and try again.
+/// Run `matcher` against `argv` directly; if `argv` is a privilege
+/// wrapper such as `sudo git ...` — including nested forms like
+/// `sudo doas git ...` — peel the wrappers one layer at a time and retry.
 fn invokes_matcher(argv: &Argv, matcher: fn(&Argv) -> bool) -> bool {
     if matcher(argv) {
         return true;
     }
-    if let Some(unwrapped) = unwrap_sudo(argv) {
-        return matcher(&unwrapped);
+    let mut current = unwrap_privilege_wrapper(argv);
+    while let Some(inner) = current {
+        if matcher(&inner) {
+            return true;
+        }
+        current = unwrap_privilege_wrapper(&inner);
     }
     false
 }
@@ -185,6 +190,21 @@ mod tests {
             "sudo --user root git push --force origin main",
             "sudo --user=root git push --force origin main",
             "sudo -E -u root -- git push --force origin main",
+        ] {
+            assert_decision(&FORCE_PUSH_RULE, cmd, DecisionKind::Deny);
+        }
+    }
+
+    #[test]
+    fn force_push_denies_via_nested_and_other_wrappers() {
+        for cmd in [
+            "doas git push --force origin main",
+            "pkexec git push --force origin main",
+            "run0 git push --force origin main",
+            // nested prefix wrappers are peeled one layer at a time
+            "sudo doas git push --force origin main",
+            // `su -c` surfaces the inner git command via inner_argv
+            "su -c 'git push --force origin main'",
         ] {
             assert_decision(&FORCE_PUSH_RULE, cmd, DecisionKind::Deny);
         }
@@ -798,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn unwrap_sudo_with_only_flags_returns_none() {
+    fn unwrap_privilege_wrapper_with_only_flags_returns_none() {
         let argv = Argv {
             env_assignments: Vec::new(),
             head: "sudo".into(),
@@ -807,7 +827,7 @@ mod tests {
             inner_code: Vec::new(),
             inner_redirects: Vec::new(),
         };
-        assert_eq!(unwrap_sudo(&argv), None);
+        assert_eq!(unwrap_privilege_wrapper(&argv), None);
     }
 
     #[test]
@@ -869,7 +889,8 @@ mod tests {
         }
 
         // Adversarial: arbitrary bash strings must not panic any of the
-        // matchers. The bash-facts layer already feeds `unwrap_sudo`.
+        // matchers. The bash-facts layer already feeds
+        // `unwrap_privilege_wrapper`.
         #[test]
         fn pbt_git_rules_never_panic_on_arbitrary_bash(cmd in arbitrary_command()) {
             let input = bash(&cmd);

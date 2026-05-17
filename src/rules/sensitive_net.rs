@@ -1,6 +1,6 @@
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, Bash, Pipeline, Redirect, unwrap_sudo};
+use crate::facts::shell::{Argv, Bash, Pipeline, Redirect, unwrap_privilege_wrapper};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -81,7 +81,7 @@ fn invokes_network_sink(argv: &Argv) -> bool {
     if NETWORK_SINK_HEADS.contains(&argv.head.as_str()) {
         return true;
     }
-    if let Some(inner) = unwrap_sudo(argv) {
+    if let Some(inner) = unwrap_privilege_wrapper(argv) {
         return NETWORK_SINK_HEADS.contains(&inner.head.as_str());
     }
     false

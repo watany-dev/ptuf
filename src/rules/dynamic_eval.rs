@@ -4,7 +4,7 @@
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, unwrap_sudo};
+use crate::facts::shell::{Argv, unwrap_privilege_wrapper};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -88,7 +88,7 @@ fn invokes_dynamic_eval(argv: &Argv) -> bool {
     if matches_dynamic_eval(argv) {
         return true;
     }
-    if let Some(unwrapped) = unwrap_sudo(argv) {
+    if let Some(unwrapped) = unwrap_privilege_wrapper(argv) {
         return matches_dynamic_eval(&unwrapped);
     }
     false
