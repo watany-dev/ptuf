@@ -994,6 +994,75 @@ mod tests {
             let facts = crate::facts::extract(&input);
             prop_assert!(CONFIG_OVERRIDE_BYPASS_RULE.evaluate(&facts, &input).is_none());
         }
+
+        // `git reset --hard` fires the reset-hard rule regardless of
+        // any trailing non-flag positionals (commit-ish / pathspec).
+        #[test]
+        fn pbt_reset_hard_fires_for_hard_flag(
+            extra in proptest::collection::vec("[a-zA-Z0-9_./]{1,8}", 0..3),
+        ) {
+            let cmd = format!("git reset --hard {}", extra.join(" "));
+            let input = bash(&cmd);
+            let facts = crate::facts::extract(&input);
+            prop_assert!(RESET_HARD_RULE.evaluate(&facts, &input).is_some());
+        }
+
+        // Non-`--hard` reset modes never fire the reset-hard rule.
+        #[test]
+        fn pbt_reset_non_hard_modes_never_fire(
+            mode in proptest::sample::select(vec!["--soft", "--mixed", "--keep"]),
+            extra in proptest::collection::vec("[a-zA-Z0-9_./]{1,8}", 0..3),
+        ) {
+            let cmd = format!("git reset {mode} {}", extra.join(" "));
+            let input = bash(&cmd);
+            let facts = crate::facts::extract(&input);
+            prop_assert!(RESET_HARD_RULE.evaluate(&facts, &input).is_none());
+        }
+
+        // `git clean` fires the clean-fdx rule for any cluster spelling
+        // carrying force + dir + ignored, in any character order.
+        #[test]
+        fn pbt_clean_fdx_fires_regardless_of_cluster_order(
+            cluster in proptest::sample::select(vec![
+                "-fdx", "-fxd", "-dfx", "-dxf", "-xfd", "-xdf",
+                "-fdX", "-fXd", "-dfX", "-dXf", "-Xfd", "-Xdf",
+            ]),
+        ) {
+            let cmd = format!("git clean {cluster}");
+            let input = bash(&cmd);
+            let facts = crate::facts::extract(&input);
+            prop_assert!(CLEAN_FDX_RULE.evaluate(&facts, &input).is_some());
+        }
+
+        // A dry-run flag (`-n`) in the cluster suppresses the clean-fdx
+        // rule even when force + dir + ignored are all present.
+        #[test]
+        fn pbt_clean_dry_run_never_fires(
+            cluster in proptest::sample::select(vec!["-fdxn", "-nfdx", "-fdXn", "-ndfx"]),
+        ) {
+            let cmd = format!("git clean {cluster}");
+            let input = bash(&cmd);
+            let facts = crate::facts::extract(&input);
+            prop_assert!(CLEAN_FDX_RULE.evaluate(&facts, &input).is_none());
+        }
+
+        // For the same branch name, `git branch -D` force-deletes (rule
+        // fires) while `git branch -d` is the safe form (rule skips).
+        #[test]
+        fn pbt_branch_delete_uppercase_fires_lowercase_does_not(
+            name in "[A-Za-z0-9][A-Za-z0-9_./-]{0,11}",
+        ) {
+            let force = bash(&format!("git branch -D {name}"));
+            let safe = bash(&format!("git branch -d {name}"));
+            let force_facts = crate::facts::extract(&force);
+            let safe_facts = crate::facts::extract(&safe);
+            prop_assert!(
+                BRANCH_DELETE_FORCE_RULE.evaluate(&force_facts, &force).is_some()
+            );
+            prop_assert!(
+                BRANCH_DELETE_FORCE_RULE.evaluate(&safe_facts, &safe).is_none()
+            );
+        }
     }
 
     // The static rule slice only uses Deny / Ask, so the Monitor and

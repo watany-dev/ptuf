@@ -547,4 +547,46 @@ rules:
             "deny"
         );
     }
+
+    use proptest::prelude::*;
+
+    /// One `CaseOutcome` with an arbitrary `passed` flag; the remaining
+    /// fields are fixed dummies since the count invariants only read
+    /// `passed`.
+    fn case_outcome() -> impl Strategy<Value = CaseOutcome> {
+        any::<bool>().prop_map(|passed| CaseOutcome {
+            rule_id: String::new(),
+            expectation: Expectation::ShouldTrigger,
+            passed,
+            command: String::new(),
+            got: None,
+        })
+    }
+
+    fn run_report() -> impl Strategy<Value = RunReport> {
+        proptest::collection::vec(case_outcome(), 0..8).prop_map(|cases| RunReport {
+            source: PathBuf::from("test.yaml"),
+            plugin_name: "p".to_string(),
+            cases,
+        })
+    }
+
+    proptest! {
+        // `passed_count` and `failed_count` partition the case list:
+        // together they always sum to the total number of cases.
+        #[test]
+        fn pbt_run_report_counts_partition_cases(report in run_report()) {
+            prop_assert_eq!(
+                report.passed_count() + report.failed_count(),
+                report.cases.len(),
+            );
+        }
+
+        // `passed()` is exactly "no failures": it holds iff
+        // `failed_count()` is zero (the empty-case report included).
+        #[test]
+        fn pbt_run_report_passed_iff_no_failures(report in run_report()) {
+            prop_assert_eq!(report.passed(), report.failed_count() == 0);
+        }
+    }
 }

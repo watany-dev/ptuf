@@ -359,4 +359,70 @@ mod tests {
         assert!(String::from_utf8_lossy(&out).contains("\"permissionDecision\":\"deny\""));
         assert!(String::from_utf8_lossy(&err).contains("blocked"));
     }
+
+    use proptest::prelude::*;
+
+    use crate::testing::proptest::decision;
+
+    /// All four hook agents drawn uniformly.
+    fn hook_agent() -> impl Strategy<Value = HookAgent> {
+        prop_oneof![
+            Just(HookAgent::ClaudeCode),
+            Just(HookAgent::Codex),
+            Just(HookAgent::Copilot),
+            Just(HookAgent::Kiro),
+        ]
+    }
+
+    proptest! {
+        // `decision_label` always returns one of the four known labels.
+        #[test]
+        fn pbt_decision_label_is_one_of_four(d in decision()) {
+            let label = decision_label(&d);
+            prop_assert!(matches!(label, "allow" | "monitor" | "ask" | "deny"));
+        }
+
+        // `emit_decision` returns exactly the exit code computed by
+        // `decision_exit_code` for the agent-adapted decision.
+        #[test]
+        fn pbt_emit_decision_matches_exit_code(agent in hook_agent(), d in decision()) {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = emit_decision(agent, &d, &mut out, &mut err);
+            let expected = decision_exit_code(agent, &adapt_hook_decision(agent, &d));
+            prop_assert_eq!(code, expected);
+        }
+
+        // `adapt_hook_decision` is idempotent: adapting an already
+        // adapted decision is a no-op.
+        #[test]
+        fn pbt_adapt_hook_decision_is_idempotent(agent in hook_agent(), d in decision()) {
+            let once = adapt_hook_decision(agent, &d);
+            let twice = adapt_hook_decision(agent, &once);
+            prop_assert_eq!(once, twice);
+        }
+
+        // Copilot's exit code is always 0 — fail-closed is expressed via
+        // the stdout JSON, never a non-zero exit.
+        #[test]
+        fn pbt_copilot_exit_code_is_always_zero(d in decision()) {
+            prop_assert_eq!(decision_exit_code(HookAgent::Copilot, &d), 0);
+        }
+
+        // Codex / Copilot / Kiro have no interactive ask channel, so the
+        // adapted decision is never `Ask` for those agents.
+        #[test]
+        fn pbt_non_claude_adapt_never_yields_ask(
+            agent in prop_oneof![
+                Just(HookAgent::Codex),
+                Just(HookAgent::Copilot),
+                Just(HookAgent::Kiro),
+            ],
+            d in decision(),
+        ) {
+            let adapted = adapt_hook_decision(agent, &d);
+            let is_ask = matches!(adapted, Decision::Ask { .. });
+            prop_assert!(!is_ask, "adapted decision must not be Ask: {adapted:?}");
+        }
+    }
 }

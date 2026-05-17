@@ -282,5 +282,43 @@ mod tests {
         ) {
             prop_assert_eq!(wildcard_match(&pattern, &value), pattern == value);
         }
+
+        // `read_current_branch` is total: writing arbitrary bytes —
+        // including invalid UTF-8 — into `.git/HEAD` never panics.
+        #[test]
+        fn pbt_read_current_branch_is_total(
+            bytes in crate::testing::proptest::arbitrary_utf8_bytes(),
+        ) {
+            let dir = tempfile::TempDir::new().expect("tempdir");
+            std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
+            std::fs::write(dir.path().join(".git").join("HEAD"), &bytes).expect("write");
+            let _ = read_current_branch(dir.path());
+        }
+
+        // A well-formed `ref: refs/heads/<name>` line round-trips back
+        // to `Some(name)`.
+        #[test]
+        fn pbt_read_current_branch_recovers_well_formed_ref(
+            name in "[A-Za-z0-9._/-]{1,20}",
+        ) {
+            let dir = tempfile::TempDir::new().expect("tempdir");
+            std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
+            let head = format!("ref: refs/heads/{name}\n");
+            std::fs::write(dir.path().join(".git").join("HEAD"), head).expect("write");
+            prop_assert_eq!(read_current_branch(dir.path()), Some(name));
+        }
+
+        // A detached HEAD (raw object name, no `ref:` prefix) yields
+        // `None`.
+        #[test]
+        fn pbt_read_current_branch_rejects_detached_head(
+            sha in "[0-9a-f]{1,40}",
+        ) {
+            let dir = tempfile::TempDir::new().expect("tempdir");
+            std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
+            std::fs::write(dir.path().join(".git").join("HEAD"), format!("{sha}\n"))
+                .expect("write");
+            prop_assert!(read_current_branch(dir.path()).is_none());
+        }
     }
 }

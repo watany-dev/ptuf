@@ -266,4 +266,117 @@ mod tests {
         assert!(layout.project.is_none());
         assert!(layout.project_local.is_none());
     }
+
+    use proptest::prelude::*;
+
+    /// Optional path component for `Layout` field generators.
+    fn opt_path() -> impl Strategy<Value = Option<PathBuf>> {
+        proptest::option::of("[a-zA-Z0-9_./-]{1,12}".prop_map(PathBuf::from))
+    }
+
+    proptest! {
+        // `ordered_paths` flattens the four scope slots in fixed
+        // priority order, dropping every `None`.
+        #[test]
+        fn pbt_ordered_paths_preserves_priority_order(
+            system in opt_path(),
+            user in opt_path(),
+            project in opt_path(),
+            project_local in opt_path(),
+        ) {
+            let layout = Layout {
+                system: system.clone(),
+                user: user.clone(),
+                project: project.clone(),
+                project_local: project_local.clone(),
+            };
+            let expected: Vec<PathBuf> = [system, user, project, project_local]
+                .into_iter()
+                .flatten()
+                .collect();
+            prop_assert_eq!(layout.ordered_paths(), expected);
+        }
+
+        // `PTUF_CONFIG_DIR` pins the user path regardless of whether
+        // `XDG_CONFIG_HOME` / `HOME` are also present.
+        #[test]
+        fn pbt_layout_for_ptuf_config_dir_overrides_user(
+            dir in "[a-zA-Z0-9_/-]{1,16}",
+            xdg in proptest::option::of("[a-zA-Z0-9_/-]{1,16}"),
+            home in proptest::option::of("[a-zA-Z0-9_/-]{1,16}"),
+        ) {
+            let mut pairs: Vec<(&str, &str)> = vec![("PTUF_CONFIG_DIR", dir.as_str())];
+            if let Some(x) = xdg.as_deref() {
+                pairs.push(("XDG_CONFIG_HOME", x));
+            }
+            if let Some(h) = home.as_deref() {
+                pairs.push(("HOME", h));
+            }
+            let env = MapEnv::new(&pairs);
+            let layout = layout_for(None, &env);
+            prop_assert_eq!(
+                layout.user,
+                Some(Path::new(dir.as_str()).join("config.yaml")),
+            );
+        }
+
+        // With no `PTUF_CONFIG_DIR`, `XDG_CONFIG_HOME` pins the user
+        // path regardless of `HOME`.
+        #[test]
+        fn pbt_layout_for_xdg_beats_home(
+            xdg in "[a-zA-Z0-9_/-]{1,16}",
+            home in proptest::option::of("[a-zA-Z0-9_/-]{1,16}"),
+        ) {
+            let mut pairs: Vec<(&str, &str)> = vec![("XDG_CONFIG_HOME", xdg.as_str())];
+            if let Some(h) = home.as_deref() {
+                pairs.push(("HOME", h));
+            }
+            let env = MapEnv::new(&pairs);
+            let layout = layout_for(None, &env);
+            prop_assert_eq!(
+                layout.user,
+                Some(Path::new(xdg.as_str()).join("ptuf/config.yaml")),
+            );
+        }
+
+        // The system path follows `PTUF_ETC_DIR` when set and otherwise
+        // falls back to the hard-coded `/etc/ptuf/policy.yaml`; it is
+        // never `None`.
+        #[test]
+        fn pbt_layout_for_system_path_uses_ptuf_etc_dir_or_default(
+            etc in proptest::option::of("[a-zA-Z0-9_/-]{1,16}"),
+        ) {
+            let pairs: Vec<(&str, &str)> = match etc.as_deref() {
+                Some(e) => vec![("PTUF_ETC_DIR", e)],
+                None => Vec::new(),
+            };
+            let env = MapEnv::new(&pairs);
+            let layout = layout_for(None, &env);
+            let expected = match etc.as_deref() {
+                Some(e) => Path::new(e).join("policy.yaml"),
+                None => PathBuf::from("/etc/ptuf/policy.yaml"),
+            };
+            prop_assert_eq!(layout.system, Some(expected));
+        }
+
+        // Both project paths are populated exactly when a repo root is
+        // supplied, and both are `None` otherwise.
+        #[test]
+        fn pbt_layout_for_project_paths_track_repo_root(
+            repo in proptest::option::of("[a-zA-Z0-9_/-]{1,16}"),
+        ) {
+            let env = MapEnv::new(&[]);
+            let layout = layout_for(repo.as_deref().map(Path::new), &env);
+            if let Some(r) = repo.as_deref() {
+                prop_assert_eq!(layout.project, Some(Path::new(r).join(".ptuf.yaml")));
+                prop_assert_eq!(
+                    layout.project_local,
+                    Some(Path::new(r).join(".ptuf.local.yaml")),
+                );
+            } else {
+                prop_assert!(layout.project.is_none());
+                prop_assert!(layout.project_local.is_none());
+            }
+        }
+    }
 }
