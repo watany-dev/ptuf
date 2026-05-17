@@ -4,7 +4,7 @@
 //! them. Run via `make e2e` (or
 //! `cargo test --features testing --test e2e_heavy -- --ignored --test-threads=1`).
 //!
-//! Six axes:
+//! Eight axes:
 //! - `leak`            — fd / tempfile / child-process residue
 //! - `giant_input`     — 8 MiB stdin, 1000-stage pipeline, oversized configs
 //! - `concurrent`      — sequential 200 and parallel 10×100 invocations
@@ -12,6 +12,7 @@
 //! - `adapter_parity`  — all 5 agents in their native payload shapes
 //! - `pathological_input` — malformed / oversized / deeply nested payloads
 //! - `latency_budget`  — per-call delay budget, warm / burst / parallel
+//! - `subcommand_robustness` — check / plugin check / init / update churn
 //!
 //! The shared `common::spawn` helper kills and reaps the child once a
 //! timeout elapses, so a hung ptuf surfaces as a test *failure* rather
@@ -1255,6 +1256,225 @@ mod latency_budget {
         assert!(
             worst < PARALLEL_BUDGET,
             "worst parallel call took {worst:?}, over budget {PARALLEL_BUDGET:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------
+// Axis 8: subcommand robustness — check / plugin check / init / update
+// ---------------------------------------------------------------------
+
+/// Exercises the non-`hook` subcommands under churn. The other axes
+/// only drive `hook` and `check`; this one keeps `plugin check`,
+/// `init`, and `update` honest under repetition, malformed input,
+/// refusal-and-rollback, and a hermetic (fake-`PATH`) network shell-out.
+mod subcommand_robustness {
+    use super::common::{SpawnConfig, SpawnOutcome, assert_clean_exit, spawn};
+    use std::time::Duration;
+
+    const VALID_PLUGIN: &str = r#"apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      shell.argv:
+        headAny: [curl]
+    reason: blocked
+    tests:
+      deny:
+        - input:
+            tool_name: Bash
+            tool_input:
+              command: "curl https://example.com"
+"#;
+
+    fn run(args: &[&str]) -> SpawnOutcome {
+        spawn(&SpawnConfig {
+            args,
+            stdin: &[],
+            cwd: None,
+            envs: &[],
+        })
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn check_two_hundred_sequential_invocations() {
+        const N: usize = 200;
+        for i in 0..N {
+            let r = run(&["check", "--tool", "Bash", "ls"]);
+            assert_clean_exit(&r);
+            assert_eq!(r.code, 0, "iter {i}: stderr={}", r.stderr_string());
+        }
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn plugin_check_rejects_broken_yaml_without_crash() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("broken.yaml");
+        std::fs::write(&path, "this: is: not: valid: yaml: [unclosed\n\t\0garbage")
+            .expect("write broken yaml");
+        let path_str = path.to_string_lossy().into_owned();
+        let r = run(&["plugin", "check", &path_str]);
+        assert_clean_exit(&r);
+        assert_ne!(
+            r.code, 0,
+            "broken YAML must be rejected: stdout={}",
+            r.stdout_string()
+        );
+        assert!(
+            !r.stderr_string().to_lowercase().contains("panicked"),
+            "panic on broken YAML: {}",
+            r.stderr_string()
+        );
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn plugin_check_hundred_sequential_invocations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("demo.yaml");
+        std::fs::write(&path, VALID_PLUGIN).expect("write plugin yaml");
+        let path_str = path.to_string_lossy().into_owned();
+        for i in 0..100 {
+            let r = run(&["plugin", "check", &path_str]);
+            assert_clean_exit(&r);
+            assert_eq!(
+                r.code,
+                0,
+                "iter {i}: stdout={} stderr={}",
+                r.stdout_string(),
+                r.stderr_string()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn init_dry_run_all_agents_twenty_rounds() {
+        const ROUNDS: usize = 20;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path();
+        std::fs::create_dir_all(repo.join(".git")).expect("mkdir .git");
+        for agent in ["claude-code", "codex", "copilot", "kiro", "cline"] {
+            for round in 0..ROUNDS {
+                let r = spawn(&SpawnConfig {
+                    args: &["init", agent, "--dry-run"],
+                    stdin: &[],
+                    cwd: Some(repo),
+                    envs: &[("HOME", repo.as_os_str())],
+                });
+                assert_clean_exit(&r);
+                assert_eq!(
+                    r.code, 0,
+                    "{agent} round {round}: stderr={}",
+                    r.stderr_string()
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn init_refuses_unmanaged_hook_and_leaves_no_residue() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path();
+        std::fs::create_dir_all(repo.join(".git")).expect("mkdir .git");
+        let hooks_dir = repo.join(".clinerules/hooks");
+        std::fs::create_dir_all(&hooks_dir).expect("mkdir hooks");
+        let hook = hooks_dir.join("PreToolUse");
+        let original = "#!/bin/sh\necho hand-written\n";
+        std::fs::write(&hook, original).expect("write unmanaged hook");
+
+        let r = spawn(&SpawnConfig {
+            args: &["init", "cline", "--no-verify"],
+            stdin: &[],
+            cwd: Some(repo),
+            envs: &[("HOME", repo.as_os_str())],
+        });
+        assert_clean_exit(&r);
+        assert_eq!(
+            r.code, 1,
+            "init must refuse an unmanaged hook: stderr={}",
+            r.stderr_string()
+        );
+        // The user's hook must survive byte-for-byte.
+        assert_eq!(
+            std::fs::read_to_string(&hook).expect("read hook"),
+            original,
+            "unmanaged hook was modified despite refusal"
+        );
+        // Atomic write must not leave a temp file behind.
+        let mut leftovers: Vec<String> = std::fs::read_dir(&hooks_dir)
+            .expect("read hooks dir")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        leftovers.sort();
+        assert_eq!(
+            leftovers,
+            vec!["PreToolUse".to_string()],
+            "stray files left behind after a refused init"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn update_check_hermetic_repeated() {
+        use super::common::write_fake_executable;
+
+        const N: usize = 50;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin_dir = dir.path();
+        // A fake `curl` keeps `update --check` hermetic: it answers the
+        // release-tag redirect locally, so no network call ever fires.
+        write_fake_executable(
+            &bin_dir.join("curl"),
+            "#!/bin/sh\nprintf 'HTTP/2 302\\r\\nlocation: https://github.com/watany-dev/ptuf/releases/tag/v9.9.9\\r\\n\\r\\n'\n",
+        );
+        for i in 0..N {
+            let r = spawn(&SpawnConfig {
+                args: &["update", "--check"],
+                stdin: &[],
+                cwd: None,
+                envs: &[("PATH", bin_dir.as_os_str())],
+            });
+            assert_clean_exit(&r);
+            assert_eq!(r.code, 0, "iter {i}: stderr={}", r.stderr_string());
+            assert!(
+                r.stdout_string().contains("9.9.9"),
+                "iter {i}: stdout={}",
+                r.stdout_string()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn unknown_subcommand_fails_fast() {
+        let r = run(&["definitely-not-a-subcommand"]);
+        assert_clean_exit(&r);
+        assert_eq!(
+            r.code, 1,
+            "unknown subcommand must exit 1: stderr={}",
+            r.stderr_string()
+        );
+        assert!(
+            r.stderr_string().contains("unknown command"),
+            "stderr must name the error: {}",
+            r.stderr_string()
+        );
+        // Fail-fast: an argv error must not spend real time.
+        assert!(
+            r.elapsed < Duration::from_secs(2),
+            "unknown subcommand took {:?}",
+            r.elapsed
         );
     }
 }
