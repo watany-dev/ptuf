@@ -130,12 +130,21 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   `PBT_DEEP_CASES=N` で上書き可) はリリース前 / 個別調査向け。CI では
   動かさず、ローカル実行のみ。
 - **重 E2E**: `make e2e` (`tests/e2e_heavy.rs`, `--test-threads=1`) は
-  実 `ptuf` バイナリを subprocess で連続 spawn し、fd / tempfile リーク
-  検出 (200 回 spawn 前後の `/proc/self/fd` 差分)、8 MiB stdin 境界、
+  実 `ptuf` バイナリを subprocess で連続 spawn し、8 軸 40 ケースを
+  `#[ignore]` で隔離する。前半 4 軸は fd / tempfile リーク検出
+  (200 回 spawn 前後の `/proc/self/fd` 差分)、8 MiB stdin 境界、
   10 worker × 100 並列 hook + 単一 audit JSONL の flock 整合性、
   `/etc/ptuf` から project local まで 4 層 + plugin + audit を tempdir に
-  組み上げた end-to-end の計 15 ケースを `#[ignore]` で隔離する。
-  `make check` には含めず、nightly / リリース直前に手動実行する。
+  組み上げた end-to-end。後半 4 軸はクラッシュ / ハング / 遅延を回帰検出
+  する: 5 adapter (claude-code / codex / copilot / kiro / cline) の出力契約
+  parity、病的入力 (非 UTF-8 / NUL / 深いネスト JSON・bash / 打ち切り
+  envelope / 巨大 secret 列) を fail-closed で弾くか、per-call latency 予算、
+  `check` / `plugin check` / `init` / `update` subcommand の連続 / 敵対的
+  実行。spawn ハーネスはタイムアウト付きで、`Child::try_wait()` ポーリング
+  により無期限ハングを「タイムアウト失敗」へ変換し、signal kill された子
+  (クラッシュ) も `SpawnOutcome::signal` で検出する — `assert_clean_exit`
+  が両者をまとめてアサートする。`make check` には含めず、nightly /
+  リリース直前に手動実行する。
 - **Fuzzing (nightly / on demand)**: `make fuzz` は `cargo-fuzz`
   (coverage-guided, nightly toolchain 必須) で 4 つの信頼境界を打つ
   — `fuzz_shell_parse` (shell tokenizer), `fuzz_hook_pipeline`
