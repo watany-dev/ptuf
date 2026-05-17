@@ -29,6 +29,19 @@ PBT は 3 段の予算で同じ proptest ブロックを繰り返し打つ:
 fd / tempfile リーク・8 MiB stdin 境界・並列 hook と shared audit JSONL・4 層 config フル統合の
 15 ケースを `#[ignore]` で実行する重 E2E。`make check` には含めず、nightly / リリース直前に手動実行する。
 
+`make check` 非対象の追加 QA 層 (`.github/workflows/nightly.yml` で夜間実行):
+
+- `make fuzz` / `make fuzz-soak` — `cargo fuzz` による信頼境界 4 種 (shell parser /
+  hook pipeline / config merge / plugin DSL) の coverage-guided fuzzing。`fuzz/` は
+  独立 workspace で nightly toolchain を要する。クラッシュ種は `fuzz/artifacts/` に commit。
+- `make mutants` — `cargo-mutants` による decision コア (`src/decision.rs` / `src/rules/**` /
+  `src/engine/**`、スコープは `.cargo/mutants.toml`) の mutation testing。
+- `make semver` — `cargo-semver-checks` で公開 API の SemVer 破壊を検知 (PR CI でも実行)。
+
+敵対的 bypass の回帰は `tests/bypass/corpus.jsonl` (版管理) に集約し、`make check` の
+`test` ステップで `tests/bypass_corpus.rs` が検証する。fuzz / 監査で新規 bypass を
+発見したら corpus に追記する。
+
 ## アーキテクチャ規約
 
 - 設計詳細は `docs/design/overview.md` から辿る

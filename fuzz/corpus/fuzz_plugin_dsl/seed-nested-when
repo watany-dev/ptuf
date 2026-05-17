@@ -1,0 +1,18 @@
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: nested
+capabilities:
+  requires:
+    - shell.argv
+rules:
+  - id: nested.combo
+    severity: high
+    defaultDecision: ask
+    when:
+      allOf:
+        - tool: Bash
+        - anyOf:
+            - shell.argv.head: curl
+            - shell.argv.head: wget
+    reason: nested condition tree

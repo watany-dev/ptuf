@@ -1,0 +1,11 @@
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: example
+rules:
+  - id: example.block-bash
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: example rule

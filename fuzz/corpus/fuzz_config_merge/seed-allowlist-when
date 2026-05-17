@@ -1,0 +1,10 @@
+version: 1
+mode: monitor
+allowlists:
+  - id: tmp-exception
+    ruleIds:
+      - core.network.remote-script-pipe
+    when:
+      tool: Bash
+    expiresAt: "2030-01-01T00:00:00Z"
+    reason: audited

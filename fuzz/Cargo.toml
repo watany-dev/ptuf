@@ -1,0 +1,59 @@
+[package]
+name = "ptuf-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# `libfuzzer-sys` is consumed through the `fuzz_target!` macro; some
+# static analysers miss macro-only usage, so it is pinned here as a
+# documented false-positive suppression for cargo-machete.
+[package.metadata.cargo-machete]
+ignored = ["libfuzzer-sys"]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[dependencies.ptuf]
+path = ".."
+
+# This crate is a standalone workspace so the coverage-guided fuzz
+# tooling (and its nightly-only `-Z` build flags) never interferes with
+# the parent crate's `cargo build` / `cargo clippy --all-targets` /
+# cargo-deny / crates.io package contents.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "fuzz_shell_parse"
+path = "fuzz_targets/fuzz_shell_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_hook_pipeline"
+path = "fuzz_targets/fuzz_hook_pipeline.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_config_merge"
+path = "fuzz_targets/fuzz_config_merge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_plugin_dsl"
+path = "fuzz_targets/fuzz_plugin_dsl.rs"
+test = false
+doc = false
+bench = false

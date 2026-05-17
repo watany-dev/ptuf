@@ -29,10 +29,12 @@ This runs the same gates that block CI:
 | `deny` | `cargo deny check advisories licenses bans sources` |
 
 CI additionally runs `tarpaulin` (95% coverage floor), an MSRV `cargo check`
-on Rust 1.93.0, `actionlint`, `cargo-machete`, and `zizmor` (workflow security
-audit). A daily scheduled `cargo audit` workflow catches newly-published
-RustSec advisories outside the PR loop. The MSRV is the floor — do not raise
-it without prior discussion.
+on Rust 1.93.0, `cargo-semver-checks` (public-API SemVer gate), `actionlint`,
+`cargo-machete`, and `zizmor` (workflow security audit). A daily scheduled
+`cargo audit` workflow catches newly-published RustSec advisories outside the
+PR loop, and a scheduled `Nightly` workflow runs coverage-guided fuzzing and
+mutation testing (see below). The MSRV is the floor — do not raise it without
+prior discussion.
 
 ### Property-Based Testing
 
@@ -50,6 +52,30 @@ inside a tempdir. It is excluded from `make check` (each axis takes
 minutes) and intended for nightly CI or pre-release validation. The
 target passes `--test-threads=1`; the fd-leak and shared-audit axes
 interfere when run in parallel.
+
+### Fuzzing, mutation testing, and the bypass corpus
+
+These layers run outside the PR gate (the `Nightly` workflow / on
+demand) and are not part of `make check`:
+
+- **Fuzzing** — `make fuzz` drives the four trust boundaries (shell
+  parser, hook pipeline, config merge, plugin DSL) with coverage-guided
+  `cargo fuzz`. The `fuzz/` crate is a standalone workspace and needs a
+  nightly toolchain; `make fuzz-soak FUZZ_TARGET=<name>` runs one target
+  for longer. Crash reproducers land in `fuzz/artifacts/` and are
+  committed as permanent regression seeds.
+- **Mutation testing** — `make mutants` runs `cargo-mutants` over the
+  decision core (`src/decision.rs`, `src/rules/**`, `src/engine/**`;
+  scope in `.cargo/mutants.toml`). A surviving (`MISSED`) mutant marks a
+  behaviour the test suite fails to verify — close it with an
+  example-based test.
+- **Bypass corpus** — `tests/bypass/corpus.jsonl` is a version-controlled
+  adversarial negative-security suite (`tests/bypass_corpus.rs`, run by
+  the ordinary `cargo test` / `make check` `test` step). New bypasses
+  found by fuzzing or audit are appended there.
+
+`make semver` runs the public-API SemVer check locally (same comparison
+as the PR `semver` job).
 
 ## Commit & PR Hygiene
 
