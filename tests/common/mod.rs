@@ -14,7 +14,7 @@
 )]
 
 use std::ffi::{OsStr, OsString};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -35,10 +35,20 @@ pub struct SpawnConfig<'a> {
 }
 
 pub struct SpawnOutcome {
+    /// Exit code, or `-1` when the process was killed by a signal.
+    /// Kept as a plain `i32` so the existing cases that match on
+    /// `code` compile unchanged; inspect `code_opt` / `signal` to tell
+    /// a genuine `-1` exit from a signal kill.
     pub code: i32,
+    /// `ExitStatus::code()` verbatim — `None` when killed by a signal.
+    pub code_opt: Option<i32>,
+    /// Unix signal that killed the process, if any.
+    pub signal: Option<i32>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub elapsed: Duration,
+    /// Set when the timeout fired and the child was force-killed.
+    pub timed_out: bool,
 }
 
 impl SpawnOutcome {
@@ -54,13 +64,32 @@ pub fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ptuf"))
 }
 
-/// Spawn ptuf. stdin is written from a scoped worker thread to avoid
-/// deadlock when the payload exceeds the OS pipe buffer (Linux default
-/// 64 KiB; an 8 MiB stdin would otherwise block on write). The scoped
-/// thread borrows `cfg.stdin` directly so the 8 MiB ceiling case does
-/// not double-allocate. When stdin is empty the writer thread is
-/// skipped entirely.
+/// Default ceiling for [`spawn`]. Long enough that a healthy ptuf run
+/// (even the 8 MiB stdin case under a debug build) finishes
+/// comfortably, short enough that a genuine hang surfaces as a test
+/// failure instead of wedging `make e2e` forever.
+pub const DEFAULT_SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Spawn ptuf with [`DEFAULT_SPAWN_TIMEOUT`]. Thin wrapper over
+/// [`spawn_with_timeout`] kept signature-compatible with the original
+/// helper so existing cases need no change.
 pub fn spawn(cfg: &SpawnConfig) -> SpawnOutcome {
+    spawn_with_timeout(cfg, DEFAULT_SPAWN_TIMEOUT)
+}
+
+/// Spawn ptuf, drive stdin/stdout/stderr on dedicated threads, and wait
+/// for exit with a hard `timeout`.
+///
+/// `Child::wait_with_output()` cannot be interrupted, so a hung child
+/// would block `make e2e` indefinitely and a hang would never surface
+/// as a *failure*. Instead the child is polled with `try_wait()`; once
+/// `timeout` elapses it is force-killed and then reaped with `wait()`
+/// so no zombie is left behind (`timed_out` records that this
+/// happened). stdout/stderr are drained on their own threads so the
+/// child cannot deadlock by filling a pipe buffer while we are blocked
+/// writing stdin (or vice versa). stdin borrows `cfg.stdin` directly
+/// so the 8 MiB ceiling case does not double-allocate.
+pub fn spawn_with_timeout(cfg: &SpawnConfig, timeout: Duration) -> SpawnOutcome {
     let mut cmd = binary();
     cmd.args(cfg.args)
         .stdin(Stdio::piped())
@@ -76,29 +105,85 @@ pub fn spawn(cfg: &SpawnConfig) -> SpawnOutcome {
     let started = Instant::now();
     let mut child = cmd.spawn().expect("spawn ptuf");
     let sin = child.stdin.take().expect("child stdin");
+    let mut sout = child.stdout.take().expect("child stdout");
+    let mut serr = child.stderr.take().expect("child stderr");
 
-    let output = if cfg.stdin.is_empty() {
-        drop(sin);
-        child.wait_with_output().expect("wait_with_output")
-    } else {
-        std::thread::scope(|s| {
-            let stdin_buf = cfg.stdin;
-            let writer = s.spawn(move || {
-                let mut sin = sin;
-                let _ = sin.write_all(stdin_buf);
-            });
-            let out = child.wait_with_output().expect("wait_with_output");
-            let _ = writer.join();
-            out
-        })
-    };
+    std::thread::scope(|s| {
+        let stdin_buf = cfg.stdin;
+        let writer = s.spawn(move || {
+            let mut sin = sin;
+            let _ = sin.write_all(stdin_buf);
+            // `sin` drops here, closing the pipe so the child sees EOF.
+        });
+        let out_reader = s.spawn(move || {
+            let mut buf = Vec::new();
+            let _ = sout.read_to_end(&mut buf);
+            buf
+        });
+        let err_reader = s.spawn(move || {
+            let mut buf = Vec::new();
+            let _ = serr.read_to_end(&mut buf);
+            buf
+        });
 
-    SpawnOutcome {
-        code: output.status.code().expect("exit code"),
-        stdout: output.stdout,
-        stderr: output.stderr,
-        elapsed: started.elapsed(),
-    }
+        let (status, timed_out) = loop {
+            if let Some(status) = child.try_wait().expect("try_wait") {
+                break (status, false);
+            }
+            if started.elapsed() >= timeout {
+                let _ = child.kill();
+                let status = child.wait().expect("wait after kill");
+                break (status, true);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let elapsed = started.elapsed();
+
+        let _ = writer.join();
+        let stdout = out_reader.join().expect("join stdout reader");
+        let stderr = err_reader.join().expect("join stderr reader");
+
+        let code_opt = status.code();
+        SpawnOutcome {
+            code: code_opt.unwrap_or(-1),
+            code_opt,
+            signal: exit_signal(&status),
+            stdout,
+            stderr,
+            elapsed,
+            timed_out,
+        }
+    })
+}
+
+#[cfg(unix)]
+fn exit_signal(status: &std::process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_status: &std::process::ExitStatus) -> Option<i32> {
+    None
+}
+
+/// Assert the process neither hung (timed out) nor crashed (died to a
+/// signal). The shared "no crash, no hang" check every heavy E2E case
+/// applies before inspecting decision output.
+#[track_caller]
+pub fn assert_clean_exit(outcome: &SpawnOutcome) {
+    assert!(
+        !outcome.timed_out,
+        "ptuf hung: no exit within timeout (elapsed {:?})",
+        outcome.elapsed
+    );
+    assert!(
+        outcome.signal.is_none(),
+        "ptuf killed by signal {:?} after {:?} (stderr: {})",
+        outcome.signal,
+        outcome.elapsed,
+        outcome.stderr_string()
+    );
 }
 
 pub struct LayerYaml {
@@ -207,4 +292,18 @@ pub fn open_fd_count() -> std::io::Result<usize> {
         n += 1;
     }
     Ok(n)
+}
+
+/// Write an executable shell script at `path` (mode `0755`). Used to
+/// build a hermetic `PATH` for `update`-style subcommand tests so they
+/// never reach the real network or system binaries.
+#[cfg(unix)]
+pub fn write_fake_executable(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, body).expect("write fake executable");
+    let mut perms = std::fs::metadata(path)
+        .expect("stat fake executable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).expect("chmod fake executable");
 }
