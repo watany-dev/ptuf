@@ -4,11 +4,17 @@
 //! them. Run via `make e2e` (or
 //! `cargo test --features testing --test e2e_heavy -- --ignored --test-threads=1`).
 //!
-//! Four axes:
+//! Five axes:
 //! - `leak`            — fd / tempfile / child-process residue
 //! - `giant_input`     — 8 MiB stdin, 1000-stage pipeline, oversized configs
 //! - `concurrent`      — sequential 200 and parallel 10×100 invocations
 //! - `full_config_stack` — 4-layer config + plugin + audit end-to-end
+//! - `pathological_input` — malformed / oversized / deeply nested payloads
+//!
+//! The shared `common::spawn` helper kills and reaps the child once a
+//! timeout elapses, so a hung ptuf surfaces as a test *failure* rather
+//! than wedging `make e2e`; `common::assert_clean_exit` additionally
+//! flags a signal kill (crash). Every axis below relies on this.
 
 // Some inner-module helpers (e.g. `leak::ptuf_tempfile_names`) live
 // outside `#[test]` bodies and so fall outside `clippy.toml`'s
@@ -620,5 +626,214 @@ mod full_config_stack {
             !default_audit.exists(),
             "default audit path leaked despite override: {default_audit:?}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------
+// Axis 6: pathological input — the primary crash / hang / delay probe
+// ---------------------------------------------------------------------
+
+/// Feeds malformed, oversized, and deeply nested payloads through real
+/// process boundaries. Deep nesting is *expected* to be rejected
+/// safely — serde_json caps recursion at 128 and the shell parser is
+/// depth-bounded — so this axis verifies that the rejection holds at a
+/// process boundary (no SIGSEGV, no infinite loop) rather than
+/// trusting it. Every case asserts the shared fail-closed contract:
+/// no crash, no hang, a documented exit code, and an answer within
+/// budget.
+mod pathological_input {
+    use super::common::{MAX_STDIN, SpawnConfig, SpawnOutcome, assert_clean_exit, spawn};
+    use std::time::Duration;
+
+    /// Upper bound for one ordinary pathological call. Generous —
+    /// `make e2e` builds debug and each case spawns a subprocess — but
+    /// far below the 60 s hang timeout so a genuine slowdown still
+    /// fails as a *delay*.
+    const PER_CALL_BUDGET: Duration = Duration::from_secs(15);
+
+    /// Looser bound for the two multi-megabyte cases (50k secret
+    /// tokens, near-8 MiB pipeline). Still below the hang timeout, so
+    /// an unbounded loop is caught, but tolerant of honest linear work
+    /// over millions of tokens in a debug build.
+    const HEAVY_BUDGET: Duration = Duration::from_secs(45);
+
+    const TRUNCATED: &[u8] = br#"{"tool_name":"Bash","tool_input":{"command":"ls"#;
+
+    fn run(args: &[&str], stdin: &[u8]) -> SpawnOutcome {
+        spawn(&SpawnConfig {
+            args,
+            stdin,
+            cwd: None,
+            envs: &[],
+        })
+    }
+
+    fn non_utf8_blob() -> Vec<u8> {
+        let mut v = Vec::with_capacity(8192);
+        for _ in 0..2048 {
+            v.extend_from_slice(&[0xFF, 0xFE, 0x80, 0xC0]);
+        }
+        v
+    }
+
+    fn nul_blob() -> Vec<u8> {
+        let mut v = super::ALLOW_PAYLOAD.to_vec();
+        v.extend(std::iter::repeat_n(0u8, 4096));
+        v
+    }
+
+    /// `hook claude-code` and `check` answer allow with exit 0 and deny
+    /// with exit 2; no other code is part of the contract. Combined
+    /// with `assert_clean_exit` this is the full "no crash, no hang,
+    /// fail closed, no delay" check.
+    #[track_caller]
+    fn assert_fail_closed(r: &SpawnOutcome, label: &str, budget: Duration) {
+        assert_clean_exit(r);
+        assert!(
+            r.code == 0 || r.code == 2,
+            "{label}: undocumented exit {} (stderr={})",
+            r.code,
+            r.stderr_string()
+        );
+        assert!(
+            r.elapsed < budget,
+            "{label}: took {:?}, over budget {budget:?}",
+            r.elapsed
+        );
+        let stderr = r.stderr_string();
+        assert!(
+            !stderr.to_lowercase().contains("panicked"),
+            "{label}: panic leaked to stderr: {stderr}"
+        );
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn non_utf8_stdin_fails_closed() {
+        let r = run(&["hook", "claude-code"], &non_utf8_blob());
+        assert_fail_closed(&r, "non-utf8 stdin", PER_CALL_BUDGET);
+        assert_eq!(r.code, 2, "invalid bytes must fail closed to deny");
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn embedded_nul_bytes_fail_closed() {
+        let r = run(&["hook", "claude-code"], &nul_blob());
+        assert_fail_closed(&r, "embedded NUL", PER_CALL_BUDGET);
+        assert_eq!(r.code, 2, "trailing NUL bytes must fail closed to deny");
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn deeply_nested_json_fails_closed_without_stack_overflow() {
+        const DEPTH: usize = 20_000;
+        let mut payload = String::with_capacity(DEPTH * 5 + DEPTH + 1);
+        for _ in 0..DEPTH {
+            payload.push_str("{\"a\":");
+        }
+        payload.push('1');
+        for _ in 0..DEPTH {
+            payload.push('}');
+        }
+        let r = run(&["hook", "claude-code"], payload.as_bytes());
+        // serde_json's recursion limit rejects this far short of any
+        // stack exhaustion; the point is rejection without a SIGSEGV.
+        assert_fail_closed(&r, "deeply nested JSON", PER_CALL_BUDGET);
+        assert_eq!(r.code, 2, "over-nested JSON must fail closed to deny");
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn deeply_nested_bash_substitution_stays_bounded() {
+        const DEPTH: usize = 5_000;
+        let mut cmd = String::with_capacity(DEPTH * 7 + DEPTH + 1);
+        for _ in 0..DEPTH {
+            cmd.push_str("$(echo ");
+        }
+        cmd.push('x');
+        for _ in 0..DEPTH {
+            cmd.push(')');
+        }
+        // Decision (allow/deny) is irrelevant here — the probe is that
+        // the shell parser's bounded depth holds without a crash.
+        let r = run(&["check", "--tool", "Bash", &cmd], &[]);
+        assert_fail_closed(&r, "deeply nested bash substitution", PER_CALL_BUDGET);
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn fifty_thousand_secret_tokens_redact_within_budget() {
+        const TOKENS: usize = 50_000;
+        let token = " AKIAIOSFODNN7EXAMPLE aws_secret=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY";
+        let mut cmd = String::with_capacity(TOKENS * token.len() + 16);
+        cmd.push_str("rm -rf / #");
+        for _ in 0..TOKENS {
+            cmd.push_str(token);
+        }
+        let mut payload = String::with_capacity(cmd.len() + 64);
+        payload.push_str(r#"{"tool_name":"Bash","tool_input":{"command":""#);
+        payload.push_str(&cmd);
+        payload.push_str(r#""}}"#);
+        let r = run(&["hook", "claude-code"], payload.as_bytes());
+        assert_fail_closed(&r, "50k secret tokens", HEAVY_BUDGET);
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn truncated_json_envelope_fails_closed() {
+        let r = run(&["hook", "claude-code"], TRUNCATED);
+        assert_fail_closed(&r, "truncated JSON", PER_CALL_BUDGET);
+        assert_eq!(r.code, 2, "truncated envelope must fail closed to deny");
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn near_8mib_pipeline_payload_stays_responsive() {
+        let prefix = br#"{"tool_name":"Bash","tool_input":{"command":""#;
+        let suffix = br#""}}"#;
+        let budget = MAX_STDIN - prefix.len() - suffix.len() - 64;
+        let stage = "echo x|";
+        let stages = budget / stage.len();
+        let mut cmd = String::with_capacity(stages * stage.len() + 8);
+        for _ in 0..stages {
+            cmd.push_str(stage);
+        }
+        cmd.push_str("echo x");
+        let mut payload = Vec::with_capacity(MAX_STDIN);
+        payload.extend_from_slice(prefix);
+        payload.extend_from_slice(cmd.as_bytes());
+        payload.extend_from_slice(suffix);
+        assert!(
+            payload.len() <= MAX_STDIN,
+            "payload {} exceeds stdin ceiling {MAX_STDIN}",
+            payload.len()
+        );
+        let r = run(&["hook", "claude-code"], &payload);
+        assert_fail_closed(&r, "near-8MiB pipeline", HEAVY_BUDGET);
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn repeated_malformed_input_does_not_degrade() {
+        // Twenty rounds of the cheap malformed inputs back to back. A
+        // per-spawn resource leak or super-linear slowdown would show
+        // up as a budget breach on a late round. The two heavy cases
+        // (50k secrets, near-8 MiB pipeline) are excluded to keep this
+        // axis inside the `make e2e` time budget.
+        const ROUNDS: usize = 20;
+        let non_utf8 = non_utf8_blob();
+        let nul = nul_blob();
+        for round in 0..ROUNDS {
+            for (label, stdin) in [
+                ("non-utf8", non_utf8.as_slice()),
+                ("nul", nul.as_slice()),
+                ("truncated", TRUNCATED),
+            ] {
+                let r = run(&["hook", "claude-code"], stdin);
+                let tag = format!("round {round} {label}");
+                assert_fail_closed(&r, &tag, PER_CALL_BUDGET);
+                assert_eq!(r.code, 2, "{tag}: must fail closed to deny");
+            }
+        }
     }
 }
