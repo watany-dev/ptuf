@@ -44,14 +44,25 @@ override available). Run it before tagging a release.
 ### Heavy end-to-end tests
 
 `make e2e` runs the `#[ignore]`d subprocess suite in
-`tests/e2e_heavy.rs`, exercising real-world ptuf invocation patterns:
-fd / tempfile leak detection over 200 spawns, the 8 MiB stdin boundary,
-sequential and parallel hook spawns sharing one audit file under
-`flock`, and a full 4-layer config + plugin + audit end-to-end build
-inside a tempdir. It is excluded from `make check` (each axis takes
-minutes) and intended for nightly CI or pre-release validation. The
-target passes `--test-threads=1`; the fd-leak and shared-audit axes
-interfere when run in parallel.
+`tests/e2e_heavy.rs`, exercising real-world ptuf invocation patterns
+across eight axes (40 cases). The first four cover fd / tempfile leak
+detection over 200 spawns, the 8 MiB stdin boundary, sequential and
+parallel hook spawns sharing one audit file under `flock`, and a full
+4-layer config + plugin + audit end-to-end build inside a tempdir. The
+last four regression-detect crashes, hangs, and delays: output-contract
+parity across all five adapters (claude-code / codex / copilot / kiro /
+cline), pathological input (non-UTF-8, NUL bytes, deeply nested JSON and
+bash, truncated envelopes, huge secret runs) that must fail closed,
+per-call latency budgets, and repeated / adversarial `check`,
+`plugin check`, `init`, and `update` subcommand runs. The `spawn`
+harness is timeout-equipped: it polls `Child::try_wait()` so an
+unbounded hang surfaces as a timeout *failure* rather than wedging
+`make e2e`, and a child killed by a signal (a crash) is reported via
+`SpawnOutcome::signal` — `assert_clean_exit` asserts against both. It is
+excluded from `make check` (each axis takes minutes) and intended for
+nightly CI or pre-release validation. The target passes
+`--test-threads=1`; the fd-leak and shared-audit axes interfere when run
+in parallel.
 
 ### Fuzzing, mutation testing, and the bypass corpus
 
