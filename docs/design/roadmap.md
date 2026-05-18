@@ -94,7 +94,7 @@
 - `facts.collect_sensitive` で `expanded` / `canonical_or_raw` も
   classify (symlink bypass を塞ぐ)
 
-### M9 — ファイル中身のインジェクション検査 (実装済み, post-`v0.1.0`)
+### M9 — ファイル中身のインジェクション検査 (実装済み, `v0.1.1`)
 
 - `core.injection.invisible-chars` (Ask / High / overridable) 追加。
   ptuf で初めて評価中に対象ファイルを開き、中身をバイト単位で静的検査
