@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-18
+
 ### Added
 - New rule `core.injection.invisible-chars` (pack `core.injection`,
   default-enabled). Statically inspects the *contents* of files an agent
@@ -275,5 +277,7 @@ Initial public release.
 - `curl | sh` and PowerShell installers via cargo-dist
 - crates.io publication
 
+[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/watany-dev/ptuf/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/watany-dev/ptuf/releases/tag/v0.1.0
 [0.0.1]: https://github.com/watany-dev/ptuf/releases/tag/v0.0.1
