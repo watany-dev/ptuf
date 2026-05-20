@@ -249,12 +249,25 @@ impl ProtectedPaths {
         }
 
         let mut kiro_settings: Vec<PathBuf> = Vec::new();
+        let mut kiro_dirs: Vec<PathBuf> = Vec::new();
         if let Some(root) = repo_root {
-            kiro_settings.push(root.join(".kiro/agents/ptuf-guarded.json"));
+            kiro_dirs.push(root.join(".kiro/agents"));
         }
-        if let Some(home_os) = env.var_os("HOME") {
-            let home = PathBuf::from(home_os);
-            kiro_settings.push(home.join(".kiro/agents/ptuf-guarded.json"));
+        if let Some(kiro_home) = env.var_os("KIRO_HOME") {
+            kiro_dirs.push(PathBuf::from(kiro_home).join("agents"));
+        } else if let Some(home_os) = env.var_os("HOME") {
+            kiro_dirs.push(PathBuf::from(home_os).join(".kiro/agents"));
+        }
+        for dir in &kiro_dirs {
+            let Ok(entries) = fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
+                    kiro_settings.push(path);
+                }
+            }
         }
         kiro_settings.sort();
         kiro_settings.dedup();
@@ -894,20 +907,87 @@ mod tests {
     }
 
     #[test]
-    fn collect_includes_kiro_settings_for_repo_and_home() {
-        let env = MapEnv::with(&[("HOME", "/h")]);
+    fn collect_enumerates_kiro_agent_jsons_under_repo_and_home() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-kiro-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let repo = dir.join("repo");
+        let home = dir.join("home");
+        std::fs::create_dir_all(repo.join(".kiro/agents")).expect("mkdir repo");
+        std::fs::create_dir_all(home.join(".kiro/agents")).expect("mkdir home");
+        std::fs::write(repo.join(".kiro/agents/dev.json"), "{}").expect("write dev");
+        std::fs::write(repo.join(".kiro/agents/notes.md"), "ignored").expect("write notes");
+        std::fs::write(home.join(".kiro/agents/global.json"), "{}").expect("write global");
+
+        let env = MapEnv::with(&[("HOME", home.to_str().unwrap())]);
         let cfg = Config::default();
-        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        let p = ProtectedPaths::collect_with_env(Some(&repo), &cfg, &env);
+
         assert!(
             p.kiro_settings
                 .iter()
-                .any(|q| q == &PathBuf::from("/repo/.kiro/agents/ptuf-guarded.json"))
+                .any(|q| q.file_name().and_then(std::ffi::OsStr::to_str) == Some("dev.json")),
+            "kiro_settings={:?}",
+            p.kiro_settings,
         );
         assert!(
             p.kiro_settings
                 .iter()
-                .any(|q| q == &PathBuf::from("/h/.kiro/agents/ptuf-guarded.json"))
+                .any(|q| q.file_name().and_then(std::ffi::OsStr::to_str) == Some("global.json")),
+            "kiro_settings={:?}",
+            p.kiro_settings,
         );
+        assert!(
+            !p.kiro_settings
+                .iter()
+                .any(|q| q.extension().and_then(std::ffi::OsStr::to_str) == Some("md")),
+            "non-JSON files must not be enumerated: {:?}",
+            p.kiro_settings,
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_kiro_settings_honors_kiro_home_env() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-kiro-home-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let kiro_home = dir.join("kiro_home");
+        let home = dir.join("home");
+        std::fs::create_dir_all(kiro_home.join("agents")).expect("mkdir kiro_home/agents");
+        std::fs::create_dir_all(home.join(".kiro/agents")).expect("mkdir home/.kiro/agents");
+        std::fs::write(kiro_home.join("agents/k.json"), "{}").expect("write k");
+        std::fs::write(home.join(".kiro/agents/h.json"), "{}").expect("write h");
+
+        let env = MapEnv::with(&[
+            ("HOME", home.to_str().unwrap()),
+            ("KIRO_HOME", kiro_home.to_str().unwrap()),
+        ]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
+
+        // KIRO_HOME wins over HOME/.kiro.
+        assert!(
+            p.kiro_settings
+                .iter()
+                .any(|q| q.file_name().and_then(std::ffi::OsStr::to_str) == Some("k.json")),
+            "kiro_settings={:?}",
+            p.kiro_settings,
+        );
+        assert!(
+            !p.kiro_settings
+                .iter()
+                .any(|q| q.file_name().and_then(std::ffi::OsStr::to_str) == Some("h.json")),
+            "HOME/.kiro must be ignored when KIRO_HOME is set: {:?}",
+            p.kiro_settings,
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

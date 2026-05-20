@@ -18,10 +18,26 @@ where
     let mut agent: Option<HookAgent> = None;
     let mut dry_run = false;
     let mut no_verify = false;
-    for arg in iter {
+    let mut new_agent = false;
+    let mut set_default: Option<String> = None;
+    let mut workspace_only = false;
+    let mut global_only = false;
+    while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
             "--no-verify" => no_verify = true,
+            "--new-agent" => new_agent = true,
+            "--workspace-only" => workspace_only = true,
+            "--global" => global_only = true,
+            "--set-default" => {
+                let value = iter
+                    .next()
+                    .ok_or(ParseError::MissingValue("--set-default"))?;
+                set_default = Some(value.clone());
+            },
+            other if other.starts_with("--set-default=") => {
+                set_default = Some(other.trim_start_matches("--set-default=").to_string());
+            },
             "claude-code" | "codex" | "copilot" | "kiro" | "cline" => {
                 if agent.is_some() {
                     return Err(ParseError::UnexpectedArgument(arg.clone()));
@@ -31,6 +47,9 @@ where
             other => return Err(ParseError::UnexpectedArgument(other.to_string())),
         }
     }
+    if workspace_only && global_only {
+        return Err(ParseError::ConflictingFlags("--workspace-only vs --global"));
+    }
     // Dry-run never writes, so the synthetic-deny check would just
     // confirm whatever was already on disk; treat dry-run as "skip
     // verify" rather than as a parse error.
@@ -39,6 +58,10 @@ where
         agent,
         verify,
         dry_run,
+        new_agent,
+        set_default,
+        workspace_only,
+        global_only,
     }))
 }
 
@@ -346,6 +369,7 @@ mod tests {
                 agent: None,
                 verify: true,
                 dry_run: false,
+                ..InitOptions::default()
             })
         );
     }
@@ -366,6 +390,7 @@ mod tests {
                     agent: Some(expected),
                     verify: true,
                     dry_run: false,
+                    ..InitOptions::default()
                 }),
                 "agent token {token}",
             );
@@ -380,6 +405,7 @@ mod tests {
                 agent: None,
                 verify: false,
                 dry_run: false,
+                ..InitOptions::default()
             })
         );
     }
@@ -392,6 +418,7 @@ mod tests {
                 agent: None,
                 verify: false,
                 dry_run: true,
+                ..InitOptions::default()
             })
         );
     }
@@ -404,8 +431,83 @@ mod tests {
                 agent: Some(HookAgent::ClaudeCode),
                 verify: false,
                 dry_run: true,
+                ..InitOptions::default()
             })
         );
+    }
+
+    #[test]
+    fn parses_init_kiro_specific_flags() {
+        let c = cmd(&[
+            "init",
+            "kiro",
+            "--new-agent",
+            "--set-default",
+            "architect",
+            "--workspace-only",
+        ]);
+        assert_eq!(
+            c,
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Kiro),
+                verify: true,
+                dry_run: false,
+                new_agent: true,
+                set_default: Some("architect".to_string()),
+                workspace_only: true,
+                global_only: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_init_set_default_equals_form() {
+        let c = cmd(&["init", "kiro", "--set-default=default"]);
+        assert_eq!(
+            c,
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Kiro),
+                verify: true,
+                dry_run: false,
+                new_agent: false,
+                set_default: Some("default".to_string()),
+                workspace_only: false,
+                global_only: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_init_global_flag() {
+        let c = cmd(&["init", "kiro", "--global"]);
+        assert_eq!(
+            c,
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Kiro),
+                verify: true,
+                dry_run: false,
+                new_agent: false,
+                set_default: None,
+                workspace_only: false,
+                global_only: true,
+            })
+        );
+    }
+
+    #[test]
+    fn init_rejects_workspace_only_with_global() {
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--workspace-only", "--global"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn init_set_default_requires_value() {
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--set-default"])),
+            Err(ParseError::MissingValue("--set-default"))
+        ));
     }
 
     #[test]

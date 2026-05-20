@@ -460,7 +460,16 @@ fn init_auto_detect_aggregates_multiple_agents_into_json_array() {
     std::fs::create_dir_all(&home).expect("mkdir home");
     std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
     std::fs::create_dir_all(cwd.join(".github")).expect("mkdir .github");
-    std::fs::create_dir_all(cwd.join(".kiro")).expect("mkdir .kiro");
+    // Kiro auto-detect requires an agent JSON + a chat.defaultAgent
+    // pointing at it so the effective default is covered.
+    std::fs::create_dir_all(cwd.join(".kiro/agents")).expect("mkdir .kiro/agents");
+    std::fs::write(cwd.join(".kiro/agents/dev.json"), "{}").expect("write agent");
+    std::fs::create_dir_all(home.join(".kiro/settings")).expect("mkdir home .kiro settings");
+    std::fs::write(
+        home.join(".kiro/settings/cli.json"),
+        r#"{"chat":{"defaultAgent":"dev"}}"#,
+    )
+    .expect("write settings");
 
     let (code, stdout, stderr) = run_in(&["--json", "init", "--dry-run"], cwd, Some(&home), "");
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
@@ -545,7 +554,14 @@ fn init_auto_detect_finds_kiro_via_home_only() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let cwd = dir.path();
     let home = dir.path().join("home");
-    std::fs::create_dir_all(home.join(".kiro")).expect("mkdir home/.kiro");
+    std::fs::create_dir_all(home.join(".kiro/agents")).expect("mkdir home/.kiro/agents");
+    std::fs::write(home.join(".kiro/agents/dev.json"), "{}").expect("write agent");
+    std::fs::create_dir_all(home.join(".kiro/settings")).expect("mkdir settings");
+    std::fs::write(
+        home.join(".kiro/settings/cli.json"),
+        r#"{"chat":{"defaultAgent":"dev"}}"#,
+    )
+    .expect("write settings");
 
     let (code, stdout, stderr) = run_in(&["init", "--dry-run"], cwd, Some(&home), "");
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");

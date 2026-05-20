@@ -121,6 +121,7 @@ pub fn install(
         }],
         matcher: DEFAULT_MATCHER.to_string(),
         command,
+        kiro_report: None,
     })
 }
 

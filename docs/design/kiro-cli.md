@@ -11,7 +11,7 @@ Kiro CLI の `preToolUse` hook を ptuf に橋渡しする adapter (M6) の設�
 | サブコマンド | 役割 |
 | --- | --- |
 | `ptuf hook kiro` | stdin の Kiro `preToolUse` payload を canonical `HookInput` に正規化し、engine 判定結果を stderr + exit code で返す |
-| `ptuf init kiro` | `<repo>/.kiro/agents/ptuf-guarded.json` (local) / `~/.kiro/agents/ptuf-guarded.json` (global fallback) に hook entry を idempotent に書き込む |
+| `ptuf init kiro` | `<repo>/.kiro/agents/*.json` と `<global_root>/agents/*.json` を列挙して各 agent に `matcher: "*"` の `preToolUse` hook を append し、`chat.defaultAgent` 経由の effective default agent が実際に protect されているか検証する |
 
 中核 engine と他 3 adapter (Claude Code / Codex / Copilot) は不変。Kiro
 固有の揺れは `src/cli/kiro_input.rs`, `src/cli/output.rs::adapt_hook_decision`,
@@ -80,31 +80,96 @@ stdin が読めない、JSON parse 失敗、`hook_event_name != preToolUse` の
 
 ## `ptuf init kiro`
 
-`.kiro/agents/ptuf-guarded.json` の `hooks.preToolUse` 配列に entry を append
-する。既に末尾 token が `["hook", "kiro"]` の `command` を持つ entry
-があれば `AlreadyPresent` で no-op。
+成功条件は「Kiro CLI が実際に起動する agent (= effective default agent)
+が ptuf hook で守られている」こと。単に `ptuf-guarded.json` を生成するだけ
+では built-in `kiro_default` (patch 不能) や既存 custom agent を素通しに
+してしまうため、列挙 + patch + default 検証の 3 段で構成する。
 
-agent 名は `ptuf-guarded` 固定、agent file の path も `<repo>/.kiro/agents/`
-配下が既定で、repo root が見つからない場合は `$HOME/.kiro/agents/` へ
-fallback する。
+### 探索パス
 
-`init` の global flag:
+| scope | path | 取得元 |
+| --- | --- | --- |
+| Workspace agents dir | `<repo>/.kiro/agents/` | `cwd` から repo root を解決 |
+| Global agents dir | `<global_root>/agents/` | `KIRO_HOME` があればそれ、無ければ `$HOME/.kiro` |
+| Global settings file | `<global_root>/settings/cli.json` | 同上 |
+| Workspace settings (diagnostic) | `<repo>/.kiro/settings/cli.json` | authoritative ではない、warning 用 |
+
+各ディレクトリ内の `*.json` を全て enumerate する。`.md` などの非 JSON
+は `skippedNonJsonAgents` として report に残す。
+
+### Effective default agent の解決
+
+`<global_root>/settings/cli.json` の `chat.defaultAgent` を authoritative
+として読む:
+
+- `chat.defaultAgent` 未設定 → Kiro CLI は built-in `kiro_default` を使う。
+  これは file が存在しないため patch 不能で、`BuiltinDefaultUncovered`
+  failure。
+- `chat.defaultAgent: "kiro_default"` → 同上 (`BuiltinDefaultUncovered`)。
+- `chat.defaultAgent: "<name>"` → workspace → global の順で
+  `<name>.json` を検索。両方に存在する場合は workspace precedence、
+  global は warning として記録する。
+
+`--set-default <name>` が指定されたら、設定ファイル経由の値を上書きして
+init 中に `chat.defaultAgent` を `<name>` に書き換える。
+`--set-default default` の特殊ケースとして `default.json` が存在しなければ
+fallback skeleton (下記) を `<global_root>/agents/default.json` (無ければ
+workspace) に生成する。
+
+### Coverage tri-state
+
+各 agent JSON 内の `hooks.preToolUse[]` を以下に分類する:
+
+- **FullCoverage** — `matcher` が `"*"` あるいは省略 (Kiro CLI の wildcard 解釈)
+  かつ `command` の末尾 token が `["hook", "kiro"]`。
+- **NarrowCoverage** — `command` 末尾は ptuf だが `matcher` が
+  特定 tool (`fs_write` 等)。元 entry は触らず、兄弟として `matcher: "*"`
+  の新 entry を append する。
+- **Present** (= ptuf hook が無い) — `matcher: "*"` の FullCoverage を append。
+
+既に FullCoverage を含む agent は `AlreadyFullCoverage` で no-op
+(install status は他に変更が無ければ `AlreadyPresent`)。
+
+### CLI flags
 
 | フラグ | 用途 |
 | --- | --- |
 | `--no-verify` | install 後の synthetic deny / fail-closed verify を skip |
 | `--dry-run` | 書き込まずに `WouldInstall` を報告 (verify は自動的に off) |
+| `--new-agent` | レガシー互換: `ptuf-guarded.json` 単一ファイルを workspace か global に生成し、default-agent coverage 検証を skip する |
+| `--set-default <name>` | init 終了時に `<global_root>/settings/cli.json` の `chat.defaultAgent` を `<name>` に固定する。`<name>` の agent JSON が無く `default` が指定された場合のみ skeleton を生成する |
+| `--workspace-only` | global agents / global settings を一切触らない |
+| `--global` | workspace agents を skip し、global のみ操作する (`--workspace-only` と排他) |
 
-書き込みは temp file + `rename(2)` の atomic write、JSON は
-`serde_json::to_string_pretty` + 末尾改行 1 つ。`hooks.preToolUse` 以外
-のキー (`name`, `description`, `tools`, `model`, `temperature`, ...) は
-`serde_json::Value` のまま保持し mutate しない。
-
-新規作成時の default skeleton:
+### Hook entry の書式
 
 ```json
 {
-  "name": "ptuf-guarded",
+  "matcher": "*",
+  "command": "'/abs/path/to/ptuf' hook kiro",
+  "timeout_ms": 10000,
+  "cache_ttl_seconds": 0
+}
+```
+
+`command` は POSIX shell 単一引用符でクォートした絶対パス
+(`'/abs/path/ptuf'` 内の `'` は `'\''` で escape)
++ ` hook kiro`。`std::env::current_exe()` から導出し、得られない場合は
+literal `"ptuf"` にフォールバック (他 adapter と同様)。
+
+書き込みは temp file + `rename(2)` の atomic write、JSON は
+`serde_json::to_string_pretty` + 末尾改行 1 つ、mode 0600。`hooks.preToolUse`
+以外のキー (`name`, `description`, `tools`, `model`, `temperature`, ...)
+は `serde_json::Value` のまま保持し mutate しない。
+
+### Fallback skeleton
+
+`--set-default default` で `default.json` が存在しないとき、または
+`--new-agent` モードで `ptuf-guarded.json` を新規作成するときの shape:
+
+```json
+{
+  "name": "<default|ptuf-guarded>",
   "description": "Kiro CLI agent guarded by ptuf PreToolUse policy.",
   "tools": ["*"],
   "includeMcpJson": true,
@@ -112,7 +177,7 @@ fallback する。
     "preToolUse": [
       {
         "matcher": "*",
-        "command": "<absolute ptuf path> hook kiro",
+        "command": "'<absolute ptuf path>' hook kiro",
         "timeout_ms": 10000,
         "cache_ttl_seconds": 0
       }
@@ -121,8 +186,17 @@ fallback する。
 }
 ```
 
-`<absolute ptuf path>` は `std::env::current_exe()` から導出する。
-得られない場合は literal `"ptuf"` にフォールバック (他 adapter と同様)。
+### 失敗条件
+
+以下のいずれかで `overall_failure = true` → exit 1:
+
+- `BuiltinDefaultUncovered` — `chat.defaultAgent` 未設定 or `kiro_default`
+- `DefaultAgentJsonNotFound` — `chat.defaultAgent: "<name>"` だが `<name>.json` 不在
+- `InvalidDefaultAgentJson` / `UnsupportedDefaultAgentJsonShape` — default agent の JSON が壊れている
+- `PatchFailed` — default agent への書き込み失敗
+- `NoAgentsAndNoSetDefault` — `--new-agent` 未指定で agents が 0、`--set-default` も無し
+
+非 default agent の patch 失敗は warning のみで init 自体は通る。
 
 ## audit log との関係
 
@@ -137,6 +211,6 @@ Kiro 経由の hook 呼び出しは audit JSONL に `agent: "kiro"` として
 - `src/cli/output.rs::{adapt_hook_decision, decision_exit_code}` — Ask
   demotion / stderr-only 出力 / exit code matrix
 - `src/hook_output.rs::kiro::deny_reason_for_ask` — Ask 拒否文言
-- `src/init/kiro.rs` — `resolve_paths` / `install` / `entry_commands` /
-  `command_invokes_ptuf_hook`
+- `src/init/kiro.rs` — `plan` / `install` / coverage 分類 /
+  `command_invokes_ptuf_hook` / fallback skeleton 生成
 - `tests/cli_smoke.rs::kiro_hook_*` — subprocess 境界の smoke test

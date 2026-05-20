@@ -58,18 +58,28 @@ impl HookAgent {
     }
 }
 
-/// Parsed `ptuf init [<agent>] [--no-verify] [--dry-run]`.
+/// Parsed `ptuf init [<agent>] [--no-verify] [--dry-run]
+///   [--new-agent] [--set-default <name>] [--workspace-only] [--global]`.
 ///
 /// `agent = None` means "auto-detect every agent reachable from
 /// `cwd` / `$HOME`". `verify` defaults to `true`; `--no-verify`
 /// flips it off, and `--dry-run` implicitly disables verify (a
 /// dry run never writes, so the synthetic-deny check would just
 /// confirm the unmodified disk state).
+///
+/// The Kiro-specific knobs (`new_agent`, `set_default`, `workspace_only`,
+/// `global_only`) are documented in `docs/design/kiro-cli.md` and only
+/// take effect when `agent == Some(HookAgent::Kiro)` (or when
+/// auto-detection lands on Kiro). Other adapters ignore them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InitOptions {
     pub agent: Option<HookAgent>,
     pub verify: bool,
     pub dry_run: bool,
+    pub new_agent: bool,
+    pub set_default: Option<String>,
+    pub workspace_only: bool,
+    pub global_only: bool,
 }
 
 /// Top-level flags that apply uniformly across subcommands.

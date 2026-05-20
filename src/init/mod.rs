@@ -14,6 +14,93 @@ pub mod copilot;
 pub mod kiro;
 pub mod verify;
 
+/// Render a [`kiro::KiroReport`] into the JSON shape consumed by
+/// `--json` callers and surfaced inside `verify`'s report. Kept here so
+/// the shape is exercised by both code paths uniformly.
+pub fn kiro_report_to_json(report: &kiro::KiroReport) -> serde_json::Value {
+    use serde_json::json;
+    json!({
+        "globalRoot": report
+            .global_root
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        "workspaceAgentsDir": report
+            .workspace_agents_dir
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        "globalAgentsDir": report
+            .global_agents_dir
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        "globalSettingsPath": report
+            .global_settings_path
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        "patchedAgentCount": report.patched_agent_count(),
+        "alreadyFullCoverageCount": report.already_full_coverage_count(),
+        "narrowCoverageRepairedCount": report.narrow_coverage_repaired_count(),
+        "patchedAgentPaths": report
+            .patched_agent_paths()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>(),
+        "skippedNonJsonAgents": report
+            .skipped_non_json
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>(),
+        "defaultAgent": {
+            "settingPath": report
+                .global_settings_path
+                .as_ref()
+                .map(|p| p.display().to_string()),
+            "settingValue": report.default_agent.setting_value,
+            "source": match report.default_agent.source {
+                kiro::DefaultAgentSource::BuiltinFallback => "builtinFallback",
+                kiro::DefaultAgentSource::GlobalSetting => "globalSetting",
+                kiro::DefaultAgentSource::CliFlag => "cliFlag",
+            },
+            "resolvedPath": report
+                .default_agent
+                .resolved_agent_path
+                .as_ref()
+                .map(|p| p.display().to_string()),
+            "covered": report.default_agent.covered,
+            "failureReason": report
+                .default_agent
+                .failure_reason
+                .as_ref()
+                .map(kiro_failure_reason_to_label),
+        },
+        "defaultAgentCovered": report.default_agent.covered,
+        "observedWorkspaceSettings": report.observed_workspace_settings.as_ref().map(|s| json!({
+            "path": s.path.display().to_string(),
+            "chat.defaultAgent": s.chat_default_agent,
+            "authoritative": false,
+        })),
+        "warnings": report.warnings,
+        "setDefaultApplied": report.set_default_applied,
+        "overallFailure": report.overall_failure,
+    })
+}
+
+fn kiro_failure_reason_to_label(reason: &kiro::DefaultAgentFailureReason) -> &'static str {
+    match reason {
+        kiro::DefaultAgentFailureReason::BuiltinDefaultUncovered => "BuiltinDefaultUncovered",
+        kiro::DefaultAgentFailureReason::DefaultAgentJsonNotFound { .. } => {
+            "DefaultAgentJsonNotFound"
+        },
+        kiro::DefaultAgentFailureReason::InvalidDefaultAgentJson { .. } => {
+            "InvalidDefaultAgentJson"
+        },
+        kiro::DefaultAgentFailureReason::UnsupportedDefaultAgentJsonShape { .. } => {
+            "UnsupportedDefaultAgentJsonShape"
+        },
+        kiro::DefaultAgentFailureReason::PatchFailed { .. } => "PatchFailed",
+        kiro::DefaultAgentFailureReason::NoAgentsAndNoSetDefault => "NoAgentsAndNoSetDefault",
+    }
+}
+
 /// Return the first whitespace-delimited token of `cmd`, which is the
 /// executable path/name. Used by path-collection callers to extract the
 /// binary from a full hook command string.
@@ -138,13 +225,18 @@ impl std::error::Error for InitError {
 /// Outcome of an install attempt. Identical for dry-run and live runs;
 /// the `dry_run` flag passed in determines whether [`InstallStatus`]
 /// uses the `Would*` variants.
-#[derive(Debug, PartialEq, Eq)]
+///
+/// `kiro_report` carries Kiro-specific multi-agent install details (per
+/// `docs/design/kiro-cli.md`) when the adapter is Kiro; it's `None` for
+/// every other adapter.
+#[derive(Debug)]
 pub struct InstallOutcome {
     pub status: InstallStatus,
     pub agent: &'static str,
     pub paths: Vec<InstallPath>,
     pub matcher: String,
     pub command: String,
+    pub kiro_report: Option<kiro::KiroReport>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

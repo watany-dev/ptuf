@@ -226,6 +226,13 @@ where
                 {
                     overall = 1;
                 }
+                if outcome
+                    .kiro_report
+                    .as_ref()
+                    .is_some_and(|r| r.overall_failure)
+                {
+                    overall = 1;
+                }
                 if globals.json {
                     let value = match report.as_ref() {
                         Some(r) => init::verify::render_json(&outcome, r, rolled_back),
@@ -247,6 +254,9 @@ where
                                 "ptuf init: existing hook entry failed verification; review the file(s) above manually.",
                             );
                         }
+                    }
+                    if let Some(kr) = outcome.kiro_report.as_ref() {
+                        render_kiro_report_text(kr, stdout);
                     }
                 }
             },
@@ -310,7 +320,7 @@ fn install_one<F, W: Write>(
 where
     F: FnMut() -> init::verify::VerifyReport,
 {
-    let plan = AgentPlan::resolve(agent, cwd)?;
+    let plan = AgentPlan::resolve(agent, cwd, options)?;
     let snaps = if options.verify {
         Some(init::capture(
             &plan
@@ -358,7 +368,11 @@ struct AgentPlan {
 }
 
 impl AgentPlan {
-    fn resolve(agent: HookAgent, cwd: Option<&std::path::Path>) -> Result<Self, init::InitError> {
+    fn resolve(
+        agent: HookAgent,
+        cwd: Option<&std::path::Path>,
+        options: &InitOptions,
+    ) -> Result<Self, init::InitError> {
         match agent {
             HookAgent::ClaudeCode => {
                 let path = init::claude_code::default_settings_path()
@@ -393,13 +407,19 @@ impl AgentPlan {
                 })
             },
             HookAgent::Kiro => {
-                let targets = init::kiro::resolve_paths(cwd)?;
+                let env = init::kiro::Environment::from_process();
+                let kiro_options = init::kiro::KiroOptions {
+                    new_agent: options.new_agent,
+                    set_default: options.set_default.clone(),
+                    workspace_only: options.workspace_only,
+                    global_only: options.global_only,
+                };
+                let binary = init::kiro::detect_binary();
+                let plan = init::kiro::plan(cwd, &env, &kiro_options, &binary)?;
+                let snapshot_paths = plan.snapshot_paths();
                 Ok(Self {
-                    snapshot_paths: vec![targets.agent_config_path.clone()],
-                    install: Box::new(move |dry_run| {
-                        let binary = init::kiro::detect_binary();
-                        init::kiro::install(&targets, &binary, dry_run)
-                    }),
+                    snapshot_paths,
+                    install: Box::new(move |dry_run| init::kiro::install(&plan, dry_run)),
                 })
             },
             HookAgent::Cline => {
@@ -450,7 +470,7 @@ fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: boo
 }
 
 fn render_install_json(outcome: &init::InstallOutcome, dry_run: bool) -> serde_json::Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "agent": outcome.agent,
         "status": match outcome.status {
             init::InstallStatus::Installed => "installed",
@@ -464,7 +484,51 @@ fn render_install_json(outcome: &init::InstallOutcome, dry_run: bool) -> serde_j
             "label": p.label,
             "path": p.path.display().to_string(),
         })).collect::<Vec<_>>(),
-    })
+    });
+    if let Some(kr) = outcome.kiro_report.as_ref()
+        && let Some(map) = value.as_object_mut()
+    {
+        map.insert("kiro".to_string(), init::kiro_report_to_json(kr));
+    }
+    value
+}
+
+fn render_kiro_report_text<W: Write>(report: &init::kiro::KiroReport, stdout: &mut W) {
+    let _ = writeln!(stdout, "Kiro coverage:");
+    if let Some(p) = &report.global_settings_path {
+        let _ = writeln!(stdout, "  global settings: {}", p.display());
+    }
+    let _ = writeln!(stdout, "  patched: {}", report.patched_agent_count());
+    let _ = writeln!(
+        stdout,
+        "  already full coverage: {}",
+        report.already_full_coverage_count()
+    );
+    let _ = writeln!(
+        stdout,
+        "  narrow coverage repaired: {}",
+        report.narrow_coverage_repaired_count()
+    );
+    let setting = report
+        .default_agent
+        .setting_value
+        .as_deref()
+        .unwrap_or("<built-in kiro_default>");
+    let covered = if report.default_agent.covered {
+        "yes"
+    } else {
+        "NO"
+    };
+    let _ = writeln!(
+        stdout,
+        "  effective default agent: {setting} (covered: {covered})"
+    );
+    if let Some(reason) = &report.default_agent.failure_reason {
+        let _ = writeln!(stdout, "  failure: {reason:?}");
+    }
+    for w in &report.warnings {
+        let _ = writeln!(stdout, "  warning: {w}");
+    }
 }
 
 #[cfg(test)]
@@ -488,6 +552,7 @@ mod tests {
             agent,
             verify,
             dry_run,
+            ..InitOptions::default()
         })
     }
 
@@ -691,7 +756,13 @@ rules:
         let mut err = Vec::new();
         let code = run(
             GlobalFlags::default(),
-            cmd_init(Some(HookAgent::Kiro), false, true),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Kiro),
+                verify: false,
+                dry_run: true,
+                new_agent: true,
+                ..InitOptions::default()
+            }),
             b"" as &[u8],
             &mut out,
             &mut err,
@@ -760,6 +831,7 @@ rules:
                 agent: Some(HookAgent::Copilot),
                 verify: true,
                 dry_run: false,
+                ..InitOptions::default()
             },
             passing_report,
             &mut out,
@@ -788,6 +860,7 @@ rules:
                 agent: Some(HookAgent::Copilot),
                 verify: true,
                 dry_run: false,
+                ..InitOptions::default()
             },
             failing_report,
             &mut out,
@@ -818,6 +891,7 @@ rules:
                 agent: Some(HookAgent::Copilot),
                 verify: true,
                 dry_run: false,
+                ..InitOptions::default()
             },
             passing_report,
             &mut out,
@@ -1145,6 +1219,7 @@ rules:
             }],
             matcher: "Bash".to_string(),
             command: "/x/ptuf hook codex".to_string(),
+            kiro_report: None,
         };
         let mut out = Vec::new();
         render_install_outcome(&outcome, true, &mut out);
@@ -1170,6 +1245,7 @@ rules:
             ],
             matcher: "Bash|apply_patch|mcp__.*".to_string(),
             command: "/x/ptuf hook codex".to_string(),
+            kiro_report: None,
         };
         let mut out = Vec::new();
         render_install_outcome(&outcome, false, &mut out);
@@ -1192,6 +1268,7 @@ rules:
             }],
             matcher: "Bash".to_string(),
             command: "/x/ptuf hook codex".to_string(),
+            kiro_report: None,
         };
         let mut out = Vec::new();
         render_install_outcome(&outcome, true, &mut out);
