@@ -41,7 +41,7 @@ ptuf update [--check] [--version <TAG>] [--force]
 | ClaudeCode | `$HOME/.claude/` | `$HOME/.claude/settings.json` |
 | Codex | `<repo>/.codex/` または `$HOME/.codex/` | repo 配下の `.codex/` |
 | Copilot | `<repo>/.github/` | `<repo>/.github/hooks/ptuf.json` |
-| Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | 該当 `.kiro/agents/ptuf-guarded.json` |
+| Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | 両 scope の `.kiro/agents/*.json` を一括 patch (空 scope は `agents/default.json` で fallback) |
 | Cline | `<repo>/.clinerules/` `.cline/`、または `$HOME/Documents/Cline/` `.cline/` | repo 配下 `.clinerules/hooks/PreToolUse` または `$HOME/Documents/Cline/Hooks/PreToolUse` |
 
 検出 0 件 → exit `1` + `no agent detected` を stderr に出す。1 件以上
@@ -182,17 +182,20 @@ codex_hooks = true
 
 ## Kiro CLI への登録
 
-`ptuf init kiro` は repo-local な
-`<repo>/.kiro/agents/ptuf-guarded.json` を更新する。repo root が見つからない
-場合は `$HOME/.kiro/agents/ptuf-guarded.json` へ fallback する。agent 名は
-`ptuf-guarded` 固定。
+`ptuf init kiro` の default 動作は **既存 agent JSON への一括 patch**:
+列挙対象の各 scope (workspace + home) にある `*.json` をすべて読み込み、
+`hooks.preToolUse` 配列に ptuf entry を append する。
+
+scope:
+
+- repo-local: `<repo>/.kiro/agents/*.json`
+- global: `$HOME/.kiro/agents/*.json`
 
 ```json
 {
-  "name": "ptuf-guarded",
-  "description": "Kiro CLI agent guarded by ptuf PreToolUse policy.",
+  "name": "<既存 agent 名>",
+  "description": "<既存 description>",
   "tools": ["*"],
-  "includeMcpJson": true,
   "hooks": {
     "preToolUse": [
       {
@@ -206,11 +209,38 @@ codex_hooks = true
 }
 ```
 
+CLI フラグ:
+
+| フラグ | scope | 動作 |
+| --- | --- | --- |
+| (なし) | workspace + home | 全 agent JSON を patch |
+| `--workspace-only` | repo-local のみ | `$HOME` は触らない |
+| `--global` | `$HOME` のみ | repo-local は触らない |
+| `--new-agent` | (組合せ可能) | legacy 動作: `<scope>/.kiro/agents/ptuf-guarded.json` を単一ファイルとして作成 |
+
+`--workspace-only` + `--global` は parse error。`--new-agent` +
+`--workspace-only` も parse error。`--new-agent` + `--global` は許可。
+Kiro-only フラグを他 adapter / auto-detect に渡しても parse error。
+
 実装上の契約:
 
-- repo root が見つからない場合は `$HOME` 配下へ fallback する。両方とも
-  解決できない場合は `InitError::RepoRootNotFound` を返す
-- `$HOME` が unset で repo root も無い場合は `InitError::HomeNotSet`
+- scope filter の解決:
+  - `WorkspaceOnly`: repo root 未発見なら `InitError::RepoRootNotFound`
+  - `GlobalOnly`: `$HOME` 未設定なら `InitError::HomeNotSet`
+  - `Both`: repo / home 両方とも解決できない場合は `InitError::RepoRootNotFound`
+- 各 scope について `settings/cli.json` を読み、flat dotted-key
+  `"chat.defaultAgent"` を取得する。指定された名前に対応する
+  `agents/<name>.json` が同じ scope に存在しない場合は
+  **`InitError::Schema` で fail-closed** (新規 init は失敗、verify は出力
+  しない)
+- `.md` agent ファイル (`.kiro/agents/*.md`) は触らず、verify report の
+  `skipped_non_json_agents` に列挙
+- 両 scope 合わせて agent JSON が 1 つも見つからない場合のみ、最優先
+  scope (workspace > home) に `agents/default.json` を新規作成し
+  skeleton + hook を書く (legacy `ptuf-guarded.json` は使わない)
+- `--new-agent` 経路では legacy 動作: scope filter が `WorkspaceOnly`
+  なら repo 内、`GlobalOnly` なら HOME 内、`Both` なら repo 優先・HOME
+  fallback の単一 path `agents/ptuf-guarded.json` を返す
 - ファイルは JSON object、新規生成時は default skeleton (`name`,
   `description`, `tools`, `includeMcpJson`, `hooks.preToolUse`) を書く
 - 既存 entry の検出は `hooks.preToolUse[].command` 末尾 `hook kiro` で行う
@@ -223,6 +253,11 @@ codex_hooks = true
   umask に依存しないため、共有ホスト上で hook 設定が world-readable に
   なる経路を塞ぐ。Windows では NTFS ACL を親ディレクトリから継承する
   既存挙動をそのまま採用する
+- 複数ファイル install で `--no-verify` 指定時は capture/restore が回らず、
+  ループ途中で write が失敗すると先行ファイルだけ patch 済の状態が残る
+  (個別 file の write は atomic だが、ファイル間整合性は保証なし)。
+  default の verify 経路では snapshot capture が走り mid-loop crash でも
+  自動巻き戻し
 
 ## Cline への登録
 

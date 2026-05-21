@@ -147,6 +147,19 @@ pub struct InstallOutcome {
     pub command: String,
 }
 
+/// Adapter-specific install reporting carried back to the CLI
+/// dispatcher and renderer. `kiro` is populated only by the Kiro
+/// adapter, whose default mode patches an unbounded set of agent JSON
+/// files. Other adapters install into a single fixed file and have no
+/// per-file breakdown to surface. Kept `pub(crate)` so it does not
+/// inflate the lib crate's public surface — embedded `kiro::install`
+/// callers receive only the bare [`InstallOutcome`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AdapterRunReport {
+    pub outcome: InstallOutcome,
+    pub kiro: Option<kiro::KiroInstallExtras>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct InstallPath {
     pub label: &'static str,
@@ -602,6 +615,38 @@ mod tests {
         let tmp = sibling_temp_path(p);
         let s = tmp.to_string_lossy();
         assert!(s.contains("snapshot.tmp"), "got {s}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_secure_retries_when_temp_path_already_exists_as_file() {
+        // `write_secure` opens the temp path with `create_new`, so a
+        // stale file from a prior crashed run would block the second
+        // call. The `AlreadyExists` arm must remove the stale file and
+        // retry; this test pins that retry path.
+        let dir = workdir("write-secure-retry");
+        let tmp = dir.join("payload.tmp");
+        fs::write(&tmp, b"stale").expect("seed stale tmp");
+
+        write_secure(&tmp, b"fresh").expect("retry must succeed");
+        assert_eq!(fs::read(&tmp).unwrap(), b"fresh");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_executable_retries_when_temp_path_already_exists_as_file() {
+        // Mirror of the `write_secure` retry test for the 0700 variant
+        // used by the Cline adapter's wrapper-script installer.
+        let dir = workdir("write-exec-retry");
+        let tmp = dir.join("payload.tmp");
+        fs::write(&tmp, b"stale").expect("seed stale tmp");
+
+        write_executable(&tmp, b"fresh").expect("retry must succeed");
+        assert_eq!(fs::read(&tmp).unwrap(), b"fresh");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

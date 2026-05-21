@@ -144,9 +144,9 @@ const COPILOT_SETTINGS: RuleSpec = RuleSpec {
 const KIRO_SETTINGS: RuleSpec = RuleSpec {
     id: "core.self_protection.kiro-settings",
     kind: ProtectedKind::KiroSettings,
-    problem: "The command modifies a Kiro CLI agent config file (.kiro/agents/ptuf-guarded.json). \
-         The hook registration lives there, so this edit could remove or short-circuit the ptuf \
-         hook entirely.",
+    problem: "The command modifies a Kiro CLI agent config file under .kiro/agents/ (workspace or \
+         $HOME). The PreToolUse hook registration lives there, so this edit could remove or \
+         short-circuit the ptuf hook entirely.",
     alternatives: &[
         "Use `ptuf init kiro` to manage the hook entry safely.",
         "Have the user edit the agent config outside an agent session.",

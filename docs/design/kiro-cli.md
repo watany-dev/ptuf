@@ -11,7 +11,7 @@ Kiro CLI の `preToolUse` hook を ptuf に橋渡しする adapter (M6) の設�
 | サブコマンド | 役割 |
 | --- | --- |
 | `ptuf hook kiro` | stdin の Kiro `preToolUse` payload を canonical `HookInput` に正規化し、engine 判定結果を stderr + exit code で返す |
-| `ptuf init kiro` | `<repo>/.kiro/agents/ptuf-guarded.json` (local) / `~/.kiro/agents/ptuf-guarded.json` (global fallback) に hook entry を idempotent に書き込む |
+| `ptuf init kiro` | `<repo>/.kiro/agents/*.json` と `~/.kiro/agents/*.json` の **既存 agent JSON すべて** に hook entry を idempotent に注入する (`--new-agent` で legacy single-file 動作) |
 
 中核 engine と他 3 adapter (Claude Code / Codex / Copilot) は不変。Kiro
 固有の揺れは `src/cli/kiro_input.rs`, `src/cli/output.rs::adapt_hook_decision`,
@@ -80,27 +80,47 @@ stdin が読めない、JSON parse 失敗、`hook_event_name != preToolUse` の
 
 ## `ptuf init kiro`
 
-`.kiro/agents/ptuf-guarded.json` の `hooks.preToolUse` 配列に entry を append
-する。既に末尾 token が `["hook", "kiro"]` の `command` を持つ entry
-があれば `AlreadyPresent` で no-op。
+default 動作は **既存 agent JSON への一括 patch**: 列挙対象の各 scope に
+ある `*.json` をすべて読み込み、`hooks.preToolUse` 配列に ptuf entry を
+append する。既に末尾 token が `["hook", "kiro"]` の `command` を持つ entry
+があれば `AlreadyPresent` で no-op (冪等)。
 
-agent 名は `ptuf-guarded` 固定、agent file の path も `<repo>/.kiro/agents/`
-配下が既定で、repo root が見つからない場合は `$HOME/.kiro/agents/` へ
-fallback する。
+scope:
 
-`init` の global flag:
+- repo-local: `<repo>/.kiro/agents/*.json`
+- global: `$HOME/.kiro/agents/*.json`
+
+両 scope は独立に列挙され、各 scope の `settings/cli.json` から
+`chat.defaultAgent` (flat dotted-key) を読んで、参照先の agent JSON が
+同じ scope に存在するか検証する。**`chat.defaultAgent` が指定されている
+が対応する `agents/<name>.json` が無い場合は `InitError::Schema` で
+fail-closed する** (新規 init は失敗、verify は出力しない)。
+
+`.md` agent ファイルは触らず、verify report の `skipped_non_json_agents`
+に列挙する。
+
+両 scope を合わせて agent JSON が 1 つも見つからない場合のみ、最優先
+scope (workspace > home) に `agents/default.json` を新規作成し skeleton +
+hook を書き込む。
 
 | フラグ | 用途 |
 | --- | --- |
 | `--no-verify` | install 後の synthetic deny / fail-closed verify を skip |
 | `--dry-run` | 書き込まずに `WouldInstall` を報告 (verify は自動的に off) |
+| `--new-agent` | legacy 動作: `<scope>/.kiro/agents/ptuf-guarded.json` を 1 ファイル作成。既存 agent JSON は触らない |
+| `--workspace-only` | repo-local scope のみ列挙 (`$HOME` は触らない)。`--new-agent` と併用すると parse error |
+| `--global` | `$HOME` scope のみ列挙。`--new-agent` と併用すると `$HOME/.kiro/agents/ptuf-guarded.json` を作る |
+
+`--workspace-only` と `--global` は排他。Kiro-only フラグを他 adapter や
+auto-detect 経路に渡すと parse error (`ParseError::ConflictingFlags`)。
 
 書き込みは temp file + `rename(2)` の atomic write、JSON は
 `serde_json::to_string_pretty` + 末尾改行 1 つ。`hooks.preToolUse` 以外
 のキー (`name`, `description`, `tools`, `model`, `temperature`, ...) は
 `serde_json::Value` のまま保持し mutate しない。
 
-新規作成時の default skeleton:
+新規作成 (`--new-agent` または空ディレクトリ fallback) 時の default
+skeleton:
 
 ```json
 {
@@ -121,8 +141,31 @@ fallback する。
 }
 ```
 
+空ディレクトリ fallback のファイル名は `default.json` (legacy
+`ptuf-guarded.json` ではない)。
+
 `<absolute ptuf path>` は `std::env::current_exe()` から導出する。
 得られない場合は literal `"ptuf"` にフォールバック (他 adapter と同様)。
+
+### Partial-write window
+
+複数ファイル install で `--no-verify` 指定時は capture/restore が回らない
+ため、ループ途中で write が失敗すると先行ファイルだけ patch 済の状態が
+残る。各 file の write は temp+rename で atomic なので個別ファイルが torn
+にはならないが、ファイル間整合性は保証されない。`--no-verify` を使う
+ユーザーは部分適用を許容すること。デフォルト (`--no-verify` 未指定) では
+verify 経路の snapshot capture により mid-loop crash でも自動巻き戻し。
+
+## self-protection との関係
+
+`ProtectedPaths::collect` は起動時に `<repo>/.kiro/agents/*.json` と
+`$HOME/.kiro/agents/*.json` に実在する `*.json` をすべて列挙し
+`ProtectedKind::KiroSettings` の対象に積む。`ptuf init kiro` の default
+mode で patch される全 agent JSON が `core.self_protection.kiro-settings`
+の保護下に入るため、hook 直後に同じ session が当該 JSON を書き換えて
+hook を消すことを deny する。`.md` agent や `.kiro/agents/` 自体が存在
+しないリポジトリでは `kiro_settings` は空のまま (protected list は graceful
+degrade)。
 
 ## audit log との関係
 

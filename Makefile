@@ -43,6 +43,7 @@ coverage: tools
 		--exclude-files "src/main.rs" \
 		--exclude-files "src/**/windows*.rs" \
 		--exclude-files "src/**/*_windows.rs" \
+		--exclude-files "src/testing/**" \
 		--timeout 300 \
 		-- --test-threads=1
 

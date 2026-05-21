@@ -248,26 +248,20 @@ impl ProtectedPaths {
             }
         }
 
-        let mut kiro_settings: Vec<PathBuf> = Vec::new();
-        if let Some(root) = repo_root {
-            kiro_settings.push(root.join(".kiro/agents/ptuf-guarded.json"));
-        }
-        if let Some(home_os) = env.var_os("HOME") {
-            let home = PathBuf::from(home_os);
-            kiro_settings.push(home.join(".kiro/agents/ptuf-guarded.json"));
-        }
-        kiro_settings.sort();
-        kiro_settings.dedup();
+        let home_path = env.var_os("HOME").map(PathBuf::from);
+        let kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
 
         for agent_path in &kiro_settings {
-            let body = match fs::read_to_string(agent_path) {
-                Ok(s) => s,
-                Err(err) if err.kind() == ErrorKind::NotFound => continue,
-                Err(_) => continue,
+            // `collect_kiro_agent_jsons` enumerates via `read_dir`, so
+            // every `agent_path` was present moments ago; treat read /
+            // parse failures uniformly as "skip this scope" so a TOCTOU
+            // race (file removed between enumeration and now) collapses
+            // into the same control flow as malformed JSON.
+            let Ok(body) = fs::read_to_string(agent_path) else {
+                continue;
             };
-            let parsed: Value = match serde_json::from_str(&body) {
-                Ok(v) => v,
-                Err(_) => continue,
+            let Ok(parsed): Result<Value, _> = serde_json::from_str(&body) else {
+                continue;
             };
             for command in crate::init::kiro::pre_tool_use_commands(&parsed) {
                 let Some(executable) = crate::init::command_executable(&command) else {
@@ -402,6 +396,41 @@ impl ProtectedPaths {
     }
 }
 
+/// Enumerate every `*.json` directly under `<repo>/.kiro/agents/` and
+/// `$HOME/.kiro/agents/`. Missing directories are silently skipped so
+/// the protected set degrades to empty when `ptuf init kiro` has not
+/// yet been run, rather than locking unknown legacy paths.
+fn collect_kiro_agent_jsons(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(root) = repo_root {
+        dirs.push(root.join(".kiro/agents"));
+    }
+
+    if let Some(home) = home {
+        dirs.push(home.join(".kiro/agents"));
+    }
+
+    let mut paths = Vec::new();
+
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
+                paths.push(path);
+            }
+        }
+    }
+
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
 /// Replace each entry with its `canonicalize().unwrap_or(self)` form
 /// so the target side never re-canonicalises during match-time. The
 /// helper is shared across every protected list; non-existent targets
@@ -472,11 +501,12 @@ fn candidate_targets<'a>(
                 if a == head {
                     continue;
                 }
-                out.push(crate::facts::path::resolve_with_env(
+                let resolved = crate::facts::path::resolve_with_env(
                     a,
                     base_dir,
                     &crate::config::scope::SystemEnv,
-                ));
+                );
+                out.push(resolved);
             }
         }
     }
@@ -894,19 +924,53 @@ mod tests {
     }
 
     #[test]
-    fn collect_includes_kiro_settings_for_repo_and_home() {
+    fn collect_enumerates_every_kiro_agent_json_in_both_scopes() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-kiro-enum-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let repo = dir.join("repo");
+        let home = dir.join("home");
+        std::fs::create_dir_all(repo.join(".kiro/agents")).expect("mkdir repo agents");
+        std::fs::create_dir_all(home.join(".kiro/agents")).expect("mkdir home agents");
+        std::fs::write(repo.join(".kiro/agents/code-reviewer.json"), "{}").expect("write a");
+        std::fs::write(repo.join(".kiro/agents/build.json"), "{}").expect("write b");
+        std::fs::write(repo.join(".kiro/agents/notes.md"), "ignored").expect("write md");
+        std::fs::write(home.join(".kiro/agents/default.json"), "{}").expect("write home");
+
+        let home_string = home.to_string_lossy().into_owned();
+        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(&repo), &cfg, &env);
+
+        let canon = |p: PathBuf| p.canonicalize().unwrap_or(p);
+        let expected_a = canon(repo.join(".kiro/agents/code-reviewer.json"));
+        let expected_b = canon(repo.join(".kiro/agents/build.json"));
+        let expected_home = canon(home.join(".kiro/agents/default.json"));
+        let ignored_md = canon(repo.join(".kiro/agents/notes.md"));
+
+        assert!(p.kiro_settings.iter().any(|q| q == &expected_a));
+        assert!(p.kiro_settings.iter().any(|q| q == &expected_b));
+        assert!(p.kiro_settings.iter().any(|q| q == &expected_home));
+        assert!(
+            !p.kiro_settings.iter().any(|q| q == &ignored_md),
+            "non-json agent should be excluded, got {:?}",
+            p.kiro_settings
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_kiro_settings_is_empty_when_agents_dir_missing() {
         let env = MapEnv::with(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         assert!(
+            p.kiro_settings.is_empty(),
+            "no .kiro/agents/ dir should yield empty kiro_settings, got {:?}",
             p.kiro_settings
-                .iter()
-                .any(|q| q == &PathBuf::from("/repo/.kiro/agents/ptuf-guarded.json"))
-        );
-        assert!(
-            p.kiro_settings
-                .iter()
-                .any(|q| q == &PathBuf::from("/h/.kiro/agents/ptuf-guarded.json"))
         );
     }
 
@@ -1023,6 +1087,45 @@ mod tests {
         };
         let labels = p.classify_input(&input);
         assert!(labels.contains(&ProtectedKind::Binary));
+    }
+
+    #[test]
+    fn classify_skips_non_writer_bash_head_with_positional_path() {
+        // `echo` is not in the writer_heads allowlist, so its positional
+        // arguments — even when they look like protected targets — must
+        // not be added to the candidate set. This pins the
+        // `!writer_heads.contains(&head_base)` skip branch.
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        let input = HookInput {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({
+                "command": "echo /repo/.claude/settings.json"
+            }),
+        };
+        assert!(
+            p.classify_input(&input).is_empty(),
+            "echo with a path positional must not match — head is not in writer_heads"
+        );
+    }
+
+    #[test]
+    fn classify_skips_self_positional_for_writer_head() {
+        // `rm rm` has a positional that equals the head; the
+        // `if a == head { continue; }` branch must skip it so the
+        // writer-head literal does not get classified as a destination.
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        let input = HookInput {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({ "command": "rm rm" }),
+        };
+        // No protected path equals "rm", so the result is empty either
+        // way — but the assertion records the intent and stops anyone
+        // re-introducing the literal as a candidate.
+        assert!(p.classify_input(&input).is_empty());
     }
 
     use crate::testing::proptest::{protected_kind, richer_hook_input};

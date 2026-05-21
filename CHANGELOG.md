@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+- `ptuf init kiro` の default 動作を変更: `<repo>/.kiro/agents/*.json`
+  と `$HOME/.kiro/agents/*.json` の **すべて** に PreToolUse hook を
+  注入する方式に切り替えた。これまでの「専用 `ptuf-guarded.json` を
+  一つ作るだけ」の挙動は、`chat.defaultAgent` 等で別 agent を選ぶ
+  ユーザーをサイレントに bypass していたため。legacy の単独作成は
+  `--new-agent` flag で残置。scope 制限用に `--workspace-only` /
+  `--global` を追加。`<scope>/.kiro/settings/cli.json` の
+  `chat.defaultAgent` が同 scope に存在しない agent JSON を指している
+  場合は `InitError::Schema` で fail-closed。`.kiro/agents/*.md` は
+  patch 対象から除外。
+- `init::kiro::TargetPaths` の構造変更:
+  `{ agent_config_path: PathBuf }` → `{ agent_config_paths:
+  Vec<ResolvedAgent>, skipped_non_json: Vec<PathBuf>,
+  default_agent_names: Vec<KiroDefaultAgentReport> }`。
+- `init::kiro::resolve_paths` に必須引数 `&KiroInitOptions` を追加。
+- `init::kiro::install` の `&TargetPaths` 意味論を単一 path から多 path
+  に変更 (signature 同型のまま受け取る struct shape が変わる)。
+- `init::kiro::TargetPaths` の field を `pub(crate)` に降格 (struct
+  自体は `pub` 維持の opaque handle)。embedded user は `resolve_paths`
+  の戻り値を `install` にそのまま渡せれば足りるので、内部 field を
+  直接読む API contract は外す。
+- `core.self_protection.kiro-settings` の対象を `.kiro/agents/ptuf-
+  guarded.json` 単独から `<repo>/.kiro/agents/*.json` + `$HOME/.kiro/
+  agents/*.json` (起動時に列挙された実在 `*.json`) に拡張。`ptuf init
+  kiro` の default mode で patch される全 agent JSON が self-protection
+  の対象になる。空ディレクトリでは `kiro_settings` は空のまま (rule は
+  発火しない)。
+
+### Added
+- `init::kiro` の新規 pub items: `KiroMode`, `ScopeFilter`,
+  `KiroInitOptions`, `FALLBACK_AGENT_NAME`。kiro 固有の reporting 型
+  (`Scope` / `ResolvedAgent` / `KiroDefaultAgentReport` /
+  `KiroInstallExtras`) は CLI 内部 (`pub(crate)`) に閉じ込め、
+  `pub fn install` の戻り値は pre-kiro と同じ素の `InstallOutcome`。
+  CLI dispatcher は `pub(crate) fn install_with_report` 経由で extras
+  を受領する。
+- `ptuf init` の Kiro 専用 flag: `--new-agent` (legacy 単独 agent 作成)、
+  `--workspace-only` (`<repo>/.kiro/agents/` のみ patch)、`--global`
+  (`$HOME/.kiro/agents/` のみ patch)。
+
 ## [0.1.1] - 2026-05-18
 
 ### Added

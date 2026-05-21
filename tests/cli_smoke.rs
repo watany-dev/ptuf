@@ -553,6 +553,54 @@ fn init_auto_detect_finds_kiro_via_home_only() {
 }
 
 #[test]
+fn init_kiro_default_mode_patches_existing_workspace_agents() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
+    let agents_dir = cwd.join(".kiro").join("agents");
+    std::fs::create_dir_all(&agents_dir).expect("mkdir agents");
+    std::fs::write(agents_dir.join("alpha.json"), r#"{"name":"alpha"}"#).expect("write alpha");
+    std::fs::write(agents_dir.join("beta.json"), r#"{"name":"beta"}"#).expect("write beta");
+
+    let (code, stdout, stderr) = run_in(
+        &["init", "kiro", "--workspace-only", "--dry-run"],
+        cwd,
+        Some(&home),
+        "",
+    );
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(stdout.contains("alpha.json"), "stdout: {stdout}");
+    assert!(stdout.contains("beta.json"), "stdout: {stdout}");
+    assert!(
+        !stdout.contains("ptuf-guarded.json"),
+        "default mode must not name the legacy file: {stdout}",
+    );
+}
+
+#[test]
+fn init_kiro_new_agent_flag_preserves_legacy_path() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
+
+    let (code, stdout, stderr) = run_in(
+        &["init", "kiro", "--new-agent", "--dry-run"],
+        cwd,
+        Some(&home),
+        "",
+    );
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(
+        stdout.contains("ptuf-guarded.json"),
+        "--new-agent must keep the legacy filename: {stdout}",
+    );
+}
+
+#[test]
 fn init_post_subcommand_json_is_unexpected_argument() {
     let (code, _stdout, stderr) = run(&["init", "claude-code", "--json"], "");
     assert_eq!(code, 1);
