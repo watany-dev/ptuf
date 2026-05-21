@@ -338,20 +338,12 @@ pub fn plan(
     let mut warnings: Vec<String> = Vec::new();
 
     if options.new_agent {
-        // Legacy --new-agent: explicit ptuf-guarded.json target.
-        let scope_dir = workspace_agents_dir
-            .as_ref()
-            .or(global_agents_dir.as_ref())
-            .cloned();
-        if let Some(dir) = scope_dir {
-            let scope = if workspace_agents_dir
-                .as_ref()
-                .is_some_and(|w| *w == dir.clone())
-            {
-                KiroScope::Workspace
-            } else {
-                KiroScope::Global
-            };
+        let (dir, scope) = match (&workspace_agents_dir, &global_agents_dir) {
+            (Some(d), _) => (Some(d.clone()), KiroScope::Workspace),
+            (None, Some(d)) => (Some(d.clone()), KiroScope::Global),
+            (None, None) => (None, KiroScope::Workspace),
+        };
+        if let Some(dir) = dir {
             let path = dir.join(format!("{LEGACY_AGENT_NAME}.json"));
             let action = classify_target_action(&path);
             targets.push(KiroAgentTarget {
@@ -363,7 +355,6 @@ pub fn plan(
             });
         }
     } else {
-        // Default flow: enumerate every *.json under workspace and global agents dirs.
         if let Some(dir) = &workspace_agents_dir {
             enumerate_agents(
                 dir,
@@ -377,7 +368,6 @@ pub fn plan(
         }
     }
 
-    // Resolve effective default agent.
     let setting_value = global_settings_path
         .as_deref()
         .and_then(read_chat_default_agent);
@@ -399,14 +389,12 @@ pub fn plan(
 
     match chosen_default.as_deref() {
         None => {
-            // built-in default; not patchable.
             default_agent.failure_reason = Some(DefaultAgentFailureReason::BuiltinDefaultUncovered);
         },
         Some(BUILTIN_DEFAULT_AGENT) => {
             default_agent.failure_reason = Some(DefaultAgentFailureReason::BuiltinDefaultUncovered);
         },
         Some(name) => {
-            // Find the agent JSON; workspace precedes global.
             let workspace_candidate = workspace_agents_dir
                 .as_ref()
                 .map(|d| d.join(format!("{name}.json")));
@@ -427,7 +415,6 @@ pub fn plan(
                 resolved = Some(p.clone());
             }
 
-            // local/global precedence warning.
             if let (Some(w), Some(g)) = (workspace_candidate.as_ref(), global_candidate.as_ref())
                 && w.is_file()
                 && g.is_file()
@@ -691,38 +678,10 @@ pub fn install(plan: &KiroInstallPlan, dry_run: bool) -> Result<InstallOutcome, 
         overall_failure: false,
     };
 
-    // Patch each agent file.
     for target in &mut report.targets {
-        match &target.action {
-            KiroPatchAction::AlreadyFullCoverage => {},
-            KiroPatchAction::FailInvalidJson { .. }
-            | KiroPatchAction::FailUnsupportedShape { .. } => {
-                // Leave the file untouched but record the failure.
-            },
-            KiroPatchAction::AppendedFullCoverage
-            | KiroPatchAction::AddedFullCoverageBecauseNarrow => {
-                if !dry_run
-                    && let Err(err) = patch_existing_agent(&target.path, &plan.binary_command)
-                {
-                    target.action = KiroPatchAction::FailUnsupportedShape {
-                        detail: err.to_string(),
-                    };
-                }
-            },
-            KiroPatchAction::CreatedFallbackSkeleton => {
-                if !dry_run
-                    && let Err(err) =
-                        create_fallback_agent(&target.path, &target.name, &plan.binary_command)
-                {
-                    target.action = KiroPatchAction::FailUnsupportedShape {
-                        detail: err.to_string(),
-                    };
-                }
-            },
-        }
+        apply_patch(target, dry_run, &plan.binary_command);
     }
 
-    // Apply --set-default to global settings (if applicable).
     if let Some(name) = &plan.options.set_default
         && let Some(settings_path) = &plan.global_settings_path
     {
@@ -760,7 +719,6 @@ pub fn install(plan: &KiroInstallPlan, dry_run: bool) -> Result<InstallOutcome, 
 
 fn finalize_default_coverage(report: &mut KiroReport) {
     let Some(resolved) = report.default_agent.resolved_agent_path.clone() else {
-        // No file → covered=false; ensure a failure reason is set.
         if report.default_agent.failure_reason.is_none() {
             report.default_agent.failure_reason =
                 Some(DefaultAgentFailureReason::BuiltinDefaultUncovered);
@@ -812,22 +770,6 @@ fn finalize_default_coverage(report: &mut KiroReport) {
             report.overall_failure = true;
         },
     }
-
-    // Even when the effective default is covered, fail-overall if any other
-    // failure reason is present. Failures on non-default targets only
-    // surface as warnings — they don't block init by themselves.
-    if let Some(reason) = report.default_agent.failure_reason.as_ref() {
-        match reason {
-            DefaultAgentFailureReason::PatchFailed { .. }
-            | DefaultAgentFailureReason::BuiltinDefaultUncovered
-            | DefaultAgentFailureReason::DefaultAgentJsonNotFound { .. }
-            | DefaultAgentFailureReason::InvalidDefaultAgentJson { .. }
-            | DefaultAgentFailureReason::UnsupportedDefaultAgentJsonShape { .. }
-            | DefaultAgentFailureReason::NoAgentsAndNoSetDefault => {
-                report.overall_failure = true;
-            },
-        }
-    }
 }
 
 fn derive_install_status(report: &KiroReport, dry_run: bool) -> InstallStatus {
@@ -873,6 +815,31 @@ fn scope_label(scope: KiroScope) -> &'static str {
     match scope {
         KiroScope::Workspace => "workspace-agent",
         KiroScope::Global => "global-agent",
+    }
+}
+
+fn apply_patch(target: &mut KiroAgentTarget, dry_run: bool, command: &str) {
+    let result = match &target.action {
+        KiroPatchAction::AlreadyFullCoverage
+        | KiroPatchAction::FailInvalidJson { .. }
+        | KiroPatchAction::FailUnsupportedShape { .. } => return,
+        KiroPatchAction::AppendedFullCoverage | KiroPatchAction::AddedFullCoverageBecauseNarrow => {
+            if dry_run {
+                return;
+            }
+            patch_existing_agent(&target.path, command)
+        },
+        KiroPatchAction::CreatedFallbackSkeleton => {
+            if dry_run {
+                return;
+            }
+            create_fallback_agent(&target.path, &target.name, command)
+        },
+    };
+    if let Err(err) = result {
+        target.action = KiroPatchAction::FailUnsupportedShape {
+            detail: err.to_string(),
+        };
     }
 }
 
@@ -1035,40 +1002,12 @@ fn ensure_array_field<'a>(
 }
 
 fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
     let mut body = serde_json::to_string_pretty(value).map_err(|e| InitError::Schema {
         path: path.to_path_buf(),
         message: e.to_string(),
     })?;
     body.push('\n');
-    let tmp = sibling_temp_path(path);
-    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-fn sibling_temp_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().map_or_else(
-        || std::ffi::OsString::from("agent.json"),
-        std::ffi::OsStr::to_os_string,
-    );
-    name.push(format!(".ptuf.{}.tmp", std::process::id()));
-    match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.join(name),
-        _ => PathBuf::from(name),
-    }
+    crate::init::write_atomically(path, body.as_bytes())
 }
 
 #[cfg(test)]

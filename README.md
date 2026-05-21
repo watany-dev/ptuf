@@ -150,11 +150,18 @@ ptuf init codex
 ptuf init copilot
 ```
 
-**Kiro CLI** — writes `<repo>/.kiro/agents/ptuf-guarded.json`:
+**Kiro CLI** — patches every `*.json` under `<repo>/.kiro/agents/` and
+`<global_root>/agents/` so the `preToolUse` hook routes through `ptuf
+hook kiro`, and verifies that the effective default agent
+(`<global_root>/settings/cli.json` `chat.defaultAgent`) is covered:
 
 ```bash
 ptuf init kiro
 ```
+
+Flags: `--set-default <name>` pins `chat.defaultAgent`,
+`--workspace-only` / `--global` scope the patch, `--new-agent` keeps the
+legacy `ptuf-guarded.json` single-file mode.
 
 **Cline** — writes a `PreToolUse` file hook into
 `<repo>/.clinerules/hooks/PreToolUse` (`PreToolUse.ps1` on Windows). With

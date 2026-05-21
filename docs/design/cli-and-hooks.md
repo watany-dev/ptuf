@@ -41,7 +41,7 @@ ptuf update [--check] [--version <TAG>] [--force]
 | ClaudeCode | `$HOME/.claude/` | `$HOME/.claude/settings.json` |
 | Codex | `<repo>/.codex/` または `$HOME/.codex/` | repo 配下の `.codex/` |
 | Copilot | `<repo>/.github/` | `<repo>/.github/hooks/ptuf.json` |
-| Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | 該当 `.kiro/agents/ptuf-guarded.json` |
+| Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` (`KIRO_HOME` で上書き) | `<repo>/.kiro/agents/*.json` と `<global_root>/agents/*.json` をすべて patch + `<global_root>/settings/cli.json` |
 | Cline | `<repo>/.clinerules/` `.cline/`、または `$HOME/Documents/Cline/` `.cline/` | repo 配下 `.clinerules/hooks/PreToolUse` または `$HOME/Documents/Cline/Hooks/PreToolUse` |
 
 検出 0 件 → exit `1` + `no agent detected` を stderr に出す。1 件以上
@@ -182,47 +182,26 @@ codex_hooks = true
 
 ## Kiro CLI への登録
 
-`ptuf init kiro` は repo-local な
-`<repo>/.kiro/agents/ptuf-guarded.json` を更新する。repo root が見つからない
-場合は `$HOME/.kiro/agents/ptuf-guarded.json` へ fallback する。agent 名は
-`ptuf-guarded` 固定。
+`ptuf init kiro` の詳細仕様 — flag matrix・coverage tri-state・default
+agent 解決・fallback skeleton・失敗条件 — は
+[`kiro-cli.md`](kiro-cli.md) に集約してある。要点だけここに残す:
 
-```json
-{
-  "name": "ptuf-guarded",
-  "description": "Kiro CLI agent guarded by ptuf PreToolUse policy.",
-  "tools": ["*"],
-  "includeMcpJson": true,
-  "hooks": {
-    "preToolUse": [
-      {
-        "matcher": "*",
-        "command": "/usr/local/bin/ptuf hook kiro",
-        "timeout_ms": 10000,
-        "cache_ttl_seconds": 0
-      }
-    ]
-  }
-}
-```
-
-実装上の契約:
-
-- repo root が見つからない場合は `$HOME` 配下へ fallback する。両方とも
-  解決できない場合は `InitError::RepoRootNotFound` を返す
-- `$HOME` が unset で repo root も無い場合は `InitError::HomeNotSet`
-- ファイルは JSON object、新規生成時は default skeleton (`name`,
-  `description`, `tools`, `includeMcpJson`, `hooks.preToolUse`) を書く
-- 既存 entry の検出は `hooks.preToolUse[].command` 末尾 `hook kiro` で行う
+- `<repo>/.kiro/agents/*.json` と `<global_root>/agents/*.json`
+  (`KIRO_HOME` か `$HOME/.kiro` で決まる) を全て enumerate し、各
+  agent JSON に `matcher: "*"` の `preToolUse` hook を append する
+- `<global_root>/settings/cli.json` の `chat.defaultAgent` を
+  authoritative として読み、effective default agent が patch 済みである
+  ことを検証する。built-in `kiro_default` は file が無く patch 不能なため、
+  `chat.defaultAgent` 未設定 / `"kiro_default"` の場合は
+  `BuiltinDefaultUncovered` で fail
+- `--set-default <name>` は init 終了時に `chat.defaultAgent` を pin
+  する。`--workspace-only` / `--global` は scope を切り替える。
+  `--new-agent` は旧来の `ptuf-guarded.json` 単一ファイルモード
 - 既存ファイル中の未知 key (`model` / `temperature` / `prompt` /
   `allowedTools` / `resources` 等) は `serde_json::Value` のまま保持される
-- 書き込みは temp file + rename の原子的更新
-- Unix では temp file を `OpenOptions::create_new(true).mode(0o600)` で
-  生成し、rename 先のホスト設定ファイル (settings.json / hooks.json /
-  config.toml / agent.json) も owner-only (`0o600`) になる。process
-  umask に依存しないため、共有ホスト上で hook 設定が world-readable に
-  なる経路を塞ぐ。Windows では NTFS ACL を親ディレクトリから継承する
-  既存挙動をそのまま採用する
+- 書き込みは temp file + rename の原子的更新で mode 0600
+- 既存 entry の検出は `hooks.preToolUse[].command` 末尾 `hook kiro` と
+  `matcher: "*"` (FullCoverage) / それ以外 (NarrowCoverage) の二択
 
 ## Cline への登録
 

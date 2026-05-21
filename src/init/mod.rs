@@ -72,7 +72,6 @@ pub fn kiro_report_to_json(report: &kiro::KiroReport) -> serde_json::Value {
                 .as_ref()
                 .map(kiro_failure_reason_to_label),
         },
-        "defaultAgentCovered": report.default_agent.covered,
         "observedWorkspaceSettings": report.observed_workspace_settings.as_ref().map(|s| json!({
             "path": s.path.display().to_string(),
             "chat.defaultAgent": s.chat_default_agent,
@@ -324,7 +323,7 @@ fn restore_one(snap: &PathSnapshot) -> Result<(), InitError> {
     }
 }
 
-fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
+pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
