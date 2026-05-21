@@ -352,6 +352,11 @@ pub(crate) fn command_invokes_ptuf_hook(cmd: &str, tail: &[&str]) -> bool {
     tokens[n - tail.len()..] == *tail
 }
 
+/// Shared backing for every adapter's `detect_binary`: prefer
+/// `std::env::current_exe()` so the rendered hook command points at
+/// the same binary that ran `ptuf init`, falling back to the literal
+/// `"ptuf"` so the entry remains useful when `current_exe` is
+/// unavailable (e.g. a CI container without a stable absolute path).
 pub(crate) fn detect_binary_impl() -> String {
     std::env::current_exe()
         .ok()
