@@ -35,10 +35,7 @@ pub fn default_home_config_path() -> Option<PathBuf> {
 
 /// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
 pub fn detect_binary() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.into_os_string().into_string().ok())
-        .unwrap_or_else(|| "ptuf".to_string())
+    super::detect_binary_impl()
 }
 
 pub fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
@@ -144,12 +141,7 @@ fn read_config(path: &Path) -> Result<DocumentMut, InitError> {
 }
 
 pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
-    let tokens: Vec<&str> = cmd.split_whitespace().collect();
-    let n = tokens.len();
-    if n < COMMAND_TAIL.len() {
-        return false;
-    }
-    tokens[n - COMMAND_TAIL.len()..] == *COMMAND_TAIL
+    super::command_invokes_ptuf_hook(cmd, COMMAND_TAIL)
 }
 
 pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
@@ -288,15 +280,7 @@ fn write_toml_atomically(path: &Path, doc: &DocumentMut) -> Result<(), InitError
 }
 
 fn sibling_temp_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().map_or_else(
-        || std::ffi::OsString::from("hooks.json"),
-        std::ffi::OsStr::to_os_string,
-    );
-    name.push(format!(".ptuf.{}.tmp", std::process::id()));
-    match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.join(name),
-        _ => PathBuf::from(name),
-    }
+    super::sibling_install_tmp_path(path, "hooks.json")
 }
 
 #[cfg(test)]
@@ -573,11 +557,6 @@ mod tests {
         assert!(!command_invokes_ptuf_hook(
             "ptuf hook claude-code pre-tool-use"
         ));
-    }
-
-    #[test]
-    fn detect_binary_returns_a_non_empty_string() {
-        assert!(!detect_binary().is_empty());
     }
 
     #[test]
@@ -860,20 +839,6 @@ mod tests {
             Some(true)
         );
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn sibling_temp_path_falls_back_to_bare_filename_when_no_parent() {
-        let bare = Path::new("hooks.json");
-        let tmp = sibling_temp_path(bare);
-        assert!(
-            tmp.parent()
-                .map(Path::as_os_str)
-                .unwrap_or_default()
-                .is_empty(),
-            "no-parent input must yield no-parent temp path: {tmp:?}"
-        );
-        assert!(tmp.to_string_lossy().contains("hooks.json.ptuf."));
     }
 
     #[test]

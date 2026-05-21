@@ -42,10 +42,7 @@ pub struct TargetPaths {
 
 /// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
 pub fn detect_binary() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.into_os_string().into_string().ok())
-        .unwrap_or_else(|| "ptuf".to_string())
+    super::detect_binary_impl()
 }
 
 /// File name of the Cline `PreToolUse` hook for the current platform.
@@ -194,15 +191,7 @@ fn write_executable_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitErro
 }
 
 fn sibling_temp_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().map_or_else(
-        || std::ffi::OsString::from("PreToolUse"),
-        std::ffi::OsStr::to_os_string,
-    );
-    name.push(format!(".ptuf.{}.tmp", std::process::id()));
-    match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.join(name),
-        _ => PathBuf::from(name),
-    }
+    super::sibling_install_tmp_path(path, "PreToolUse")
 }
 
 #[cfg(test)]
@@ -424,29 +413,11 @@ mod tests {
     }
 
     #[test]
-    fn detect_binary_returns_a_non_empty_string() {
-        assert!(!detect_binary().is_empty());
-    }
-
-    #[test]
     fn sibling_temp_path_uses_default_filename_when_input_has_none() {
         let tmp = sibling_temp_path(Path::new("/"));
         assert!(
             tmp.to_string_lossy().contains("PreToolUse.ptuf."),
             "got: {tmp:?}",
         );
-    }
-
-    #[test]
-    fn sibling_temp_path_falls_back_to_bare_filename_when_no_parent() {
-        let tmp = sibling_temp_path(Path::new("PreToolUse"));
-        assert!(
-            tmp.parent()
-                .map(Path::as_os_str)
-                .unwrap_or_default()
-                .is_empty(),
-            "no-parent input must yield no-parent temp path: {tmp:?}",
-        );
-        assert!(tmp.to_string_lossy().contains("PreToolUse.ptuf."));
     }
 }

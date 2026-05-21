@@ -339,6 +339,50 @@ pub(crate) fn write_executable(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> 
     std::fs::write(tmp, bytes)
 }
 
+/// True iff the trailing whitespace-delimited tokens of `cmd` equal
+/// `tail`. Each adapter wraps this with its own `COMMAND_TAIL`
+/// (e.g. `&["hook", "claude-code"]`) to recognise hook entries that
+/// already invoke `ptuf hook <adapter>`.
+pub(crate) fn command_invokes_ptuf_hook(cmd: &str, tail: &[&str]) -> bool {
+    let tokens: Vec<&str> = cmd.split_whitespace().collect();
+    let n = tokens.len();
+    if n < tail.len() {
+        return false;
+    }
+    tokens[n - tail.len()..] == *tail
+}
+
+/// Shared backing for every adapter's `detect_binary`: prefer
+/// `std::env::current_exe()` so the rendered hook command points at
+/// the same binary that ran `ptuf init`, falling back to the literal
+/// `"ptuf"` so the entry remains useful when `current_exe` is
+/// unavailable (e.g. a CI container without a stable absolute path).
+pub(crate) fn detect_binary_impl() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.into_os_string().into_string().ok())
+        .unwrap_or_else(|| "ptuf".to_string())
+}
+
+/// Sibling temp path for adapter install writes:
+/// `<dir>/<file_name>.ptuf.{pid}.tmp`, or
+/// `<dir>/<default_name>.ptuf.{pid}.tmp` when `path` has no file name.
+///
+/// Distinct from [`sibling_temp_path`] (snapshot variant, `.ptuf-snap.`)
+/// so an install write and a snapshot write on the same destination
+/// cannot collide on temp file names.
+pub(crate) fn sibling_install_tmp_path(path: &Path, default_name: &str) -> PathBuf {
+    let mut name = path.file_name().map_or_else(
+        || std::ffi::OsString::from(default_name),
+        std::ffi::OsStr::to_os_string,
+    );
+    name.push(format!(".ptuf.{}.tmp", std::process::id()));
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.join(name),
+        _ => PathBuf::from(name),
+    }
+}
+
 fn sibling_temp_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().map_or_else(
         || std::ffi::OsString::from("snapshot.tmp"),
@@ -588,6 +632,44 @@ mod tests {
         assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn command_invokes_ptuf_hook_matches_trailing_tokens_against_arbitrary_tail() {
+        let tail: &[&str] = &["hook", "demo"];
+        assert!(command_invokes_ptuf_hook("ptuf hook demo", tail));
+        assert!(command_invokes_ptuf_hook("/usr/bin/ptuf hook demo", tail));
+        assert!(!command_invokes_ptuf_hook("ptuf hook other", tail));
+        assert!(!command_invokes_ptuf_hook("hook", tail));
+        assert!(!command_invokes_ptuf_hook("", tail));
+    }
+
+    #[test]
+    fn detect_binary_impl_returns_a_non_empty_string() {
+        // Every adapter's `detect_binary` delegates here; a non-empty
+        // string is the contract the host config writers depend on.
+        assert!(!detect_binary_impl().is_empty());
+    }
+
+    #[test]
+    fn sibling_install_tmp_path_falls_back_to_bare_filename_when_no_parent() {
+        // Bare input filename: helper must keep the file_name and emit a
+        // sibling tmp with the install `.ptuf.` infix (NOT `.ptuf-snap.`),
+        // and the result must have no parent directory.
+        let tmp = sibling_install_tmp_path(Path::new("hooks.json"), "fallback");
+        assert!(
+            tmp.parent()
+                .map(Path::as_os_str)
+                .unwrap_or_default()
+                .is_empty(),
+            "no-parent input must yield no-parent temp path: {tmp:?}",
+        );
+        let s = tmp.to_string_lossy();
+        assert!(s.starts_with("hooks.json.ptuf."), "got {s}");
+        assert!(
+            !s.contains(".ptuf-snap."),
+            "must not collide with snap suffix: {s}"
+        );
     }
 
     #[test]

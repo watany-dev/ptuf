@@ -43,10 +43,7 @@ pub fn default_settings_path() -> Option<PathBuf> {
 /// so the resulting hook entry is still useful when invoked from a
 /// CI container without a stable absolute path.
 pub fn detect_binary() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.into_os_string().into_string().ok())
-        .unwrap_or_else(|| "ptuf".to_string())
+    super::detect_binary_impl()
 }
 
 /// Install (or report a planned install for `dry_run = true`) the
@@ -129,12 +126,7 @@ fn hook_invokes_ptuf(hook: &Value) -> bool {
 }
 
 pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
-    let tokens: Vec<&str> = cmd.split_whitespace().collect();
-    let n = tokens.len();
-    if n < COMMAND_TAIL.len() {
-        return false;
-    }
-    tokens[n - COMMAND_TAIL.len()..] == *COMMAND_TAIL
+    super::command_invokes_ptuf_hook(cmd, COMMAND_TAIL)
 }
 
 pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
@@ -231,15 +223,7 @@ fn write_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
 }
 
 fn sibling_temp_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().map_or_else(
-        || std::ffi::OsString::from("settings.json"),
-        std::ffi::OsStr::to_os_string,
-    );
-    name.push(format!(".ptuf.{}.tmp", std::process::id()));
-    match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.join(name),
-        _ => PathBuf::from(name),
-    }
+    super::sibling_install_tmp_path(path, "settings.json")
 }
 
 #[cfg(test)]
@@ -459,12 +443,6 @@ mod tests {
     }
 
     #[test]
-    fn detect_binary_returns_a_non_empty_string() {
-        let s = detect_binary();
-        assert!(!s.is_empty());
-    }
-
-    #[test]
     fn default_settings_path_ends_with_claude_settings_when_home_is_set() {
         if let Some(path) = default_settings_path() {
             assert!(path.ends_with(".claude/settings.json"));
@@ -573,16 +551,6 @@ mod tests {
             Some(42)
         );
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn sibling_temp_path_falls_back_to_bare_filename_when_no_parent() {
-        let tmp = sibling_temp_path(Path::new("settings.json"));
-        assert_eq!(tmp.parent(), Some(Path::new("")));
-        assert!(
-            tmp.to_string_lossy().starts_with("settings.json.ptuf."),
-            "got {tmp:?}",
-        );
     }
 
     #[test]

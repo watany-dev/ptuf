@@ -23,6 +23,10 @@ use crate::facts;
 use crate::hook_input::HookInput;
 use crate::rules::ConfigRule;
 
+fn is_overridable(rule: &(dyn ConfigRule + Sync)) -> bool {
+    rule.overridable() && !rule.hard_deny()
+}
+
 pub(super) fn is_pack_disabled(rule: &(dyn ConfigRule + Sync), config: &Config) -> bool {
     if rule.hard_deny() {
         return false;
@@ -42,7 +46,7 @@ pub(super) fn apply_rule_override(
     let Some(overlay) = config.rule_overrides.get(rule.id()) else {
         return Some(decision);
     };
-    if overlay.enabled == Some(false) && rule.overridable() && !rule.hard_deny() {
+    if overlay.enabled == Some(false) && is_overridable(rule) {
         return None;
     }
     let Some(kind) = overlay.decision else {
@@ -55,7 +59,7 @@ pub(super) fn apply_rule_override(
 }
 
 fn override_allowed(rule: &(dyn ConfigRule + Sync), from: DecisionKind, to: DecisionKind) -> bool {
-    if rule.overridable() && !rule.hard_deny() {
+    if is_overridable(rule) {
         return true;
     }
     decision_rank(to) >= decision_rank(from)
@@ -88,7 +92,7 @@ pub(super) fn effective_severity(rule: &(dyn ConfigRule + Sync), config: &Config
         return rule.severity();
     };
     match overlay.severity {
-        Some(severity) if rule.overridable() && !rule.hard_deny() => severity,
+        Some(severity) if is_overridable(rule) => severity,
         _ => rule.severity(),
     }
 }
