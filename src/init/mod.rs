@@ -339,6 +339,19 @@ pub(crate) fn write_executable(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> 
     std::fs::write(tmp, bytes)
 }
 
+/// True iff the trailing whitespace-delimited tokens of `cmd` equal
+/// `tail`. Each adapter wraps this with its own `COMMAND_TAIL`
+/// (e.g. `&["hook", "claude-code"]`) to recognise hook entries that
+/// already invoke `ptuf hook <adapter>`.
+pub(crate) fn command_invokes_ptuf_hook(cmd: &str, tail: &[&str]) -> bool {
+    let tokens: Vec<&str> = cmd.split_whitespace().collect();
+    let n = tokens.len();
+    if n < tail.len() {
+        return false;
+    }
+    tokens[n - tail.len()..] == *tail
+}
+
 pub(crate) fn detect_binary_impl() -> String {
     std::env::current_exe()
         .ok()
@@ -614,6 +627,16 @@ mod tests {
         assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn command_invokes_ptuf_hook_matches_trailing_tokens_against_arbitrary_tail() {
+        let tail: &[&str] = &["hook", "demo"];
+        assert!(command_invokes_ptuf_hook("ptuf hook demo", tail));
+        assert!(command_invokes_ptuf_hook("/usr/bin/ptuf hook demo", tail));
+        assert!(!command_invokes_ptuf_hook("ptuf hook other", tail));
+        assert!(!command_invokes_ptuf_hook("hook", tail));
+        assert!(!command_invokes_ptuf_hook("", tail));
     }
 
     #[test]

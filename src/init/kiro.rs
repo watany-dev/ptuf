@@ -559,12 +559,7 @@ pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
 }
 
 pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
-    let tokens: Vec<&str> = cmd.split_whitespace().collect();
-    let n = tokens.len();
-    if n < COMMAND_TAIL.len() {
-        return false;
-    }
-    tokens[n - COMMAND_TAIL.len()..] == *COMMAND_TAIL
+    super::command_invokes_ptuf_hook(cmd, COMMAND_TAIL)
 }
 
 /// Read the single `command` field on a Kiro `preToolUse` entry. The
