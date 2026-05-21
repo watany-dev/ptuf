@@ -446,6 +446,71 @@ mod tests {
     }
 
     #[test]
+    fn copilot_deny_emits_bare_json_with_zero_exit() {
+        // Copilot expresses fail-closed via the JSON envelope, not the
+        // exit code; the host treats non-zero exits as hook failures and
+        // can let the tool call proceed. Pin: deny → exit 0 + bare
+        // permissionDecision JSON on stdout + reason on stderr.
+        let decision = Decision::Deny {
+            rule_id: "core.filesystem.destructive-rm".into(),
+            reason: "blocked".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Copilot, &decision, &mut out, &mut err);
+        assert_eq!(code, 0, "Copilot deny must exit 0 to stay fail-closed");
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}"
+        );
+        assert!(String::from_utf8_lossy(&err).contains("blocked"));
+    }
+
+    #[test]
+    fn copilot_allow_emits_no_stdout_with_zero_exit() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Copilot, &Decision::Allow, &mut out, &mut err);
+        assert_eq!(code, 0);
+        assert!(
+            out.is_empty(),
+            "Copilot allow must emit no stdout, got: {out:?}"
+        );
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn copilot_ask_is_demoted_to_deny() {
+        // Copilot PreToolUse has no interactive ask channel, so Ask must
+        // demote to Deny — same fail-closed contract as Codex / Kiro.
+        let decision = Decision::Ask {
+            rule_id: "core.test.ask".into(),
+            reason: "please confirm".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Copilot, &decision, &mut out, &mut err);
+        assert_eq!(code, 0, "Copilot stays at exit 0 for every Decision");
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(
+            out_s.contains("\"permissionDecision\":\"deny\""),
+            "stdout: {out_s}"
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("please confirm"), "stderr: {err_s}");
+    }
+
+    #[test]
+    fn render_hook_response_is_none_for_copilot() {
+        let decision = Decision::Deny {
+            rule_id: "core.x".into(),
+            reason: "r".into(),
+        };
+        assert!(render_hook_response(HookAgent::Copilot, &decision).is_none());
+    }
+
+    #[test]
     fn emit_decision_serialization_failure_returns_one() {
         // Force the json writer to fail by truncating budget below the
         // serialised envelope length. This exercises the

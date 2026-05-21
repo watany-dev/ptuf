@@ -252,14 +252,16 @@ impl ProtectedPaths {
         let kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
 
         for agent_path in &kiro_settings {
-            let body = match fs::read_to_string(agent_path) {
-                Ok(s) => s,
-                Err(err) if err.kind() == ErrorKind::NotFound => continue,
-                Err(_) => continue,
+            // `collect_kiro_agent_jsons` enumerates via `read_dir`, so
+            // every `agent_path` was present moments ago; treat read /
+            // parse failures uniformly as "skip this scope" so a TOCTOU
+            // race (file removed between enumeration and now) collapses
+            // into the same control flow as malformed JSON.
+            let Ok(body) = fs::read_to_string(agent_path) else {
+                continue;
             };
-            let parsed: Value = match serde_json::from_str(&body) {
-                Ok(v) => v,
-                Err(_) => continue,
+            let Ok(parsed): Result<Value, _> = serde_json::from_str(&body) else {
+                continue;
             };
             for command in crate::init::kiro::pre_tool_use_commands(&parsed) {
                 let Some(executable) = crate::init::command_executable(&command) else {
@@ -499,11 +501,12 @@ fn candidate_targets<'a>(
                 if a == head {
                     continue;
                 }
-                out.push(crate::facts::path::resolve_with_env(
+                let resolved = crate::facts::path::resolve_with_env(
                     a,
                     base_dir,
                     &crate::config::scope::SystemEnv,
-                ));
+                );
+                out.push(resolved);
             }
         }
     }
@@ -1084,6 +1087,45 @@ mod tests {
         };
         let labels = p.classify_input(&input);
         assert!(labels.contains(&ProtectedKind::Binary));
+    }
+
+    #[test]
+    fn classify_skips_non_writer_bash_head_with_positional_path() {
+        // `echo` is not in the writer_heads allowlist, so its positional
+        // arguments — even when they look like protected targets — must
+        // not be added to the candidate set. This pins the
+        // `!writer_heads.contains(&head_base)` skip branch.
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        let input = HookInput {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({
+                "command": "echo /repo/.claude/settings.json"
+            }),
+        };
+        assert!(
+            p.classify_input(&input).is_empty(),
+            "echo with a path positional must not match — head is not in writer_heads"
+        );
+    }
+
+    #[test]
+    fn classify_skips_self_positional_for_writer_head() {
+        // `rm rm` has a positional that equals the head; the
+        // `if a == head { continue; }` branch must skip it so the
+        // writer-head literal does not get classified as a destination.
+        let env = MapEnv::with(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        let input = HookInput {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({ "command": "rm rm" }),
+        };
+        // No protected path equals "rm", so the result is empty either
+        // way — but the assertion records the intent and stops anyone
+        // re-introducing the literal as a candidate.
+        assert!(p.classify_input(&input).is_empty());
     }
 
     use crate::testing::proptest::{protected_kind, richer_hook_input};

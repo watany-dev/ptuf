@@ -617,6 +617,38 @@ mod tests {
         assert!(s.contains("snapshot.tmp"), "got {s}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn write_secure_retries_when_temp_path_already_exists_as_file() {
+        // `write_secure` opens the temp path with `create_new`, so a
+        // stale file from a prior crashed run would block the second
+        // call. The `AlreadyExists` arm must remove the stale file and
+        // retry; this test pins that retry path.
+        let dir = workdir("write-secure-retry");
+        let tmp = dir.join("payload.tmp");
+        fs::write(&tmp, b"stale").expect("seed stale tmp");
+
+        write_secure(&tmp, b"fresh").expect("retry must succeed");
+        assert_eq!(fs::read(&tmp).unwrap(), b"fresh");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_executable_retries_when_temp_path_already_exists_as_file() {
+        // Mirror of the `write_secure` retry test for the 0700 variant
+        // used by the Cline adapter's wrapper-script installer.
+        let dir = workdir("write-exec-retry");
+        let tmp = dir.join("payload.tmp");
+        fs::write(&tmp, b"stale").expect("seed stale tmp");
+
+        write_executable(&tmp, b"fresh").expect("retry must succeed");
+        assert_eq!(fs::read(&tmp).unwrap(), b"fresh");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn capture_propagates_io_error_when_path_is_a_directory() {
         let dir = workdir("capture-dir-as-file");
