@@ -248,14 +248,8 @@ impl ProtectedPaths {
             }
         }
 
-        let mut kiro_settings: Vec<PathBuf> = Vec::new();
-        if let Some(root) = repo_root {
-            kiro_settings.push(root.join(".kiro/agents/ptuf-guarded.json"));
-        }
-        if let Some(home_os) = env.var_os("HOME") {
-            let home = PathBuf::from(home_os);
-            kiro_settings.push(home.join(".kiro/agents/ptuf-guarded.json"));
-        }
+        let home_path = env.var_os("HOME").map(PathBuf::from);
+        let mut kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
         kiro_settings.sort();
         kiro_settings.dedup();
 
@@ -400,6 +394,41 @@ impl ProtectedPaths {
         }
         None
     }
+}
+
+/// Enumerate every `*.json` directly under `<repo>/.kiro/agents/` and
+/// `$HOME/.kiro/agents/`. Missing directories are silently skipped so
+/// the protected set degrades to empty when `ptuf init kiro` has not
+/// yet been run, rather than locking unknown legacy paths.
+fn collect_kiro_agent_jsons(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(root) = repo_root {
+        dirs.push(root.join(".kiro/agents"));
+    }
+
+    if let Some(home) = home {
+        dirs.push(home.join(".kiro/agents"));
+    }
+
+    let mut paths = Vec::new();
+
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
+                paths.push(path);
+            }
+        }
+    }
+
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// Replace each entry with its `canonicalize().unwrap_or(self)` form
@@ -894,19 +923,53 @@ mod tests {
     }
 
     #[test]
-    fn collect_includes_kiro_settings_for_repo_and_home() {
+    fn collect_enumerates_every_kiro_agent_json_in_both_scopes() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-kiro-enum-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let repo = dir.join("repo");
+        let home = dir.join("home");
+        std::fs::create_dir_all(repo.join(".kiro/agents")).expect("mkdir repo agents");
+        std::fs::create_dir_all(home.join(".kiro/agents")).expect("mkdir home agents");
+        std::fs::write(repo.join(".kiro/agents/code-reviewer.json"), "{}").expect("write a");
+        std::fs::write(repo.join(".kiro/agents/build.json"), "{}").expect("write b");
+        std::fs::write(repo.join(".kiro/agents/notes.md"), "ignored").expect("write md");
+        std::fs::write(home.join(".kiro/agents/default.json"), "{}").expect("write home");
+
+        let home_string = home.to_string_lossy().into_owned();
+        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(&repo), &cfg, &env);
+
+        let canon = |p: PathBuf| p.canonicalize().unwrap_or(p);
+        let expected_a = canon(repo.join(".kiro/agents/code-reviewer.json"));
+        let expected_b = canon(repo.join(".kiro/agents/build.json"));
+        let expected_home = canon(home.join(".kiro/agents/default.json"));
+        let ignored_md = canon(repo.join(".kiro/agents/notes.md"));
+
+        assert!(p.kiro_settings.iter().any(|q| q == &expected_a));
+        assert!(p.kiro_settings.iter().any(|q| q == &expected_b));
+        assert!(p.kiro_settings.iter().any(|q| q == &expected_home));
+        assert!(
+            !p.kiro_settings.iter().any(|q| q == &ignored_md),
+            "non-json agent should be excluded, got {:?}",
+            p.kiro_settings
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_kiro_settings_is_empty_when_agents_dir_missing() {
         let env = MapEnv::with(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         assert!(
+            p.kiro_settings.is_empty(),
+            "no .kiro/agents/ dir should yield empty kiro_settings, got {:?}",
             p.kiro_settings
-                .iter()
-                .any(|q| q == &PathBuf::from("/repo/.kiro/agents/ptuf-guarded.json"))
-        );
-        assert!(
-            p.kiro_settings
-                .iter()
-                .any(|q| q == &PathBuf::from("/h/.kiro/agents/ptuf-guarded.json"))
         );
     }
 

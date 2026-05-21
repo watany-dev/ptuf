@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   自体は `pub` 維持の opaque handle)。embedded user は `resolve_paths`
   の戻り値を `install` にそのまま渡せれば足りるので、内部 field を
   直接読む API contract は外す。
+- `core.self_protection.kiro-settings` の対象を `.kiro/agents/ptuf-
+  guarded.json` 単独から `<repo>/.kiro/agents/*.json` + `$HOME/.kiro/
+  agents/*.json` (起動時に列挙された実在 `*.json`) に拡張。`ptuf init
+  kiro` の default mode で patch される全 agent JSON が self-protection
+  の対象になる。空ディレクトリでは `kiro_settings` は空のまま (rule は
+  発火しない)。
 
 ### Added
 - `init::kiro` の新規 pub items: `KiroMode`, `ScopeFilter`,

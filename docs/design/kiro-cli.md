@@ -156,6 +156,17 @@ skeleton:
 ユーザーは部分適用を許容すること。デフォルト (`--no-verify` 未指定) では
 verify 経路の snapshot capture により mid-loop crash でも自動巻き戻し。
 
+## self-protection との関係
+
+`ProtectedPaths::collect` は起動時に `<repo>/.kiro/agents/*.json` と
+`$HOME/.kiro/agents/*.json` に実在する `*.json` をすべて列挙し
+`ProtectedKind::KiroSettings` の対象に積む。`ptuf init kiro` の default
+mode で patch される全 agent JSON が `core.self_protection.kiro-settings`
+の保護下に入るため、hook 直後に同じ session が当該 JSON を書き換えて
+hook を消すことを deny する。`.md` agent や `.kiro/agents/` 自体が存在
+しないリポジトリでは `kiro_settings` は空のまま (protected list は graceful
+degrade)。
+
 ## audit log との関係
 
 Kiro 経由の hook 呼び出しは audit JSONL に `agent: "kiro"` として

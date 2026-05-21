@@ -161,7 +161,7 @@ guard / hook / 監査を 1 発で迂回する)。
 | `core.self_protection.claude-settings` | `.claude/settings*.json` |
 | `core.self_protection.codex-settings` | `.codex/config.toml`, `.codex/hooks.json` |
 | `core.self_protection.copilot-settings` | `.github/hooks/ptuf.json` |
-| `core.self_protection.kiro-settings` | `.kiro/agents/ptuf-guarded.json` |
+| `core.self_protection.kiro-settings` | `<repo>/.kiro/agents/*.json` と `$HOME/.kiro/agents/*.json` (実在する `*.json` を起動時に列挙) |
 | `core.self_protection.hook-script` | Claude / Codex / Copilot / Kiro / Cline の hook command が参照する実行ファイル |
 
 ## `core.engine`
