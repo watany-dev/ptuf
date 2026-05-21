@@ -145,6 +145,11 @@ pub struct InstallOutcome {
     pub paths: Vec<InstallPath>,
     pub matcher: String,
     pub command: String,
+    /// Adapter-specific sidecar reporting. `None` for adapters that
+    /// install into a single fixed file. Kiro fills this with
+    /// per-file installed/already-present counts plus default-agent
+    /// coverage so `verify` can render a multi-agent summary.
+    pub extras: Option<InstallExtras>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -162,6 +167,14 @@ pub enum InstallStatus {
     Installed,
     /// `--dry-run`: an entry would have been written.
     WouldInstall,
+}
+
+/// Adapter-specific install reporting. Currently only Kiro populates
+/// this (its default mode patches an unbounded set of agent JSON
+/// files, so the verify report needs the per-file breakdown).
+#[derive(Debug, PartialEq, Eq)]
+pub enum InstallExtras {
+    Kiro(kiro::KiroInstallExtras),
 }
 
 /// Pre-install snapshot of a single target file. `previous = None`

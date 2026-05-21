@@ -310,7 +310,7 @@ fn install_one<F, W: Write>(
 where
     F: FnMut() -> init::verify::VerifyReport,
 {
-    let plan = AgentPlan::resolve(agent, cwd)?;
+    let plan = AgentPlan::resolve(agent, cwd, options)?;
     let snaps = if options.verify {
         Some(init::capture(
             &plan
@@ -358,7 +358,11 @@ struct AgentPlan {
 }
 
 impl AgentPlan {
-    fn resolve(agent: HookAgent, cwd: Option<&std::path::Path>) -> Result<Self, init::InitError> {
+    fn resolve(
+        agent: HookAgent,
+        cwd: Option<&std::path::Path>,
+        options: &InitOptions,
+    ) -> Result<Self, init::InitError> {
         match agent {
             HookAgent::ClaudeCode => {
                 let path = init::claude_code::default_settings_path()
@@ -393,9 +397,15 @@ impl AgentPlan {
                 })
             },
             HookAgent::Kiro => {
-                let targets = init::kiro::resolve_paths(cwd)?;
+                let home = std::env::var_os("HOME").map(PathBuf::from);
+                let targets = init::kiro::resolve_paths(cwd, home.as_deref(), &options.kiro)?;
+                let snapshot_paths = targets
+                    .agent_config_paths
+                    .iter()
+                    .map(|a| a.path.clone())
+                    .collect();
                 Ok(Self {
-                    snapshot_paths: vec![targets.agent_config_path.clone()],
+                    snapshot_paths,
                     install: Box::new(move |dry_run| {
                         let binary = init::kiro::detect_binary();
                         init::kiro::install(&targets, &binary, dry_run)
@@ -488,6 +498,7 @@ mod tests {
             agent,
             verify,
             dry_run,
+            kiro: init::kiro::KiroInitOptions::default(),
         })
     }
 
@@ -686,7 +697,7 @@ rules:
         let dir = workdir("init-kiro-dry");
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
-        let agent_path = dir.join(".kiro/agents/ptuf-guarded.json");
+        let agents_dir = dir.join(".kiro/agents");
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
@@ -698,7 +709,23 @@ rules:
         );
         assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
         assert!(String::from_utf8_lossy(&out).contains("would register hook"));
-        assert!(!agent_path.exists());
+        // Dry-run must not create any agent JSON file regardless of the
+        // synthesized fallback name (`default.json` under the new
+        // patch-existing mode).
+        let no_json_written = !agents_dir.exists()
+            || std::fs::read_dir(&agents_dir)
+                .map(|it| it.count())
+                .unwrap_or(0)
+                == 0;
+        assert!(
+            no_json_written,
+            "dry-run created agent files: {:?}",
+            std::fs::read_dir(&agents_dir).map(|it| {
+                it.filter_map(Result::ok)
+                    .map(|e| e.path())
+                    .collect::<Vec<_>>()
+            }),
+        );
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -760,6 +787,7 @@ rules:
                 agent: Some(HookAgent::Copilot),
                 verify: true,
                 dry_run: false,
+                kiro: init::kiro::KiroInitOptions::default(),
             },
             passing_report,
             &mut out,
@@ -788,6 +816,7 @@ rules:
                 agent: Some(HookAgent::Copilot),
                 verify: true,
                 dry_run: false,
+                kiro: init::kiro::KiroInitOptions::default(),
             },
             failing_report,
             &mut out,
@@ -818,6 +847,7 @@ rules:
                 agent: Some(HookAgent::Copilot),
                 verify: true,
                 dry_run: false,
+                kiro: init::kiro::KiroInitOptions::default(),
             },
             passing_report,
             &mut out,
@@ -1145,6 +1175,7 @@ rules:
             }],
             matcher: "Bash".to_string(),
             command: "/x/ptuf hook codex".to_string(),
+            extras: None,
         };
         let mut out = Vec::new();
         render_install_outcome(&outcome, true, &mut out);
@@ -1170,6 +1201,7 @@ rules:
             ],
             matcher: "Bash|apply_patch|mcp__.*".to_string(),
             command: "/x/ptuf hook codex".to_string(),
+            extras: None,
         };
         let mut out = Vec::new();
         render_install_outcome(&outcome, false, &mut out);
@@ -1192,6 +1224,7 @@ rules:
             }],
             matcher: "Bash".to_string(),
             command: "/x/ptuf hook codex".to_string(),
+            extras: None,
         };
         let mut out = Vec::new();
         render_install_outcome(&outcome, true, &mut out);

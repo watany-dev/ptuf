@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use crate::Decision;
 use crate::engine::Engine;
+use crate::init::kiro::KiroInitOptions;
 use crate::reason;
 
 pub use crate::update::UpdateOptions;
@@ -58,18 +59,25 @@ impl HookAgent {
     }
 }
 
-/// Parsed `ptuf init [<agent>] [--no-verify] [--dry-run]`.
+/// Parsed `ptuf init [<agent>] [--no-verify] [--dry-run]
+/// [--new-agent] [--workspace-only] [--global]`.
 ///
 /// `agent = None` means "auto-detect every agent reachable from
 /// `cwd` / `$HOME`". `verify` defaults to `true`; `--no-verify`
 /// flips it off, and `--dry-run` implicitly disables verify (a
 /// dry run never writes, so the synthetic-deny check would just
 /// confirm the unmodified disk state).
+///
+/// `kiro` carries the Kiro-specific flags. These are accepted only
+/// when `agent == Some(HookAgent::Kiro)`; the parser rejects them
+/// against other agents (or against auto-detect) with
+/// `ParseError::ConflictingFlags`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InitOptions {
     pub agent: Option<HookAgent>,
     pub verify: bool,
     pub dry_run: bool,
+    pub kiro: KiroInitOptions,
 }
 
 /// Top-level flags that apply uniformly across subcommands.
@@ -209,10 +217,17 @@ const HELP: &str = "ptuf — PreToolUseFilter, a guardrail for coding agents
 
 USAGE:
     ptuf [--json] init [<AGENT>] [--no-verify] [--dry-run]
+                       [--new-agent] [--workspace-only] [--global]
         (auto-detect every agent under cwd / $HOME and install the
          PreToolUse hook with verify enabled by default. AGENT pins
          to a single adapter: claude-code | codex | copilot | kiro
          | cline)
+        Kiro-only flags:
+          --new-agent       Create a dedicated ptuf-guarded.json agent
+                            (legacy single-file behavior) instead of
+                            patching every existing agent JSON.
+          --workspace-only  Patch only <repo>/.kiro/agents/*.json.
+          --global          Patch only $HOME/.kiro/agents/*.json.
     ptuf hook <AGENT>
         (run as the agent's PreToolUse hook over stdin/stdout)
     ptuf [--json] check --tool <NAME> <COMMAND>

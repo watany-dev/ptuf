@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use crate::init::kiro::{KiroInitOptions, KiroMode, ScopeFilter};
 use crate::update::UpdateOptions;
 
 use super::{Command, HookAgent, InitOptions, ParseError};
@@ -18,10 +19,16 @@ where
     let mut agent: Option<HookAgent> = None;
     let mut dry_run = false;
     let mut no_verify = false;
+    let mut new_agent = false;
+    let mut workspace_only = false;
+    let mut global = false;
     for arg in iter {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
             "--no-verify" => no_verify = true,
+            "--new-agent" => new_agent = true,
+            "--workspace-only" => workspace_only = true,
+            "--global" => global = true,
             "claude-code" | "codex" | "copilot" | "kiro" | "cline" => {
                 if agent.is_some() {
                     return Err(ParseError::UnexpectedArgument(arg.clone()));
@@ -31,14 +38,43 @@ where
             other => return Err(ParseError::UnexpectedArgument(other.to_string())),
         }
     }
+    if workspace_only && global {
+        return Err(ParseError::ConflictingFlags("--workspace-only vs --global"));
+    }
+    if new_agent && workspace_only {
+        return Err(ParseError::ConflictingFlags(
+            "--new-agent vs --workspace-only",
+        ));
+    }
+    let kiro_only_flag_set = new_agent || workspace_only || global;
+    if kiro_only_flag_set && agent != Some(HookAgent::Kiro) {
+        return Err(ParseError::ConflictingFlags(
+            "Kiro-only flag requires `kiro` agent",
+        ));
+    }
     // Dry-run never writes, so the synthetic-deny check would just
     // confirm whatever was already on disk; treat dry-run as "skip
     // verify" rather than as a parse error.
     let verify = !no_verify && !dry_run;
+    let kiro = KiroInitOptions {
+        mode: if new_agent {
+            KiroMode::NewAgent
+        } else {
+            KiroMode::PatchExisting
+        },
+        scope: if workspace_only {
+            ScopeFilter::WorkspaceOnly
+        } else if global {
+            ScopeFilter::GlobalOnly
+        } else {
+            ScopeFilter::Both
+        },
+    };
     Ok(Command::Init(InitOptions {
         agent,
         verify,
         dry_run,
+        kiro,
     }))
 }
 
@@ -149,6 +185,7 @@ mod tests {
 
     use std::path::PathBuf;
 
+    use crate::init::kiro::{KiroInitOptions, KiroMode, ScopeFilter};
     use crate::update::UpdateOptions;
 
     use super::super::test_support::s;
@@ -346,6 +383,7 @@ mod tests {
                 agent: None,
                 verify: true,
                 dry_run: false,
+                kiro: KiroInitOptions::default(),
             })
         );
     }
@@ -366,6 +404,7 @@ mod tests {
                     agent: Some(expected),
                     verify: true,
                     dry_run: false,
+                    kiro: KiroInitOptions::default(),
                 }),
                 "agent token {token}",
             );
@@ -380,6 +419,7 @@ mod tests {
                 agent: None,
                 verify: false,
                 dry_run: false,
+                kiro: KiroInitOptions::default(),
             })
         );
     }
@@ -392,6 +432,7 @@ mod tests {
                 agent: None,
                 verify: false,
                 dry_run: true,
+                kiro: KiroInitOptions::default(),
             })
         );
     }
@@ -404,8 +445,106 @@ mod tests {
                 agent: Some(HookAgent::ClaudeCode),
                 verify: false,
                 dry_run: true,
+                kiro: KiroInitOptions::default(),
             })
         );
+    }
+
+    #[test]
+    fn parse_init_accepts_new_agent_with_kiro() {
+        assert_eq!(
+            cmd(&["init", "kiro", "--new-agent"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Kiro),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions {
+                    mode: KiroMode::NewAgent,
+                    scope: ScopeFilter::Both,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_accepts_workspace_only_with_kiro() {
+        assert_eq!(
+            cmd(&["init", "kiro", "--workspace-only"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Kiro),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions {
+                    mode: KiroMode::PatchExisting,
+                    scope: ScopeFilter::WorkspaceOnly,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_accepts_global_with_kiro() {
+        assert_eq!(
+            cmd(&["init", "kiro", "--global"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Kiro),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions {
+                    mode: KiroMode::PatchExisting,
+                    scope: ScopeFilter::GlobalOnly,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_accepts_new_agent_with_global() {
+        assert_eq!(
+            cmd(&["init", "kiro", "--new-agent", "--global"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Kiro),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions {
+                    mode: KiroMode::NewAgent,
+                    scope: ScopeFilter::GlobalOnly,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_rejects_workspace_only_with_global() {
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--workspace-only", "--global"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn parse_init_rejects_new_agent_with_workspace_only() {
+        assert!(matches!(
+            parse(&s(&["init", "kiro", "--new-agent", "--workspace-only"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn parse_init_rejects_kiro_flag_without_kiro_agent() {
+        for combo in [
+            vec!["init", "--new-agent"],
+            vec!["init", "--workspace-only"],
+            vec!["init", "--global"],
+            vec!["init", "claude-code", "--new-agent"],
+            vec!["init", "codex", "--workspace-only"],
+            vec!["init", "copilot", "--global"],
+        ] {
+            assert!(
+                matches!(parse(&s(&combo)), Err(ParseError::ConflictingFlags(_))),
+                "expected ConflictingFlags for {combo:?}",
+            );
+        }
     }
 
     #[test]
