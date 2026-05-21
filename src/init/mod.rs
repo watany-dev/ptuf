@@ -661,7 +661,10 @@ mod tests {
         );
         let s = tmp.to_string_lossy();
         assert!(s.starts_with("hooks.json.ptuf."), "got {s}");
-        assert!(!s.contains(".ptuf-snap."), "must not collide with snap suffix: {s}");
+        assert!(
+            !s.contains(".ptuf-snap."),
+            "must not collide with snap suffix: {s}"
+        );
     }
 
     #[test]
