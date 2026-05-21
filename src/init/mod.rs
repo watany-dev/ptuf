@@ -339,6 +339,13 @@ pub(crate) fn write_executable(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> 
     std::fs::write(tmp, bytes)
 }
 
+pub(crate) fn detect_binary_impl() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.into_os_string().into_string().ok())
+        .unwrap_or_else(|| "ptuf".to_string())
+}
+
 fn sibling_temp_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().map_or_else(
         || std::ffi::OsString::from("snapshot.tmp"),
@@ -588,6 +595,13 @@ mod tests {
         assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_binary_impl_returns_a_non_empty_string() {
+        // Every adapter's `detect_binary` delegates here; a non-empty
+        // string is the contract the host config writers depend on.
+        assert!(!detect_binary_impl().is_empty());
     }
 
     #[test]

@@ -43,10 +43,7 @@ pub fn default_settings_path() -> Option<PathBuf> {
 /// so the resulting hook entry is still useful when invoked from a
 /// CI container without a stable absolute path.
 pub fn detect_binary() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.into_os_string().into_string().ok())
-        .unwrap_or_else(|| "ptuf".to_string())
+    super::detect_binary_impl()
 }
 
 /// Install (or report a planned install for `dry_run = true`) the
@@ -456,12 +453,6 @@ mod tests {
         let after: Value = serde_json::from_str(&read(&path)).unwrap();
         assert!(after.pointer("/hooks/PreToolUse").is_some());
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn detect_binary_returns_a_non_empty_string() {
-        let s = detect_binary();
-        assert!(!s.is_empty());
     }
 
     #[test]

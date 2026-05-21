@@ -35,10 +35,7 @@ pub struct TargetPaths {
 
 /// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
 pub fn detect_binary() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.into_os_string().into_string().ok())
-        .unwrap_or_else(|| "ptuf".to_string())
+    super::detect_binary_impl()
 }
 
 /// Resolve `<repo>/.github/hooks/ptuf.json` from the discovered repo
@@ -563,11 +560,6 @@ mod tests {
     fn pre_tool_use_commands_returns_empty_when_array_missing() {
         let root = json!({ "version": 1 });
         assert!(pre_tool_use_commands(&root).is_empty());
-    }
-
-    #[test]
-    fn detect_binary_returns_a_non_empty_string() {
-        assert!(!detect_binary().is_empty());
     }
 
     #[test]
