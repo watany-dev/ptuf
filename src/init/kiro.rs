@@ -73,11 +73,15 @@ pub const DEFAULT_CACHE_TTL_SECONDS: u64 = 0;
 /// a ptuf Kiro `preToolUse` hook.
 pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "kiro"];
 
+/// Flat top-level key inside `<scope>/.kiro/settings/cli.json` that
+/// names the default agent. Kiro stores this as a dotted key on the
+/// root object (not a nested `chat.defaultAgent` path).
+const CHAT_DEFAULT_AGENT_KEY: &str = "chat.defaultAgent";
+
 /// Whether the resolved agent path lives under the workspace
 /// (`<repo>/.kiro/`) or under the user's home (`$HOME/.kiro/`).
-/// Used by reporting and by `is_default_agent` resolution (which is
-/// per-scope: workspace `settings/cli.json` only governs workspace
-/// agents).
+/// Used by reporting and by per-scope default-agent resolution
+/// (workspace `settings/cli.json` only governs workspace agents).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
     Workspace,
@@ -91,6 +95,13 @@ impl Scope {
             Self::Home => "home-agent",
         }
     }
+
+    pub(crate) fn short(self) -> &'static str {
+        match self {
+            Self::Workspace => "workspace",
+            Self::Home => "home",
+        }
+    }
 }
 
 /// One Kiro agent file resolved for patching.
@@ -98,27 +109,24 @@ impl Scope {
 pub struct ResolvedAgent {
     pub scope: Scope,
     pub path: PathBuf,
-    /// True when `<scope>/.kiro/settings/cli.json` names this file's
-    /// stem in its `chat.defaultAgent` field.
-    pub is_default_agent: bool,
 }
 
 /// Per-scope summary of which agent the user has marked as their
-/// default (via `<scope>/.kiro/settings/cli.json`) and whether the
-/// install loop ended up patching that agent.
+/// default (via `<scope>/.kiro/settings/cli.json`). The install loop
+/// fails early via `InitError::Schema` when the referenced JSON is
+/// missing, so any report that survives to `InstallOutcome` is covered
+/// by construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KiroDefaultAgentReport {
     pub scope: Scope,
     pub agent_name: String,
-    pub covered: bool,
 }
 
 /// Adapter-specific reporting carried back in `InstallOutcome.extras`.
+/// Patched / written paths are not duplicated here — they live in
+/// `InstallOutcome.paths` already.
 #[derive(Debug, PartialEq, Eq)]
 pub struct KiroInstallExtras {
-    /// Every agent JSON file that the loop wrote to (or would write
-    /// to, under `--dry-run`).
-    pub patched_agent_paths: Vec<PathBuf>,
     /// Number of files that already carried a ptuf hook entry and
     /// were left untouched.
     pub already_present_count: usize,
@@ -176,6 +184,20 @@ pub fn detect_binary() -> String {
         .unwrap_or_else(|| "ptuf".to_string())
 }
 
+/// Production entry: resolve every agent-config path to patch.
+///
+/// Reads the user's home directory from `$HOME` and delegates to
+/// `resolve_paths_with`. Tests use `resolve_paths_with` directly so
+/// they can inject a tempdir without mutating process env (forbidden
+/// by `unsafe_code = "forbid"`).
+pub fn resolve_paths(
+    start: Option<&Path>,
+    opts: &KiroInitOptions,
+) -> Result<TargetPaths, InitError> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    resolve_paths_with(start, home.as_deref(), opts)
+}
+
 /// Resolve every agent-config path the install loop should consider.
 ///
 /// In `KiroMode::PatchExisting` (default), enumerates `*.json` files
@@ -190,13 +212,13 @@ pub fn detect_binary() -> String {
 ///
 /// `start` is a path inside the workspace (typically `cwd`); the
 /// workspace root is discovered upward from it. `home` is the user's
-/// home directory; production callers pass `std::env::var_os("HOME")`,
-/// tests inject a tempdir to keep behaviour deterministic.
+/// home directory (production passes `$HOME`, tests inject a
+/// tempdir).
 ///
 /// Returns `InitError::RepoRootNotFound` / `InitError::HomeNotSet`
 /// when the requested scope is unavailable, and `InitError::Schema`
 /// when `chat.defaultAgent` references a missing agent file.
-pub fn resolve_paths(
+pub(crate) fn resolve_paths_with(
     start: Option<&Path>,
     home: Option<&Path>,
     opts: &KiroInitOptions,
@@ -263,7 +285,7 @@ pub fn resolve_paths(
                 return Err(InitError::Schema {
                     path: settings_dir.join("cli.json"),
                     message: format!(
-                        "`chat.defaultAgent`=\"{name}\" referenced but {} not found",
+                        "`{CHAT_DEFAULT_AGENT_KEY}`=\"{name}\" referenced but {} not found",
                         referenced.display()
                     ),
                 });
@@ -271,16 +293,13 @@ pub fn resolve_paths(
             defaults.push(KiroDefaultAgentReport {
                 scope: *scope,
                 agent_name: name.to_string(),
-                covered: true,
             });
         }
 
         for path in json_files {
-            let is_default = matches_stem(&path, default_name.as_deref());
             agents.push(ResolvedAgent {
                 scope: *scope,
                 path,
-                is_default_agent: is_default,
             });
         }
     }
@@ -295,7 +314,6 @@ pub fn resolve_paths(
         agents.push(ResolvedAgent {
             scope: *scope,
             path: fallback,
-            is_default_agent: false,
         });
     }
 
@@ -324,23 +342,17 @@ fn resolve_new_agent_path(
         agent_config_paths: vec![ResolvedAgent {
             scope,
             path: base.join(".kiro/agents").join(file_name),
-            is_default_agent: false,
         }],
         skipped_non_json: Vec::new(),
         default_agent_names: Vec::new(),
     })
 }
 
-fn matches_stem(path: &Path, name: Option<&str>) -> bool {
-    match (path.file_stem().and_then(|s| s.to_str()), name) {
-        (Some(stem), Some(n)) => stem == n,
-        _ => false,
-    }
-}
-
 /// Enumerate `<agents_dir>/*` into `(json_files, non_json_files)`.
 /// A missing directory yields two empty vecs. Both vectors are
-/// returned unsorted; callers sort by `file_name()` for determinism.
+/// returned unsorted; the caller sorts the slices it cares about
+/// using `Path::cmp` (workspace and home agents live in different
+/// parent dirs so a `PathBuf` sort still groups them correctly).
 fn enumerate_agents(agents_dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), InitError> {
     let entries = match fs::read_dir(agents_dir) {
         Ok(it) => it,
@@ -400,7 +412,7 @@ fn read_default_agent(settings_dir: &Path) -> Result<Option<String>, InitError> 
         return Ok(None);
     };
     Ok(obj
-        .get("chat.defaultAgent")
+        .get(CHAT_DEFAULT_AGENT_KEY)
         .and_then(Value::as_str)
         .map(str::to_string))
 }
@@ -416,36 +428,13 @@ pub fn install(
     dry_run: bool,
 ) -> Result<InstallOutcome, InitError> {
     let command = format!("{ptuf_binary} hook kiro");
-    let mut paths: Vec<InstallPath> = Vec::new();
-    let mut patched: Vec<PathBuf> = Vec::new();
+    let mut paths: Vec<InstallPath> = Vec::with_capacity(targets.agent_config_paths.len());
     let mut already_present_count = 0_usize;
-    let mut installed_count = 0_usize;
-    let mut default_coverage: Vec<KiroDefaultAgentReport> = targets
-        .default_agent_names
-        .iter()
-        .map(|r| KiroDefaultAgentReport {
-            scope: r.scope,
-            agent_name: r.agent_name.clone(),
-            covered: false,
-        })
-        .collect();
 
     for agent in &targets.agent_config_paths {
         let per_file = install_one_file(&agent.path, &command, dry_run)?;
         if per_file.already_present {
             already_present_count += 1;
-        } else {
-            installed_count += 1;
-            patched.push(agent.path.clone());
-        }
-        if agent.is_default_agent
-            && let Some(stem) = agent.path.file_stem().and_then(|s| s.to_str())
-        {
-            for entry in &mut default_coverage {
-                if entry.scope == agent.scope && entry.agent_name == stem {
-                    entry.covered = true;
-                }
-            }
         }
         paths.push(InstallPath {
             label: agent.scope.label(),
@@ -453,6 +442,7 @@ pub fn install(
         });
     }
 
+    let installed_count = paths.len() - already_present_count;
     let status = if installed_count == 0 {
         InstallStatus::AlreadyPresent
     } else if dry_run {
@@ -462,9 +452,8 @@ pub fn install(
     };
 
     let extras = KiroInstallExtras {
-        patched_agent_paths: patched,
         already_present_count,
-        default_agents: default_coverage,
+        default_agents: targets.default_agent_names.clone(),
         skipped_non_json_agents: targets.skipped_non_json.clone(),
     };
 
@@ -683,7 +672,6 @@ mod tests {
             agent_config_paths: vec![ResolvedAgent {
                 scope: Scope::Workspace,
                 path,
-                is_default_agent: false,
             }],
             skipped_non_json: Vec::new(),
             default_agent_names: Vec::new(),
@@ -965,7 +953,7 @@ mod tests {
     #[test]
     fn resolve_paths_falls_back_to_home_when_outside_git_tree() {
         let opts = KiroInitOptions::default();
-        let result = resolve_paths(
+        let result = resolve_paths_with(
             Some(Path::new("/nonexistent-definitely-not-git")),
             None,
             &opts,
@@ -1020,7 +1008,7 @@ mod tests {
             mode: KiroMode::NewAgent,
             scope: ScopeFilter::WorkspaceOnly,
         };
-        let targets = resolve_paths(Some(dir.as_path()), None, &opts).unwrap();
+        let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         let outcome = install(&targets, "/usr/local/bin/ptuf", false).unwrap();
         assert!(matches!(outcome.status, InstallStatus::Installed));
         let written_path = &targets.agent_config_paths[0].path;
@@ -1058,7 +1046,7 @@ mod tests {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
         };
-        let targets = resolve_paths(Some(dir.as_path()), None, &opts).unwrap();
+        let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 2);
         let outcome = install(&targets, "/x/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::Installed);
@@ -1090,7 +1078,7 @@ mod tests {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
         };
-        let targets = resolve_paths(Some(dir.as_path()), None, &opts).unwrap();
+        let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
         assert_eq!(targets.skipped_non_json, vec![md_path.clone()]);
 
@@ -1118,7 +1106,7 @@ mod tests {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
         };
-        let err = resolve_paths(Some(dir.as_path()), None, &opts).unwrap_err();
+        let err = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap_err();
         match err {
             InitError::Schema { path, message } => {
                 assert!(path.ends_with("cli.json"), "got: {path:?}");
@@ -1138,7 +1126,7 @@ mod tests {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
         };
-        let targets = resolve_paths(Some(dir.as_path()), None, &opts).unwrap();
+        let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
         assert!(
             targets.agent_config_paths[0]
@@ -1168,13 +1156,11 @@ mod tests {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
         };
-        let targets = resolve_paths(Some(dir.as_path()), None, &opts).unwrap();
+        let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
-        assert!(targets.agent_config_paths[0].is_default_agent);
         let outcome = install(&targets, "/x/ptuf", false).unwrap();
         let extras = kiro_extras(&outcome);
         assert_eq!(extras.default_agents.len(), 1);
-        assert!(extras.default_agents[0].covered);
         assert_eq!(extras.default_agents[0].agent_name, "architect");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1192,7 +1178,7 @@ mod tests {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
         };
-        let targets = resolve_paths(Some(dir.as_path()), Some(home.as_path()), &opts).unwrap();
+        let targets = resolve_paths_with(Some(dir.as_path()), Some(home.as_path()), &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
         assert!(targets.agent_config_paths[0].path.starts_with(&dir));
         let _ = fs::remove_dir_all(&dir);
@@ -1212,7 +1198,7 @@ mod tests {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::GlobalOnly,
         };
-        let targets = resolve_paths(Some(dir.as_path()), Some(home.as_path()), &opts).unwrap();
+        let targets = resolve_paths_with(Some(dir.as_path()), Some(home.as_path()), &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
         assert!(targets.agent_config_paths[0].path.starts_with(&home));
         let _ = fs::remove_dir_all(&dir);
@@ -1231,7 +1217,7 @@ mod tests {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::Both,
         };
-        let targets = resolve_paths(Some(dir.as_path()), Some(home.as_path()), &opts).unwrap();
+        let targets = resolve_paths_with(Some(dir.as_path()), Some(home.as_path()), &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 2);
         let outcome = install(&targets, "/x/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::Installed);
@@ -1259,7 +1245,7 @@ mod tests {
             mode: KiroMode::NewAgent,
             scope: ScopeFilter::WorkspaceOnly,
         };
-        let targets = resolve_paths(Some(dir.as_path()), None, &opts).unwrap();
+        let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
         assert!(
             targets.agent_config_paths[0]
@@ -1277,7 +1263,7 @@ mod tests {
             mode: KiroMode::NewAgent,
             scope: ScopeFilter::WorkspaceOnly,
         };
-        let targets = resolve_paths(Some(dir.as_path()), None, &opts_legacy).unwrap();
+        let targets = resolve_paths_with(Some(dir.as_path()), None, &opts_legacy).unwrap();
         install(&targets, "/x/ptuf", false).unwrap();
 
         // Now re-run in default (PatchExisting) mode — the existing
@@ -1287,7 +1273,7 @@ mod tests {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
         };
-        let targets2 = resolve_paths(Some(dir.as_path()), None, &opts_default).unwrap();
+        let targets2 = resolve_paths_with(Some(dir.as_path()), None, &opts_default).unwrap();
         let outcome = install(&targets2, "/x/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::AlreadyPresent);
         assert_eq!(kiro_extras(&outcome).already_present_count, 1);

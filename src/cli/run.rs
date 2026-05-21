@@ -397,8 +397,7 @@ impl AgentPlan {
                 })
             },
             HookAgent::Kiro => {
-                let home = std::env::var_os("HOME").map(PathBuf::from);
-                let targets = init::kiro::resolve_paths(cwd, home.as_deref(), &options.kiro)?;
+                let targets = init::kiro::resolve_paths(cwd, &options.kiro)?;
                 let snapshot_paths = targets
                     .agent_config_paths
                     .iter()
@@ -457,10 +456,44 @@ fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: boo
             let _ = writeln!(stdout, "Run without --dry-run to apply.");
         },
     }
+    render_install_extras_text(outcome, stdout);
+}
+
+fn render_install_extras_text<W: Write>(outcome: &init::InstallOutcome, stdout: &mut W) {
+    let Some(init::InstallExtras::Kiro(extras)) = outcome.extras.as_ref() else {
+        return;
+    };
+    let patched = outcome
+        .paths
+        .len()
+        .saturating_sub(extras.already_present_count);
+    let _ = writeln!(
+        stdout,
+        "  kiro: patched {patched} agent(s), {} already present",
+        extras.already_present_count
+    );
+    if !extras.default_agents.is_empty() {
+        let parts: Vec<String> = extras
+            .default_agents
+            .iter()
+            .map(|d| format!("{}={}", d.scope.short(), d.agent_name))
+            .collect();
+        let _ = writeln!(stdout, "  kiro: default agent: {}", parts.join(", "));
+    }
+    if !extras.skipped_non_json_agents.is_empty() {
+        let _ = writeln!(
+            stdout,
+            "  kiro: skipped {} non-JSON agent file(s)",
+            extras.skipped_non_json_agents.len()
+        );
+        for path in &extras.skipped_non_json_agents {
+            let _ = writeln!(stdout, "    {}", path.display());
+        }
+    }
 }
 
 fn render_install_json(outcome: &init::InstallOutcome, dry_run: bool) -> serde_json::Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "agent": outcome.agent,
         "status": match outcome.status {
             init::InstallStatus::Installed => "installed",
@@ -474,7 +507,30 @@ fn render_install_json(outcome: &init::InstallOutcome, dry_run: bool) -> serde_j
             "label": p.label,
             "path": p.path.display().to_string(),
         })).collect::<Vec<_>>(),
-    })
+    });
+    if let Some(init::InstallExtras::Kiro(extras)) = outcome.extras.as_ref() {
+        let default_agents: Vec<serde_json::Value> = extras
+            .default_agents
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "scope": d.scope.short(),
+                    "agentName": d.agent_name,
+                })
+            })
+            .collect();
+        let skipped: Vec<String> = extras
+            .skipped_non_json_agents
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        value["kiro"] = serde_json::json!({
+            "alreadyPresentCount": extras.already_present_count,
+            "defaultAgents": default_agents,
+            "skippedNonJsonAgents": skipped,
+        });
+    }
+    value
 }
 
 #[cfg(test)]
@@ -491,7 +547,10 @@ mod tests {
         Command, GlobalFlags, HookAgent, INVALID_PAYLOAD_RULE, InitOptions,
         POLICY_LOAD_FAILED_RULE, run,
     };
-    use super::{MAX_HOOK_STDIN_BYTES, render_install_outcome, run_init_with, run_plugin_check};
+    use super::{
+        MAX_HOOK_STDIN_BYTES, render_install_json, render_install_outcome, run_init_with,
+        run_plugin_check,
+    };
 
     fn cmd_init(agent: Option<HookAgent>, verify: bool, dry_run: bool) -> Command {
         Command::Init(InitOptions {
@@ -1211,6 +1270,99 @@ rules:
         assert!(s.contains("config=/x/config.toml"));
         assert!(s.contains("matcher: Bash|apply_patch|mcp__.*"));
         assert!(s.contains("command: /x/ptuf hook codex"));
+    }
+
+    #[test]
+    fn render_install_outcome_surfaces_kiro_extras() {
+        let extras = init::kiro::KiroInstallExtras {
+            already_present_count: 1,
+            default_agents: vec![init::kiro::KiroDefaultAgentReport {
+                scope: init::kiro::Scope::Workspace,
+                agent_name: "architect".to_string(),
+            }],
+            skipped_non_json_agents: vec![PathBuf::from("/x/.kiro/agents/notes.md")],
+        };
+        let outcome = init::InstallOutcome {
+            status: init::InstallStatus::Installed,
+            agent: "kiro",
+            paths: vec![
+                init::InstallPath {
+                    label: "workspace-agent",
+                    path: PathBuf::from("/x/.kiro/agents/architect.json"),
+                },
+                init::InstallPath {
+                    label: "workspace-agent",
+                    path: PathBuf::from("/x/.kiro/agents/beta.json"),
+                },
+            ],
+            matcher: "*".to_string(),
+            command: "/x/ptuf hook kiro".to_string(),
+            extras: Some(init::InstallExtras::Kiro(extras)),
+        };
+        let mut out = Vec::new();
+        render_install_outcome(&outcome, false, &mut out);
+        let s = String::from_utf8_lossy(&out);
+        assert!(
+            s.contains("kiro: patched 1 agent(s), 1 already present"),
+            "{s}"
+        );
+        assert!(
+            s.contains("kiro: default agent: workspace=architect"),
+            "{s}"
+        );
+        assert!(s.contains("kiro: skipped 1 non-JSON agent file(s)"), "{s}");
+        assert!(s.contains("/x/.kiro/agents/notes.md"), "{s}");
+    }
+
+    #[test]
+    fn render_install_json_includes_kiro_extras_when_present() {
+        let extras = init::kiro::KiroInstallExtras {
+            already_present_count: 0,
+            default_agents: vec![init::kiro::KiroDefaultAgentReport {
+                scope: init::kiro::Scope::Home,
+                agent_name: "default".to_string(),
+            }],
+            skipped_non_json_agents: Vec::new(),
+        };
+        let outcome = init::InstallOutcome {
+            status: init::InstallStatus::Installed,
+            agent: "kiro",
+            paths: vec![init::InstallPath {
+                label: "home-agent",
+                path: PathBuf::from("/h/.kiro/agents/default.json"),
+            }],
+            matcher: "*".to_string(),
+            command: "/x/ptuf hook kiro".to_string(),
+            extras: Some(init::InstallExtras::Kiro(extras)),
+        };
+        let value = render_install_json(&outcome, false);
+        assert_eq!(value["kiro"]["alreadyPresentCount"], 0);
+        assert_eq!(value["kiro"]["defaultAgents"][0]["scope"], "home");
+        assert_eq!(value["kiro"]["defaultAgents"][0]["agentName"], "default");
+        assert_eq!(
+            value["kiro"]["skippedNonJsonAgents"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn render_install_json_omits_kiro_block_for_non_kiro_adapters() {
+        let outcome = init::InstallOutcome {
+            status: init::InstallStatus::Installed,
+            agent: "codex",
+            paths: vec![init::InstallPath {
+                label: "hooks",
+                path: PathBuf::from("/x/hooks.json"),
+            }],
+            matcher: "Bash".to_string(),
+            command: "/x/ptuf hook codex".to_string(),
+            extras: None,
+        };
+        let value = render_install_json(&outcome, false);
+        assert!(value.get("kiro").is_none(), "{value}");
     }
 
     #[test]
