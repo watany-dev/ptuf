@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+- `ptuf init kiro` の default 動作を変更: `<repo>/.kiro/agents/*.json`
+  と `$HOME/.kiro/agents/*.json` の **すべて** に PreToolUse hook を
+  注入する方式に切り替えた。これまでの「専用 `ptuf-guarded.json` を
+  一つ作るだけ」の挙動は、`chat.defaultAgent` 等で別 agent を選ぶ
+  ユーザーをサイレントに bypass していたため。legacy の単独作成は
+  `--new-agent` flag で残置。scope 制限用に `--workspace-only` /
+  `--global` を追加。`<scope>/.kiro/settings/cli.json` の
+  `chat.defaultAgent` が同 scope に存在しない agent JSON を指している
+  場合は `InitError::Schema` で fail-closed。`.kiro/agents/*.md` は
+  patch 対象から除外。
+- `init::kiro::TargetPaths` の構造変更:
+  `{ agent_config_path: PathBuf }` → `{ agent_config_paths:
+  Vec<ResolvedAgent>, skipped_non_json: Vec<PathBuf>,
+  default_agent_names: Vec<KiroDefaultAgentReport> }`。
+- `init::kiro::resolve_paths` に必須引数 `&KiroInitOptions` を追加。
+- `init::kiro::install` の `&TargetPaths` 意味論を単一 path から多 path
+  に変更 (signature 同型のまま受け取る struct shape が変わる)。
+- `init::InstallOutcome` に required field `pub extras:
+  Option<InstallExtras>` を追加。
+
+### Added
+- `init::kiro` の新規 pub items: `Scope`, `ResolvedAgent`,
+  `KiroDefaultAgentReport`, `KiroInstallExtras`, `KiroMode`,
+  `ScopeFilter`, `KiroInitOptions`, `FALLBACK_AGENT_NAME`。
+- `init::InstallExtras` enum (現状 `Kiro(KiroInstallExtras)` のみ) —
+  adapter 固有の追加レポートを `InstallOutcome` 経由で渡す経路。
+- `ptuf init` の Kiro 専用 flag: `--new-agent` (legacy 単独 agent 作成)、
+  `--workspace-only` (`<repo>/.kiro/agents/` のみ patch)、`--global`
+  (`$HOME/.kiro/agents/` のみ patch)。
+
 ## [0.1.1] - 2026-05-18
 
 ### Added
