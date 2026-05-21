@@ -656,15 +656,7 @@ fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
 }
 
 fn sibling_temp_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().map_or_else(
-        || std::ffi::OsString::from("agent.json"),
-        std::ffi::OsStr::to_os_string,
-    );
-    name.push(format!(".ptuf.{}.tmp", std::process::id()));
-    match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.join(name),
-        _ => PathBuf::from(name),
-    }
+    super::sibling_install_tmp_path(path, "agent.json")
 }
 
 #[cfg(test)]

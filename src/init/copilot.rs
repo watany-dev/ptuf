@@ -225,15 +225,7 @@ fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
 }
 
 fn sibling_temp_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().map_or_else(
-        || std::ffi::OsString::from("ptuf.json"),
-        std::ffi::OsStr::to_os_string,
-    );
-    name.push(format!(".ptuf.{}.tmp", std::process::id()));
-    match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.join(name),
-        _ => PathBuf::from(name),
-    }
+    super::sibling_install_tmp_path(path, "ptuf.json")
 }
 
 #[cfg(test)]
@@ -617,20 +609,6 @@ mod tests {
             "expected Schema error for non-object JSON, got: {err:?}",
         );
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn sibling_temp_path_falls_back_to_bare_filename_when_no_parent() {
-        let bare = Path::new("ptuf.json");
-        let tmp = sibling_temp_path(bare);
-        assert!(
-            tmp.parent()
-                .map(Path::as_os_str)
-                .unwrap_or_default()
-                .is_empty(),
-            "no-parent input must yield no-parent temp path: {tmp:?}"
-        );
-        assert!(tmp.to_string_lossy().contains("ptuf.json.ptuf."));
     }
 
     #[cfg(unix)]

@@ -228,15 +228,7 @@ fn write_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
 }
 
 fn sibling_temp_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().map_or_else(
-        || std::ffi::OsString::from("settings.json"),
-        std::ffi::OsStr::to_os_string,
-    );
-    name.push(format!(".ptuf.{}.tmp", std::process::id()));
-    match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.join(name),
-        _ => PathBuf::from(name),
-    }
+    super::sibling_install_tmp_path(path, "settings.json")
 }
 
 #[cfg(test)]
@@ -564,16 +556,6 @@ mod tests {
             Some(42)
         );
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn sibling_temp_path_falls_back_to_bare_filename_when_no_parent() {
-        let tmp = sibling_temp_path(Path::new("settings.json"));
-        assert_eq!(tmp.parent(), Some(Path::new("")));
-        assert!(
-            tmp.to_string_lossy().starts_with("settings.json.ptuf."),
-            "got {tmp:?}",
-        );
     }
 
     #[test]

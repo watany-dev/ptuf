@@ -346,6 +346,25 @@ pub(crate) fn detect_binary_impl() -> String {
         .unwrap_or_else(|| "ptuf".to_string())
 }
 
+/// Sibling temp path for adapter install writes:
+/// `<dir>/<file_name>.ptuf.{pid}.tmp`, or
+/// `<dir>/<default_name>.ptuf.{pid}.tmp` when `path` has no file name.
+///
+/// Distinct from [`sibling_temp_path`] (snapshot variant, `.ptuf-snap.`)
+/// so an install write and a snapshot write on the same destination
+/// cannot collide on temp file names.
+pub(crate) fn sibling_install_tmp_path(path: &Path, default_name: &str) -> PathBuf {
+    let mut name = path.file_name().map_or_else(
+        || std::ffi::OsString::from(default_name),
+        std::ffi::OsStr::to_os_string,
+    );
+    name.push(format!(".ptuf.{}.tmp", std::process::id()));
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.join(name),
+        _ => PathBuf::from(name),
+    }
+}
+
 fn sibling_temp_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().map_or_else(
         || std::ffi::OsString::from("snapshot.tmp"),
@@ -602,6 +621,24 @@ mod tests {
         // Every adapter's `detect_binary` delegates here; a non-empty
         // string is the contract the host config writers depend on.
         assert!(!detect_binary_impl().is_empty());
+    }
+
+    #[test]
+    fn sibling_install_tmp_path_falls_back_to_bare_filename_when_no_parent() {
+        // Bare input filename: helper must keep the file_name and emit a
+        // sibling tmp with the install `.ptuf.` infix (NOT `.ptuf-snap.`),
+        // and the result must have no parent directory.
+        let tmp = sibling_install_tmp_path(Path::new("hooks.json"), "fallback");
+        assert!(
+            tmp.parent()
+                .map(Path::as_os_str)
+                .unwrap_or_default()
+                .is_empty(),
+            "no-parent input must yield no-parent temp path: {tmp:?}",
+        );
+        let s = tmp.to_string_lossy();
+        assert!(s.starts_with("hooks.json.ptuf."), "got {s}");
+        assert!(!s.contains(".ptuf-snap."), "must not collide with snap suffix: {s}");
     }
 
     #[test]
