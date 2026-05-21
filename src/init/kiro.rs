@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
-use super::{InitError, InstallExtras, InstallOutcome, InstallPath, InstallStatus};
+use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
 /// Agent name used by `KiroMode::NewAgent` (the legacy single-file path).
 /// Mirrors the agent file's `name` field and the file stem
@@ -83,7 +83,7 @@ const CHAT_DEFAULT_AGENT_KEY: &str = "chat.defaultAgent";
 /// Used by reporting and by per-scope default-agent resolution
 /// (workspace `settings/cli.json` only governs workspace agents).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scope {
+pub(crate) enum Scope {
     Workspace,
     Home,
 }
@@ -106,7 +106,7 @@ impl Scope {
 
 /// One Kiro agent file resolved for patching.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedAgent {
+pub(crate) struct ResolvedAgent {
     pub scope: Scope,
     pub path: PathBuf,
 }
@@ -114,19 +114,19 @@ pub struct ResolvedAgent {
 /// Per-scope summary of which agent the user has marked as their
 /// default (via `<scope>/.kiro/settings/cli.json`). The install loop
 /// fails early via `InitError::Schema` when the referenced JSON is
-/// missing, so any report that survives to `InstallOutcome` is covered
-/// by construction.
+/// missing, so any report that survives to the CLI dispatcher is
+/// covered by construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KiroDefaultAgentReport {
+pub(crate) struct KiroDefaultAgentReport {
     pub scope: Scope,
     pub agent_name: String,
 }
 
-/// Adapter-specific reporting carried back in `InstallOutcome.extras`.
-/// Patched / written paths are not duplicated here — they live in
-/// `InstallOutcome.paths` already.
+/// Adapter-specific reporting carried back to the CLI dispatcher via
+/// the internal `AdapterRunReport`. Patched / written paths are not
+/// duplicated here — they live in `InstallOutcome.paths` already.
 #[derive(Debug, PartialEq, Eq)]
-pub struct KiroInstallExtras {
+pub(crate) struct KiroInstallExtras {
     /// Number of files that already carried a ptuf hook entry and
     /// were left untouched.
     pub already_present_count: usize,
@@ -137,17 +137,22 @@ pub struct KiroInstallExtras {
 }
 
 /// Resolved set of agent JSON files to patch.
+///
+/// The struct itself is `pub` so it can flow between the `pub fn
+/// resolve_paths` and `pub fn install` entry points as an opaque
+/// handle, but its fields reference `pub(crate)` types and are not
+/// part of the public API surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetPaths {
-    pub agent_config_paths: Vec<ResolvedAgent>,
+    pub(crate) agent_config_paths: Vec<ResolvedAgent>,
     /// `*.md` agent files seen but intentionally skipped — reported
     /// to the user so they know we noticed them.
-    pub skipped_non_json: Vec<PathBuf>,
+    pub(crate) skipped_non_json: Vec<PathBuf>,
     /// Per-scope default-agent metadata derived from
     /// `settings/cli.json`. Populated even when the agent JSON file
     /// itself is also in `agent_config_paths` (the two are joined
     /// later via stem comparison).
-    pub default_agent_names: Vec<KiroDefaultAgentReport>,
+    pub(crate) default_agent_names: Vec<KiroDefaultAgentReport>,
 }
 
 /// Default mode picks every existing agent JSON file; legacy mode
@@ -422,11 +427,28 @@ fn read_default_agent(settings_dir: &Path) -> Result<Option<String>, InitError> 
 /// Returns `InstallStatus::AlreadyPresent` only when *every* target
 /// already carries a ptuf entry; if any target needs a write, the
 /// outcome reports `Installed` (or `WouldInstall` under `--dry-run`).
+///
+/// This is the public entry point; the kiro-specific reporting
+/// (`KiroInstallExtras`) is dropped on the floor. CLI dispatchers that
+/// need the extras call `install_with_report` instead.
 pub fn install(
     targets: &TargetPaths,
     ptuf_binary: &str,
     dry_run: bool,
 ) -> Result<InstallOutcome, InitError> {
+    let (outcome, _) = install_with_report(targets, ptuf_binary, dry_run)?;
+    Ok(outcome)
+}
+
+/// Internal entry that returns both the canonical `InstallOutcome` and
+/// the kiro-specific `KiroInstallExtras`. Used by the CLI dispatcher to
+/// surface per-scope default-agent / skipped-non-json reporting without
+/// widening `InstallOutcome`'s public surface.
+pub(crate) fn install_with_report(
+    targets: &TargetPaths,
+    ptuf_binary: &str,
+    dry_run: bool,
+) -> Result<(InstallOutcome, KiroInstallExtras), InitError> {
     let command = format!("{ptuf_binary} hook kiro");
     let mut paths: Vec<InstallPath> = Vec::with_capacity(targets.agent_config_paths.len());
     let mut already_present_count = 0_usize;
@@ -457,14 +479,16 @@ pub fn install(
         skipped_non_json_agents: targets.skipped_non_json.clone(),
     };
 
-    Ok(InstallOutcome {
-        status,
-        agent: "kiro",
-        paths,
-        matcher: DEFAULT_MATCHER.to_string(),
-        command,
-        extras: Some(InstallExtras::Kiro(extras)),
-    })
+    Ok((
+        InstallOutcome {
+            status,
+            agent: "kiro",
+            paths,
+            matcher: DEFAULT_MATCHER.to_string(),
+            command,
+        },
+        extras,
+    ))
 }
 
 struct PerFileResult {
@@ -678,10 +702,12 @@ mod tests {
         }
     }
 
-    fn kiro_extras(outcome: &InstallOutcome) -> &KiroInstallExtras {
-        match outcome.extras.as_ref().unwrap() {
-            InstallExtras::Kiro(k) => k,
-        }
+    fn install_and_extras(
+        targets: &TargetPaths,
+        bin: &str,
+        dry_run: bool,
+    ) -> (InstallOutcome, KiroInstallExtras) {
+        install_with_report(targets, bin, dry_run).unwrap()
     }
 
     #[test]
@@ -721,10 +747,10 @@ mod tests {
         fs::write(&path, serde_json::to_string_pretty(&preset).unwrap()).unwrap();
         let before = read(&path);
         let targets = single_target(path.clone());
-        let outcome = install(&targets, "/y/ptuf", false).unwrap();
+        let (outcome, extras) = install_and_extras(&targets, "/y/ptuf", false);
         assert_eq!(outcome.status, InstallStatus::AlreadyPresent);
         assert_eq!(before, read(&path));
-        assert_eq!(kiro_extras(&outcome).already_present_count, 1);
+        assert_eq!(extras.already_present_count, 1);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1082,8 +1108,7 @@ mod tests {
         assert_eq!(targets.agent_config_paths.len(), 1);
         assert_eq!(targets.skipped_non_json, vec![md_path.clone()]);
 
-        let outcome = install(&targets, "/x/ptuf", false).unwrap();
-        let extras = kiro_extras(&outcome);
+        let (_outcome, extras) = install_and_extras(&targets, "/x/ptuf", false);
         assert_eq!(extras.skipped_non_json_agents, vec![md_path.clone()]);
         // .md file must be untouched
         assert_eq!(fs::read_to_string(&md_path).unwrap(), "# system prompt");
@@ -1158,8 +1183,7 @@ mod tests {
         };
         let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
-        let outcome = install(&targets, "/x/ptuf", false).unwrap();
-        let extras = kiro_extras(&outcome);
+        let (_outcome, extras) = install_and_extras(&targets, "/x/ptuf", false);
         assert_eq!(extras.default_agents.len(), 1);
         assert_eq!(extras.default_agents[0].agent_name, "architect");
         let _ = fs::remove_dir_all(&dir);
@@ -1274,9 +1298,9 @@ mod tests {
             scope: ScopeFilter::WorkspaceOnly,
         };
         let targets2 = resolve_paths_with(Some(dir.as_path()), None, &opts_default).unwrap();
-        let outcome = install(&targets2, "/x/ptuf", false).unwrap();
+        let (outcome, extras) = install_and_extras(&targets2, "/x/ptuf", false);
         assert_eq!(outcome.status, InstallStatus::AlreadyPresent);
-        assert_eq!(kiro_extras(&outcome).already_present_count, 1);
+        assert_eq!(extras.already_present_count, 1);
         let _ = fs::remove_dir_all(&dir);
     }
 

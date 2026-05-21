@@ -217,30 +217,30 @@ where
         let result = install_one(agent, cwd.as_deref(), &options, &mut runner, stderr);
         match result {
             Ok(InstallStep {
-                outcome,
-                report,
+                run,
+                verify,
                 rolled_back,
             }) => {
-                if let Some(report) = report.as_ref()
+                if let Some(report) = verify.as_ref()
                     && !report.passed()
                 {
                     overall = 1;
                 }
                 if globals.json {
-                    let value = match report.as_ref() {
-                        Some(r) => init::verify::render_json(&outcome, r, rolled_back),
-                        None => render_install_json(&outcome, options.dry_run),
+                    let value = match verify.as_ref() {
+                        Some(r) => init::verify::render_json(&run.outcome, r, rolled_back),
+                        None => render_install_json(&run, options.dry_run),
                     };
                     json_results.push(value);
                 } else {
-                    render_install_outcome(&outcome, options.dry_run, stdout);
-                    if let Some(report) = report.as_ref() {
+                    render_install_outcome(&run, options.dry_run, stdout);
+                    if let Some(report) = verify.as_ref() {
                         let _ = init::verify::render_text(report, stdout);
                         if rolled_back {
                             let _ =
                                 writeln!(stdout, "ptuf init: rolled back changes (verify failed)");
                         } else if !report.passed()
-                            && matches!(outcome.status, init::InstallStatus::AlreadyPresent)
+                            && matches!(run.outcome.status, init::InstallStatus::AlreadyPresent)
                         {
                             let _ = writeln!(
                                 stdout,
@@ -295,8 +295,8 @@ pub(super) fn run_update<W1: Write, W2: Write>(
 }
 
 struct InstallStep {
-    outcome: init::InstallOutcome,
-    report: Option<init::verify::VerifyReport>,
+    run: init::AdapterRunReport,
+    verify: Option<init::verify::VerifyReport>,
     rolled_back: bool,
 }
 
@@ -322,18 +322,18 @@ where
     } else {
         None
     };
-    let outcome = (plan.install)(options.dry_run)?;
+    let run = (plan.install)(options.dry_run)?;
     if !options.verify {
         return Ok(InstallStep {
-            outcome,
-            report: None,
+            run,
+            verify: None,
             rolled_back: false,
         });
     }
-    let report = runner();
+    let verify_report = runner();
     let mut rolled_back = false;
-    if !report.passed()
-        && matches!(outcome.status, init::InstallStatus::Installed)
+    if !verify_report.passed()
+        && matches!(run.outcome.status, init::InstallStatus::Installed)
         && let Some(snaps) = snaps.as_deref()
     {
         match init::restore(snaps) {
@@ -346,15 +346,15 @@ where
         }
     }
     Ok(InstallStep {
-        outcome,
-        report: Some(report),
+        run,
+        verify: Some(verify_report),
         rolled_back,
     })
 }
 
 struct AgentPlan {
     snapshot_paths: Vec<PathBuf>,
-    install: Box<dyn FnOnce(bool) -> Result<init::InstallOutcome, init::InitError>>,
+    install: Box<dyn FnOnce(bool) -> Result<init::AdapterRunReport, init::InitError>>,
 }
 
 impl AgentPlan {
@@ -372,7 +372,11 @@ impl AgentPlan {
                     snapshot_paths: vec![path],
                     install: Box::new(move |dry_run| {
                         let binary = init::claude_code::detect_binary();
-                        init::claude_code::install(&install_path, &binary, dry_run)
+                        let outcome = init::claude_code::install(&install_path, &binary, dry_run)?;
+                        Ok(init::AdapterRunReport {
+                            outcome,
+                            kiro: None,
+                        })
                     }),
                 })
             },
@@ -382,7 +386,11 @@ impl AgentPlan {
                     snapshot_paths: vec![targets.hooks_path.clone(), targets.config_path.clone()],
                     install: Box::new(move |dry_run| {
                         let binary = init::codex::detect_binary();
-                        init::codex::install(&targets, &binary, dry_run)
+                        let outcome = init::codex::install(&targets, &binary, dry_run)?;
+                        Ok(init::AdapterRunReport {
+                            outcome,
+                            kiro: None,
+                        })
                     }),
                 })
             },
@@ -392,7 +400,11 @@ impl AgentPlan {
                     snapshot_paths: vec![targets.hooks_path.clone()],
                     install: Box::new(move |dry_run| {
                         let binary = init::copilot::detect_binary();
-                        init::copilot::install(&targets, &binary, dry_run)
+                        let outcome = init::copilot::install(&targets, &binary, dry_run)?;
+                        Ok(init::AdapterRunReport {
+                            outcome,
+                            kiro: None,
+                        })
                     }),
                 })
             },
@@ -407,7 +419,12 @@ impl AgentPlan {
                     snapshot_paths,
                     install: Box::new(move |dry_run| {
                         let binary = init::kiro::detect_binary();
-                        init::kiro::install(&targets, &binary, dry_run)
+                        let (outcome, extras) =
+                            init::kiro::install_with_report(&targets, &binary, dry_run)?;
+                        Ok(init::AdapterRunReport {
+                            outcome,
+                            kiro: Some(extras),
+                        })
                     }),
                 })
             },
@@ -417,7 +434,11 @@ impl AgentPlan {
                     snapshot_paths: vec![targets.hook_path.clone()],
                     install: Box::new(move |dry_run| {
                         let binary = init::cline::detect_binary();
-                        init::cline::install(&targets, &binary, dry_run)
+                        let outcome = init::cline::install(&targets, &binary, dry_run)?;
+                        Ok(init::AdapterRunReport {
+                            outcome,
+                            kiro: None,
+                        })
                     }),
                 })
             },
@@ -425,7 +446,8 @@ impl AgentPlan {
     }
 }
 
-fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: bool, stdout: &mut W) {
+fn render_install_outcome<W: Write>(run: &init::AdapterRunReport, dry_run: bool, stdout: &mut W) {
+    let outcome = &run.outcome;
     let parts: Vec<String> = outcome
         .paths
         .iter()
@@ -456,14 +478,15 @@ fn render_install_outcome<W: Write>(outcome: &init::InstallOutcome, dry_run: boo
             let _ = writeln!(stdout, "Run without --dry-run to apply.");
         },
     }
-    render_install_extras_text(outcome, stdout);
+    render_install_extras_text(run, stdout);
 }
 
-fn render_install_extras_text<W: Write>(outcome: &init::InstallOutcome, stdout: &mut W) {
-    let Some(init::InstallExtras::Kiro(extras)) = outcome.extras.as_ref() else {
+fn render_install_extras_text<W: Write>(run: &init::AdapterRunReport, stdout: &mut W) {
+    let Some(extras) = run.kiro.as_ref() else {
         return;
     };
-    let patched = outcome
+    let patched = run
+        .outcome
         .paths
         .len()
         .saturating_sub(extras.already_present_count);
@@ -492,7 +515,8 @@ fn render_install_extras_text<W: Write>(outcome: &init::InstallOutcome, stdout: 
     }
 }
 
-fn render_install_json(outcome: &init::InstallOutcome, dry_run: bool) -> serde_json::Value {
+fn render_install_json(run: &init::AdapterRunReport, dry_run: bool) -> serde_json::Value {
+    let outcome = &run.outcome;
     let mut value = serde_json::json!({
         "agent": outcome.agent,
         "status": match outcome.status {
@@ -508,7 +532,7 @@ fn render_install_json(outcome: &init::InstallOutcome, dry_run: bool) -> serde_j
             "path": p.path.display().to_string(),
         })).collect::<Vec<_>>(),
     });
-    if let Some(init::InstallExtras::Kiro(extras)) = outcome.extras.as_ref() {
+    if let Some(extras) = run.kiro.as_ref() {
         let default_agents: Vec<serde_json::Value> = extras
             .default_agents
             .iter()
@@ -1225,19 +1249,21 @@ rules:
 
     #[test]
     fn render_install_outcome_for_already_present_dry_run_uses_suffix() {
-        let outcome = init::InstallOutcome {
-            status: init::InstallStatus::AlreadyPresent,
-            agent: "codex",
-            paths: vec![init::InstallPath {
-                label: "hooks",
-                path: PathBuf::from("/x/hooks.json"),
-            }],
-            matcher: "Bash".to_string(),
-            command: "/x/ptuf hook codex".to_string(),
-            extras: None,
+        let run = init::AdapterRunReport {
+            outcome: init::InstallOutcome {
+                status: init::InstallStatus::AlreadyPresent,
+                agent: "codex",
+                paths: vec![init::InstallPath {
+                    label: "hooks",
+                    path: PathBuf::from("/x/hooks.json"),
+                }],
+                matcher: "Bash".to_string(),
+                command: "/x/ptuf hook codex".to_string(),
+            },
+            kiro: None,
         };
         let mut out = Vec::new();
-        render_install_outcome(&outcome, true, &mut out);
+        render_install_outcome(&run, true, &mut out);
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("(dry-run)"), "out: {s}");
         assert!(s.contains("already contains"), "out: {s}");
@@ -1245,25 +1271,27 @@ rules:
 
     #[test]
     fn render_install_outcome_for_installed_writes_matcher_and_command() {
-        let outcome = init::InstallOutcome {
-            status: init::InstallStatus::Installed,
-            agent: "codex",
-            paths: vec![
-                init::InstallPath {
-                    label: "hooks",
-                    path: PathBuf::from("/x/hooks.json"),
-                },
-                init::InstallPath {
-                    label: "config",
-                    path: PathBuf::from("/x/config.toml"),
-                },
-            ],
-            matcher: "Bash|apply_patch|mcp__.*".to_string(),
-            command: "/x/ptuf hook codex".to_string(),
-            extras: None,
+        let run = init::AdapterRunReport {
+            outcome: init::InstallOutcome {
+                status: init::InstallStatus::Installed,
+                agent: "codex",
+                paths: vec![
+                    init::InstallPath {
+                        label: "hooks",
+                        path: PathBuf::from("/x/hooks.json"),
+                    },
+                    init::InstallPath {
+                        label: "config",
+                        path: PathBuf::from("/x/config.toml"),
+                    },
+                ],
+                matcher: "Bash|apply_patch|mcp__.*".to_string(),
+                command: "/x/ptuf hook codex".to_string(),
+            },
+            kiro: None,
         };
         let mut out = Vec::new();
-        render_install_outcome(&outcome, false, &mut out);
+        render_install_outcome(&run, false, &mut out);
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("registered hook"));
         assert!(s.contains("hooks=/x/hooks.json"));
@@ -1282,25 +1310,27 @@ rules:
             }],
             skipped_non_json_agents: vec![PathBuf::from("/x/.kiro/agents/notes.md")],
         };
-        let outcome = init::InstallOutcome {
-            status: init::InstallStatus::Installed,
-            agent: "kiro",
-            paths: vec![
-                init::InstallPath {
-                    label: "workspace-agent",
-                    path: PathBuf::from("/x/.kiro/agents/architect.json"),
-                },
-                init::InstallPath {
-                    label: "workspace-agent",
-                    path: PathBuf::from("/x/.kiro/agents/beta.json"),
-                },
-            ],
-            matcher: "*".to_string(),
-            command: "/x/ptuf hook kiro".to_string(),
-            extras: Some(init::InstallExtras::Kiro(extras)),
+        let run = init::AdapterRunReport {
+            outcome: init::InstallOutcome {
+                status: init::InstallStatus::Installed,
+                agent: "kiro",
+                paths: vec![
+                    init::InstallPath {
+                        label: "workspace-agent",
+                        path: PathBuf::from("/x/.kiro/agents/architect.json"),
+                    },
+                    init::InstallPath {
+                        label: "workspace-agent",
+                        path: PathBuf::from("/x/.kiro/agents/beta.json"),
+                    },
+                ],
+                matcher: "*".to_string(),
+                command: "/x/ptuf hook kiro".to_string(),
+            },
+            kiro: Some(extras),
         };
         let mut out = Vec::new();
-        render_install_outcome(&outcome, false, &mut out);
+        render_install_outcome(&run, false, &mut out);
         let s = String::from_utf8_lossy(&out);
         assert!(
             s.contains("kiro: patched 1 agent(s), 1 already present"),
@@ -1324,18 +1354,20 @@ rules:
             }],
             skipped_non_json_agents: Vec::new(),
         };
-        let outcome = init::InstallOutcome {
-            status: init::InstallStatus::Installed,
-            agent: "kiro",
-            paths: vec![init::InstallPath {
-                label: "home-agent",
-                path: PathBuf::from("/h/.kiro/agents/default.json"),
-            }],
-            matcher: "*".to_string(),
-            command: "/x/ptuf hook kiro".to_string(),
-            extras: Some(init::InstallExtras::Kiro(extras)),
+        let run = init::AdapterRunReport {
+            outcome: init::InstallOutcome {
+                status: init::InstallStatus::Installed,
+                agent: "kiro",
+                paths: vec![init::InstallPath {
+                    label: "home-agent",
+                    path: PathBuf::from("/h/.kiro/agents/default.json"),
+                }],
+                matcher: "*".to_string(),
+                command: "/x/ptuf hook kiro".to_string(),
+            },
+            kiro: Some(extras),
         };
-        let value = render_install_json(&outcome, false);
+        let value = render_install_json(&run, false);
         assert_eq!(value["kiro"]["alreadyPresentCount"], 0);
         assert_eq!(value["kiro"]["defaultAgents"][0]["scope"], "home");
         assert_eq!(value["kiro"]["defaultAgents"][0]["agentName"], "default");
@@ -1350,36 +1382,40 @@ rules:
 
     #[test]
     fn render_install_json_omits_kiro_block_for_non_kiro_adapters() {
-        let outcome = init::InstallOutcome {
-            status: init::InstallStatus::Installed,
-            agent: "codex",
-            paths: vec![init::InstallPath {
-                label: "hooks",
-                path: PathBuf::from("/x/hooks.json"),
-            }],
-            matcher: "Bash".to_string(),
-            command: "/x/ptuf hook codex".to_string(),
-            extras: None,
+        let run = init::AdapterRunReport {
+            outcome: init::InstallOutcome {
+                status: init::InstallStatus::Installed,
+                agent: "codex",
+                paths: vec![init::InstallPath {
+                    label: "hooks",
+                    path: PathBuf::from("/x/hooks.json"),
+                }],
+                matcher: "Bash".to_string(),
+                command: "/x/ptuf hook codex".to_string(),
+            },
+            kiro: None,
         };
-        let value = render_install_json(&outcome, false);
+        let value = render_install_json(&run, false);
         assert!(value.get("kiro").is_none(), "{value}");
     }
 
     #[test]
     fn render_install_outcome_for_would_install_emits_run_advice() {
-        let outcome = init::InstallOutcome {
-            status: init::InstallStatus::WouldInstall,
-            agent: "codex",
-            paths: vec![init::InstallPath {
-                label: "hooks",
-                path: PathBuf::from("/x/hooks.json"),
-            }],
-            matcher: "Bash".to_string(),
-            command: "/x/ptuf hook codex".to_string(),
-            extras: None,
+        let run = init::AdapterRunReport {
+            outcome: init::InstallOutcome {
+                status: init::InstallStatus::WouldInstall,
+                agent: "codex",
+                paths: vec![init::InstallPath {
+                    label: "hooks",
+                    path: PathBuf::from("/x/hooks.json"),
+                }],
+                matcher: "Bash".to_string(),
+                command: "/x/ptuf hook codex".to_string(),
+            },
+            kiro: None,
         };
         let mut out = Vec::new();
-        render_install_outcome(&outcome, true, &mut out);
+        render_install_outcome(&run, true, &mut out);
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("would register hook"));
         assert!(s.contains("matcher: Bash"));

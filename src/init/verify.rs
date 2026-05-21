@@ -224,7 +224,6 @@ mod tests {
             }],
             matcher: "Bash|Read|Edit|Write|WebFetch|mcp__.*".into(),
             command: "/usr/local/bin/ptuf hook claude-code".into(),
-            extras: None,
         }
     }
 

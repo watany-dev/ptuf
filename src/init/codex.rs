@@ -110,7 +110,6 @@ pub fn install(
         ],
         matcher: DEFAULT_MATCHER.to_string(),
         command,
-        extras: None,
     })
 }
 

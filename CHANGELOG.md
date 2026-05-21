@@ -25,15 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `init::kiro::resolve_paths` に必須引数 `&KiroInitOptions` を追加。
 - `init::kiro::install` の `&TargetPaths` 意味論を単一 path から多 path
   に変更 (signature 同型のまま受け取る struct shape が変わる)。
-- `init::InstallOutcome` に required field `pub extras:
-  Option<InstallExtras>` を追加。
+- `init::kiro::TargetPaths` の field を `pub(crate)` に降格 (struct
+  自体は `pub` 維持の opaque handle)。embedded user は `resolve_paths`
+  の戻り値を `install` にそのまま渡せれば足りるので、内部 field を
+  直接読む API contract は外す。
 
 ### Added
-- `init::kiro` の新規 pub items: `Scope`, `ResolvedAgent`,
-  `KiroDefaultAgentReport`, `KiroInstallExtras`, `KiroMode`,
-  `ScopeFilter`, `KiroInitOptions`, `FALLBACK_AGENT_NAME`。
-- `init::InstallExtras` enum (現状 `Kiro(KiroInstallExtras)` のみ) —
-  adapter 固有の追加レポートを `InstallOutcome` 経由で渡す経路。
+- `init::kiro` の新規 pub items: `KiroMode`, `ScopeFilter`,
+  `KiroInitOptions`, `FALLBACK_AGENT_NAME`。kiro 固有の reporting 型
+  (`Scope` / `ResolvedAgent` / `KiroDefaultAgentReport` /
+  `KiroInstallExtras`) は CLI 内部 (`pub(crate)`) に閉じ込め、
+  `pub fn install` の戻り値は pre-kiro と同じ素の `InstallOutcome`。
+  CLI dispatcher は `pub(crate) fn install_with_report` 経由で extras
+  を受領する。
 - `ptuf init` の Kiro 専用 flag: `--new-agent` (legacy 単独 agent 作成)、
   `--workspace-only` (`<repo>/.kiro/agents/` のみ patch)、`--global`
   (`$HOME/.kiro/agents/` のみ patch)。
