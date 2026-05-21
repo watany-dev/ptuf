@@ -22,7 +22,7 @@ codes per agent, and the full payload contract, see the design notes:
 | ClaudeCode  | `$HOME/.claude/`                                 | `$HOME/.claude/settings.json`             |
 | Codex       | `<repo>/.codex/` or `$HOME/.codex/`              | `<repo>/.codex/{hooks.json,config.toml}`  |
 | Copilot     | `<repo>/.github/`                                | `<repo>/.github/hooks/ptuf.json`          |
-| Kiro        | `<repo>/.kiro/` or `$HOME/.kiro/`                | `<repo>/.kiro/agents/ptuf-guarded.json`   |
+| Kiro        | `<repo>/.kiro/` or `$HOME/.kiro/`                | `<repo>/.kiro/agents/*.json` and `$HOME/.kiro/agents/*.json` (all existing JSONs are patched; empty scope falls back to `agents/default.json`) |
 | Cline       | `<repo>/.clinerules/`, `<repo>/.cline/`, `$HOME/Documents/Cline/`, or `$HOME/.cline/` | `<repo>/.clinerules/hooks/PreToolUse` |
 
 Pin to a single adapter with `ptuf init <agent>` (`claude-code` / `codex`
@@ -84,16 +84,29 @@ non-interactive reason as Codex.
 ## Kiro CLI
 
 ```bash
-ptuf init kiro                   # writes <repo>/.kiro/agents/ptuf-guarded.json
+ptuf init kiro                   # patches every <repo>/.kiro/agents/*.json and $HOME/.kiro/agents/*.json
 ptuf init kiro --dry-run
 ptuf init kiro --no-verify
+ptuf init kiro --workspace-only  # patch only <repo>/.kiro/agents/*.json
+ptuf init kiro --global          # patch only $HOME/.kiro/agents/*.json
+ptuf init kiro --new-agent       # legacy: create a single ptuf-guarded.json
 ```
 
-The installer falls back to `~/.kiro/agents/ptuf-guarded.json` when no
-repo root with a `.kiro/` directory is found. The written
-`hooks.preToolUse` entry invokes `<ptuf> hook kiro`. The installer is
-idempotent — re-running it detects an existing ptuf entry by the
-`hook kiro` command tail.
+The default mode reads every `*.json` directly under both
+`<repo>/.kiro/agents/` and `$HOME/.kiro/agents/`, appends a
+`hooks.preToolUse` entry that invokes `<ptuf> hook kiro`, and is
+idempotent (re-running detects existing entries by the `hook kiro`
+command tail). `.md` agents are skipped and reported under
+`skipped_non_json_agents` in the verify report.
+
+When neither scope contains any agent JSON, the installer falls back to
+creating `agents/default.json` (not `ptuf-guarded.json`) in the highest-
+priority scope so the hook still gets wired up. Each scope's
+`settings/cli.json` `chat.defaultAgent` is consulted to verify the
+referenced agent JSON exists; a dangling reference fails closed with
+`InitError::Schema`. The patched JSON files are added to
+`core.self_protection.kiro-settings`, so a guarded session cannot rewrite
+them to remove the hook.
 
 Kiro `preToolUse` payloads use a different vocabulary than Claude Code, so
 the adapter normalises tool names and `tool_input` keys before the engine

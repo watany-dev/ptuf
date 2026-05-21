@@ -41,7 +41,7 @@ ptuf update [--check] [--version <TAG>] [--force]
 | ClaudeCode | `$HOME/.claude/` | `$HOME/.claude/settings.json` |
 | Codex | `<repo>/.codex/` または `$HOME/.codex/` | repo 配下の `.codex/` |
 | Copilot | `<repo>/.github/` | `<repo>/.github/hooks/ptuf.json` |
-| Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | 該当 `.kiro/agents/ptuf-guarded.json` |
+| Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | 両 scope の `.kiro/agents/*.json` を一括 patch (空 scope は `agents/default.json` で fallback) |
 | Cline | `<repo>/.clinerules/` `.cline/`、または `$HOME/Documents/Cline/` `.cline/` | repo 配下 `.clinerules/hooks/PreToolUse` または `$HOME/Documents/Cline/Hooks/PreToolUse` |
 
 検出 0 件 → exit `1` + `no agent detected` を stderr に出す。1 件以上

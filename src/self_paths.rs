@@ -249,9 +249,7 @@ impl ProtectedPaths {
         }
 
         let home_path = env.var_os("HOME").map(PathBuf::from);
-        let mut kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
-        kiro_settings.sort();
-        kiro_settings.dedup();
+        let kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
 
         for agent_path in &kiro_settings {
             let body = match fs::read_to_string(agent_path) {

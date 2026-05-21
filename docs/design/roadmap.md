@@ -57,8 +57,9 @@
   `@server/tool` MCP 化、`Ask` → `Deny` demote、JSON envelope を持たず
   stderr + exit `2` で deny を返す fail-closed 経路、`core.engine.*`
   reserved rule の流用)
-- `ptuf init kiro` (`.kiro/agents/ptuf-guarded.json` への idempotent
-  書き込み、repo root が無ければ `$HOME` へ fallback)
+- `ptuf init kiro` (`<repo>/.kiro/agents/*.json` と `$HOME/.kiro/agents/*.json`
+  の **全 JSON** への idempotent な hook 注入。空 scope は
+  `agents/default.json` で fallback。`--new-agent` で legacy 単独ファイル動作)
 - `Read` / `Edit` / `Write` の `paths[]` / `operations[].path` を core
   `collect_event_paths` で重複排除しつつ収集する additive 拡張
 - audit `agent: "kiro"` を許容
