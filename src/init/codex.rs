@@ -220,15 +220,19 @@ fn ensure_hooks_enabled(doc: &mut DocumentMut) -> bool {
     let Some(features) = doc["features"].as_table_like_mut() else {
         return false;
     };
-    let already_enabled = features
-        .get("codex_hooks")
-        .and_then(toml_edit::Item::as_bool)
-        == Some(true);
-    if already_enabled {
-        return false;
+
+    let mut changed = false;
+    // Codex deprecated `codex_hooks` in favor of `hooks`; strip the legacy key
+    // so re-running `init` silences the upstream warning.
+    if features.remove("codex_hooks").is_some() {
+        changed = true;
     }
-    features.insert("codex_hooks", value(true));
-    true
+    let already_enabled = features.get("hooks").and_then(toml_edit::Item::as_bool) == Some(true);
+    if !already_enabled {
+        features.insert("hooks", value(true));
+        changed = true;
+    }
+    changed
 }
 
 fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
@@ -346,7 +350,13 @@ mod tests {
         assert_eq!(outcome.status, InstallStatus::Installed);
         assert!(read(&targets.hooks_path).contains("\"PreToolUse\""));
         assert!(read(&targets.hooks_path).contains(DEFAULT_MATCHER));
-        assert!(read(&targets.config_path).contains("codex_hooks = true"));
+        let doc = read(&targets.config_path).parse::<DocumentMut>().unwrap();
+        let features = doc["features"].as_table_like().unwrap();
+        assert_eq!(
+            features.get("hooks").and_then(|item| item.as_bool()),
+            Some(true)
+        );
+        assert!(!features.contains_key("codex_hooks"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -375,7 +385,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        fs::write(&targets.config_path, "[features]\ncodex_hooks = true\n").unwrap();
+        fs::write(&targets.config_path, "[features]\nhooks = true\n").unwrap();
         let before_hooks = read(&targets.hooks_path);
         let before_config = read(&targets.config_path);
         let outcome = install(&targets, "/y/ptuf", false).unwrap();
@@ -430,7 +440,13 @@ mod tests {
         let outcome = install(&targets, "/x/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::Installed);
         assert_eq!(before_hooks, read(&targets.hooks_path));
-        assert!(read(&targets.config_path).contains("codex_hooks = true"));
+        let doc = read(&targets.config_path).parse::<DocumentMut>().unwrap();
+        let features = doc["features"].as_table_like().unwrap();
+        assert_eq!(
+            features.get("hooks").and_then(|item| item.as_bool()),
+            Some(true)
+        );
+        assert!(!features.contains_key("codex_hooks"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -477,9 +493,10 @@ mod tests {
             Some(true)
         );
         assert_eq!(
-            features.get("codex_hooks").and_then(|item| item.as_bool()),
+            features.get("hooks").and_then(|item| item.as_bool()),
             Some(true)
         );
+        assert!(!features.contains_key("codex_hooks"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -620,7 +637,13 @@ mod tests {
         fs::write(&targets.config_path, "").unwrap();
         let outcome = install(&targets, "/x/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::Installed);
-        assert!(read(&targets.config_path).contains("codex_hooks = true"));
+        let doc = read(&targets.config_path).parse::<DocumentMut>().unwrap();
+        let features = doc["features"].as_table_like().unwrap();
+        assert_eq!(
+            features.get("hooks").and_then(|item| item.as_bool()),
+            Some(true)
+        );
+        assert!(!features.contains_key("codex_hooks"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -835,9 +858,10 @@ mod tests {
             Some(true)
         );
         assert_eq!(
-            features.get("codex_hooks").and_then(|item| item.as_bool()),
+            features.get("hooks").and_then(|item| item.as_bool()),
             Some(true)
         );
+        assert!(!features.contains_key("codex_hooks"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -932,6 +956,82 @@ mod tests {
             let mode = fs::metadata(p).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "{} must be 0600", p.display());
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_migrates_legacy_codex_hooks_key() {
+        let dir = workdir("migrate-legacy");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        fs::write(
+            &targets.hooks_path,
+            serde_json::to_string_pretty(&json!({
+                "hooks": {
+                    "PreToolUse": [{
+                        "matcher": DEFAULT_MATCHER,
+                        "hooks": [{
+                            "type": "command",
+                            "command": "/x/ptuf hook codex"
+                        }]
+                    }]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(&targets.config_path, "[features]\ncodex_hooks = true\n").unwrap();
+        let outcome = install(&targets, "/x/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        let doc = read(&targets.config_path).parse::<DocumentMut>().unwrap();
+        let features = doc["features"].as_table_like().unwrap();
+        assert_eq!(
+            features.get("hooks").and_then(|item| item.as_bool()),
+            Some(true)
+        );
+        assert!(
+            !features.contains_key("codex_hooks"),
+            "legacy codex_hooks key must be removed"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_is_idempotent_when_new_hooks_key_already_true() {
+        let dir = workdir("idempotent-new-key");
+        let targets = TargetPaths {
+            root: Some(dir.clone()),
+            hooks_path: dir.join(".codex/hooks.json"),
+            config_path: dir.join(".codex/config.toml"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        fs::write(
+            &targets.hooks_path,
+            serde_json::to_string_pretty(&json!({
+                "hooks": {
+                    "PreToolUse": [{
+                        "matcher": DEFAULT_MATCHER,
+                        "hooks": [{
+                            "type": "command",
+                            "command": "/x/ptuf hook codex"
+                        }]
+                    }]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(&targets.config_path, "[features]\nhooks = true\n").unwrap();
+        let before_hooks = read(&targets.hooks_path);
+        let before_config = read(&targets.config_path);
+        let outcome = install(&targets, "/y/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::AlreadyPresent);
+        assert_eq!(before_hooks, read(&targets.hooks_path));
+        assert_eq!(before_config, read(&targets.config_path));
         let _ = fs::remove_dir_all(&dir);
     }
 }

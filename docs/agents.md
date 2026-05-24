@@ -63,7 +63,7 @@ ptuf init codex --no-verify
 ```
 
 Hook matcher is `Bash|apply_patch|mcp__.*`, command is `<absolute>/ptuf hook
-codex`, and `features.codex_hooks = true` is set. Because Codex `PreToolUse`
+codex`, and `features.hooks = true` is set. Because Codex `PreToolUse`
 cannot prompt interactively, the adapter converts `Ask` decisions to `Deny`.
 
 ## GitHub Copilot
