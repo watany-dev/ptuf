@@ -244,10 +244,14 @@ fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
         })?;
     }
 
-    let mut body = serde_json::to_string_pretty(value).map_err(|e| InitError::Schema {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
+    // `serde_json::Value` is always serializable (numbers exclude NaN/Inf,
+    // maps are string-keyed), so `to_string_pretty` cannot fail here.
+    #[expect(
+        clippy::expect_used,
+        reason = "serde_json::Value serialization is infallible"
+    )]
+    let mut body =
+        serde_json::to_string_pretty(value).expect("serde_json::Value always serializes");
     body.push('\n');
 
     let tmp = sibling_temp_path(path);
