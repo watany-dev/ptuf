@@ -217,20 +217,19 @@ fn ensure_hooks_enabled(doc: &mut DocumentMut) -> bool {
     if !doc.as_table().contains_key("features") || doc["features"].as_table_like_mut().is_none() {
         doc["features"] = Item::Table(Table::new());
     }
-    let Some(features) = doc["features"].as_table_like_mut() else {
-        return false;
-    };
-
     let mut changed = false;
-    // Codex deprecated `codex_hooks` in favor of `hooks`; strip the legacy key
-    // so re-running `init` silences the upstream warning.
-    if features.remove("codex_hooks").is_some() {
-        changed = true;
-    }
-    let already_enabled = features.get("hooks").and_then(toml_edit::Item::as_bool) == Some(true);
-    if !already_enabled {
-        features.insert("hooks", value(true));
-        changed = true;
+    if let Some(features) = doc["features"].as_table_like_mut() {
+        // Codex deprecated `codex_hooks` in favor of `hooks`; strip the legacy
+        // key so re-running `init` silences the upstream warning.
+        if features.remove("codex_hooks").is_some() {
+            changed = true;
+        }
+        let already_enabled =
+            features.get("hooks").and_then(toml_edit::Item::as_bool) == Some(true);
+        if !already_enabled {
+            features.insert("hooks", value(true));
+            changed = true;
+        }
     }
     changed
 }
