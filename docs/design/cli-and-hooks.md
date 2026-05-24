@@ -139,7 +139,7 @@ stdout に書く。
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
 ```
 
 実装上の契約:
