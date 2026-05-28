@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-28
+
 ### Changed (BREAKING)
 - `ptuf init kiro` の default 動作を変更: `<repo>/.kiro/agents/*.json`
   と `$HOME/.kiro/agents/*.json` の **すべて** に PreToolUse hook を
@@ -318,7 +320,8 @@ Initial public release.
 - `curl | sh` and PowerShell installers via cargo-dist
 - crates.io publication
 
-[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/watany-dev/ptuf/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/watany-dev/ptuf/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/watany-dev/ptuf/releases/tag/v0.1.0
 [0.0.1]: https://github.com/watany-dev/ptuf/releases/tag/v0.0.1
