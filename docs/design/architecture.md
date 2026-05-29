@@ -112,6 +112,13 @@ normalized `Event { agent, event, tool, inputs, paths, urls, content }`
   reserved rule (`core.engine.invalid-payload` /
   `core.engine.policy-load-failed`) も exit `0` + cancel JSON で fail-closed
   する。`shouldContinue` は一切出さない。
+- Cursor: Claude Code と同じく独自の `Ask` channel を持つため `Ask` を
+  降格せず保持する。`Allow` / `Monitor` は stdout 空 + exit `0`、`Ask` は
+  bare `{"permission":"ask","user_message":"…","agent_message":"…"}` + exit `0`、
+  `Deny` は `permission` を `deny` にして exit `2`。reserved rule も bare
+  `permission:deny` JSON + exit `2` で fail-closed する。Cursor の全機能ではなく
+  hook 駆動の agent tool execution のみが対象 (Tab 補完・手動編集・手動
+  ターミナルは hook を経由しないため対象外)。
 
 Copilot 入力は CLI 層の `src/cli/copilot_input.rs` で snake (`tool_name` /
 `tool_input`) と camel (`toolName` / `toolArgs`) の両形を正規化し、tool 名
@@ -136,6 +143,19 @@ legacy 形 (`preToolUse`) の両 envelope を正規化する。`tool_call` が�
 alias キー (`command` / `file_path` / `content` 等) を非破壊的に正規化する。
 canonical 化した tool 名と `tool_call` の id は `_cline_tool_name` /
 `_cline_tool_call_id` として `tool_input` に保持する。
+
+Cursor 入力は CLI 層の `src/cli/cursor_input.rs` で `hook_event_name`
+(camelCase `hookEventName` 互換) を event dispatcher として正規化する。
+enforce 対象は `preToolUse` (tool 名を canonical 形へ正規化) /
+`beforeShellExecution`→`Bash` / `beforeReadFile`→`Read` /
+`beforeMCPExecution`→`mcp__server__tool` で、それ以外の event は MVP では
+`core.engine.invalid-payload` で fail-closed する。tool 名 mapping
+(`Shell` / `Bash`→`Bash`、`Read` / `ReadFile`→`Read`、`Write`→`Write`、
+`Edit`→`Edit`、`Fetch`→`WebFetch`、`MCP` / `mcp__*`→`mcp__server__tool`) を
+適用し、`tool_input` (camelCase `toolInput` / root も読む) の `command` /
+`file_path` / `content` / `old_string` / `new_string` を alias から非破壊的に
+複製する。`tool_input` が JSON 文字列なら parse し、失敗時は `{"text":…}` で
+保持する。
 
 判定 engine 自体は agent 非依存で、adapter 拡張は CLI 層に閉じている。
 

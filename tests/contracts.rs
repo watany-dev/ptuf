@@ -472,6 +472,118 @@ fn cline_ask_demotes_to_cancel_with_note() {
 }
 
 #[test]
+fn cursor_deny_outputs_bare_permission_envelope_and_exit_two() {
+    let payload = r#"{"hook_event_name":"preToolUse","tool_name":"Shell","tool_input":{"command":"rm -rf /"},"cwd":"/tmp"}"#;
+    let (code, stdout, stderr) = run(&["hook", "cursor"], payload);
+    assert_eq!(code, 2, "Cursor deny must exit 2");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["permission"], "deny");
+    assert!(
+        value.get("hookSpecificOutput").is_none(),
+        "Cursor uses a bare envelope: {stdout}",
+    );
+    assert!(
+        value["agent_message"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.filesystem.destructive-rm")),
+        "stdout: {stdout}",
+    );
+    assert!(
+        value["user_message"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.filesystem.destructive-rm")),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("core.filesystem.destructive-rm"));
+}
+
+#[test]
+fn cursor_ask_is_preserved_not_demoted_and_exit_zero() {
+    let dir = repo();
+    std::fs::write(
+        dir.path().join(".ptuf.yaml"),
+        "plugins:\n  - path: ./ask-plugin.yaml\n",
+    )
+    .expect("write yaml");
+    std::fs::write(
+        dir.path().join("ask-plugin.yaml"),
+        "apiVersion: ptuf.dev/v1\nkind: Plugin\nmetadata:\n  name: pack.ask\nrules:\n  - id: pack.ask.confirm-curl\n    severity: medium\n    defaultDecision: ask\n    when:\n      shell.argv:\n        headAny: [curl]\n    reason: please confirm\n",
+    )
+    .expect("write plugin");
+
+    let payload = r#"{"hook_event_name":"beforeShellExecution","command":"curl https://example.com","cwd":"/tmp"}"#;
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "cursor"], payload);
+    assert_eq!(code, 0, "Cursor keeps Ask at exit 0");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(
+        value["permission"], "ask",
+        "Cursor must preserve Ask, never demote to deny: {stdout}",
+    );
+    let reason = value["agent_message"].as_str().expect("reason string");
+    assert!(reason.contains("please confirm"), "stdout: {stdout}");
+    assert!(
+        !reason.contains("demote") && !reason.contains("Cline"),
+        "Cursor reason must be verbatim, no demotion note: {stdout}",
+    );
+    assert!(stderr.contains("please confirm"), "stderr: {stderr}");
+}
+
+#[test]
+fn cursor_allow_outputs_empty_stdout_and_exit_zero() {
+    let payload = r#"{"hook_event_name":"beforeShellExecution","command":"ls","cwd":"/tmp"}"#;
+    let (code, stdout, stderr) = run(&["hook", "cursor"], payload);
+    assert_eq!(code, 0);
+    assert!(stdout.is_empty(), "Cursor allow emits no stdout: {stdout}");
+    assert!(stderr.is_empty(), "stderr: {stderr}");
+}
+
+#[test]
+fn cursor_invalid_payload_fails_closed_with_permission_deny_exit_two() {
+    let dir = repo();
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "cursor"], "not json");
+    assert_eq!(code, 2, "Cursor fail-closed exits 2");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["permission"], "deny");
+    assert!(
+        value["agent_message"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.engine.invalid-payload")),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("invalid hook payload"), "stderr: {stderr}");
+}
+
+#[test]
+fn cursor_unsupported_event_fails_closed() {
+    // postToolUse is observe-only territory in the spec; MVP rejects it as a
+    // fail-closed deny rather than silently allowing it through.
+    let payload =
+        r#"{"hook_event_name":"postToolUse","tool_name":"Shell","tool_input":{"command":"ls"}}"#;
+    let (code, stdout, stderr) = run(&["hook", "cursor"], payload);
+    assert_eq!(code, 2, "unsupported event fails closed: {stdout}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["permission"], "deny");
+    assert!(
+        value["agent_message"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.engine.invalid-payload")),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("invalid hook payload"), "stderr: {stderr}");
+}
+
+#[test]
+fn cursor_mcp_execution_normalises_to_mcp_tool() {
+    // beforeMCPExecution must reach the engine as mcp__<server>__<tool>. We
+    // assert it does not crash and produces a well-formed envelope; a safe
+    // tool yields Allow (empty stdout, exit 0).
+    let payload = r#"{"hook_event_name":"beforeMCPExecution","metadata":{"server":"github","tool_name":"get_me"}}"#;
+    let (code, stdout, stderr) = run(&["hook", "cursor"], payload);
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(stdout.is_empty(), "safe MCP call allowed: {stdout}");
+}
+
+#[test]
 fn workspace_outside_access_denies_read_outside_repo_when_pack_enabled() {
     let dir = repo();
     std::fs::write(

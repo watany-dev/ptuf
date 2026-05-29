@@ -66,6 +66,7 @@ CLI 経路はこれと異なり fail-closed で動作する。
 - `ptuf hook copilot`
 - `ptuf hook kiro`
 - `ptuf hook cline`
+- `ptuf hook cursor`
 - `ptuf [--json] check --tool <name> <command>`
 - `ptuf [--json] plugin check <path>`
 - `ptuf [--json] init [<agent>] [--no-verify] [--dry-run]`

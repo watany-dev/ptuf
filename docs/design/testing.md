@@ -86,9 +86,10 @@ point は、外部 agent との信頼境界として以下の不変を持つ。
   返し panic しない。exit `2` の場合は stdout に
   `"permissionDecision":"deny"` を含む (`src/cli/run.rs` の
   `pbt_run_hook_fails_closed_for_arbitrary_stdin`)
-- `copilot_input::parse` / `kiro_input::parse` / `cline_input::parse` は
-  任意の `&str` に対し `Ok` / `Err(ParseProblem | KiroInputError |
-  ClineInputError)` を返し panic しない (`pbt_parse_is_total_on_arbitrary_utf8`)
+- `copilot_input::parse` / `kiro_input::parse` / `cline_input::parse` /
+  `cursor_input::parse` は任意の `&str` に対し `Ok` / `Err(ParseProblem |
+  KiroInputError | ClineInputError | CursorInputError)` を返し panic しない
+  (`pbt_parse_is_total_on_arbitrary_utf8`)
 - 非 object / `toolName`/`tool_name` 欠落 / Kiro の `hook_event_name !=
   "preToolUse"` / Cline の `tool_call`・`preToolUse` 双方欠落や非対応
   `hookName` といった各異常 envelope は対応する parser error variant を

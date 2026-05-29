@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use crate::Decision;
 use crate::engine::Engine;
+use crate::init::cursor::CursorInitOptions;
 use crate::init::kiro::KiroInitOptions;
 use crate::reason;
 
@@ -19,6 +20,7 @@ pub use crate::update::UpdateOptions;
 
 mod cline_input;
 mod copilot_input;
+mod cursor_input;
 mod input_helpers;
 mod kiro_input;
 mod output;
@@ -45,6 +47,7 @@ pub enum HookAgent {
     Copilot,
     Kiro,
     Cline,
+    Cursor,
 }
 
 impl HookAgent {
@@ -55,6 +58,7 @@ impl HookAgent {
             Self::Copilot => "copilot",
             Self::Kiro => "kiro",
             Self::Cline => "cline",
+            Self::Cursor => "cursor",
         }
     }
 }
@@ -72,12 +76,17 @@ impl HookAgent {
 /// when `agent == Some(HookAgent::Kiro)`; the parser rejects them
 /// against other agents (or against auto-detect) with
 /// `ParseError::ConflictingFlags`.
+///
+/// `cursor` carries the Cursor-specific flags (`--scope` / `--root` /
+/// `--hooks`), accepted only when `agent == Some(HookAgent::Cursor)`
+/// with the same `ParseError::ConflictingFlags` guard.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InitOptions {
     pub agent: Option<HookAgent>,
     pub verify: bool,
     pub dry_run: bool,
     pub kiro: KiroInitOptions,
+    pub cursor: CursorInitOptions,
 }
 
 /// Top-level flags that apply uniformly across subcommands.
@@ -86,7 +95,7 @@ pub struct InitOptions {
 /// subcommand token (`ptuf --json init`). Per-subcommand
 /// `--json` was removed in the v0 simplification; `hook` rejects
 /// `--json` at parse time because the hook protocol output shape
-/// is fixed by Claude Code / Codex / Copilot / Kiro.
+/// is fixed by Claude Code / Codex / Copilot / Kiro / Cline / Cursor.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GlobalFlags {
     pub json: bool,
@@ -218,16 +227,24 @@ const HELP: &str = "ptuf — PreToolUseFilter, a guardrail for coding agents
 USAGE:
     ptuf [--json] init [<AGENT>] [--no-verify] [--dry-run]
                        [--new-agent] [--workspace-only] [--global]
+                       [--scope <local|global>] [--root <PATH>]
+                       [--hooks <PATH>]
         (auto-detect every agent under cwd / $HOME and install the
          PreToolUse hook with verify enabled by default. AGENT pins
          to a single adapter: claude-code | codex | copilot | kiro
-         | cline)
+         | cline | cursor)
         Kiro-only flags:
           --new-agent       Create a dedicated ptuf-guarded.json agent
                             (legacy single-file behavior) instead of
                             patching every existing agent JSON.
           --workspace-only  Patch only <repo>/.kiro/agents/*.json.
           --global          Patch only $HOME/.kiro/agents/*.json.
+        Cursor-only flags:
+          --scope <local|global>
+                            local (default) patches <repo>/.cursor/hooks.json;
+                            global patches $HOME/.cursor/hooks.json.
+          --root <PATH>     Override the repo-discovery start directory.
+          --hooks <PATH>    Patch this exact hooks.json file instead.
     ptuf hook <AGENT>
         (run as the agent's PreToolUse hook over stdin/stdout)
     ptuf [--json] check --tool <NAME> <COMMAND>
@@ -285,5 +302,6 @@ mod tests {
         assert_eq!(HookAgent::Copilot.audit_name(), "copilot");
         assert_eq!(HookAgent::Kiro.audit_name(), "kiro");
         assert_eq!(HookAgent::Cline.audit_name(), "cline");
+        assert_eq!(HookAgent::Cursor.audit_name(), "cursor");
     }
 }

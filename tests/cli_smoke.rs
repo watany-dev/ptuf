@@ -267,6 +267,67 @@ fn cline_hook_invalid_json_fails_closed_with_cancel_json() {
 }
 
 #[test]
+fn cursor_hook_denies_destructive_rm_with_permission_deny_and_exit_2() {
+    let payload = r#"{"hook_event_name":"preToolUse","tool_name":"Shell","tool_input":{"command":"rm -rf /"},"cwd":"/tmp"}"#;
+    let (code, stdout, stderr) = run(&["hook", "cursor"], payload);
+    assert_eq!(code, 2, "Cursor deny exits 2");
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Cursor must emit valid JSON");
+    assert_eq!(value["permission"], "deny", "stdout: {stdout}");
+    assert!(
+        value["agent_message"]
+            .as_str()
+            .is_some_and(|m| m.contains("core.filesystem.destructive-rm")),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("Blocked by ptuf rule"), "stderr: {stderr}");
+}
+
+#[test]
+fn cursor_hook_preserves_ask_with_permission_ask_and_zero_exit() {
+    let payload = r#"{"hook_event_name":"beforeShellExecution","command":"git reset --hard HEAD~3","cwd":"/tmp"}"#;
+    let (code, stdout, _stderr) = run(&["hook", "cursor"], payload);
+    assert_eq!(code, 0, "Cursor preserves Ask without demotion: exit 0");
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Cursor must emit valid JSON");
+    assert_eq!(
+        value["permission"], "ask",
+        "Cursor must not demote Ask to Deny: {stdout}",
+    );
+    assert!(
+        value["agent_message"]
+            .as_str()
+            .is_some_and(|m| m.contains("core.git.reset-hard")),
+        "stdout: {stdout}",
+    );
+}
+
+#[test]
+fn cursor_hook_allows_safe_payload_with_empty_stdout() {
+    let payload = r#"{"hook_event_name":"beforeShellExecution","command":"ls","cwd":"/tmp"}"#;
+    let (code, stdout, stderr) = run(&["hook", "cursor"], payload);
+    assert_eq!(code, 0);
+    assert!(stdout.is_empty(), "Cursor allow emits no stdout: {stdout}");
+    assert!(stderr.is_empty(), "stderr: {stderr}");
+}
+
+#[test]
+fn cursor_hook_invalid_json_fails_closed_with_permission_deny() {
+    let (code, stdout, stderr) = run(&["hook", "cursor"], "not json");
+    assert_eq!(code, 2, "Cursor fail-closed exits 2");
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Cursor must emit valid JSON");
+    assert_eq!(value["permission"], "deny", "stdout: {stdout}");
+    assert!(
+        value["agent_message"]
+            .as_str()
+            .is_some_and(|m| m.contains("core.engine.invalid-payload")),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("invalid hook payload"), "stderr: {stderr}");
+}
+
+#[test]
 fn no_args_returns_one_with_missing_subcommand_error() {
     let (code, stdout, stderr) = run(&[], "");
     assert_eq!(code, 1);

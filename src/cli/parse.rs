@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use crate::init::cursor::{CursorInitOptions, CursorScope};
 use crate::init::kiro::{KiroInitOptions, KiroMode, ScopeFilter};
 use crate::update::UpdateOptions;
 
@@ -22,14 +23,38 @@ where
     let mut new_agent = false;
     let mut workspace_only = false;
     let mut global = false;
-    for arg in iter {
+    let mut cursor_scope: Option<CursorScope> = None;
+    let mut cursor_root: Option<PathBuf> = None;
+    let mut cursor_hooks: Option<PathBuf> = None;
+    while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
             "--no-verify" => no_verify = true,
             "--new-agent" => new_agent = true,
             "--workspace-only" => workspace_only = true,
             "--global" => global = true,
-            "claude-code" | "codex" | "copilot" | "kiro" | "cline" => {
+            "--scope" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--scope"))?;
+                cursor_scope = Some(parse_cursor_scope(value)?);
+            },
+            other if other.starts_with("--scope=") => {
+                cursor_scope = Some(parse_cursor_scope(other.trim_start_matches("--scope="))?);
+            },
+            "--root" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--root"))?;
+                cursor_root = Some(PathBuf::from(value));
+            },
+            other if other.starts_with("--root=") => {
+                cursor_root = Some(PathBuf::from(other.trim_start_matches("--root=")));
+            },
+            "--hooks" => {
+                let value = iter.next().ok_or(ParseError::MissingValue("--hooks"))?;
+                cursor_hooks = Some(PathBuf::from(value));
+            },
+            other if other.starts_with("--hooks=") => {
+                cursor_hooks = Some(PathBuf::from(other.trim_start_matches("--hooks=")));
+            },
+            "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" => {
                 if agent.is_some() {
                     return Err(ParseError::UnexpectedArgument(arg.clone()));
                 }
@@ -52,6 +77,13 @@ where
             "Kiro-only flag requires `kiro` agent",
         ));
     }
+    let cursor_only_flag_set =
+        cursor_scope.is_some() || cursor_root.is_some() || cursor_hooks.is_some();
+    if cursor_only_flag_set && agent != Some(HookAgent::Cursor) {
+        return Err(ParseError::ConflictingFlags(
+            "Cursor-only flag requires `cursor` agent",
+        ));
+    }
     // Dry-run never writes, so the synthetic-deny check would just
     // confirm whatever was already on disk; treat dry-run as "skip
     // verify" rather than as a parse error.
@@ -70,12 +102,26 @@ where
             ScopeFilter::Both
         },
     };
+    let cursor = CursorInitOptions {
+        scope: cursor_scope.unwrap_or_default(),
+        root: cursor_root,
+        hooks: cursor_hooks,
+    };
     Ok(Command::Init(InitOptions {
         agent,
         verify,
         dry_run,
         kiro,
+        cursor,
     }))
+}
+
+fn parse_cursor_scope(value: &str) -> Result<CursorScope, ParseError> {
+    match value {
+        "local" => Ok(CursorScope::Local),
+        "global" => Ok(CursorScope::Global),
+        other => Err(ParseError::UnexpectedArgument(format!("--scope {other}"))),
+    }
 }
 
 fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
@@ -85,6 +131,7 @@ fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
         "copilot" => Ok(HookAgent::Copilot),
         "kiro" => Ok(HookAgent::Kiro),
         "cline" => Ok(HookAgent::Cline),
+        "cursor" => Ok(HookAgent::Cursor),
         other => Err(ParseError::UnknownAgent(other.to_string())),
     }
 }
@@ -185,6 +232,7 @@ mod tests {
 
     use std::path::PathBuf;
 
+    use crate::init::cursor::{CursorInitOptions, CursorScope};
     use crate::init::kiro::{KiroInitOptions, KiroMode, ScopeFilter};
     use crate::update::UpdateOptions;
 
@@ -384,6 +432,7 @@ mod tests {
                 verify: true,
                 dry_run: false,
                 kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions::default(),
             })
         );
     }
@@ -396,6 +445,7 @@ mod tests {
             ("copilot", HookAgent::Copilot),
             ("kiro", HookAgent::Kiro),
             ("cline", HookAgent::Cline),
+            ("cursor", HookAgent::Cursor),
         ] {
             let c = cmd(&["init", token]);
             assert_eq!(
@@ -405,6 +455,7 @@ mod tests {
                     verify: true,
                     dry_run: false,
                     kiro: KiroInitOptions::default(),
+                    cursor: CursorInitOptions::default(),
                 }),
                 "agent token {token}",
             );
@@ -420,6 +471,7 @@ mod tests {
                 verify: false,
                 dry_run: false,
                 kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions::default(),
             })
         );
     }
@@ -433,6 +485,7 @@ mod tests {
                 verify: false,
                 dry_run: true,
                 kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions::default(),
             })
         );
     }
@@ -446,6 +499,7 @@ mod tests {
                 verify: false,
                 dry_run: true,
                 kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions::default(),
             })
         );
     }
@@ -462,6 +516,7 @@ mod tests {
                     mode: KiroMode::NewAgent,
                     scope: ScopeFilter::Both,
                 },
+                cursor: CursorInitOptions::default(),
             })
         );
     }
@@ -478,6 +533,7 @@ mod tests {
                     mode: KiroMode::PatchExisting,
                     scope: ScopeFilter::WorkspaceOnly,
                 },
+                cursor: CursorInitOptions::default(),
             })
         );
     }
@@ -494,6 +550,7 @@ mod tests {
                     mode: KiroMode::PatchExisting,
                     scope: ScopeFilter::GlobalOnly,
                 },
+                cursor: CursorInitOptions::default(),
             })
         );
     }
@@ -510,6 +567,7 @@ mod tests {
                     mode: KiroMode::NewAgent,
                     scope: ScopeFilter::GlobalOnly,
                 },
+                cursor: CursorInitOptions::default(),
             })
         );
     }
@@ -545,6 +603,107 @@ mod tests {
                 "expected ConflictingFlags for {combo:?}",
             );
         }
+    }
+
+    #[test]
+    fn parse_init_accepts_scope_global_with_cursor() {
+        assert_eq!(
+            cmd(&["init", "cursor", "--scope", "global"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Cursor),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions {
+                    scope: CursorScope::Global,
+                    root: None,
+                    hooks: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_accepts_scope_local_equals_form_with_cursor() {
+        assert_eq!(
+            cmd(&["init", "cursor", "--scope=local"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Cursor),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions {
+                    scope: CursorScope::Local,
+                    root: None,
+                    hooks: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_accepts_root_and_hooks_with_cursor() {
+        assert_eq!(
+            cmd(&[
+                "init",
+                "cursor",
+                "--root",
+                "/repo",
+                "--hooks",
+                "/tmp/h.json"
+            ]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Cursor),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions {
+                    scope: CursorScope::Local,
+                    root: Some(PathBuf::from("/repo")),
+                    hooks: Some(PathBuf::from("/tmp/h.json")),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_rejects_cursor_flag_without_cursor_agent() {
+        for combo in [
+            vec!["init", "--scope", "global"],
+            vec!["init", "--root", "/x"],
+            vec!["init", "--hooks", "/x.json"],
+            vec!["init", "claude-code", "--scope", "local"],
+            vec!["init", "kiro", "--root", "/x"],
+        ] {
+            assert!(
+                matches!(parse(&s(&combo)), Err(ParseError::ConflictingFlags(_))),
+                "expected ConflictingFlags for {combo:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_init_rejects_invalid_scope_value() {
+        assert!(matches!(
+            parse(&s(&["init", "cursor", "--scope", "workspace"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn parse_init_requires_value_for_cursor_flags() {
+        assert!(matches!(
+            parse(&s(&["init", "cursor", "--scope"])),
+            Err(ParseError::MissingValue("--scope"))
+        ));
+        assert!(matches!(
+            parse(&s(&["init", "cursor", "--root"])),
+            Err(ParseError::MissingValue("--root"))
+        ));
+        assert!(matches!(
+            parse(&s(&["init", "cursor", "--hooks"])),
+            Err(ParseError::MissingValue("--hooks"))
+        ));
     }
 
     #[test]

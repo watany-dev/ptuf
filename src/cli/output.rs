@@ -28,6 +28,11 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         HookAgent::Cline => Some(serde_json::to_string(&hook_output::cline::from_decision(
             &adapted,
         ))),
+        // Cursor emits a bare permission envelope (no `hookSpecificOutput`
+        // wrapper) and, unlike Copilot, preserves Ask as `permission:ask`.
+        HookAgent::Cursor => {
+            hook_output::cursor::from_decision(&adapted).map(|r| serde_json::to_string(&r))
+        },
         HookAgent::ClaudeCode | HookAgent::Codex => {
             render_hook_response(agent, &adapted).map(|r| serde_json::to_string(&r))
         },
@@ -75,6 +80,9 @@ pub(super) fn render_hook_response(
         // Cline uses a Cline-specific cancel envelope; `emit_decision`
         // dispatches through `hook_output::cline` directly.
         HookAgent::Cline => None,
+        // Cursor uses a bare permission envelope; `emit_decision`
+        // dispatches through `hook_output::cursor` directly.
+        HookAgent::Cursor => None,
     }
 }
 
@@ -442,6 +450,100 @@ mod tests {
                 }
             ),
             0
+        );
+    }
+
+    #[test]
+    fn cursor_deny_emits_permission_json_with_exit_2() {
+        let decision = Decision::Deny {
+            rule_id: "core.filesystem.destructive-rm".into(),
+            reason: "blocked".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Cursor, &decision, &mut out, &mut err);
+        assert_eq!(code, 2, "Cursor deny exits 2");
+        let json: serde_json::Value =
+            serde_json::from_slice(&out).expect("Cursor stdout must be JSON");
+        assert_eq!(json["permission"], "deny");
+        assert!(
+            json.get("hookSpecificOutput").is_none(),
+            "Cursor must emit a bare envelope"
+        );
+        assert!(String::from_utf8_lossy(&err).contains("blocked"));
+    }
+
+    #[test]
+    fn cursor_ask_is_preserved_with_exit_0() {
+        // Cursor has a genuine ask channel, so Ask must NOT demote to
+        // deny — `permission:ask` + exit 0.
+        let decision = Decision::Ask {
+            rule_id: "core.test.ask".into(),
+            reason: "please confirm".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Cursor, &decision, &mut out, &mut err);
+        assert_eq!(code, 0, "Cursor Ask must exit 0, not demote to deny");
+        let json: serde_json::Value =
+            serde_json::from_slice(&out).expect("Cursor stdout must be JSON");
+        assert_eq!(json["permission"], "ask");
+        assert!(String::from_utf8_lossy(&err).contains("please confirm"));
+    }
+
+    #[test]
+    fn cursor_allow_emits_no_stdout_with_zero_exit() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Cursor, &Decision::Allow, &mut out, &mut err);
+        assert_eq!(code, 0);
+        assert!(
+            out.is_empty(),
+            "Cursor allow must emit no stdout, got: {out:?}"
+        );
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn render_hook_response_is_none_for_cursor() {
+        let decision = Decision::Deny {
+            rule_id: "core.x".into(),
+            reason: "r".into(),
+        };
+        assert!(render_hook_response(HookAgent::Cursor, &decision).is_none());
+    }
+
+    #[test]
+    fn decision_exit_code_cursor_matrix() {
+        assert_eq!(decision_exit_code(HookAgent::Cursor, &Decision::Allow), 0);
+        assert_eq!(
+            decision_exit_code(
+                HookAgent::Cursor,
+                &Decision::Monitor {
+                    rule_id: "x".into()
+                }
+            ),
+            0
+        );
+        assert_eq!(
+            decision_exit_code(
+                HookAgent::Cursor,
+                &Decision::Ask {
+                    rule_id: "x".into(),
+                    reason: "r".into()
+                }
+            ),
+            0
+        );
+        assert_eq!(
+            decision_exit_code(
+                HookAgent::Cursor,
+                &Decision::Deny {
+                    rule_id: "x".into(),
+                    reason: "r".into()
+                }
+            ),
+            2
         );
     }
 
