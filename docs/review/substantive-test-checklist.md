@@ -49,7 +49,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
-| [ ] | `decide_fails_open_when_project_config_invalid` | `src/lib.rs` `mod tests` | `tempfile::TempDir` を CWD に `chdir`；`.ptuf.yaml` に構文エラーまたは `plugins: [{ path: ./missing.yaml }]` | `decide(&bash("rm -rf /"))` が **`Decision::Allow`** であることを pin（現状契約）**または** 仕様変更後は `Deny` |
+| [x] | `decide_fails_open_when_project_config_invalid` | `src/lib.rs` `mod tests` | `tempfile::TempDir` を CWD に `chdir`；`.ptuf.yaml` に構文エラーまたは `plugins: [{ path: ./missing.yaml }]` | `decide(&bash("rm -rf /"))` が **`Decision::Allow`** であることを pin（現状契約）**または** 仕様変更後は `Deny` |
 | [ ] | `try_decide_errors_on_invalid_project_config` | 同上 | 同上 CWD | `try_decide(...)` が `Err(EngineError::...)`（policy load failed 系） |
 | [ ] | `decide_vs_cli_fail_closed_parity_documented` | `tests/contracts.rs` または `tests/config_integration.rs` | 壊れた `.ptuf.yaml` | `ptuf check` → exit `2` + `core.engine.policy-load-failed`；同 CWD で `decide()` は上記と対になる結果 |
 
