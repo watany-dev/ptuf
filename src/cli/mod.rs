@@ -30,6 +30,12 @@ mod run;
 #[cfg(test)]
 mod test_support;
 
+/// Lossy Copilot stdin normaliser for coverage-guided fuzzing.
+#[doc(hidden)]
+pub fn fuzz_copilot_parse(body: &str) {
+    let _ = copilot_input::parse(body);
+}
+
 /// Reserved rule id used when the engine itself failed to load policy
 /// and the CLI must fail-closed
 /// (`docs/design/cli-and-hooks.md:104-114`).
