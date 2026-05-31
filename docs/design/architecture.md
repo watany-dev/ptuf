@@ -80,13 +80,14 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 
 ## Agent adapter
 
-現在の adapter は 5 つ。
+現在の adapter は 6 つ。
 
 - `claude-code`
 - `codex`
 - `copilot` (GitHub Copilot)
 - `kiro` (Kiro CLI)
 - `cline` (Cline)
+- `cursor` (Cursor)
 
 adapter は stdin payload をまず `RawHookInput` として受け、内部では
 normalized `Event { agent, event, tool, inputs, paths, urls, content }`

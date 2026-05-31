@@ -27,40 +27,28 @@ where
     let mut cursor_root: Option<PathBuf> = None;
     let mut cursor_hooks: Option<PathBuf> = None;
     while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--dry-run" => dry_run = true,
-            "--no-verify" => no_verify = true,
-            "--new-agent" => new_agent = true,
-            "--workspace-only" => workspace_only = true,
-            "--global" => global = true,
-            "--scope" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--scope"))?;
-                cursor_scope = Some(parse_cursor_scope(value)?);
-            },
-            other if other.starts_with("--scope=") => {
-                cursor_scope = Some(parse_cursor_scope(other.trim_start_matches("--scope="))?);
-            },
-            "--root" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--root"))?;
-                cursor_root = Some(PathBuf::from(value));
-            },
-            other if other.starts_with("--root=") => {
-                cursor_root = Some(PathBuf::from(other.trim_start_matches("--root=")));
-            },
-            "--hooks" => {
-                let value = iter.next().ok_or(ParseError::MissingValue("--hooks"))?;
-                cursor_hooks = Some(PathBuf::from(value));
-            },
-            other if other.starts_with("--hooks=") => {
-                cursor_hooks = Some(PathBuf::from(other.trim_start_matches("--hooks=")));
-            },
-            "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" => {
-                if agent.is_some() {
-                    return Err(ParseError::UnexpectedArgument(arg.clone()));
-                }
-                agent = Some(parse_agent(arg)?);
-            },
-            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
+        let arg = arg.as_str();
+        if let Some(value) = value_flag(arg, "--scope", iter)? {
+            cursor_scope = Some(parse_cursor_scope(&value)?);
+        } else if let Some(value) = value_flag(arg, "--root", iter)? {
+            cursor_root = Some(PathBuf::from(value));
+        } else if let Some(value) = value_flag(arg, "--hooks", iter)? {
+            cursor_hooks = Some(PathBuf::from(value));
+        } else {
+            match arg {
+                "--dry-run" => dry_run = true,
+                "--no-verify" => no_verify = true,
+                "--new-agent" => new_agent = true,
+                "--workspace-only" => workspace_only = true,
+                "--global" => global = true,
+                "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" => {
+                    if agent.is_some() {
+                        return Err(ParseError::UnexpectedArgument(arg.to_string()));
+                    }
+                    agent = Some(parse_agent(arg)?);
+                },
+                other => return Err(ParseError::UnexpectedArgument(other.to_string())),
+            }
         }
     }
     if workspace_only && global {
@@ -114,6 +102,30 @@ where
         kiro,
         cursor,
     }))
+}
+
+/// Extract the value for a value-taking flag in either `--flag value` or
+/// `--flag=value` form. Returns `Ok(None)` when `arg` is not this flag, so
+/// callers can chain checks before falling through to the value-less flags.
+fn value_flag<'a, I>(
+    arg: &str,
+    flag: &'static str,
+    iter: &mut I,
+) -> Result<Option<String>, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    if arg == flag {
+        let value = iter.next().ok_or(ParseError::MissingValue(flag))?;
+        Ok(Some(value.clone()))
+    } else if let Some(value) = arg
+        .strip_prefix(flag)
+        .and_then(|rest| rest.strip_prefix('='))
+    {
+        Ok(Some(value.to_string()))
+    } else {
+        Ok(None)
+    }
 }
 
 fn parse_cursor_scope(value: &str) -> Result<CursorScope, ParseError> {

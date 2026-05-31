@@ -1,8 +1,8 @@
 # Wiring ptuf into a coding agent
 
 ptuf ships first-class adapters for **Claude Code**, **Codex**, **GitHub
-Copilot**, **Kiro CLI**, and **Cline**. The same policy engine and YAML
-plugins back every host; only the hook-protocol envelope differs.
+Copilot**, **Kiro CLI**, **Cline**, and **Cursor**. The same policy engine
+and YAML plugins back every host; only the hook-protocol envelope differs.
 
 This page is the user-facing how-to. For the underlying hook protocol, exit
 codes per agent, and the full payload contract, see the design notes:
@@ -24,9 +24,10 @@ codes per agent, and the full payload contract, see the design notes:
 | Copilot     | `<repo>/.github/`                                | `<repo>/.github/hooks/ptuf.json`          |
 | Kiro        | `<repo>/.kiro/` or `$HOME/.kiro/`                | `<repo>/.kiro/agents/*.json` and `$HOME/.kiro/agents/*.json` (all existing JSONs are patched; empty scope falls back to `agents/default.json`) |
 | Cline       | `<repo>/.clinerules/`, `<repo>/.cline/`, `$HOME/Documents/Cline/`, or `$HOME/.cline/` | `<repo>/.clinerules/hooks/PreToolUse` |
+| Cursor      | `<repo>/.cursor/` or `$HOME/.cursor/`            | `<repo>/.cursor/hooks.json` (`--scope global` → `$HOME/.cursor/hooks.json`) |
 
 Pin to a single adapter with `ptuf init <agent>` (`claude-code` / `codex`
-/ `copilot` / `kiro` / `cline`).
+/ `copilot` / `kiro` / `cline` / `cursor`).
 
 ## Common flags
 
@@ -150,6 +151,40 @@ uniformly reliable interactive review channel.
 > Cline hooks are not a sandbox. If Cline is run with hooks disabled or in
 > a mode that bypasses hooks, ptuf cannot inspect or block tool calls.
 
+## Cursor
+
+```bash
+ptuf init cursor                 # writes <repo>/.cursor/hooks.json
+ptuf init cursor --scope global  # writes $HOME/.cursor/hooks.json
+ptuf init cursor --root <path>   # start repo discovery from <path>
+ptuf init cursor --hooks <path>  # patch this exact hooks.json file
+ptuf init cursor --dry-run
+ptuf init cursor --no-verify
+```
+
+The installer adds (or updates, idempotently) a `version: 1`
+`hooks.preToolUse` entry pointing at `<absolute>/ptuf hook cursor`, with a
+`matcher` of `Shell|Bash|Read|ReadFile|Write|Edit|MCP|WebFetch|Fetch|mcp__.*`,
+a `timeout` of `10`, and `failClosed: true`. Existing ptuf entries are
+detected by the `hook cursor` command tail; other hooks in the file are
+preserved. The `--scope` / `--root` / `--hooks` flags are Cursor-only and
+are rejected for any other agent.
+
+Cursor dispatches several hook events; the adapter enforces
+`preToolUse`, `beforeShellExecution` (→`Bash`), `beforeReadFile` (→`Read`),
+and `beforeMCPExecution` (→`mcp__server__tool`). Any other event
+(`postToolUse`, `afterFileEdit`, `sessionStart`, …) fails closed with
+`core.engine.invalid-payload`. Tool names and `tool_input` keys are
+normalised before the engine sees them (`Shell` → `Bash`, `ReadFile` →
+`Read`, `Fetch` → `WebFetch`, `mcp__*` → `mcp__server__tool`, etc.), with
+camelCase (`hookEventName` / `toolName` / `toolInput`) accepted as aliases.
+
+Unlike Codex / Copilot / Kiro / Cline, Cursor has its own interactive
+`Ask` channel, so `Ask` decisions are **preserved** (`{"permission":"ask",…}`,
+exit `0`) rather than demoted to a hard deny. Only hook-driven agent tool
+execution is guarded; Tab completion, manual edits, and commands typed
+directly into the terminal never reach a hook and are out of scope.
+
 ## Behavior summary
 
 | Host | Allow / Monitor | Ask | Deny | Failure mode |
@@ -159,6 +194,7 @@ uniformly reliable interactive review channel.
 | GitHub Copilot | exit `0`, empty stdout | converted to **deny** | exit `0`, bare `{"permissionDecision":"deny",…}` JSON + reason on stderr | bare deny JSON at exit `0` |
 | Kiro CLI | exit `0`, empty stdout | converted to **deny** | exit `2`, reason on stderr only (no envelope) | `core.engine.invalid-payload` deny at exit `2` |
 | Cline | exit `0`, stdout `{}` | converted to **deny**, exit `0`, cancel JSON | exit `0`, `{"cancel":true,…}` JSON + reason on stderr | `core.engine.invalid-payload` cancel JSON at exit `0` |
+| Cursor | exit `0`, empty stdout | **preserved**, exit `0`, `{"permission":"ask",…}` JSON | exit `2`, `{"permission":"deny",…}` JSON + reason on stderr | `core.engine.invalid-payload` deny JSON at exit `2` |
 
 Hook stdin payloads are capped at 8 MiB across every host. Unreadable,
 oversized, or invalid-JSON stdin is rejected with the reserved

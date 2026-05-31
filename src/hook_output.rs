@@ -221,9 +221,7 @@ pub mod cursor {
     #[derive(Debug, Serialize)]
     pub struct CursorResponse {
         pub permission: &'static str,
-        #[serde(rename = "user_message")]
         pub user_message: String,
-        #[serde(rename = "agent_message")]
         pub agent_message: String,
     }
 

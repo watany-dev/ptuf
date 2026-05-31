@@ -10,6 +10,7 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合)、`v0.1.0` (M5
 
 - `PreToolUse` 向け CLI とライブラリ
 - Claude Code / Codex / GitHub Copilot / Kiro CLI / Cline adapter (frozen)
+- Cursor adapter (MVP — hook 駆動の agent tool execution のみ)
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
   `core.self_protection` / `core.engine` / `core.injection` /

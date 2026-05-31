@@ -281,10 +281,20 @@ fn find_path(args: &Map<String, Value>, root: &Map<String, Value>) -> Option<Str
     None
 }
 
+/// Whether `args[key]` should be backfilled from a fallback. Always true
+/// when the key is absent or non-string. `treat_empty_as_missing` also
+/// backfills an empty string (used for `command` / `file_path`, where an
+/// empty value is useless), while `content` / `old_string` / `new_string`
+/// keep an existing empty string as an intentional value.
+fn needs_fill(args: &Map<String, Value>, key: &str, treat_empty_as_missing: bool) -> bool {
+    args.get(key).is_none_or(|v| match v.as_str() {
+        None => true,
+        Some(s) => treat_empty_as_missing && s.is_empty(),
+    })
+}
+
 fn reshape_bash(mut args: Map<String, Value>, root: &Map<String, Value>) -> Value {
-    if args
-        .get("command")
-        .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
+    if needs_fill(&args, "command", true)
         && let Some(cmd) = first_string(&args, root, &["command", "cmd", "script"])
     {
         args.insert("command".into(), Value::String(cmd));
@@ -293,9 +303,7 @@ fn reshape_bash(mut args: Map<String, Value>, root: &Map<String, Value>) -> Valu
 }
 
 fn reshape_path(mut args: Map<String, Value>, root: &Map<String, Value>) -> Value {
-    if args
-        .get("file_path")
-        .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
+    if needs_fill(&args, "file_path", true)
         && let Some(path) = find_path(&args, root)
     {
         args.insert("file_path".into(), Value::String(path));
@@ -304,14 +312,12 @@ fn reshape_path(mut args: Map<String, Value>, root: &Map<String, Value>) -> Valu
 }
 
 fn reshape_write(mut args: Map<String, Value>, root: &Map<String, Value>) -> Value {
-    if args
-        .get("file_path")
-        .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
+    if needs_fill(&args, "file_path", true)
         && let Some(path) = find_path(&args, root)
     {
         args.insert("file_path".into(), Value::String(path));
     }
-    if args.get("content").is_none_or(|v| v.as_str().is_none())
+    if needs_fill(&args, "content", false)
         && let Some(content) = first_string(&args, root, &["content", "text", "new_content"])
     {
         args.insert("content".into(), Value::String(content));
@@ -320,19 +326,17 @@ fn reshape_write(mut args: Map<String, Value>, root: &Map<String, Value>) -> Val
 }
 
 fn reshape_edit(mut args: Map<String, Value>, root: &Map<String, Value>) -> Value {
-    if args
-        .get("file_path")
-        .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
+    if needs_fill(&args, "file_path", true)
         && let Some(path) = find_path(&args, root)
     {
         args.insert("file_path".into(), Value::String(path));
     }
-    if args.get("old_string").is_none_or(|v| v.as_str().is_none())
+    if needs_fill(&args, "old_string", false)
         && let Some(old) = first_string(&args, root, &["old_string", "oldText", "old"])
     {
         args.insert("old_string".into(), Value::String(old));
     }
-    if args.get("new_string").is_none_or(|v| v.as_str().is_none())
+    if needs_fill(&args, "new_string", false)
         && let Some(new) = first_string(&args, root, &["new_string", "newText", "new"])
     {
         args.insert("new_string".into(), Value::String(new));
