@@ -216,6 +216,13 @@ config_with_filters) を集約し、
 `2:2:1` で混ぜ、Bash 偏重を緩和して Read / Write / WebFetch 系の
 fact カバレッジを確保する。
 
+## 本質的テストのギャップチェックリスト
+
+行カバレッジでは測れない「契約・統合・既知バイパス」の追加タスクは
+[substantive-test-checklist.md](../review/substantive-test-checklist.md)
+にテスト名と期待 assert 付きで整理している。新規 bypass や adapter 契約を
+足す前に該当行を確認する。
+
 ## 契約テスト
 
 `tests/contracts.rs` と `tests/contracts/*.json` は公開契約を固定する層である。
