@@ -700,3 +700,101 @@ fn init_verify_json_schema_contract_is_stable() {
         .collect();
     assert_eq!(actual, expected);
 }
+
+// ---------------------------------------------------------------
+// OpenAI Codex adapter contracts (mirror Copilot / Cursor density).
+// ---------------------------------------------------------------
+
+#[test]
+fn codex_deny_outputs_permission_deny_exit_two() {
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
+    let (code, stdout, stderr) = run(&["hook", "codex"], payload);
+    assert_eq!(code, 2, "stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert!(
+        value["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.filesystem.destructive-rm")),
+        "stdout: {stdout}",
+    );
+}
+
+#[test]
+fn codex_allow_outputs_empty_stdout_exit_zero() {
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+    let (code, stdout, stderr) = run(&["hook", "codex"], payload);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.is_empty(), "allow must emit no stdout: {stdout}");
+}
+
+#[test]
+fn codex_ask_demotes_to_deny() {
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD~3"}}"#;
+    let (code, stdout, stderr) = run(&["hook", "codex"], payload);
+    assert_eq!(code, 2, "stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert!(
+        stdout.contains("Codex PreToolUse cannot prompt interactively"),
+        "stdout: {stdout}",
+    );
+}
+
+#[test]
+fn codex_policy_load_failure_fails_closed() {
+    let dir = repo();
+    std::fs::write(
+        dir.path().join(".ptuf.yaml"),
+        "plugins:\n  - path: ./missing-plugin.yaml\n",
+    )
+    .expect("write yaml");
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "codex"], payload);
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert!(
+        value["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.engine.policy-load-failed")),
+        "stdout: {stdout}",
+    );
+    assert!(stderr.contains("could not load policy"), "stderr: {stderr}");
+}
+
+#[test]
+fn codex_oversized_stdin_fails_closed() {
+    let dir = repo();
+    let payload = "A".repeat(8 * 1024 * 1024 + 1);
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "codex"], &payload);
+    assert_eq!(code, 2, "stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert!(
+        value["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .is_some_and(|s| s.contains("core.engine.invalid-payload")),
+        "stdout: {stdout}",
+    );
+}
+
+#[test]
+fn allowlist_when_git_head_mismatch_not_suppressed() {
+    let dir = repo();
+    std::fs::write(
+        dir.path().join(".ptuf.yaml"),
+        "allowlists:\n  - id: wrong-head\n    appliesTo:\n      rules: [core.git.reset-hard]\n    when:\n      shell.argv:\n        headAny: [wget]\n",
+    )
+    .expect("write yaml");
+    let (code, stdout, stderr) = run_in(
+        dir.path(),
+        &["check", "--tool", "Bash", "git reset --hard HEAD~3"],
+        "",
+    );
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(
+        stdout.contains("Decision: ask"),
+        "wget-only when must not suppress git reset: {stdout}",
+    );
+}
