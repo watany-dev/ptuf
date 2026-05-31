@@ -56,4 +56,30 @@ mod tests {
         let err_s = String::from_utf8_lossy(&err);
         assert!(err_s.contains("missing value for subcommand"), "{err_s}");
     }
+
+    #[test]
+    fn io_runner_dispatches_hook_with_exit_code() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let args = vec!["hook", "codex"];
+        let exit = run(&args, b"{not valid json" as &[u8], &mut out, &mut err);
+        assert_eq!(exit, ExitCode::from(2));
+        let out_s = String::from_utf8_lossy(&out);
+        assert!(out_s.contains("\"permissionDecision\":\"deny\""));
+    }
+
+    #[test]
+    fn io_runner_dispatches_plugin_check() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let bad_plugin = dir.path().join("bad.yaml");
+        std::fs::write(&bad_plugin, "::not yaml::").expect("write plugin");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let path = bad_plugin.to_str().expect("utf-8 path");
+        let args = vec!["plugin", "check", path];
+        let exit = run(&args, b"" as &[u8], &mut out, &mut err);
+        assert_ne!(exit, ExitCode::from(0));
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(!err_s.is_empty() || !String::from_utf8_lossy(&out).is_empty());
+    }
 }
