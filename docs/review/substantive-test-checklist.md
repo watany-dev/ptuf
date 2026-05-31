@@ -126,7 +126,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 | --- | --- | --- | --- | --- |
 | [x] | `pbt_allowlist_when_suppresses_only_on_match` | `tests/filter_proptest.rs` | `allowlist_entry()` 戦略を拡張し `when: Some(...)` を混ぜる | `when` 不一致時は `Deny` が残る；一致時のみ `Allow` + `allowlist_id` |
 | [x] | `pbt_allowlist_when_idempotent` | 同上 | 同一入力で二回 `decide` | 結果同一 |
-| [ ] | `allowlist_when_git_head_mismatch_not_suppressed` | `tests/contracts.rs` または `config_integration` | `approved-reset` 契約の否定例: `headAny: [wget]` | `Deny` のまま |
+| [x] | `allowlist_when_git_head_mismatch_not_suppressed` | `tests/contracts.rs` または `config_integration` | `approved-reset` 契約の否定例: `headAny: [wget]` | `Deny` のまま |
 
 ---
 
