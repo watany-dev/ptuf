@@ -198,7 +198,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 | Done | 作業 | 期待 |
 | --- | --- | --- |
 | [x] | `nightly.yml` で `make e2e` が必ず走る | 失敗で赤 |
-| [ ] | 上記 P0/P1 で `config_integration` に昇格したケースは e2e から重複削除 | 実行時間短縮 |
+| [x] | 上記 P0/P1 で `config_integration` に昇格したケースは e2e から重複削除 | 実行時間短縮 |
 | [ ] | リリース手順（README / CLAUDE）に `make e2e` を明記 | 人手忘れ防止 |
 
 主要 e2e テスト名（参照用）: `four_layer_config_merges_in_documented_priority_order`,
