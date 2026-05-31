@@ -62,7 +62,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 | [x] | `plugin_path_loads_and_denies_matching_command` | `tests/config_integration.rs` | `repo()` + `.ptuf/plugins/no-curl.yaml` + `.ptuf.yaml` に `plugins: [{ path: .ptuf/plugins/no-curl.yaml }]` | `run_in(..., ["check", "--tool", "Bash", "curl https://x"], "")` → `code == 2`；stdout に `pack.no-curl`（または plugin rule id） |
 | [x] | `plugin_path_allow_when_command_unmatched` | 同上 | 同上 | `check ... "ls"` → `code == 0`（または monitor 時の契約どおり） |
 | [x] | `plugin_audit_records_plugin_rule_id` | 同上 | `audit.path` 有効 | JSONL 1 行に `"ruleId":"pack.no-curl.block"`（実 id に合わせる） |
-| [ ] | *(promote)* `plugin_loaded_through_layered_config_*` | `tests/e2e_heavy.rs` | e2e の 4 層 fixture を `tests/common` に切り出し | 上記 3 件と同じ assert を **`#[ignore]` なし**で再現できるなら e2e から削除または薄くする |
+| [x] | *(promote)* `plugin_loaded_through_layered_config_*` | `tests/e2e_heavy.rs` | e2e の 4 層 fixture を `tests/common` に切り出し | 上記 3 件と同じ assert を **`#[ignore]` なし**で再現できるなら e2e から削除または薄くする |
 
 ---
 
