@@ -164,17 +164,26 @@ jobs:
           retention-days: 14
 
   msrv:
-    name: MSRV check
+    # Real MSRV verification — not a dry-run. `cargo build` (not `cargo check`)
+    # exercises codegen and linking; `cargo test --no-run` ensures the test
+    # harness compiles under the pinned MSRV. Bumping `package.rust-version`
+    # requires the `dtolnay/rust-toolchain@…` pin below to move in the same
+    # PR, plus a CHANGELOG entry per SECURITY.md policy.
+    name: MSRV build (1.93.0)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # 1.93.0
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: MSRV check
-        run: cargo check --all-targets --locked
+      - name: MSRV build (release profile, locked)
+        run: cargo build --release --all-targets --locked --features testing
+      - name: MSRV test compile (harness must build, but do not run)
+        run: cargo test --no-run --all-targets --locked --features testing
+      - name: MSRV doc build (lints kept as warnings — strict deny lives in `lint` job)
+        run: cargo doc --no-deps --locked --features testing
 
   npm-smoke:
     name: npm smoke

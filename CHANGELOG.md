@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   分類は従来どおり全 shape を対象とする。
 
 ### Added
+- STRIDE 脅威モデル (`docs/design/threat-model.md`) と `SECURITY.md` の
+  No Telemetry / Threat Model 節。
+- CI MSRV job を `cargo check` から release build + test harness compile +
+  `cargo doc` に拡張 (公開 MSRV ピンが実ビルド可能であることを保証)。
 - Process substitution (`<(…)` / `>(…)`) 本体を `Argv.subst_argv` へ
   re-parse (ADR 0003 C / issue #162)。`bash <(curl …)` と
   `bash -c "$(curl …)"` を `remote-script-pipe` が Deny。subst 再帰は

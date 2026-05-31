@@ -28,8 +28,9 @@ This runs the same gates that block CI:
 | `doc` | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked` |
 | `deny` | `cargo deny check advisories licenses bans sources` |
 
-CI additionally runs `tarpaulin` (95% coverage floor), an MSRV `cargo check`
-on Rust 1.93.0, `cargo-semver-checks` (public-API SemVer gate), `actionlint`,
+CI additionally runs `tarpaulin` (95% coverage floor), an MSRV build on Rust
+1.93.0 (`cargo build`, `cargo test --no-run`, and `cargo doc` — not merely
+`cargo check`), `cargo-semver-checks` (public-API SemVer gate), `actionlint`,
 `cargo-machete`, and `zizmor` (workflow security audit). A daily scheduled
 `cargo audit` workflow catches newly-published RustSec advisories outside the
 PR loop, and a scheduled `Nightly` workflow runs coverage-guided fuzzing and
