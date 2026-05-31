@@ -82,7 +82,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
-| [ ] | `four_layer_merge_mode_enforce_wins` | `tests/config_integration.rs` | `PTUF_ETC_DIR` / `PTUF_CONFIG_DIR` を `tests/common` ヘルパで注入（e2e から抽出） | project-local `mode: enforce` が audit JSONL の `"mode":"enforce"` に反映 |
+| [x] | `four_layer_merge_mode_enforce_wins` | `tests/config_integration.rs` | `PTUF_ETC_DIR` / `PTUF_CONFIG_DIR` を `tests/common` ヘルパで注入（e2e から抽出） | project-local `mode: enforce` が audit JSONL の `"mode":"enforce"` に反映 |
 | [ ] | `four_layer_merge_audit_path_from_project` | 同上 | etc: `audit.enabled: false`、project: `audit.path: ...` | hook 後に指定 path に 1 行以上 |
 | [ ] | `four_layer_later_allowlist_overrides_earlier` | 同上 | etc allowlist + project で上書き | 抑制される `rule_id` が期待どおり |
 
