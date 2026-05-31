@@ -116,7 +116,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 | [x] | `codex_allow_outputs_empty_stdout_exit_zero` | 同上 | safe payload | `code == 0`；stdout 空または allow 契約 |
 | [x] | `codex_ask_demotes_to_deny` | 同上 | plugin/rule で Ask になる入力 | stdout deny（Codex は Claude 系 demote 契約に合わせる） |
 | [x] | `codex_policy_load_failure_fails_closed` | 同上 | missing plugin `.ptuf.yaml` | `code == 2` + `core.engine.policy-load-failed` |
-| [ ] | `codex_oversized_stdin_fails_closed` | 同上 | 8 MiB 超 stdin（Copilot テストを流用） | exit / stdout 契約を Codex 用に固定 |
+| [x] | `codex_oversized_stdin_fails_closed` | 同上 | 8 MiB 超 stdin（Copilot テストを流用） | exit / stdout 契約を Codex 用に固定 |
 
 ---
 
