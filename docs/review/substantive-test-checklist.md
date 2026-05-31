@@ -214,7 +214,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 | --- | --- | --- | --- | --- |
 | [x] | `io_runner_dispatches_hook_with_exit_code` | `src/io_runner.rs` | `IoRunner` に `hook` + invalid stdin | exit `2` |
 | [x] | `io_runner_dispatches_plugin_check` | 同上 | 壊れた plugin ディレクトリ | non-zero |
-| [ ] | `update_check_does_not_mutate_binary` | `tests/cli_smoke.rs` または e2e | `ptuf update --check` | バイナリ mtime 不変（既存 e2e があれば `[x]` に） |
+| [x] | `update_check_does_not_mutate_binary` | `tests/cli_smoke.rs` または e2e | `ptuf update --check` | バイナリ mtime 不変（既存 e2e があれば `[x]` に） |
 
 ---
 

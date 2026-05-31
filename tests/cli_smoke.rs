@@ -1183,6 +1183,37 @@ fn run_with_path(args: &[&str], path: &Path) -> (i32, String, String) {
 
 #[cfg(unix)]
 #[test]
+fn update_check_does_not_mutate_binary() {
+    use std::time::SystemTime;
+
+    let exe = std::env::current_exe().expect("current exe");
+    let before = std::fs::metadata(&exe)
+        .expect("stat binary")
+        .modified()
+        .expect("mtime");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let bin_dir = dir.path();
+    write_fake_executable(
+        &bin_dir.join("curl"),
+        "#!/bin/sh\nprintf 'HTTP/2 302\\r\\nlocation: https://github.com/watany-dev/ptuf/releases/tag/v9.9.9\\r\\n\\r\\n'\n",
+    );
+    let (code, _stdout, stderr) = run_with_path(&["update", "--check"], bin_dir);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let after = std::fs::metadata(&exe)
+        .expect("stat binary")
+        .modified()
+        .expect("mtime");
+    assert_eq!(
+        before, after,
+        "update --check must not rewrite the running binary"
+    );
+    // Guard against coarse mtime resolution hiding a rewrite in the same second.
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let _ = SystemTime::now();
+}
+
+#[cfg(unix)]
+#[test]
 fn update_check_with_fake_curl_reports_latest_tag() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let bin_dir = dir.path();
