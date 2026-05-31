@@ -857,6 +857,74 @@ rules:
     }
 
     #[test]
+    fn run_init_explicit_cursor_writes_hooks_file() {
+        let dir = workdir("init-cursor-real");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let hooks_path = dir.join(".cursor/hooks.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init(Some(HookAgent::Cursor), false, false),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out).contains("registered hook"));
+        assert!(hooks_path.exists());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_cursor_dry_run_does_not_write_hooks_file() {
+        let dir = workdir("init-cursor-dry");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let hooks_path = dir.join(".cursor/hooks.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init(Some(HookAgent::Cursor), false, true),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out).contains("would register hook"));
+        assert!(!hooks_path.exists());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_auto_detect_includes_cursor() {
+        let dir = workdir("init-cursor-detect");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join(".cursor")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let hooks_path = dir.join(".cursor/hooks.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init(None, false, false),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("cursor"), "stdout: {stdout}");
+        assert!(hooks_path.exists());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn run_init_codex_explicit_dry_run() {
         let dir = workdir("init-codex-dry");
         std::fs::create_dir_all(dir.join(".git")).unwrap();

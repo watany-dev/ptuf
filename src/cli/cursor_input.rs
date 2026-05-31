@@ -539,6 +539,49 @@ mod tests {
     }
 
     #[test]
+    fn cursor_null_tool_input_decodes_to_empty_object() {
+        let body = r#"{"tool_name":"Shell","tool_input":null}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert!(input.tool_input.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cursor_non_object_tool_input_wraps_as_text() {
+        let body = r#"{"tool_name":"Shell","tool_input":42}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(
+            input.tool_input.get("text").and_then(|v| v.as_i64()),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn cursor_read_uses_files_array_when_path_absent() {
+        let body = r#"{"tool_name":"Read","tool_input":{"files":[{"path":"/tmp/from-files"}]}}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(
+            input.tool_input.get("file_path").and_then(|v| v.as_str()),
+            Some("/tmp/from-files")
+        );
+    }
+
+    #[test]
+    fn cursor_mcp_server_name_alias_is_accepted() {
+        let body =
+            r#"{"tool_name":"MCP","tool_input":{},"server_name":"my_srv","toolName":"ping"}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "mcp__my_srv__ping");
+    }
+
+    #[test]
+    fn cursor_at_mcp_with_extra_segments_collapses_underscores() {
+        let body = r#"{"tool_name":"@acme/pkg/sub/tool","tool_input":{}}"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "mcp__acme__pkg_sub_tool");
+    }
+
+    #[test]
     fn cursor_input_error_display_covers_all_variants() {
         let bad = serde_json::from_str::<Value>("nope").unwrap_err();
         assert!(format!("{}", CursorInputError::Empty).contains("empty"));
