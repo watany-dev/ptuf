@@ -72,7 +72,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
-| [ ] | *(仕様)* `fail_closed` の intended semantics を ADR または config 設計に 1 段落追記 | `docs/design/config-and-plugins.md` | — | engine が読むフィールドか、削除候補かを決定 |
+| [x] | *(仕様)* `fail_closed` の intended semantics を ADR または config 設計に 1 段落追記 | `docs/design/config-and-plugins.md` | — | engine が読むフィールドか、削除候補かを決定 |
 | [ ] | `fail_closed_false_changes_engine_on_load_error` | `src/engine/mod.rs` または `src/cli/mod.rs` | **実装後**: `failClosed: false` + 壊れた plugin path | load 失敗時も hook が動く／しないを固定 |
 | [ ] | `fail_closed_true_matches_cli_policy_load_failed` | `tests/config_integration.rs` | `failClosed: true` + missing plugin | 既存 `plugin_loader_error_contract_fails_closed` と同じ exit / rule_id |
 
