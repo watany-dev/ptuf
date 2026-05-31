@@ -136,7 +136,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 | --- | --- | --- | --- | --- |
 | [x] | `loader_accepts_shell_ast_but_dsl_has_no_when_node` | `src/plugin/loader.rs` `mod tests` | plugin `requires: [shell.ast]` | `load` は `Ok` |
 | [x] | `compile_when_shell_ast_returns_error` | `src/plugin/dsl.rs` | when 節に `shell.ast:` を書く | `compile` が `Err` **または** ロード時に拒否（仕様を決めてから） |
-| [ ] | *(doc)* `shell.ast` を unsupported と明記 | `docs/design/config-and-plugins.md` | — | `SUPPORTED_FACTS` と一致 |
+| [x] | *(doc)* `shell.ast` を unsupported と明記 | `docs/design/config-and-plugins.md` | — | `SUPPORTED_FACTS` と一致 |
 
 ---
 
