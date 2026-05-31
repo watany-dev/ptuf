@@ -261,6 +261,27 @@ rules:
     }
 
     #[test]
+    fn loader_accepts_shell_ast_but_dsl_has_no_when_node() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.ast
+capabilities:
+  requires: [shell.ast]
+rules:
+  - id: pack.ast.placeholder
+    severity: low
+    defaultDecision: allow
+    when:
+      tool: Bash
+    reason: capability placeholder
+"#;
+        let loaded = load_str(&p(), yaml).expect("shell.ast is a supported capability");
+        assert_eq!(loaded.name, "pack.ast");
+    }
+
+    #[test]
     fn supported_facts_includes_expected_v0_3_set() {
         for f in [
             "shell.ast",
