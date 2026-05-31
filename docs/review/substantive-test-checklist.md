@@ -177,7 +177,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 | --- | --- | --- | --- | --- |
 | [x] | `fuzz_hook_pipeline_with_merged_config` | `fuzz/fuzz_targets/fuzz_hook_pipeline.rs` | 入力から `RawConfig` merge → `Engine::new` | panic しない；オプションで deny 率の下限は設けない |
 | [x] | *(artifact)* Copilot envelope fuzz ターゲット追加 | `fuzz/fuzz_targets/fuzz_copilot_parse.rs`（新規） | arbitrary bytes | parse が total |
-| [ ] | *(promote)* `concurrent_writers_produce_well_formed_jsonl_lines` | `tests/e2e_heavy.rs` → `config_integration` 簡略版 | 2 プロセスは重いので 2 スレッドでも可 | 各行が valid JSON |
+| [x] | *(promote)* `concurrent_writers_produce_well_formed_jsonl_lines` | `tests/e2e_heavy.rs` → `config_integration` 簡略版 | 2 プロセスは重いので 2 スレッドでも可 | 各行が valid JSON |
 
 ---
 
