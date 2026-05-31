@@ -1342,6 +1342,33 @@ mod tests {
     }
 
     #[test]
+    fn triple_nested_su_bash_c_surfaces_inner_rm() {
+        // Three privilege wrappers exceed `nesting_budget=2`; the innermost
+        // `rm` is not surfaced today — pin the budget cap and partial unroll.
+        let cmd = r#"su -c 'bash -c "su -c '\''rm -rf /'\''"'"#;
+        let b = parse(cmd);
+        let outer = &b.segments[0].commands[0];
+        let chain = deepest_inner_chain(outer);
+        assert!(
+            chain <= 2,
+            "inner_argv chain {chain} must respect nesting_budget=2 cap"
+        );
+        assert!(
+            !outer.inner_argv.is_empty(),
+            "at least one wrapper hop must be unrolled into inner_argv"
+        );
+        let heads: Vec<_> = b
+            .commands()
+            .into_iter()
+            .map(|argv| argv.head.as_str())
+            .collect();
+        assert!(
+            !heads.contains(&"rm"),
+            "known gap: triple-nested su/bash hides rm from commands(); got {heads:?}"
+        );
+    }
+
+    #[test]
     fn lone_ampersand_does_not_loop() {
         // Found by PBT: a bare `&` (not part of `&&`) used to cause an
         // infinite loop in tokenize. Verify the lexer terminates and
