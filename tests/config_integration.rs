@@ -588,7 +588,7 @@ fn plugin_path_loads_and_denies_matching_command() {
         "",
     );
     assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
-    assert!(stdout.contains("pack.no-curl.block"), "stdout: {stdout}",);
+    assert!(stdout.contains("pack.no-curl.block"), "stdout: {stdout}");
 }
 
 #[test]
