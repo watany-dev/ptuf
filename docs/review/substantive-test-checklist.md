@@ -187,7 +187,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 | --- | --- | --- | --- | --- |
 | [x] | `examine_globs` に `src/plugin/dsl.rs` 追加 | `.cargo/mutants.toml` | `make mutants` | MISSED が出たら GAP-03/14 の example を追加 |
 | [x] | 同上 `src/facts/shell.rs` | 同上 | 同上 | GAP-02 の example で潰す |
-| [ ] | 同上 `src/config/merge.rs` | 同上 | 同上 | GAP-07 の example で潰す |
+| [x] | 同上 `src/config/merge.rs` | 同上 | 同上 | GAP-07 の example で潰す |
 
 ---
 
