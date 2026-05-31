@@ -39,7 +39,8 @@ opaque な flag surface として扱う点に限定される。
 `tests/bypass/corpus.jsonl` の `known_gap` 6 件を `must_catch` に昇格し、
 新規 13 件を追加。)
 
-残存ギャップ (P2):
+残存ギャップ (P2) の回帰テスト追加タスクは
+[substantive-test-checklist.md](substantive-test-checklist.md)（テスト名・期待 assert 付き）を参照。
 
 - 権限昇格ラッパーのネストは `nesting_budget = 2` の範囲のみ剥がす。
   3 段超 (`su -c 'bash -c "su -c ..."'`) は最深層を取り逃す。

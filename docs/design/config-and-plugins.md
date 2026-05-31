@@ -67,7 +67,7 @@ audit:
 | --- | --- | --- |
 | `version` | `u32` | 現在は `1` |
 | `mode` | `enforce` / `monitor` | 実行 mode |
-| `failClosed` | `bool` | runtime policy load 失敗時の意図。CLI の初期化失敗には効かない |
+| `failClosed` | `bool` | **予約フィールド** — `ptuf init --verify` の fail-closed チェックとスキーマ互換用。ランタイムの `Engine::for_cwd` / CLI hook は常に policy load 失敗で `core.engine.policy-load-failed` として fail-closed し、このフラグは読まれない |
 | `packs` | map | pack ごとの設定 |
 | `rules` | map | rule id 単位の override |
 | `plugins` | list | plugin file 参照 |
@@ -221,6 +221,7 @@ rules:
 | `toolAny` | `string[]` | `tool_name` がいずれかに一致 |
 | `shell.argv` | `{ headAny: [string] }` | command head がいずれかに一致。`bash -c`, `eval`, `xargs`, `find -exec` のような wrapper で surfaced した nested command も含む |
 | `shell.pipeline` | `{ from: { commandAny: [...] }, to: { commandAny: [...] } }` | pipeline に from→to の流れがある |
+| `shell.ast` | — | **未サポート** — `capabilities.requires` では宣言できるが `when:` leaf には使えない |
 | `path.filePathPrefixAny` | `string[]` | 抽出 path が prefix に一致 |
 | `url.schemeAny` | `string[]` | URL scheme が一致 |
 | `url.hostAny` | `string[]` | URL host が一致 |

@@ -420,6 +420,9 @@ mod concurrent {
     /// be valid JSON (corruption from interleaved writes would
     /// fail parse) and the line count must match exactly. Upper
     /// bound 120 s because flock serialises the writers.
+    // Promoted (simplified) to `tests/config_integration.rs`
+    // (`concurrent_writers_produce_well_formed_jsonl_lines`); kept here at
+    // full scale under `make e2e`.
     #[test]
     #[ignore = "heavy E2E; run via `make e2e`"]
     fn concurrent_writers_produce_well_formed_jsonl_lines() {
@@ -521,6 +524,8 @@ mod full_config_stack {
     /// Project-local: mode: enforce (final override).
     /// An allow payload must produce one JSONL row whose `mode` is
     /// `enforce`, proving the layers merged in priority order.
+    // Promoted to `tests/config_integration.rs` (`four_layer_merge_*`); kept
+    // here as a subprocess regression under `make e2e`.
     #[test]
     #[ignore = "heavy E2E; run via `make e2e`"]
     fn four_layer_config_merges_in_documented_priority_order() {
@@ -563,6 +568,8 @@ mod full_config_stack {
         assert_eq!(v["decision"], "allow", "decision wrong: {}", lines[0]);
     }
 
+    // Promoted to `tests/config_integration.rs` (`plugin_path_*`); kept here
+    // as a subprocess regression under `make e2e`.
     #[test]
     #[ignore = "heavy E2E; run via `make e2e`"]
     fn plugin_loaded_through_layered_config_evaluates_against_payload() {

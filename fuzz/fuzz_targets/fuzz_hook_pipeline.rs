@@ -13,18 +13,20 @@
 //! filesystem I/O.
 
 use libfuzzer_sys::fuzz_target;
+use ptuf::config::{self, Config};
 use ptuf::{Engine, HookInput};
-use std::sync::LazyLock;
-
-static ENGINE: LazyLock<Engine> = LazyLock::new(|| {
-    Engine::builder()
-        .agent("fuzz")
-        .build()
-        .expect("default-config engine builds")
-});
+use std::path::Path;
 
 fuzz_target!(|data: &[u8]| {
-    if let Ok(input) = serde_json::from_slice::<HookInput>(data) {
-        let _ = ENGINE.decide(&input);
+    let source = String::from_utf8_lossy(data);
+    let mut config = config::yaml::parse_str(Path::new("fuzz-policy.yaml"), &source)
+        .ok()
+        .map(|raw| config::merge::merge(vec![raw]))
+        .unwrap_or_default();
+    config.plugin_paths.clear();
+    if let Ok(engine) = Engine::with_config(config) {
+        if let Ok(input) = serde_json::from_slice::<HookInput>(data) {
+            let _ = engine.decide(&input);
+        }
     }
 });

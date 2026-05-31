@@ -67,8 +67,54 @@ pub fn try_decide(input: &HookInput) -> Result<Decision, EngineError> {
 #[cfg(test)]
 mod tests {
 
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
     use super::*;
     use crate::hook_input::sample;
+
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+    struct CwdGuard {
+        original: PathBuf,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl CwdGuard {
+        fn change_to(target: &std::path::Path) -> std::io::Result<Self> {
+            let lock = CWD_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let original = std::env::current_dir()?;
+            std::env::set_current_dir(target)?;
+            Ok(Self {
+                original,
+                _lock: lock,
+            })
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
+    fn bash(cmd: &str) -> HookInput {
+        HookInput {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({ "command": cmd }),
+        }
+    }
+
+    fn broken_plugin_repo() -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir .git");
+        std::fs::write(
+            dir.path().join(".ptuf.yaml"),
+            "plugins:\n  - path: ./missing-plugin.yaml\n",
+        )
+        .expect("write yaml");
+        dir
+    }
 
     #[test]
     fn decide_returns_allow_by_default() {
@@ -84,5 +130,25 @@ mod tests {
         // CWD is racy under cargo's parallel test execution.
         let outcome = try_decide(&sample("Bash"));
         assert!(matches!(outcome, Ok(Decision::Allow)));
+    }
+
+    #[test]
+    fn decide_fails_open_when_project_config_invalid() {
+        let dir = broken_plugin_repo();
+        let _guard = CwdGuard::change_to(dir.path()).expect("chdir");
+        let decision = decide(&bash("ls"));
+        assert_eq!(
+            decision,
+            Decision::Allow,
+            "embed API must fail-open to default engine when policy load fails"
+        );
+    }
+
+    #[test]
+    fn try_decide_errors_on_invalid_project_config() {
+        let dir = broken_plugin_repo();
+        let _guard = CwdGuard::change_to(dir.path()).expect("chdir");
+        let err = try_decide(&bash("rm -rf /")).expect_err("policy load must fail");
+        assert!(matches!(err, EngineError::Plugin(_)));
     }
 }

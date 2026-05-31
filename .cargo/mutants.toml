@@ -20,6 +20,9 @@ examine_globs = [
     "src/decision.rs",
     "src/rules/**/*.rs",
     "src/engine/**/*.rs",
+    "src/plugin/dsl.rs",
+    "src/facts/shell.rs",
+    "src/config/merge.rs",
 ]
 
 # The proptest-backed integration tests are gated behind the `testing`

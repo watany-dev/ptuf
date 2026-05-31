@@ -57,3 +57,10 @@ path = "fuzz_targets/fuzz_plugin_dsl.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_copilot_parse"
+path = "fuzz_targets/fuzz_copilot_parse.rs"
+test = false
+doc = false
+bench = false

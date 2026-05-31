@@ -513,6 +513,20 @@ mod tests {
     }
 
     #[test]
+    fn engine_decide_triple_nested_su_allows_destructive() {
+        // Pins nesting_budget gap: inner `rm` is hidden from destructive-rm;
+        // the outer `bash -c` wrappers still trip dynamic-eval (Ask).
+        let cmd = r#"su -c 'bash -c "su -c '\''rm -rf /'\''"'"#;
+        let outcome = engine_with(Config::default()).decide(&bash(cmd));
+        match &outcome.decision {
+            Decision::Ask { rule_id, .. } => {
+                assert_eq!(rule_id, "core.engine.dynamic-eval");
+            },
+            other => panic!("expected dynamic-eval Ask, not destructive-rm deny: {other:?}"),
+        }
+    }
+
+    #[test]
     fn bash_redirect_target_classifies_as_protected_claude_settings() {
         // A Bash redirect target must drive the same self-protection
         // classification path as a Read/Edit payload, so that

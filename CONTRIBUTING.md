@@ -59,8 +59,9 @@ harness is timeout-equipped: it polls `Child::try_wait()` so an
 unbounded hang surfaces as a timeout *failure* rather than wedging
 `make e2e`, and a child killed by a signal (a crash) is reported via
 `SpawnOutcome::signal` — `assert_clean_exit` asserts against both. It is
-excluded from `make check` (each axis takes minutes) and intended for
-nightly CI or pre-release validation. The target passes
+excluded from `make check` (each axis takes minutes) and runs on the
+nightly schedule via `.github/workflows/nightly.yml` (`make e2e` job);
+run it locally before tagging a release. The target passes
 `--test-threads=1`; the fd-leak and shared-audit axes interfere when run
 in parallel.
 
