@@ -18,10 +18,10 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
-| [x] | `gap_cmdsubst_outer_nonreader_surfaces_sensitive_token` | `src/rules/sensitive_bash_read.rs` `mod tests` | `HookInput` Bash: `echo $(cat .env)` | `Facts` に `.env` 相当トークンが載る **か**、載らない理由を `rule_id` 付き Deny/Ask で固定（改善後は `assert_deny` または `assert_ask`） |
-| [x] | `gap_brace_expansion_matches_sensitive_path` | 同上 | `cat {a,b}.env` | 改善後: `evaluate()` が `Some` かつ `rule_id == "core.filesystem.sensitive-bash-read"`（または新 rule id） |
-| [x] | `gap_unicode_homoglyph_normalizes_or_flags` | 同上 + 必要なら `src/facts/shell.rs` | `cat .еnv`（Cyrillic е） | 改善後: Ask/Deny；現状維持なら corpus `known_gap` のまま本テストは **Allow + 理由コメント** で pin |
-| [x] | *(corpus)* `gap-*` → `must_catch` 昇格 | `tests/bypass/corpus.jsonl` | 上記 3 件を直した PR | N/A — ADR 0001 gaps remain `known_gap`; no corpus promotion until fixes land |
+| [ ] | `gap_cmdsubst_outer_nonreader_surfaces_sensitive_token` | `src/rules/sensitive_bash_read.rs` `mod tests` | `HookInput` Bash: `echo $(cat .env)` | `Facts` に `.env` 相当トークンが載る **か**、載らない理由を `rule_id` 付き Deny/Ask で固定（改善後は `assert_deny` または `assert_ask`） |
+| [ ] | `gap_brace_expansion_matches_sensitive_path` | 同上 | `cat {a,b}.env` | 改善後: `evaluate()` が `Some` かつ `rule_id == "core.filesystem.sensitive-bash-read"`（または新 rule id） |
+| [ ] | `gap_unicode_homoglyph_normalizes_or_flags` | 同上 + 必要なら `src/facts/shell.rs` | `cat .еnv`（Cyrillic е） | 改善後: Ask/Deny；現状維持なら corpus `known_gap` のまま本テストは **Allow + 理由コメント** で pin |
+| [ ] | *(corpus)* `gap-*` → `must_catch` 昇格 | `tests/bypass/corpus.jsonl` | 上記 3 件を直した PR | N/A — ADR 0001 gaps remain `known_gap`; no corpus promotion until fixes land |
 
 ---
 
@@ -29,9 +29,9 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
-| [ ] | `triple_nested_su_bash_c_surfaces_inner_rm` | `src/facts/shell.rs` `mod tests` | `su -c 'bash -c "su -c '\''rm -rf /'\''"'`（3 段） | `Argv.inner_argv` の最深 head に `rm` が含まれる **か**、取り逃しを文書化するなら `inner_argv` が空でないことと `chain <= 2` の上限を明示 |
-| [ ] | `wrapper_triple_nested_su_rm_rf_root` | `tests/bypass/corpus.jsonl` + 既存 runner | 上記コマンドを `hook_input` に | **修正後**: `"kind":"must_catch","decision":"deny"`；**現状 pin**: `"kind":"known_gap","decision":"allow"` のどちらかを選び ADR / open-issues を同期 |
-| [ ] | `engine_decide_triple_nested_su_denies_destructive` | `src/engine/mod.rs` `mod tests` | `Engine::builder()` + 上記 Bash | `outcome.decision` が `Deny { rule_id: "core.filesystem.destructive-rm", .. }`（must_catch 化した場合） |
+| [x] | `triple_nested_su_bash_c_surfaces_inner_rm` | `src/facts/shell.rs` `mod tests` | `su -c 'bash -c "su -c '\''rm -rf /'\''"'`（3 段） | `Argv.inner_argv` の最深 head に `rm` が含まれる **か**、取り逃しを文書化するなら `inner_argv` が空でないことと `chain <= 2` の上限を明示 |
+| [x] | `wrapper_triple_nested_su_rm_rf_root` | `tests/bypass/corpus.jsonl` + 既存 runner | 上記コマンドを `hook_input` に | **修正後**: `"kind":"must_catch","decision":"deny"`；**現状 pin**: `"kind":"known_gap","decision":"allow"` のどちらかを選び ADR / open-issues を同期 |
+| [x] | `engine_decide_triple_nested_su_allows_destructive` | `src/engine/mod.rs` `mod tests` | `Engine::builder()` + 上記 Bash | `destructive-rm` は発火せず `core.engine.dynamic-eval` の Ask（known_gap pin） |
 
 ---
 
