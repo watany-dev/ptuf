@@ -146,7 +146,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
-| [ ] | `sensitive_path_matches_dotenv_case_insensitive` | `src/rules/patterns.rs` | `.env`, `.ENV`, `foo/.env.bar` 等の表 | `is_match` 結果を表形式で固定 |
+| [x] | `sensitive_path_matches_dotenv_case_insensitive` | `src/rules/patterns.rs` | `.env`, `.ENV`, `foo/.env.bar` 等の表 | `is_match` 結果を表形式で固定 |
 | [ ] | `sensitive_path_rejects_non_secret_paths` | 同上 | `README`, `/tmp/foo` | 非マッチ |
 | [ ] | `sensitive_path_dd_if_form` | 同上 | `if=.env` フラグ値 | マッチ（ADR B2） |
 

@@ -69,4 +69,28 @@ mod tests {
     fn all_regexes_compile() {
         LazyLock::force(&SENSITIVE_PATH);
     }
+
+    #[test]
+    fn sensitive_path_matches_dotenv_case_insensitive() {
+        let cases = [
+            (".env", true),
+            (".ENV", true),
+            ("foo/.env.bar", true),
+            ("/repo/.env", true),
+        ];
+        for (token, expect) in cases {
+            assert_eq!(SENSITIVE_PATH.is_match(token), expect, "token {token:?}");
+        }
+    }
+
+    #[test]
+    fn sensitive_path_rejects_non_secret_paths() {
+        assert!(!SENSITIVE_PATH.is_match("README"));
+        assert!(!SENSITIVE_PATH.is_match("/tmp/foo"));
+    }
+
+    #[test]
+    fn sensitive_path_dd_if_form() {
+        assert!(SENSITIVE_PATH.is_match("if=.env"));
+    }
 }
