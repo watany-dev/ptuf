@@ -220,14 +220,38 @@ mod tests {
     }
 
     #[test]
-    fn does_not_fire_when_outer_head_is_not_reader_under_substitution() {
-        // Known design limitation (documented in ADR 0001): a
-        // substitution body where the *outer* head is non-reader
-        // (`echo $(cat .env)`) hides `cat` from the parser. Pessimistic
-        // mode requires reader + sensitive coexistence at the visible
-        // argv level, mirroring sensitive-path-to-network. This test
-        // pins the limitation so removing it is a deliberate change.
-        assert_silent("echo $(cat .env)");
+    fn gap_cmdsubst_outer_nonreader_surfaces_sensitive_token() {
+        // ADR 0001 known_gap: outer head `echo` is not a reader, so the
+        // rule stays silent even though the substitution body mentions
+        // `.env`. Pin both the surfaced token and the Allow-equivalent
+        // outcome so a fix must update corpus + this test together.
+        let cmd = "echo $(cat .env)";
+        let input = bash(cmd);
+        let facts = crate::facts::extract(&input);
+        let bash_facts = facts.bash.as_ref().expect("bash facts");
+        let surfaces_sensitive = bash_facts
+            .commands()
+            .iter()
+            .any(|argv| crate::rules::patterns::argv_references_sensitive(argv));
+        assert!(
+            surfaces_sensitive,
+            "parser should still surface the .env token in argv"
+        );
+        assert_silent(cmd);
+    }
+
+    #[test]
+    fn gap_brace_expansion_matches_sensitive_path() {
+        // ADR 0001 known_gap: brace expansion is not expanded before
+        // regex anchor matching.
+        assert_silent("cat {a,b}.env");
+    }
+
+    #[test]
+    fn gap_unicode_homoglyph_normalizes_or_flags() {
+        // ADR 0001 known_gap: Cyrillic homoglyph `.еnv` evades the ASCII
+        // `(?i-u:.env)` anchor until normalization is implemented.
+        assert_silent("cat .еnv"); // U+0435 CYRILLIC SMALL LETTER IE
     }
 
     #[test]
