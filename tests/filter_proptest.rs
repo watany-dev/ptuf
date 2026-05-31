@@ -26,6 +26,7 @@ use ptuf::audit::record::AuditRecord;
 use ptuf::audit::{AuditError, AuditSink};
 use ptuf::config::{Allowlist, Config, Mode, RuleOverride};
 use ptuf::decision::DecisionKind;
+use ptuf::plugin::dsl::compile;
 use ptuf::plugin::{PluginSet, load_str};
 use ptuf::testing::proptest::{
     arbitrary_command, config_with_filters, decision_kind, pack_override, rule_override,
@@ -290,5 +291,59 @@ proptest! {
             "default config did not deny hard-deny cmd: {:?}",
             outcome.decision,
         );
+    }
+
+    /// Allowlist `when` must match before suppression applies.
+    #[test]
+    fn pbt_allowlist_when_suppresses_only_on_match(matches_when in proptest::bool::ANY) {
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "scoped-git".into(),
+            rule_ids: vec!["core.git.reset-hard".into()],
+            when: None,
+            expires_at: None,
+            reason: None,
+        });
+        let cmd = "git reset --hard HEAD~1";
+        let when_yaml: serde_yaml_ng::Value = if matches_when {
+            serde_yaml_ng::from_str("shell.argv:\n  headAny: [git]\n").expect("parse when")
+        } else {
+            serde_yaml_ng::from_str("shell.argv:\n  headAny: [wget]\n").expect("parse when")
+        };
+        let when = compile(&when_yaml).expect("compile when");
+        cfg.allowlists[0].when = Some(when);
+        let outcome = engine(cfg, PluginSet::new()).decide(&bash(cmd));
+        if matches_when {
+            prop_assert_eq!(outcome.decision, Decision::Allow);
+            prop_assert_eq!(outcome.allowlist_id.as_deref(), Some("scoped-git"));
+        } else {
+            let is_ask = matches!(outcome.decision, Decision::Ask { .. });
+            prop_assert!(is_ask, "expected Ask, got {:?}", outcome.decision);
+            prop_assert!(outcome.allowlist_id.is_none());
+        }
+    }
+
+    #[test]
+    fn pbt_allowlist_when_idempotent(matches_when in proptest::bool::ANY) {
+        let when_yaml: serde_yaml_ng::Value = if matches_when {
+            serde_yaml_ng::from_str("shell.argv:\n  headAny: [git]\n").expect("parse when")
+        } else {
+            serde_yaml_ng::from_str("shell.argv:\n  headAny: [wget]\n").expect("parse when")
+        };
+        let when = compile(&when_yaml).expect("compile when");
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "scoped-git".into(),
+            rule_ids: vec!["core.git.reset-hard".into()],
+            when: Some(when),
+            expires_at: None,
+            reason: None,
+        });
+        let cmd = "git reset --hard HEAD~1";
+        let eng = engine(cfg, PluginSet::new());
+        let input = bash(cmd);
+        let a = eng.decide(&input).decision;
+        let b = eng.decide(&input).decision;
+        prop_assert_eq!(a, b);
     }
 }
