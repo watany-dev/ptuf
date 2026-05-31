@@ -156,7 +156,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
-| [ ] | `plugin_head_any_and_path_prefix_denies` | `tests/config_integration.rs` | plugin: `shell.argv.headAny` + `path.filePathPrefixAny` | 両方満たすときのみ Deny |
+| [x] | `plugin_head_any_and_path_prefix_denies` | `tests/config_integration.rs` | plugin: `shell.argv.headAny` + `path.filePathPrefixAny` | 両方満たすときのみ Deny |
 | [ ] | `plugin_sensitive_path_fact_denies_read_tool` | 同上 | `when: sensitive_path` + Read | `Deny` |
 | [ ] | `plugin_rule_id_in_stderr_on_hook` | 同上 | deny ケース | stderr に plugin rule id |
 
