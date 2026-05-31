@@ -19,6 +19,7 @@ use crate::update::{self, UpdateOptions};
 
 use super::cline_input;
 use super::copilot_input;
+use super::cursor_input;
 use super::kiro_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
 use super::{
@@ -98,6 +99,10 @@ fn invalid_payload_deny(problem: &str) -> Decision {
 /// etc.), so its payload routes through `cli::kiro_input::parse`. Cline
 /// wraps its tool call in a `hookName` envelope (`tool_call` or legacy
 /// `preToolUse`), so its payload routes through `cli::cline_input::parse`.
+/// Cursor speaks a `hook_event_name`-dispatched shape (`preToolUse` /
+/// `beforeShellExecution` / `beforeReadFile` / `beforeMCPExecution`) with
+/// its own tool vocabulary, so its payload routes through
+/// `cli::cursor_input::parse`.
 fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
     match agent {
         HookAgent::ClaudeCode | HookAgent::Codex => serde_json::from_str::<HookInput>(body)
@@ -105,6 +110,7 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
         HookAgent::Copilot => copilot_input::parse(body).map_err(|err| err.to_string()),
         HookAgent::Kiro => kiro_input::parse(body).map_err(|err| err.to_string()),
         HookAgent::Cline => cline_input::parse(body).map_err(|err| err.to_string()),
+        HookAgent::Cursor => cursor_input::parse(body).map_err(|err| err.to_string()),
     }
 }
 
@@ -199,7 +205,7 @@ where
         if detected.is_empty() {
             let _ = writeln!(
                 stderr,
-                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro | cline)",
+                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro | cline | cursor)",
             );
             return 1;
         }
@@ -442,6 +448,20 @@ impl AgentPlan {
                     }),
                 })
             },
+            HookAgent::Cursor => {
+                let targets = init::cursor::resolve_paths(cwd, &options.cursor)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.hooks_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::cursor::detect_binary();
+                        let outcome = init::cursor::install(&targets, &binary, dry_run)?;
+                        Ok(init::AdapterRunReport {
+                            outcome,
+                            kiro: None,
+                        })
+                    }),
+                })
+            },
         }
     }
 }
@@ -582,6 +602,7 @@ mod tests {
             verify,
             dry_run,
             kiro: init::kiro::KiroInitOptions::default(),
+            cursor: init::cursor::CursorInitOptions::default(),
         })
     }
 
@@ -836,6 +857,74 @@ rules:
     }
 
     #[test]
+    fn run_init_explicit_cursor_writes_hooks_file() {
+        let dir = workdir("init-cursor-real");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let hooks_path = dir.join(".cursor/hooks.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init(Some(HookAgent::Cursor), false, false),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out).contains("registered hook"));
+        assert!(hooks_path.exists());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_cursor_dry_run_does_not_write_hooks_file() {
+        let dir = workdir("init-cursor-dry");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let hooks_path = dir.join(".cursor/hooks.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init(Some(HookAgent::Cursor), false, true),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out).contains("would register hook"));
+        assert!(!hooks_path.exists());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_auto_detect_includes_cursor() {
+        let dir = workdir("init-cursor-detect");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join(".cursor")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let hooks_path = dir.join(".cursor/hooks.json");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init(None, false, false),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        let stdout = String::from_utf8_lossy(&out);
+        assert!(stdout.contains("cursor"), "stdout: {stdout}");
+        assert!(hooks_path.exists());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn run_init_codex_explicit_dry_run() {
         let dir = workdir("init-codex-dry");
         std::fs::create_dir_all(dir.join(".git")).unwrap();
@@ -871,6 +960,7 @@ rules:
                 verify: true,
                 dry_run: false,
                 kiro: init::kiro::KiroInitOptions::default(),
+                cursor: init::cursor::CursorInitOptions::default(),
             },
             passing_report,
             &mut out,
@@ -900,6 +990,7 @@ rules:
                 verify: true,
                 dry_run: false,
                 kiro: init::kiro::KiroInitOptions::default(),
+                cursor: init::cursor::CursorInitOptions::default(),
             },
             failing_report,
             &mut out,
@@ -931,6 +1022,7 @@ rules:
                 verify: true,
                 dry_run: false,
                 kiro: init::kiro::KiroInitOptions::default(),
+                cursor: init::cursor::CursorInitOptions::default(),
             },
             passing_report,
             &mut out,

@@ -5,7 +5,7 @@ agent's `PreToolUse` event and blocks dangerous tool calls — destructive
 `rm`, piping `curl` into a shell, leaking `~/.ssh` over the network — using
 rules, not LLM heuristics.
 
-Supported hosts: **Claude Code**, **Codex**, **GitHub Copilot**, **Kiro CLI**, **Cline**.
+Supported hosts: **Claude Code**, **Codex**, **GitHub Copilot**, **Kiro CLI**, **Cline**, **Cursor**.
 
 ## What it stops
 
@@ -173,6 +173,32 @@ no repo root it falls back to `~/Documents/Cline/Hooks/`:
 ptuf init cline
 ```
 
+**Cursor** — writes a `version: 1` `hooks.preToolUse` entry into
+`<repo>/.cursor/hooks.json` (`--scope local`, default) or
+`$HOME/.cursor/hooks.json` (`--scope global`):
+
+```bash
+ptuf init cursor                 # <repo>/.cursor/hooks.json
+ptuf init cursor --scope global  # $HOME/.cursor/hooks.json
+ptuf init cursor --root <path>   # start repo discovery from <path>
+ptuf init cursor --hooks <path>  # patch this exact hooks.json file
+```
+
+Cursor guards only **hook-driven agent tool execution** — the agent
+loop's `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution`, and
+`preToolUse` events. Tab completion, manual edits, and commands typed
+directly into the terminal never reach a hook and are **out of scope**.
+Unlike Codex / Copilot / Kiro / Cline, Cursor has its own `Ask` channel,
+so an `ask` decision is preserved (`{"permission":"ask"}`, exit 0) and
+never demoted to a hard deny:
+
+| Decision         | stdout                              | exit |
+| ---------------- | ----------------------------------- | ---- |
+| Allow / Monitor  | (empty)                             | 0    |
+| Ask              | `{"permission":"ask",...}`          | 0    |
+| Deny             | `{"permission":"deny",...}`         | 2    |
+| invalid payload  | `{"permission":"deny",...}`         | 2    |
+
 `ptuf init` with no agent auto-detects every reachable host under cwd /
 `$HOME` and installs the `PreToolUse` hook into each. Pass `--dry-run`
 to show the plan without writing, or `--no-verify` to skip the
@@ -188,6 +214,7 @@ ptuf hook <agent>
 ptuf [--json] check --tool <name> <command>
 ptuf [--json] plugin check <path>
 ptuf [--json] init [<agent>] [--no-verify] [--dry-run]
+                   [--scope <local|global>] [--root <PATH>] [--hooks <PATH>]  # cursor only
 ptuf update [--check] [--version <TAG>] [--force]
 ptuf --help
 ptuf --version
@@ -198,8 +225,10 @@ subcommand. `hook` does not accept `--json` because the hook protocol
 output shape is fixed by the host. `init` runs the post-install verify
 by default; pass `--no-verify` to skip, or `--dry-run` to plan only
 (dry-run implicitly turns verify off because nothing is written).
-`hook_event_name` other than `preToolUse` is rejected with
-`core.engine.invalid-payload`.
+For the Claude Code adapter a `hook_event_name` other than `preToolUse`
+is rejected with `core.engine.invalid-payload`. The Cursor adapter
+additionally accepts `beforeShellExecution`, `beforeReadFile`, and
+`beforeMCPExecution`; any other event fails closed the same way.
 
 ## Customize
 

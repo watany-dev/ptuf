@@ -1,8 +1,8 @@
 # CLI と Hook 統合
 
 ptuf は CLI バイナリとして配布され、同時に Claude Code / Codex / GitHub
-Copilot / Kiro CLI / Cline の `PreToolUse` hook adapter を提供する。Kiro
-固有の正規化や fail-closed 経路の詳細は [`kiro-cli.md`](kiro-cli.md) を参照。
+Copilot / Kiro CLI / Cline / Cursor の `PreToolUse` hook adapter を提供する。
+Kiro 固有の正規化や fail-closed 経路の詳細は [`kiro-cli.md`](kiro-cli.md) を参照。
 
 ## 実装済みサブコマンド
 
@@ -12,6 +12,7 @@ ptuf hook codex
 ptuf hook copilot
 ptuf hook kiro
 ptuf hook cline
+ptuf hook cursor
 ptuf [--json] check --tool Bash 'git reset --hard HEAD~1'
 ptuf [--json] plugin check ./ptuf-plugin.yaml
 ptuf [--json] init                       # auto-detect every agent
@@ -43,6 +44,7 @@ ptuf update [--check] [--version <TAG>] [--force]
 | Copilot | `<repo>/.github/` | `<repo>/.github/hooks/ptuf.json` |
 | Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | 両 scope の `.kiro/agents/*.json` を一括 patch (空 scope は `agents/default.json` で fallback) |
 | Cline | `<repo>/.clinerules/` `.cline/`、または `$HOME/Documents/Cline/` `.cline/` | repo 配下 `.clinerules/hooks/PreToolUse` または `$HOME/Documents/Cline/Hooks/PreToolUse` |
+| Cursor | `<repo>/.cursor/` または `$HOME/.cursor/` | `<repo>/.cursor/hooks.json` (`--scope global` で `$HOME/.cursor/hooks.json`) |
 
 検出 0 件 → exit `1` + `no agent detected` を stderr に出す。1 件以上
 → 全部 install + verify。verify がいずれかで失敗すれば exit `1`。
@@ -54,12 +56,14 @@ install になる。
 
 | 条件 | exit |
 | --- | --- |
-| `Allow` / `Monitor` / Claude Code の `Ask` | `0` |
-| `Deny` (Claude Code / Codex / Kiro) | `2` |
+| `Allow` / `Monitor` / Claude Code・Cursor の `Ask` | `0` |
+| `Deny` (Claude Code / Codex / Kiro / Cursor) | `2` |
 | Copilot / Cline の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
 | 内部エラー、引数不正、plugin check fail、init verify fail、update 失敗 (curl 不在 / updater 非ゼロ) | `1` |
 
 Codex / Kiro では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
+Cursor は Claude Code と同じく `Ask` channel を持つため `Ask` を降格せず、
+`{"permission":"ask",…}` を exit `0` で返す (下記「Cursor への登録」参照)。
 
 Copilot は protocol 上 non-zero exit が hook failure として扱われ得るため、
 **すべての Decision で exit `0`** に固定する。Deny は bare JSON envelope
@@ -298,6 +302,53 @@ exit $LASTEXITCODE
 - binary path の quoting は sh では single-quote (`'` → `'\''`)、PowerShell
   では single-quote (`'` → `''`) で行う
 
+## Cursor への登録
+
+`ptuf init cursor` は `<repo>/.cursor/hooks.json` (`--scope global` で
+`$HOME/.cursor/hooks.json`) に `version: 1` の `hooks.preToolUse` entry を
+追加する。Copilot と同じ JSON-config 系 installer だが、scope/path 解決の
+柔軟性が異なる。
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "command": "/usr/local/bin/ptuf hook cursor",
+        "matcher": "Shell|Bash|Read|ReadFile|Write|Edit|MCP|WebFetch|Fetch|mcp__.*",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ]
+  }
+}
+```
+
+path 解決の優先順位 (`init::cursor::resolve_paths`):
+
+- `--hooks <path>` が最優先。指定ファイルをそのまま対象にする (root は
+  parent ディレクトリ、無ければ `.`)
+- `--scope global`: `$HOME/.cursor/hooks.json`。`$HOME` 不在は
+  `InitError::HomeNotSet`
+- `--scope local` (default): `--root <path>` を起点 (無ければ cwd) に
+  `config::repo::discover` で repo root を探し、`<repo>/.cursor/hooks.json`。
+  repo root 不在は `InitError::RepoRootNotFound`
+
+merge 契約 (Copilot と同型):
+
+- `version` 欠如 → `1` を付与。`hooks` / `hooks.preToolUse` を object /
+  array として補完
+- idempotent 判定は command tail `["hook","cursor"]`。既存 ptuf entry が
+  あれば推奨値へ揃え、無ければ追加。他の hook entry は保持
+- temp file + rename の原子的更新、mode `0600`
+- object であるべき箇所が他の型なら非破壊で `InitError`
+
+`--scope` / `--root` / `--hooks` は Cursor 専用フラグで、他 adapter や
+auto-detect へ渡すと parse error (`ConflictingFlags`)。Kiro の `--global`
+との取り違えを避けるため Cursor は `--scope global` を採用している。
+
 ## install verification
 
 `ptuf init <agent>` は配線を書いたあと、内部 Engine を起動して
@@ -425,10 +476,21 @@ Cline (`hookSpecificOutput` wrap なし、`shouldContinue` / `review` /
 }
 ```
 
+Cursor (bare envelope, `hookSpecificOutput` wrap なし。`permission` は
+`ask` / `deny` のみ。Claude Code と同じく `Ask` を保持し降格しない):
+
+```json
+{
+  "permission": "deny",
+  "user_message": "...",
+  "agent_message": "..."
+}
+```
+
 `Allow` と `Monitor` は hook response を出さない (Claude Code / Codex /
-Copilot / Kiro)。Cline だけは Allow / Monitor でも空 object `{}` を stdout
-に書き、block 時のみ `cancel: true` envelope を出す。`Ask` は `Deny` へ
-demote する。
+Copilot / Kiro / Cursor)。Cline だけは Allow / Monitor でも空 object `{}` を
+stdout に書き、block 時のみ `cancel: true` envelope を出す。`Ask` は
+Claude Code / Cursor では保持、それ以外では `Deny` へ demote する。
 
 agent 別の Decision → exit / 出力契約:
 
@@ -439,6 +501,7 @@ agent 別の Decision → exit / 出力契約:
 | Copilot | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `0`, bare JSON) | exit `0`, bare deny JSON | exit `0`, bare deny JSON |
 | Kiro | exit `0`, 空 stdout / 空 stderr | `Ask` → `Deny` に demote (exit `2`, stderr reason のみ) | exit `2`, stderr reason のみ | exit `2`, stderr reason のみ |
 | Cline | exit `0`, stdout `{}` | `Ask` → `Deny` に demote (exit `0`, cancel JSON) | exit `0`, cancel JSON | exit `0`, cancel JSON |
+| Cursor | exit `0`, 空 stdout | exit `0`, bare `permission:ask` JSON (**降格しない**) | exit `2`, bare `permission:deny` JSON | exit `2`, deny |
 
 Copilot の `Ask` demote 文言は仕様で固定:
 
@@ -457,8 +520,9 @@ Cline の `Ask` demote 文言も仕様で固定:
 > instead.`
 
 reserved rule `core.engine.invalid-payload` / `core.engine.policy-load-failed`
-は 5 agent で共通だが、Copilot では bare JSON + exit `0`、Kiro では stderr +
-exit `2`、Cline では cancel JSON + exit `0` で出す。
+は 6 agent で共通だが、Copilot では bare JSON + exit `0`、Kiro では stderr +
+exit `2`、Cline では cancel JSON + exit `0`、Cursor では bare
+`permission:deny` JSON + exit `2` で出す。
 
 ## MCP fact 抽出
 
@@ -548,6 +612,48 @@ Cline の file hook payload は `hookName` envelope に包まれており、2 �
 に `tool_call.id` を付与する。非 JSON / 非対応 `hookName` / `tool_call` も
 `preToolUse` も無い / tool 名が空 のいずれも `core.engine.invalid-payload`
 で fail-closed する。
+
+## Cursor 入力正規化
+
+Cursor の hook payload は `hook_event_name` (camelCase `hookEventName` 互換)
+で event を区別する。`src/cli/cursor_input.rs` が enforce 対象 event を
+canonical shape に正規化する。
+
+| Cursor event | canonical tool |
+| --- | --- |
+| `preToolUse` | `tool_name` を正規化 (下表)。`tool_name` 欠落は fail-closed |
+| `beforeShellExecution` | `Bash` |
+| `beforeReadFile` | `Read` |
+| `beforeMCPExecution` | `mcp__<server>__<tool>` |
+| その他 (`postToolUse` / `afterFileEdit` / `sessionStart` / `stop` 等) | `core.engine.invalid-payload` で fail-closed (MVP では observe-only 化しない) |
+
+`preToolUse` の `tool_name` 正規化:
+
+| Cursor tool 名 | canonical |
+| --- | --- |
+| `Shell` / `Bash` | `Bash` |
+| `Read` / `ReadFile` | `Read` |
+| `Write` | `Write` |
+| `Edit` | `Edit` |
+| `WebFetch` / `Fetch` | `WebFetch` |
+| `MCP` / `mcp__*` | `mcp__<server>__<tool>` |
+| その他 | そのまま (engine が generic / MCP 抽出) |
+
+field fallback (`tool_input` / camelCase `toolInput` / root いずれからも読む):
+
+- `Bash`: `command` → `cmd` → `script` → root `command` の順で先頭 string を
+  `command` に複製
+- `Read` / `Write` / `Edit`: `file_path` → `path` → root `path` → `paths[0]`
+  → `files[0].path` の順で `file_path` に複製
+- `Write`: `content` → `text` → `new_content`
+- `Edit`: `old_string` → `oldText` → `old`、`new_string` → `newText` → `new`
+- `beforeMCPExecution`: `metadata.server` / `metadata.tool_name` (または
+  `tool_input.*` / root) から `mcp__<server>__<tool>` を組み立てる。空白 /
+  `/` / `.` 等は `_` へ正規化する (`kiro_input::normalize_at_mcp` と同型)
+
+`tool_input` が JSON 文字列の場合は parse し、失敗時は `{"text":"<raw>"}` で
+保持する (`copilot_input::decode_args` と同型)。空 payload / 非 object payload
+も `core.engine.invalid-payload` で fail-closed する。
 
 ## fail-closed
 

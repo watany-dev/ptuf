@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-31
+
+### Changed (BREAKING)
+- `HookAgent` に `Cursor` variant を追加。
+- `InitOptions` に `cursor: CursorInitOptions` field を追加。
+
+### Added
+- Cursor hook runtime adapter (`ptuf hook cursor`) と `ptuf init cursor`
+  (repo-local / global `.cursor/hooks.json`、`--scope` / `--root` /
+  `--hooks` flag)。
+
 ## [0.2.0] - 2026-05-28
 
 ### Changed (BREAKING)
@@ -320,7 +331,8 @@ Initial public release.
 - `curl | sh` and PowerShell installers via cargo-dist
 - crates.io publication
 
-[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/watany-dev/ptuf/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/watany-dev/ptuf/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/watany-dev/ptuf/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/watany-dev/ptuf/releases/tag/v0.1.0

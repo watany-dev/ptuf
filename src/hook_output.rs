@@ -208,6 +208,42 @@ pub mod cline {
     }
 }
 
+pub mod cursor {
+    use serde::Serialize;
+
+    use crate::Decision;
+
+    /// Bare permission envelope expected by Cursor's `preToolUse` hook.
+    /// Unlike Copilot / Codex / Kiro, Cursor exposes a genuine `ask`
+    /// channel, so `Ask` is **not** demoted to `Deny`. The CLI writes this
+    /// JSON object directly (no `hookSpecificOutput` wrapper); `deny`
+    /// additionally exits 2 while `ask` exits 0.
+    #[derive(Debug, Serialize)]
+    pub struct CursorResponse {
+        pub permission: &'static str,
+        pub user_message: String,
+        pub agent_message: String,
+    }
+
+    /// Build a Cursor permission envelope from a decision. Returns `None`
+    /// for `Allow` and `Monitor` (no output). `Ask` maps to
+    /// `permission: "ask"` and `Deny` to `permission: "deny"`; both carry
+    /// the reason verbatim in `user_message` / `agent_message`.
+    pub fn from_decision(decision: &Decision) -> Option<CursorResponse> {
+        let (permission, reason) = match decision {
+            Decision::Allow | Decision::Monitor { .. } => return None,
+            Decision::Ask { reason, .. } => ("ask", reason.clone()),
+            Decision::Deny { reason, .. } => ("deny", reason.clone()),
+        };
+
+        Some(CursorResponse {
+            permission,
+            user_message: reason.clone(),
+            agent_message: reason,
+        })
+    }
+}
+
 pub use claude_code::from_decision;
 
 #[cfg(test)]
@@ -351,6 +387,49 @@ mod tests {
         let json = serde_json::to_string(&resp).expect("serialise");
         assert!(json.contains("\"permissionDecision\":\"deny\""));
         assert!(json.contains("Codex PreToolUse cannot prompt interactively"));
+    }
+
+    #[test]
+    fn cursor_allow_and_monitor_yield_none() {
+        assert!(cursor::from_decision(&Decision::Allow).is_none());
+        assert!(
+            cursor::from_decision(&Decision::Monitor {
+                rule_id: "core.m".into(),
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn cursor_deny_serialises_bare_permission_envelope() {
+        let d = Decision::Deny {
+            rule_id: "core.x".into(),
+            reason: "blocked".into(),
+        };
+        let resp = cursor::from_decision(&d).expect("response");
+        let json = serde_json::to_value(&resp).expect("serialise");
+        assert!(
+            json.get("hookSpecificOutput").is_none(),
+            "Cursor must not wrap response: {json}"
+        );
+        assert_eq!(json["permission"], "deny");
+        assert_eq!(json["user_message"], "blocked");
+        assert_eq!(json["agent_message"], "blocked");
+    }
+
+    #[test]
+    fn cursor_ask_is_preserved_not_demoted() {
+        let d = Decision::Ask {
+            rule_id: "core.a".into(),
+            reason: "confirm please".into(),
+        };
+        let resp = cursor::from_decision(&d).expect("response");
+        let json = serde_json::to_value(&resp).expect("serialise");
+        assert_eq!(
+            json["permission"], "ask",
+            "Cursor has an ask channel; Ask must not demote to deny"
+        );
+        assert_eq!(json["user_message"], "confirm please");
     }
 
     use crate::testing::proptest::{decision, reason_text, rule_id};

@@ -1050,7 +1050,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.3.0".to_string()),
+            version: Some("v9.9.9".to_string()),
             force: false,
             skip_attestation: true,
         };
@@ -1068,7 +1068,7 @@ mod tests {
             .last()
             .expect("download URL is the last curl arg");
         assert!(
-            download_url.contains("releases/download/v0.3.0/ptuf-installer.sh"),
+            download_url.contains("releases/download/v9.9.9/ptuf-installer.sh"),
             "download URL: {download_url}",
         );
         assert_eq!(calls[1].program, "sh");
