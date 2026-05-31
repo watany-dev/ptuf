@@ -166,7 +166,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
-| [ ] | *(決定)* ADR に Bash symlink を in-scope にするか | `docs/adr/0001-env-protection-gaps.md` | — | — |
+| [x] | *(決定)* ADR に Bash symlink を in-scope にするか | `docs/adr/0001-env-protection-gaps.md` | — | — |
 | [ ] | `bash_cat_symlink_to_dotenv` | `tests/bypass/corpus.jsonl` または `sensitive_bash_read` | `ln -s .env /tmp/l.env` 前提の command 文字列 | `must_catch`/`known_gap` を決めて pin |
 
 ---
