@@ -92,7 +92,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
-| [ ] | `hook_surfaces_audit_open_failure_on_stderr` | `tests/config_integration.rs` | `audit.path: /nonexistent/nope/audit.jsonl` か書込不可ディレクトリ | exit は deny でなくてもよい（現行契約確認）；**stderr に `audit` / `warning` 等の固定 substring** |
+| [x] | `hook_surfaces_audit_open_failure_on_stderr` | `tests/config_integration.rs` | `audit.path: /nonexistent/nope/audit.jsonl` か書込不可ディレクトリ | exit は deny でなくてもよい（現行契約確認）；**stderr に `audit` / `warning` 等の固定 substring** |
 | [ ] | `check_drains_audit_write_warnings` | 同上 | `ptuf check` | 同上 stderr |
 | [ ] | `hook_still_denies_when_audit_sink_fails` | 同上 | `rm -rf /` | `code == 2`（判定は続行） |
 
