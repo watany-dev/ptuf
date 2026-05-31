@@ -102,7 +102,7 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
-| [ ] | `audit_include_allowed_true_records_allow` | `tests/config_integration.rs` | `includeAllowed: true` + safe `ls` | JSONL に `"decision":"allow"` |
+| [x] | `audit_include_allowed_true_records_allow` | `tests/config_integration.rs` | `includeAllowed: true` + safe `ls` | JSONL に `"decision":"allow"` |
 | [ ] | `audit_include_allowed_false_omits_allow` | 同上 | `includeAllowed: false`（default 確認） | ファイル空または allow 行なし |
 | [ ] | `audit_include_allowed_does_not_suppress_deny` | 同上 | deny コマンド + `includeDenied: true` | deny 行は残る（`audit_include_denied_false_*` と対） |
 
