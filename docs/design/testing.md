@@ -37,7 +37,8 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 
 - `Mode::Enforce` ⇒ 入力をそのまま返す (恒等)
 - `Mode::Monitor` で `Allow / Ask / Monitor` ⇒ 不変
-- `Mode::Monitor` で `Deny { rule_id, .. }` ⇒
+- `Mode::Monitor` で `Deny { rule_id, .. }` かつ rule が `hard_deny` ⇒ 不変
+- `Mode::Monitor` で `Deny { rule_id, .. }` かつ rule が non-`hard_deny` ⇒
   `Monitor { rule_id }` (rule_id を保存)
 - demote は severity を増加させない
 

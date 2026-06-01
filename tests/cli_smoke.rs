@@ -695,10 +695,14 @@ fn engine_loads_local_ptuf_yaml_in_cwd() {
     let (code, stdout, _stderr) =
         run_in(&["check", "--tool", "Bash", "rm -rf /"], dir_path, None, "");
     assert_eq!(
-        code, 0,
-        "monitor mode must demote deny to exit 0; stdout: {stdout}"
+        code, 2,
+        "hard_deny must stay deny even in monitor mode; stdout: {stdout}"
     );
-    assert!(stdout.contains("Decision: monitor"), "stdout: {stdout}");
+    assert!(stdout.contains("Decision: deny"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("core.filesystem.destructive-rm"),
+        "stdout: {stdout}"
+    );
 }
 
 #[test]

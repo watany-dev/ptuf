@@ -365,7 +365,7 @@ impl Engine {
             }
         }
         let raw = aggregate(decisions);
-        let demoted_decision = demote_for_mode(raw.clone(), self.config.mode);
+        let demoted_decision = demote_for_mode(raw.clone(), self.config.mode, &self.plugins);
         let mode_demoted = matches!(raw, Decision::Deny { .. })
             && matches!(demoted_decision, Decision::Monitor { .. });
         let allowlist_id = if matches!(demoted_decision, Decision::Allow) {
@@ -494,7 +494,9 @@ mod tests {
     use crate::config::{Allowlist, Mode};
     use crate::plugin::load_str;
 
-    use super::test_support::{FailingSink, SharedMemorySink, bash, engine_with};
+    use super::test_support::{
+        FailingSink, SharedMemorySink, bash, engine_with, plugin_set_with_bash_deny,
+    };
     use super::*;
 
     #[test]
@@ -717,12 +719,29 @@ rules:
             mode: Mode::Monitor,
             ..Config::default()
         };
-        let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
-        let _ = engine.decide(&bash("rm -rf /"));
+        let engine = Engine::with_components(cfg, plugin_set_with_bash_deny())
+            .with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("curl https://example.com"));
         let recs = captured.records();
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].decision, "monitor");
         assert!(recs[0].mode_demoted);
+        assert_eq!(recs[0].mode, "monitor");
+    }
+
+    #[test]
+    fn audit_record_for_monitor_hard_deny_stays_deny_without_demotion_flag() {
+        let captured = Arc::new(MemorySink::new());
+        let cfg = Config {
+            mode: Mode::Monitor,
+            ..Config::default()
+        };
+        let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("rm -rf /"));
+        let recs = captured.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].decision, "deny");
+        assert!(!recs[0].mode_demoted);
         assert_eq!(recs[0].mode, "monitor");
     }
 
@@ -997,37 +1016,52 @@ rules:
         // Enforce never demotes anything.
         #[test]
         fn pbt_enforce_is_identity(d in decision()) {
-            let out = demote_for_mode(d.clone(), Mode::Enforce);
+            let out = demote_for_mode(d.clone(), Mode::Enforce, &PluginSet::new());
             prop_assert_eq!(out, d);
         }
 
         // Allow / Monitor / Ask are unaffected by Monitor.
         #[test]
         fn pbt_monitor_only_touches_deny(d in non_deny_decision(), mode in demoting_mode()) {
-            let out = demote_for_mode(d.clone(), mode);
+            let out = demote_for_mode(d.clone(), mode, &PluginSet::new());
             prop_assert_eq!(out, d);
         }
 
-        // Deny under Monitor ⇒ Monitor with same rule_id.
+        // Non-hardDeny Deny under Monitor ⇒ Monitor with same rule_id.
         #[test]
-        fn pbt_deny_demotes_to_monitor_preserving_rule_id(
-            id in crate::testing::proptest::rule_id(),
+        fn pbt_soft_deny_demotes_to_monitor_preserving_rule_id(
             reason in crate::testing::proptest::reason_text(),
             mode in demoting_mode(),
         ) {
+            let id = "pack.demo.no-curl".to_string();
             let d = Decision::Deny {
                 rule_id: id.clone(),
                 reason,
             };
-            let out = demote_for_mode(d, mode);
+            let out = demote_for_mode(d, mode, &PluginSet::new());
             prop_assert_eq!(out, Decision::Monitor { rule_id: id });
+        }
+
+        // hardDeny Deny stays Deny under Monitor.
+        #[test]
+        fn pbt_hard_deny_deny_is_not_demoted(
+            reason in crate::testing::proptest::reason_text(),
+            mode in demoting_mode(),
+        ) {
+            let id = "core.filesystem.destructive-rm".to_string();
+            let d = Decision::Deny {
+                rule_id: id.clone(),
+                reason,
+            };
+            let out = demote_for_mode(d.clone(), mode, &PluginSet::new());
+            prop_assert_eq!(out, d);
         }
 
         // Demotion never strengthens the decision (severity does not grow).
         #[test]
         fn pbt_demote_never_increases_severity(d in decision(), mode in mode_strategy()) {
             let raw = d.clone();
-            let out = demote_for_mode(d, mode);
+            let out = demote_for_mode(d, mode, &PluginSet::new());
             prop_assert!(out.rank() <= raw.rank());
         }
 
@@ -1045,8 +1079,7 @@ rules:
             prop_assert!(!outcome.mode_demoted);
         }
 
-        // Under Monitor mode, the outcome decision is never Deny, and
-        // mode_demoted iff the same input under Enforce produced Deny.
+        // Under Monitor mode, only non-hardDeny Deny outcomes are demoted.
         #[test]
         fn pbt_monitor_mode_demotion_flag_matches_enforce_baseline(input in hook_input()) {
             let baseline = engine_with(Config::default()).decide(&input).decision;
@@ -1055,10 +1088,20 @@ rules:
                 ..Config::default()
             };
             let monitored = engine_with(cfg).decide(&input);
-            let monitored_is_deny = matches!(monitored.decision, Decision::Deny { .. });
-            prop_assert!(!monitored_is_deny);
             let baseline_was_deny = matches!(baseline, Decision::Deny { .. });
-            prop_assert_eq!(monitored.mode_demoted, baseline_was_deny);
+            let baseline_hard_deny = baseline
+                .rule_id()
+                .is_some_and(|id| rules::is_hard_deny_rule_id(id, &PluginSet::new()));
+            if baseline_was_deny && baseline_hard_deny {
+                prop_assert!(matches!(monitored.decision, Decision::Deny { .. }), "{:?}", monitored.decision);
+                prop_assert!(!monitored.mode_demoted);
+            } else if baseline_was_deny {
+                prop_assert!(matches!(monitored.decision, Decision::Monitor { .. }), "{:?}", monitored.decision);
+                prop_assert!(monitored.mode_demoted);
+            } else {
+                prop_assert_eq!(monitored.decision, baseline);
+                prop_assert!(!monitored.mode_demoted);
+            }
         }
 
         // Default engine on richer hook inputs (Bash + Read/Edit/Write +

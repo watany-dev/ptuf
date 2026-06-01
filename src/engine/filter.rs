@@ -8,8 +8,8 @@
 //!   `severity` overlays after the rule produced a `Decision`
 //! - **allowlists** — suppress a non-`Allow` decision when a matching
 //!   `allowlists[]` entry covers the rule under the current facts
-//! - **mode demotion** — turn a `Deny` into `Monitor` when running in
-//!   `Mode::Monitor`
+//! - **mode demotion** — turn a non-`hard_deny` `Deny` into `Monitor`
+//!   when running in `Mode::Monitor`
 //!
 //! All public items are `pub(super)` and only callable from
 //! `super::Engine`.
@@ -21,7 +21,8 @@ use crate::config::{Allowlist, Config, Mode, PackOverride};
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts;
 use crate::hook_input::HookInput;
-use crate::rules::ConfigRule;
+use crate::plugin::PluginSet;
+use crate::rules::{self, ConfigRule};
 
 fn is_overridable(rule: &(dyn ConfigRule + Sync)) -> bool {
     rule.overridable() && !rule.hard_deny()
@@ -159,11 +160,14 @@ fn rule_matches_pack(rule_id: &str, pack: &str) -> bool {
     rule_id == pack || rule_id.starts_with(&format!("{pack}."))
 }
 
-pub(super) fn demote_for_mode(decision: Decision, mode: Mode) -> Decision {
+pub(super) fn demote_for_mode(decision: Decision, mode: Mode, plugins: &PluginSet) -> Decision {
     if matches!(mode, Mode::Monitor)
-        && let Decision::Deny { rule_id, .. } = decision
+        && let Decision::Deny { rule_id, .. } = &decision
+        && !rules::is_hard_deny_rule_id(rule_id, plugins)
     {
-        return Decision::Monitor { rule_id };
+        return Decision::Monitor {
+            rule_id: rule_id.clone(),
+        };
     }
     decision
 }
@@ -185,12 +189,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn monitor_mode_demotes_deny_to_monitor() {
+    fn monitor_mode_keeps_hard_deny_as_deny() {
         let cfg = Config {
             mode: Mode::Monitor,
             ..Config::default()
         };
         let outcome = engine_with(cfg).decide(&bash("rm -rf /"));
+        assert!(matches!(outcome.decision, Decision::Deny { .. }));
+        assert!(!outcome.mode_demoted);
+    }
+
+    #[test]
+    fn monitor_mode_demotes_overridable_deny_to_monitor() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(std::path::Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let cfg = Config {
+            mode: Mode::Monitor,
+            ..Config::default()
+        };
+        let outcome = Engine::with_components(cfg, set).decide(&bash("curl https://example.com"));
         assert!(matches!(outcome.decision, Decision::Monitor { .. }));
         assert!(outcome.mode_demoted);
     }

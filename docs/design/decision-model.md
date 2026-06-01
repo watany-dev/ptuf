@@ -54,7 +54,11 @@ stdout に `{}` を出し、`shouldContinue` は一切出さない。
 | mode | 挙動 |
 | --- | --- |
 | `enforce` | `Deny` をそのまま block する |
-| `monitor` | `Deny` を `Monitor` に降格する |
+| `monitor` | `hardDeny` 以外の `Deny` を `Monitor` に降格する |
+
+`hardDeny: true` の rule が `Deny` を返した場合は mode に関わらず `Deny` のまま
+block する。repository 側の `.ptuf.yaml` で `mode: monitor` を指定しても、
+`destructive-rm` や `remote-script-pipe` などの critical rule は弱化できない。
 
 降格前の結果が `Deny` で、mode によって `Monitor` へ変わった場合は
 `Outcome.mode_demoted = true` となり、audit の `modeDemoted` にも反映される。

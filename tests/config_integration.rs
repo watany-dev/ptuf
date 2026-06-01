@@ -13,7 +13,8 @@
 //! * allowlist `expiresAt` lifecycle (past / future / malformed)
 //! * audit `redaction` (`strict` default vs `off`)
 //! * audit `includeDenied` gating
-//! * `mode: monitor` demotion surfacing in the audit record
+//! * `mode: monitor` demotion surfacing in the audit record (soft rules only;
+//!   `hardDeny` rules stay blocked)
 //!
 //! Each knob was previously exercised only by unit / property tests
 //! that never crossed the CLI / config-file boundary.
@@ -405,20 +406,24 @@ fn audit_include_denied_false_suppresses_deny_record() {
 // ---------------------------------------------------------------
 
 #[test]
-fn monitor_mode_demotes_deny_and_audit_records_mode_demoted() {
+fn monitor_mode_demotes_soft_deny_and_audit_records_mode_demoted() {
     let dir = repo();
     let audit_path = dir.path().join("audit.jsonl");
+    write_no_curl_plugin_repo(&dir);
     std::fs::write(
         dir.path().join(".ptuf.yaml"),
-        format!("mode: monitor\naudit:\n  path: {}\n", audit_path.display()),
+        format!(
+            "mode: monitor\nplugins:\n  - path: .ptuf/plugins/no-curl.yaml\naudit:\n  path: {}\n",
+            audit_path.display()
+        ),
     )
     .expect("write yaml");
 
-    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"curl https://example.com"}}"#;
     let (code, stdout, stderr) = run_in(dir.path(), &["hook", "claude-code"], payload);
     assert_eq!(
         code, 0,
-        "monitor mode must demote the hard deny to exit 0; stderr: {stderr}",
+        "monitor mode must demote a soft deny to exit 0; stderr: {stderr}",
     );
     assert!(
         stdout.is_empty(),
@@ -429,10 +434,31 @@ fn monitor_mode_demotes_deny_and_audit_records_mode_demoted() {
     assert_eq!(record["decision"], "monitor");
     assert_eq!(record["mode"], "monitor");
     assert_eq!(record["agent"], "claude-code");
-    assert_eq!(record["ruleId"], "core.filesystem.destructive-rm");
+    assert_eq!(record["ruleId"], "pack.no-curl.block");
     assert_eq!(
         record["modeDemoted"], true,
         "the audit record must flag the deny->monitor demotion: {record}",
+    );
+}
+
+#[test]
+fn monitor_mode_does_not_demote_hard_deny() {
+    let dir = repo();
+    std::fs::write(dir.path().join(".ptuf.yaml"), "mode: monitor\n").expect("write yaml");
+
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#;
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "claude-code"], payload);
+    assert_eq!(
+        code, 2,
+        "hard_deny must stay deny in monitor mode; stderr: {stderr}",
+    );
+    assert!(
+        stdout.contains("\"permissionDecision\":\"deny\""),
+        "claude-code deny must surface hook envelope: {stdout}",
+    );
+    assert!(
+        stderr.contains("core.filesystem.destructive-rm"),
+        "stderr: {stderr}",
     );
 }
 

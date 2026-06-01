@@ -102,6 +102,23 @@ pub fn iter() -> impl Iterator<Item = &'static (dyn ConfigRule + Sync)> {
     RULES.iter().copied()
 }
 
+/// Return whether `rule_id` belongs to a built-in or plugin rule marked
+/// `hard_deny`. Used by mode demotion so repository `mode: monitor`
+/// cannot weaken critical safeguards.
+pub fn is_hard_deny_rule_id(rule_id: &str, plugins: &crate::plugin::PluginSet) -> bool {
+    for rule in iter() {
+        if rule.id() == rule_id {
+            return rule.hard_deny();
+        }
+    }
+    for rule in plugins.rules() {
+        if rule.id() == rule_id {
+            return rule.hard_deny();
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
 
