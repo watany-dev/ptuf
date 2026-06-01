@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": "ptuf hook cursor",
+        "failClosed": true,
+        "matcher": "Shell|Bash|Read|ReadFile|Write|Edit|MCP|WebFetch|Fetch|mcp__.*",
+        "timeout": 10,
+        "type": "command"
+      }
+    ]
+  },
+  "version": 1
+}
