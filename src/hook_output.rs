@@ -221,26 +221,30 @@ pub mod cursor {
     #[derive(Debug, Serialize)]
     pub struct CursorResponse {
         pub permission: &'static str,
-        pub user_message: String,
-        pub agent_message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub user_message: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub agent_message: Option<String>,
     }
 
     /// Build a Cursor permission envelope from a decision. Returns `None`
-    /// for `Allow` and `Monitor` (no output). `Ask` maps to
+    /// for no decision. `Allow` / `Monitor` map to an explicit
+    /// `permission: "allow"` because current Cursor treats empty stdout
+    /// from a `failClosed` hook as invalid output. `Ask` maps to
     /// `permission: "ask"` and `Deny` to `permission: "deny"`; both carry
     /// the reason verbatim in `user_message` / `agent_message`.
-    pub fn from_decision(decision: &Decision) -> Option<CursorResponse> {
+    pub fn from_decision(decision: &Decision) -> CursorResponse {
         let (permission, reason) = match decision {
-            Decision::Allow | Decision::Monitor { .. } => return None,
-            Decision::Ask { reason, .. } => ("ask", reason.clone()),
-            Decision::Deny { reason, .. } => ("deny", reason.clone()),
+            Decision::Allow | Decision::Monitor { .. } => ("allow", None),
+            Decision::Ask { reason, .. } => ("ask", Some(reason.clone())),
+            Decision::Deny { reason, .. } => ("deny", Some(reason.clone())),
         };
 
-        Some(CursorResponse {
+        CursorResponse {
             permission,
             user_message: reason.clone(),
             agent_message: reason,
-        })
+        }
     }
 }
 
@@ -390,14 +394,20 @@ mod tests {
     }
 
     #[test]
-    fn cursor_allow_and_monitor_yield_none() {
-        assert!(cursor::from_decision(&Decision::Allow).is_none());
-        assert!(
-            cursor::from_decision(&Decision::Monitor {
-                rule_id: "core.m".into(),
-            })
-            .is_none()
-        );
+    fn cursor_allow_and_monitor_emit_explicit_allow() {
+        let allow =
+            serde_json::to_value(cursor::from_decision(&Decision::Allow)).expect("serialise allow");
+        assert_eq!(allow["permission"], "allow");
+        assert!(allow.get("user_message").is_none());
+        assert!(allow.get("agent_message").is_none());
+
+        let monitor = serde_json::to_value(cursor::from_decision(&Decision::Monitor {
+            rule_id: "core.m".into(),
+        }))
+        .expect("serialise monitor");
+        assert_eq!(monitor["permission"], "allow");
+        assert!(monitor.get("user_message").is_none());
+        assert!(monitor.get("agent_message").is_none());
     }
 
     #[test]
@@ -406,7 +416,7 @@ mod tests {
             rule_id: "core.x".into(),
             reason: "blocked".into(),
         };
-        let resp = cursor::from_decision(&d).expect("response");
+        let resp = cursor::from_decision(&d);
         let json = serde_json::to_value(&resp).expect("serialise");
         assert!(
             json.get("hookSpecificOutput").is_none(),
@@ -423,7 +433,7 @@ mod tests {
             rule_id: "core.a".into(),
             reason: "confirm please".into(),
         };
-        let resp = cursor::from_decision(&d).expect("response");
+        let resp = cursor::from_decision(&d);
         let json = serde_json::to_value(&resp).expect("serialise");
         assert_eq!(
             json["permission"], "ask",

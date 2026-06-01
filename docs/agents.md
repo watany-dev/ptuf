@@ -194,7 +194,7 @@ directly into the terminal never reach a hook and are out of scope.
 | GitHub Copilot | exit `0`, empty stdout | converted to **deny** | exit `0`, bare `{"permissionDecision":"deny",…}` JSON + reason on stderr | bare deny JSON at exit `0` |
 | Kiro CLI | exit `0`, empty stdout | converted to **deny** | exit `2`, reason on stderr only (no envelope) | `core.engine.invalid-payload` deny at exit `2` |
 | Cline | exit `0`, stdout `{}` | converted to **deny**, exit `0`, cancel JSON | exit `0`, `{"cancel":true,…}` JSON + reason on stderr | `core.engine.invalid-payload` cancel JSON at exit `0` |
-| Cursor | exit `0`, empty stdout | **preserved**, exit `0`, `{"permission":"ask",…}` JSON | exit `2`, `{"permission":"deny",…}` JSON + reason on stderr | `core.engine.invalid-payload` deny JSON at exit `2` |
+| Cursor | exit `0`, `{"permission":"allow"}` JSON | **preserved**, exit `0`, `{"permission":"ask",…}` JSON | exit `2`, `{"permission":"deny",…}` JSON + reason on stderr | `core.engine.invalid-payload` deny JSON at exit `2` |
 
 Hook stdin payloads are capped at 8 MiB across every host. Unreadable,
 oversized, or invalid-JSON stdin is rejected with the reserved

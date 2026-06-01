@@ -303,11 +303,14 @@ fn cursor_hook_preserves_ask_with_permission_ask_and_zero_exit() {
 }
 
 #[test]
-fn cursor_hook_allows_safe_payload_with_empty_stdout() {
+fn cursor_hook_allows_safe_payload_with_explicit_allow() {
     let payload = r#"{"hook_event_name":"beforeShellExecution","command":"ls","cwd":"/tmp"}"#;
     let (code, stdout, stderr) = run(&["hook", "cursor"], payload);
     assert_eq!(code, 0);
-    assert!(stdout.is_empty(), "Cursor allow emits no stdout: {stdout}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["permission"], "allow", "stdout: {stdout}");
+    assert!(value.get("user_message").is_none(), "stdout: {stdout}");
+    assert!(value.get("agent_message").is_none(), "stdout: {stdout}");
     assert!(stderr.is_empty(), "stderr: {stderr}");
 }
 

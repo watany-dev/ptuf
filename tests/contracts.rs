@@ -529,11 +529,17 @@ fn cursor_ask_is_preserved_not_demoted_and_exit_zero() {
 }
 
 #[test]
-fn cursor_allow_outputs_empty_stdout_and_exit_zero() {
+fn cursor_allow_outputs_explicit_allow_and_exit_zero() {
     let payload = r#"{"hook_event_name":"beforeShellExecution","command":"ls","cwd":"/tmp"}"#;
     let (code, stdout, stderr) = run(&["hook", "cursor"], payload);
     assert_eq!(code, 0);
-    assert!(stdout.is_empty(), "Cursor allow emits no stdout: {stdout}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(
+        value["permission"], "allow",
+        "Cursor failClosed hooks require an explicit allow response: {stdout}"
+    );
+    assert!(value.get("user_message").is_none(), "stdout: {stdout}");
+    assert!(value.get("agent_message").is_none(), "stdout: {stdout}");
     assert!(stderr.is_empty(), "stderr: {stderr}");
 }
 
@@ -576,11 +582,12 @@ fn cursor_unsupported_event_fails_closed() {
 fn cursor_mcp_execution_normalises_to_mcp_tool() {
     // beforeMCPExecution must reach the engine as mcp__<server>__<tool>. We
     // assert it does not crash and produces a well-formed envelope; a safe
-    // tool yields Allow (empty stdout, exit 0).
+    // tool yields explicit Allow (exit 0).
     let payload = r#"{"hook_event_name":"beforeMCPExecution","metadata":{"server":"github","tool_name":"get_me"}}"#;
     let (code, stdout, stderr) = run(&["hook", "cursor"], payload);
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
-    assert!(stdout.is_empty(), "safe MCP call allowed: {stdout}");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(value["permission"], "allow", "stdout: {stdout}");
 }
 
 #[test]

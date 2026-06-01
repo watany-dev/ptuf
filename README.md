@@ -194,7 +194,7 @@ never demoted to a hard deny:
 
 | Decision         | stdout                              | exit |
 | ---------------- | ----------------------------------- | ---- |
-| Allow / Monitor  | (empty)                             | 0    |
+| Allow / Monitor  | `{"permission":"allow"}`            | 0    |
 | Ask              | `{"permission":"ask",...}`          | 0    |
 | Deny             | `{"permission":"deny",...}`         | 2    |
 | invalid payload  | `{"permission":"deny",...}`         | 2    |

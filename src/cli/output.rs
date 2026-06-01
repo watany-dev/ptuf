@@ -30,9 +30,9 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         ))),
         // Cursor emits a bare permission envelope (no `hookSpecificOutput`
         // wrapper) and, unlike Copilot, preserves Ask as `permission:ask`.
-        HookAgent::Cursor => {
-            hook_output::cursor::from_decision(&adapted).map(|r| serde_json::to_string(&r))
-        },
+        HookAgent::Cursor => Some(serde_json::to_string(&hook_output::cursor::from_decision(
+            &adapted,
+        ))),
         HookAgent::ClaudeCode | HookAgent::Codex => {
             render_hook_response(agent, &adapted).map(|r| serde_json::to_string(&r))
         },
@@ -492,15 +492,16 @@ mod tests {
     }
 
     #[test]
-    fn cursor_allow_emits_no_stdout_with_zero_exit() {
+    fn cursor_allow_emits_explicit_allow_with_zero_exit() {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = emit_decision(HookAgent::Cursor, &Decision::Allow, &mut out, &mut err);
         assert_eq!(code, 0);
-        assert!(
-            out.is_empty(),
-            "Cursor allow must emit no stdout, got: {out:?}"
-        );
+        let json: serde_json::Value =
+            serde_json::from_slice(&out).expect("Cursor stdout must be JSON");
+        assert_eq!(json["permission"], "allow");
+        assert!(json.get("user_message").is_none());
+        assert!(json.get("agent_message").is_none());
         assert!(err.is_empty());
     }
 

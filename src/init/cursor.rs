@@ -121,19 +121,21 @@ pub fn install(
 ) -> Result<InstallOutcome, InitError> {
     let command = format!("{ptuf_binary} hook cursor");
     let mut root = read_hooks(&targets.hooks_path)?;
+    let before = root.clone();
 
-    let already_present = has_existing_hook(&root);
-    let status = if already_present {
-        InstallStatus::AlreadyPresent
-    } else {
-        ensure_version(&mut root, &targets.hooks_path)?;
+    ensure_version(&mut root, &targets.hooks_path)?;
+    let had_existing = normalise_existing_hooks(&mut root, &command);
+    if !had_existing {
         append_hook(&mut root, &targets.hooks_path, &command)?;
-        if dry_run {
-            InstallStatus::WouldInstall
-        } else {
-            write_json_atomically(&targets.hooks_path, &root)?;
-            InstallStatus::Installed
-        }
+    }
+
+    let status = if root == before {
+        InstallStatus::AlreadyPresent
+    } else if dry_run {
+        InstallStatus::WouldInstall
+    } else {
+        write_json_atomically(&targets.hooks_path, &root)?;
+        InstallStatus::Installed
     };
 
     Ok(InstallOutcome {
@@ -167,6 +169,7 @@ pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
     super::command_invokes_ptuf_hook(cmd, COMMAND_TAIL)
 }
 
+#[cfg(test)]
 pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
     let Some(arr) = root.pointer("/hooks/preToolUse").and_then(Value::as_array) else {
         return Vec::new();
@@ -179,6 +182,7 @@ pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
 }
 
 /// Extract the `command` string field from a Cursor hook entry.
+#[cfg(test)]
 pub(crate) fn entry_commands(entry: &Value) -> Vec<String> {
     let mut commands = Vec::new();
     if let Some(s) = entry.get("command").and_then(Value::as_str) {
@@ -187,10 +191,32 @@ pub(crate) fn entry_commands(entry: &Value) -> Vec<String> {
     commands
 }
 
-fn has_existing_hook(root: &Value) -> bool {
-    pre_tool_use_commands(root)
-        .iter()
-        .any(|cmd| command_invokes_ptuf_hook(cmd))
+fn normalise_existing_hooks(root: &mut Value, command: &str) -> bool {
+    let Some(arr) = root
+        .pointer_mut("/hooks/preToolUse")
+        .and_then(Value::as_array_mut)
+    else {
+        return false;
+    };
+
+    let mut found = false;
+    for entry in arr {
+        let Some(existing_command) = entry.get("command").and_then(Value::as_str) else {
+            continue;
+        };
+        if !command_invokes_ptuf_hook(existing_command) {
+            continue;
+        }
+        found = true;
+        if let Some(map) = entry.as_object_mut() {
+            map.insert("type".into(), json!("command"));
+            map.insert("command".into(), json!(command));
+            map.insert("matcher".into(), json!(DEFAULT_MATCHER));
+            map.insert("timeout".into(), json!(DEFAULT_TIMEOUT_SEC));
+            map.insert("failClosed".into(), json!(true));
+        }
+    }
+    found
 }
 
 fn ensure_version(root: &mut Value, hooks_path: &Path) -> Result<(), InitError> {
@@ -414,9 +440,81 @@ mod tests {
         };
         install(&targets, "/x/ptuf", false).unwrap();
         let before = read(&targets.hooks_path);
-        let outcome = install(&targets, "/y/ptuf", false).unwrap();
+        let outcome = install(&targets, "/x/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::AlreadyPresent);
         assert_eq!(before, read(&targets.hooks_path));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_updates_existing_ptuf_hook_to_recommended_values() {
+        let dir = workdir("update-existing");
+        let targets = TargetPaths {
+            root: dir.clone(),
+            hooks_path: dir.join(".cursor/hooks.json"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        let preset = json!({
+            "version": 1,
+            "hooks": {
+                "preToolUse": [{
+                    "type": "command",
+                    "command": "/old/ptuf hook cursor",
+                    "matcher": "Shell",
+                    "timeout": 1,
+                    "failClosed": false,
+                    "keep": "me",
+                }]
+            }
+        });
+        fs::write(
+            &targets.hooks_path,
+            serde_json::to_string_pretty(&preset).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = install(&targets, "/new/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        let after: Value = serde_json::from_str(&read(&targets.hooks_path)).unwrap();
+        let entry = after
+            .pointer("/hooks/preToolUse/0")
+            .and_then(Value::as_object)
+            .unwrap();
+        assert_eq!(
+            entry.get("command").and_then(Value::as_str),
+            Some("/new/ptuf hook cursor")
+        );
+        assert_eq!(
+            entry.get("matcher").and_then(Value::as_str),
+            Some(DEFAULT_MATCHER)
+        );
+        assert_eq!(
+            entry.get("timeout").and_then(Value::as_u64),
+            Some(DEFAULT_TIMEOUT_SEC)
+        );
+        assert_eq!(entry.get("failClosed").and_then(Value::as_bool), Some(true));
+        assert_eq!(entry.get("keep").and_then(Value::as_str), Some("me"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_dry_run_reports_existing_hook_update_without_writing() {
+        let dir = workdir("dry-run-update");
+        let targets = TargetPaths {
+            root: dir.clone(),
+            hooks_path: dir.join(".cursor/hooks.json"),
+        };
+        fs::create_dir_all(targets.hooks_path.parent().unwrap()).unwrap();
+        fs::write(
+            &targets.hooks_path,
+            r#"{"version":1,"hooks":{"preToolUse":[{"command":"/old/ptuf hook cursor"}]}}"#,
+        )
+        .unwrap();
+        let before = read(&targets.hooks_path);
+
+        let outcome = install(&targets, "/new/ptuf", true).unwrap();
+        assert_eq!(outcome.status, InstallStatus::WouldInstall);
+        assert_eq!(read(&targets.hooks_path), before);
         let _ = fs::remove_dir_all(&dir);
     }
 

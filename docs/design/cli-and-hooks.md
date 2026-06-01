@@ -488,9 +488,11 @@ Cursor (bare envelope, `hookSpecificOutput` wrap なし。`permission` は
 ```
 
 `Allow` と `Monitor` は hook response を出さない (Claude Code / Codex /
-Copilot / Kiro / Cursor)。Cline だけは Allow / Monitor でも空 object `{}` を
-stdout に書き、block 時のみ `cancel: true` envelope を出す。`Ask` は
-Claude Code / Cursor では保持、それ以外では `Deny` へ demote する。
+Copilot / Kiro)。Cline は Allow / Monitor でも空 object `{}` を stdout に
+書き、Cursor は `failClosed` hook の空 stdout が invalid 扱いになるため
+`{"permission":"allow"}` を明示する。block 時のみ Cline は
+`cancel: true` envelope を出す。`Ask` は Claude Code / Cursor では保持、
+それ以外では `Deny` へ demote する。
 
 agent 別の Decision → exit / 出力契約:
 
@@ -501,7 +503,7 @@ agent 別の Decision → exit / 出力契約:
 | Copilot | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `0`, bare JSON) | exit `0`, bare deny JSON | exit `0`, bare deny JSON |
 | Kiro | exit `0`, 空 stdout / 空 stderr | `Ask` → `Deny` に demote (exit `2`, stderr reason のみ) | exit `2`, stderr reason のみ | exit `2`, stderr reason のみ |
 | Cline | exit `0`, stdout `{}` | `Ask` → `Deny` に demote (exit `0`, cancel JSON) | exit `0`, cancel JSON | exit `0`, cancel JSON |
-| Cursor | exit `0`, 空 stdout | exit `0`, bare `permission:ask` JSON (**降格しない**) | exit `2`, bare `permission:deny` JSON | exit `2`, deny |
+| Cursor | exit `0`, bare `permission:allow` JSON | exit `0`, bare `permission:ask` JSON (**降格しない**) | exit `2`, bare `permission:deny` JSON | exit `2`, deny |
 
 Copilot の `Ask` demote 文言は仕様で固定:
 
