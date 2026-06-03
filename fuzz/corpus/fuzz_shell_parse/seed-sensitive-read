@@ -1,1 +1,2 @@
 sudo cat ~/.ssh/id_rsa && bash -c 'source .env'
+cat {a,b}.env

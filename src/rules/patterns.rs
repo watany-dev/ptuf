@@ -22,8 +22,9 @@ pub static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
     // only valid UTF-8 and Unicode whitespace still anchors token
     // boundaries. The PEM header branch is naturally case-sensitive,
     // honouring RFC 7468's uppercase requirement. The dotenv anchor
-    // includes glob metacharacters (`*`, `?`, `[`, `]`) so literal-glob
-    // argv tokens are caught.
+    // includes glob metacharacters (`*`, `?`, `[`, `]`) and brace-expansion
+    // punctuation (`{`, `}`, `,`) so literal-glob / `{a,b}.env` argv tokens
+    // are caught.
     Regex::new(concat!(
         r"(?x)",
         r"(?:",
@@ -33,7 +34,7 @@ pub static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
         r"|(?:~|\$HOME|\$\{HOME\})/(?i-u:\.kube/config)\b",
         r"|(?:~|\$HOME|\$\{HOME\})/(?i-u:\.docker/config\.json)\b",
         r"|\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b",
-        r"|(?:^|/|\s|[*?\[\]=])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
+        r"|(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
         r"|\b(?i-u:\.npmrc)\b",
         r"|\b(?i-u:\.pypirc)\b",
         r"|\S+(?i-u:\.tfstate)\b",
@@ -92,5 +93,54 @@ mod tests {
     #[test]
     fn sensitive_path_dd_if_form() {
         assert!(SENSITIVE_PATH.is_match("if=.env"));
+    }
+
+    #[test]
+    fn sensitive_path_brace_expansion_form() {
+        for token in [
+            "{a,b}.env",
+            "{x,y,z}.env",
+            "{.env,.env.local}",
+            "prefix{a,b}.env",
+            "{app,web}.env.production",
+        ] {
+            assert!(SENSITIVE_PATH.is_match(token), "token {token:?}");
+        }
+    }
+
+    use crate::testing::proptest::{
+        dotenv_anchored_literal_token, dotenv_brace_token, dotenv_false_positive_token,
+    };
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn pbt_brace_dotenv_matches_sensitive_path(token in dotenv_brace_token()) {
+            prop_assert!(
+                SENSITIVE_PATH.is_match(&token),
+                "SENSITIVE_PATH missed brace token {token:?}",
+            );
+        }
+
+        #[test]
+        fn pbt_anchored_dotenv_literals_match_sensitive_path(token in dotenv_anchored_literal_token()) {
+            prop_assert!(
+                SENSITIVE_PATH.is_match(&token),
+                "SENSITIVE_PATH missed {token:?}",
+            );
+        }
+
+        #[test]
+        fn pbt_dotenv_false_positives_rejected(token in dotenv_false_positive_token()) {
+            prop_assert!(
+                !SENSITIVE_PATH.is_match(&token),
+                "SENSITIVE_PATH false positive on {token:?}",
+            );
+        }
+
+        #[test]
+        fn pbt_sensitive_path_is_match_never_panics(s in "[ -~]{0,80}") {
+            let _ = SENSITIVE_PATH.is_match(&s);
+        }
     }
 }

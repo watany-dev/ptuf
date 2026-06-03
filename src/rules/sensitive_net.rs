@@ -215,7 +215,9 @@ mod tests {
         assert!(SensitivePathToNetwork.evaluate(&facts, &input).is_none());
     }
 
-    use crate::testing::proptest::{arbitrary_command, bash_command, non_bash_hook_input};
+    use crate::testing::proptest::{
+        arbitrary_command, bash_brace_dotenv_network_exfil, bash_command, non_bash_hook_input,
+    };
     use proptest::prelude::*;
 
     fn evaluate_for(input: &HookInput) -> Option<Decision> {
@@ -249,7 +251,18 @@ mod tests {
             }
         }
 
-        // Negative space: without any network sink head, the rule cannot fire.
+        // Brace dotenv token co-located with a network sink must Deny.
+        #[test]
+        fn pbt_brace_dotenv_network_exfil_always_denies(cmd in bash_brace_dotenv_network_exfil()) {
+            let input = bash(&cmd);
+            let d = evaluate_for(&input);
+            prop_assert!(
+                matches!(d, Some(Decision::Deny { ref rule_id, .. }) if rule_id == RULE_ID),
+                "expected Deny for {cmd:?}, got {d:?}",
+            );
+        }
+
+                // Negative space: without any network sink head, the rule cannot fire.
         #[test]
         fn pbt_no_network_sink_means_no_fire(
             head in "[a-z][a-z0-9]{0,5}",
