@@ -23,14 +23,14 @@ Pin `PTUF_VERSION` so CI and Docker builds are reproducible.
 ### Linux / macOS
 
 ```bash
-PTUF_VERSION=v0.1.1
+PTUF_VERSION=v0.3.0
 curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-$env:PTUF_VERSION = "v0.1.1"
+$env:PTUF_VERSION = "v0.3.0"
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/download/$env:PTUF_VERSION/ptuf-installer.ps1 | iex"
 ```
 
@@ -100,7 +100,7 @@ attestation before extracting.
 ### Linux
 
 ```bash
-VERSION=v0.1.1
+VERSION=v0.3.0
 TARGET=x86_64-unknown-linux-musl
 ARCHIVE=ptuf-$TARGET.tar.gz
 BASE=https://github.com/watany-dev/ptuf/releases/download/$VERSION
@@ -118,7 +118,7 @@ install -m 0755 ptuf ~/.cargo/bin/ptuf
 ### macOS
 
 ```bash
-VERSION=v0.1.1
+VERSION=v0.3.0
 TARGET=aarch64-apple-darwin
 ARCHIVE=ptuf-$TARGET.tar.gz
 BASE=https://github.com/watany-dev/ptuf/releases/download/$VERSION
@@ -136,7 +136,7 @@ install -m 0755 ptuf ~/.cargo/bin/ptuf
 ### Windows (PowerShell)
 
 ```powershell
-$Version = "v0.1.1"
+$Version = "v0.3.0"
 $Target = "x86_64-pc-windows-msvc"
 $Archive = "ptuf-$Target.zip"
 $Base = "https://github.com/watany-dev/ptuf/releases/download/$Version"
@@ -233,7 +233,7 @@ setup script or a [SessionStart hook](https://code.claude.com/docs/en/claude-cod
 ```bash
 set -euo pipefail
 
-PTUF_VERSION=v0.1.1
+PTUF_VERSION=v0.3.0
 curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
 export PATH="$HOME/.cargo/bin:$PATH"
 
@@ -248,6 +248,18 @@ Pin `PTUF_VERSION` so the bootstrap is reproducible across sessions. For
 checksum + attestation verification in the bootstrap, substitute the
 [Verified install](#verified-install-recommended-for-pinned-deployments)
 steps for the one-liner.
+
+### Concrete repo files
+
+Commit these repo-local artifacts together so the bootstrap phase and
+the guarded agent loop stay in sync:
+
+- `scripts/bootstrap-cloud.sh`
+- `.cursor/ptuf-hook.sh`
+- `.claude/ptuf-hook.sh`
+- `.cursor/environment.json`
+- `.cursor/hooks.json`
+- `.claude/settings.json`
 
 ### Network policy caveat
 
@@ -266,6 +278,15 @@ phase, then run `ptuf init cursor` (writes `<repo>/.cursor/hooks.json`).
 Cursor's session setup mechanism differs from Claude Code's, so consult
 Cursor's own environment / setup documentation for where to place the
 bootstrap script.
+
+Commit an environment setup file so Cursor installs `ptuf` before any
+guarded call:
+
+```json
+{
+  "install": "bash scripts/bootstrap-cloud.sh"
+}
+```
 
 ## Updating
 

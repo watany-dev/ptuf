@@ -1,0 +1,3 @@
+{
+  "install": "bash scripts/bootstrap-cloud.sh"
+}

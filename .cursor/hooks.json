@@ -2,7 +2,7 @@
   "hooks": {
     "preToolUse": [
       {
-        "command": "ptuf hook cursor",
+        "command": "bash .cursor/ptuf-hook.sh",
         "failClosed": true,
         "matcher": "Shell|Bash|Read|ReadFile|Write|Edit|MCP|WebFetch|Fetch|mcp__.*",
         "timeout": 10,
