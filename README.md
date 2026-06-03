@@ -127,6 +127,11 @@ was used and shells out to the matching updater (no `--cargo` / `--prebuilt`
 flag to remember). Homebrew / mise / aqua installs are managed by their
 own update commands.
 
+Running in an ephemeral cloud agent (Claude Code on the web, Cursor cloud
+agents, CI)? Bootstrap ptuf in the setup / SessionStart phase, not from
+the agent loop — see
+[Cloud / ephemeral agent environments](docs/install.md#cloud--ephemeral-agent-environments).
+
 ## Wire it into your agent
 
 Pick your host and run a single command. Each installer is idempotent and

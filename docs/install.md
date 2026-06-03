@@ -180,6 +180,93 @@ make build
 cargo install --path .
 ```
 
+## Cloud / ephemeral agent environments
+
+Cloud coding agents — **Claude Code on the web**, **Cursor cloud agents**,
+CI-driven runs — start each session from a fresh clone of your repository
+in a throwaway container. The `ptuf` binary is *not* present. Wiring ptuf
+into one of these environments looks like a chicken-and-egg problem:
+
+- the Quick install one-liner (`curl … | sh`) is exactly the shape
+  `core.network.remote-script-pipe` is built to **deny**, and
+- `ptuf init` rewrites your hook config (`~/.claude/settings.json`, …),
+  which `core.self_protection.*` is built to **deny**.
+
+So if ptuf were already live, it would block its own install and update.
+
+### Two trust phases, not a cycle
+
+The circularity is only apparent. ptuf governs the **agent's** tool calls,
+not the **environment's** provisioning. Installing the binary and running
+`ptuf init` belong to the *provisioning phase* — the operator-controlled
+setup script or SessionStart hook that runs **before** the agent starts
+acting. The remote-script-pipe and self-protection rules constrain the
+agent, so they do not apply to provisioning. They only take effect once
+the agent loop begins, which is the property you want: mid-session, the
+agent cannot pipe a fresh installer into a shell or rewrite the hook entry
+to switch ptuf off.
+
+Bootstrap ptuf in that earlier, trusted phase and there is no conflict.
+
+### The fail-open trap (read this before committing hook config)
+
+Do **not** commit a PreToolUse hook entry that points at `ptuf` without
+guaranteeing the binary is provisioned in the same phase. If the hook
+fires and the binary is missing, the host's command exits non-zero
+(`127`, command not found). Claude Code treats a non-zero, non-`2` hook
+exit as a **non-blocking warning** and lets the tool call through — see
+the exit-code contract in
+[`docs/design/decision-model.md`](design/decision-model.md#fail-closed-の境界).
+The result is the worst state: the guardrail looks wired up but silently
+**fails open**, so every dangerous call sails through unprotected.
+
+The fix is to bind binary install, `ptuf init`, and a presence check into
+one bootstrap step, and to fail the session closed if the binary did not
+land.
+
+### SessionStart bootstrap (Claude Code on the web)
+
+Install a pinned binary, wire the hook, then verify — failing the session
+if `ptuf` is not on PATH afterwards. Run this from your environment's
+setup script or a [SessionStart hook](https://code.claude.com/docs/en/claude-code-on-the-web):
+
+```bash
+set -euo pipefail
+
+PTUF_VERSION=v0.1.1
+curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
+export PATH="$HOME/.cargo/bin:$PATH"
+
+ptuf init claude-code
+
+# Fail the session closed if the binary did not land — never run the
+# agent against a hook that points at a missing binary (see fail-open trap).
+ptuf --version || { echo "ptuf bootstrap failed — refusing to start unguarded" >&2; exit 1; }
+```
+
+Pin `PTUF_VERSION` so the bootstrap is reproducible across sessions. For
+checksum + attestation verification in the bootstrap, substitute the
+[Verified install](#verified-install-recommended-for-pinned-deployments)
+steps for the one-liner.
+
+### Network policy caveat
+
+Outbound access in these environments is governed by the environment's
+network policy. The installer needs to reach `github.com` and
+`objects.githubusercontent.com`. If egress is locked down, either add
+those hosts to the environment's allowlist, or avoid the download
+entirely: `cargo install ptuf` from a cached registry, or vendor a
+pinned binary into the image / repo and `install` it onto PATH in the
+setup script.
+
+### Cursor cloud agents
+
+The same two-phase pattern applies: provision the binary in the setup
+phase, then run `ptuf init cursor` (writes `<repo>/.cursor/hooks.json`).
+Cursor's session setup mechanism differs from Claude Code's, so consult
+Cursor's own environment / setup documentation for where to place the
+bootstrap script.
+
 ## Updating
 
 `ptuf update` upgrades the installed binary in place. It auto-detects
