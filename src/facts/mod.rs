@@ -252,4 +252,44 @@ mod tests {
             f.path.as_ref().map(|p| &p.canonical_or_raw),
         );
     }
+
+    use crate::testing::proptest::{bash_reader_brace_dotenv_command, dotenv_brace_token};
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn pbt_extract_brace_dotenv_from_bash(cmd in bash_reader_brace_dotenv_command()) {
+            let i = HookInput {
+                tool_name: "Bash".into(),
+                tool_input: serde_json::json!({ "command": cmd }),
+            };
+            let f = extract(&i);
+            prop_assert!(
+                f.sensitive.iter().any(|s| s.kind == sensitive::SensitiveKind::Dotenv),
+                "expected Dotenv in facts.sensitive for {cmd:?}, got {:?}",
+                f.sensitive,
+            );
+        }
+
+        #[test]
+        fn pbt_classify_brace_token_matches_extract(cmd in bash_reader_brace_dotenv_command()) {
+            let i = HookInput {
+                tool_name: "Bash".into(),
+                tool_input: serde_json::json!({ "command": cmd }),
+            };
+            let f = extract(&i);
+            for m in &f.sensitive {
+                prop_assert!(cmd.contains(&m.raw), "raw {:?} not in command {:?}", m.raw, cmd);
+            }
+        }
+
+        #[test]
+        fn pbt_extract_never_panics_on_brace_token(token in dotenv_brace_token()) {
+            let i = HookInput {
+                tool_name: "Bash".into(),
+                tool_input: serde_json::json!({ "command": format!("cat {token}") }),
+            };
+            let _ = extract(&i);
+        }
+    }
 }

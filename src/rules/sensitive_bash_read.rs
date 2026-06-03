@@ -337,7 +337,10 @@ mod tests {
         assert_eq!(SensitiveBashRead.id(), RULE_ID);
     }
 
-    use crate::testing::proptest::{arbitrary_command, bash_command, non_bash_hook_input};
+    use crate::testing::proptest::{
+        arbitrary_command, bash_command, bash_reader_brace_dotenv_command, dotenv_brace_token,
+        non_bash_hook_input,
+    };
     use proptest::prelude::*;
 
     proptest! {
@@ -362,7 +365,30 @@ mod tests {
             }
         }
 
-        // Without any reader head, the rule cannot fire — even with
+        // Reader + brace dotenv argv token must always Ask.
+        #[test]
+        fn pbt_reader_brace_dotenv_always_asks(cmd in bash_reader_brace_dotenv_command()) {
+            let input = bash(&cmd);
+            let d = evaluate_for(&input);
+            prop_assert!(
+                matches!(d, Some(Decision::Ask { ref rule_id, .. }) if rule_id == RULE_ID),
+                "expected Ask for {cmd:?}, got {d:?}",
+            );
+        }
+
+        // Parsed argv must surface the brace token for regex matching.
+        #[test]
+        fn pbt_brace_dotenv_surfaces_on_argv(token in dotenv_brace_token()) {
+            let cmd = format!("cat {token}");
+            let facts = crate::facts::extract(&bash(&cmd));
+            let bash_facts = facts.bash.as_ref().expect("bash facts");
+            let surfaces = bash_facts.commands().iter().any(|argv| {
+                crate::rules::patterns::argv_references_sensitive(argv)
+            });
+            prop_assert!(surfaces, "argv did not reference sensitive for {cmd:?}");
+        }
+
+                // Without any reader head, the rule cannot fire — even with
         // sensitive-looking arguments.
         #[test]
         fn pbt_no_reader_head_means_no_fire(

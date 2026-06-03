@@ -107,4 +107,40 @@ mod tests {
             assert!(SENSITIVE_PATH.is_match(token), "token {token:?}");
         }
     }
+
+    use crate::testing::proptest::{
+        dotenv_anchored_literal_token, dotenv_brace_token, dotenv_false_positive_token,
+    };
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn pbt_brace_dotenv_matches_sensitive_path(token in dotenv_brace_token()) {
+            prop_assert!(
+                SENSITIVE_PATH.is_match(&token),
+                "SENSITIVE_PATH missed brace token {token:?}",
+            );
+        }
+
+        #[test]
+        fn pbt_anchored_dotenv_literals_match_sensitive_path(token in dotenv_anchored_literal_token()) {
+            prop_assert!(
+                SENSITIVE_PATH.is_match(&token),
+                "SENSITIVE_PATH missed {token:?}",
+            );
+        }
+
+        #[test]
+        fn pbt_dotenv_false_positives_rejected(token in dotenv_false_positive_token()) {
+            prop_assert!(
+                !SENSITIVE_PATH.is_match(&token),
+                "SENSITIVE_PATH false positive on {token:?}",
+            );
+        }
+
+        #[test]
+        fn pbt_sensitive_path_is_match_never_panics(s in "[ -~]{0,80}") {
+            let _ = SENSITIVE_PATH.is_match(&s);
+        }
+    }
 }

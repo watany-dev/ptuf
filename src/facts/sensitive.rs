@@ -351,7 +351,40 @@ mod tests {
             prop_assert!(classify(&s).is_empty());
         }
 
-        // SSH-dir samples always classify as SshDir.
+        // Brace-expansion argv tokens must always classify as Dotenv.
+        #[test]
+        fn pbt_brace_dotenv_tokens_always_classify(token in crate::testing::proptest::dotenv_brace_token()) {
+            let kinds: Vec<_> = classify(&token).into_iter().map(|m| m.kind).collect();
+            prop_assert!(
+                kinds.contains(&SensitiveKind::Dotenv),
+                "expected Dotenv for {token:?}, got {kinds:?}",
+            );
+        }
+
+        // Every B2-anchored dotenv literal must match the legacy SENSITIVE_PATH regex.
+        #[test]
+        fn pbt_anchored_dotenv_literals_match_sensitive_path(
+            token in crate::testing::proptest::dotenv_anchored_literal_token(),
+        ) {
+            prop_assert!(
+                crate::rules::patterns::SENSITIVE_PATH.is_match(&token),
+                "SENSITIVE_PATH missed {token:?}",
+            );
+        }
+
+        // Negative space: lookalikes without anchors must stay clean.
+        #[test]
+        fn pbt_dotenv_false_positives_never_classify(
+            token in crate::testing::proptest::dotenv_false_positive_token(),
+        ) {
+            prop_assert!(
+                classify(&token).iter().all(|m| m.kind != SensitiveKind::Dotenv),
+                "false positive Dotenv for {token:?}: {:?}",
+                classify(&token),
+            );
+        }
+
+                // SSH-dir samples always classify as SshDir.
         #[test]
         fn pbt_ssh_dir_always_classifies(tail in "[a-zA-Z0-9_./-]{0,16}") {
             for prefix in ["~", "$HOME", "${HOME}"] {
