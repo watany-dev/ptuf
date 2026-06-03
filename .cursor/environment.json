@@ -1,3 +1,3 @@
 {
-  "install": "bash scripts/bootstrap-cloud.sh"
+  "install": "bash -c 'set -euo pipefail; PTUF_VERSION=${PTUF_VERSION:-v0.3.0}; curl -LsSf \"https://github.com/watany-dev/ptuf/releases/download/${PTUF_VERSION}/ptuf-installer.sh\" | sh; export PATH=\"$HOME/.cargo/bin:$PATH\"; ptuf --version'"
 }
