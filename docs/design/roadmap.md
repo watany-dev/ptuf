@@ -135,7 +135,10 @@
 
 - Cursor / Gemini など追加 adapter
 - cloud Copilot agent 向け wrapper script + JSON (network egress /
-  firewall / installer 取得経路の整理が必要)
+  firewall / installer 取得経路の整理が必要。クラウド/エフェメラル環境での
+  2 フェーズ・ブートストラップと fail-open 落とし穴の考え方は `docs/install.md`
+  の "Cloud / ephemeral agent environments" に文書化済み。wrapper script の
+  実装自体は引き続き未着手)
 - `dataflow.basic` の強化
 - signed / pinned plugin 配布
 - generated file など、project_hygiene の追加 rule
