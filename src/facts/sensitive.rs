@@ -102,11 +102,12 @@ static DOCKER_CONFIG: LazyLock<Regex> =
     LazyLock::new(|| build(r"(?:~|\$HOME|\$\{HOME\})/(?i-u:\.docker/config\.json)\b"));
 static PRIVATE_KEY_FILE: LazyLock<Regex> =
     LazyLock::new(|| build(r"\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b"));
-// Anchor includes glob metacharacters and `=` so `cat *.env`,
-// `cp ?.env`, `rm [abc].env`, and `dd if=.env`/`--env-file=.env` style
-// flag values are caught at the token boundary.
+// Anchor includes glob metacharacters, brace-expansion punctuation, and
+// `=` so `cat *.env`, `cat {a,b}.env`, `cp ?.env`, `rm [abc].env`, and
+// `dd if=.env`/`--env-file=.env` style flag values are caught at the token
+// boundary.
 static DOTENV: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|[*?\[\]=])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b"));
+    LazyLock::new(|| build(r"(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b"));
 static NPMRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i-u:\.npmrc)\b"));
 static PYPIRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i-u:\.pypirc)\b"));
 static TFSTATE: LazyLock<Regex> = LazyLock::new(|| build(r"\S+(?i-u:\.tfstate)\b"));
@@ -227,6 +228,15 @@ mod tests {
         assert!(kinds("[abc].env").contains(&SensitiveKind::Dotenv));
         assert!(kinds("a*.env").contains(&SensitiveKind::Dotenv));
         assert!(kinds("dir/*.env.local").contains(&SensitiveKind::Dotenv));
+    }
+
+    #[test]
+    fn classifies_dotenv_through_brace_expansion_anchor() {
+        assert!(kinds("{a,b}.env").contains(&SensitiveKind::Dotenv));
+        assert!(kinds("{x,y,z}.env").contains(&SensitiveKind::Dotenv));
+        assert!(kinds("{.env,.env.local}").contains(&SensitiveKind::Dotenv));
+        assert!(kinds("prefix{a,b}.env").contains(&SensitiveKind::Dotenv));
+        assert!(kinds("{app,web}.env.production").contains(&SensitiveKind::Dotenv));
     }
 
     #[test]

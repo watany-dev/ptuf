@@ -12,7 +12,7 @@ path = "/workspace/docs/review/substantive-test-checklist.md"
 text = open(path).read()
 done = {
     "gap_cmdsubst_outer_nonreader_surfaces_sensitive_token",
-    "gap_brace_expansion_matches_sensitive_path",
+    "asks_for_brace_expansion_dotenv",
     "gap_unicode_homoglyph_normalizes_or_flags",
 }
 for name in done:
@@ -241,7 +241,7 @@ git diff --cached --quiet || git commit -m "docs: substantive test checklist all
 
 # Re-mark GAP-01 tests done in earlier commits
 mark_row 'gap_cmdsubst_outer_nonreader_surfaces_sensitive_token'
-mark_row 'gap_brace_expansion_matches_sensitive_path'
+mark_row 'asks_for_brace_expansion_dotenv'
 mark_row 'gap_unicode_homoglyph_normalizes_or_flags'
 git add "$CHECKLIST"
 git diff --cached --quiet || git commit -m "docs: restore GAP-01 checklist rows"

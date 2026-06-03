@@ -241,10 +241,12 @@ mod tests {
     }
 
     #[test]
-    fn gap_brace_expansion_matches_sensitive_path() {
-        // ADR 0001 known_gap: brace expansion is not expanded before
-        // regex anchor matching.
-        assert_silent("cat {a,b}.env");
+    fn asks_for_brace_expansion_dotenv() {
+        assert_ask("cat {a,b}.env");
+        assert_ask("head {x,y,z}.env");
+        assert_ask("cat {.env,.env.local}");
+        assert_ask("cat prefix{a,b}.env");
+        assert_ask("tail -n 1 {app,web}.env.production");
     }
 
     #[test]
