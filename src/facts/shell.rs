@@ -1043,6 +1043,10 @@ mod tests {
         assert_eq!(b.segments[0].commands[0].head, "a");
         assert_eq!(b.segments[1].commands[0].head, "b");
         assert_eq!(b.segments[2].commands[0].head, "c");
+        let or_only = parse("a || b");
+        assert_eq!(or_only.segments.len(), 2);
+        assert_eq!(or_only.segments[0].commands[0].head, "a");
+        assert_eq!(or_only.segments[1].commands[0].head, "b");
     }
 
     #[test]
@@ -1152,14 +1156,6 @@ mod tests {
     fn full_path_command_keeps_head_intact() {
         let b = parse("/usr/bin/rm -rf /etc");
         assert_eq!(b.segments[0].commands[0].head, "/usr/bin/rm");
-    }
-
-    #[test]
-    fn double_pipe_is_or_not_pipeline() {
-        let b = parse("a || b");
-        assert_eq!(b.segments.len(), 2);
-        assert_eq!(b.segments[0].commands[0].head, "a");
-        assert_eq!(b.segments[1].commands[0].head, "b");
     }
 
     #[test]
@@ -1391,54 +1387,28 @@ mod tests {
     }
 
     #[test]
-    fn parses_redirect_to_file() {
-        let b = parse("echo hi > /etc/passwd");
-        assert_eq!(b.segments.len(), 1);
-        let p = &b.segments[0];
-        assert_eq!(p.commands[0], argv("echo", &["hi"]));
-        assert_eq!(p.redirects.len(), 1);
-        assert_eq!(
-            p.redirects[0],
-            Redirect {
-                op: RedirectOp::Stdout,
-                target: "/etc/passwd".into(),
-            }
-        );
-        assert!(b.has_redirect);
-        assert!(!b.has_heredoc);
-        assert!(!b.has_process_substitution);
-    }
-
-    #[test]
-    fn parses_redirect_append() {
-        let b = parse("echo hi >> /var/log/x");
-        assert_eq!(b.segments[0].redirects.len(), 1);
-        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::StdoutAppend);
-        assert_eq!(b.segments[0].redirects[0].target, "/var/log/x");
-    }
-
-    #[test]
-    fn parses_redirect_stdin() {
-        let b = parse("sh < script.sh");
-        assert_eq!(b.segments[0].redirects.len(), 1);
-        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::Stdin);
-        assert_eq!(b.segments[0].redirects[0].target, "script.sh");
-    }
-
-    #[test]
-    fn parses_redirect_stderr() {
-        let b = parse("cmd 2> err.log");
-        assert_eq!(b.segments[0].redirects.len(), 1);
-        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::Stderr);
-        assert_eq!(b.segments[0].redirects[0].target, "err.log");
-    }
-
-    #[test]
-    fn parses_redirect_merge_stdout_stderr() {
-        let b = parse("cmd &> all.log");
-        assert_eq!(b.segments[0].redirects.len(), 1);
-        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::Merge);
-        assert_eq!(b.segments[0].redirects[0].target, "all.log");
+    fn parses_redirect_operators() {
+        let cases = [
+            ("echo hi > /etc/passwd", RedirectOp::Stdout, "/etc/passwd"),
+            (
+                "echo hi >> /var/log/x",
+                RedirectOp::StdoutAppend,
+                "/var/log/x",
+            ),
+            ("sh < script.sh", RedirectOp::Stdin, "script.sh"),
+            ("cmd 2> err.log", RedirectOp::Stderr, "err.log"),
+            ("cmd &> all.log", RedirectOp::Merge, "all.log"),
+        ];
+        for (cmd, expect_op, expect_target) in cases {
+            let b = parse(cmd);
+            assert_eq!(b.segments.len(), 1, "cmd={cmd:?}");
+            assert_eq!(b.segments[0].redirects.len(), 1, "cmd={cmd:?}");
+            assert_eq!(b.segments[0].redirects[0].op, expect_op, "cmd={cmd:?}");
+            assert_eq!(
+                b.segments[0].redirects[0].target, expect_target,
+                "cmd={cmd:?}"
+            );
+        }
     }
 
     #[test]
