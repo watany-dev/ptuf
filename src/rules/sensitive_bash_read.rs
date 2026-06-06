@@ -177,20 +177,19 @@ mod tests {
     }
 
     #[test]
-    fn asks_for_cat_of_dotenv() {
-        assert_ask("cat .env");
-        assert_ask("cat /repo/.env.production");
-    }
-
-    #[test]
-    fn asks_for_source_of_dotenv() {
-        assert_ask("source .env");
-        assert_ask("source ./.env.production");
-    }
-
-    #[test]
-    fn asks_for_dot_of_dotenv() {
-        assert_ask(". .env.production");
+    fn asks_for_reader_heads_on_sensitive_paths() {
+        for cmd in [
+            "cat .env",
+            "cat /repo/.env.production",
+            "source .env",
+            "source ./.env.production",
+            ". .env.production",
+            "cat ~/.ssh/id_rsa",
+            "head ~/.aws/credentials",
+            "tail -n 1 ~/.kube/config",
+        ] {
+            assert_ask(cmd);
+        }
     }
 
     #[test]
@@ -255,13 +254,6 @@ mod tests {
         // ADR 0001 known_gap: Cyrillic homoglyph `.еnv` evades the ASCII
         // `(?i-u:.env)` anchor until normalization is implemented.
         assert_silent("cat .еnv"); // U+0435 CYRILLIC SMALL LETTER IE
-    }
-
-    #[test]
-    fn asks_for_ssh_key_read() {
-        assert_ask("cat ~/.ssh/id_rsa");
-        assert_ask("head ~/.aws/credentials");
-        assert_ask("tail -n 1 ~/.kube/config");
     }
 
     #[test]
