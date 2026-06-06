@@ -338,31 +338,27 @@ mod tests {
     }
 
     #[test]
-    fn asks_for_zero_width_in_read() {
+    fn asks_for_unicode_category_representatives() {
         let dir = TempDir::new().expect("tempdir");
-        let path = write_file(&dir, "notes.txt", "hello\u{200B}world\n".as_bytes());
-        assert_ask(&read_input(&path));
-    }
-
-    #[test]
-    fn asks_for_bidi_override() {
-        let dir = TempDir::new().expect("tempdir");
-        let path = write_file(&dir, "src.rs", "let admin = \u{202E}true;\n".as_bytes());
-        assert_ask(&read_input(&path));
-    }
-
-    #[test]
-    fn asks_for_unicode_tag() {
-        let dir = TempDir::new().expect("tempdir");
-        let path = write_file(&dir, "doc.md", "ok\u{E0041}\n".as_bytes());
-        assert_ask(&read_input(&path));
-    }
-
-    #[test]
-    fn asks_for_c0_control() {
-        let dir = TempDir::new().expect("tempdir");
-        let path = write_file(&dir, "log.txt", b"alpha\x07beta\n");
-        assert_ask(&read_input(&path));
+        let cases: &[(&str, &[u8])] = &[
+            ("zwsp.txt", "hello\u{200B}world\n".as_bytes()),
+            ("bidi.txt", "let admin = \u{202E}true;\n".as_bytes()),
+            ("tag.txt", "ok\u{E0041}\n".as_bytes()),
+            ("c0.txt", b"alpha\x07beta\n"),
+            ("lrm.txt", "head\u{200E}tail\n".as_bytes()),
+            ("rlm.txt", "head\u{200F}tail\n".as_bytes()),
+            ("alm.txt", "head\u{061C}tail\n".as_bytes()),
+            ("func.txt", "a\u{2061}b\n".as_bytes()),
+            ("times.txt", "a\u{2062}b\n".as_bytes()),
+            ("plus.txt", "a\u{2064}b\n".as_bytes()),
+            ("cgj.txt", "a\u{034F}b\n".as_bytes()),
+            ("vs-lo.txt", "x\u{E0100}y\n".as_bytes()),
+            ("vs-hi.txt", "x\u{E01EF}y\n".as_bytes()),
+        ];
+        for (name, bytes) in cases {
+            let path = write_file(&dir, name, bytes);
+            assert_ask(&read_input(&path));
+        }
     }
 
     #[test]
@@ -621,13 +617,6 @@ mod tests {
             let path = write_file(&dir, name, format!("a{ch}b\n").as_bytes());
             assert_ask(&read_input(&path));
         }
-    }
-
-    #[test]
-    fn asks_for_combining_grapheme_joiner() {
-        let dir = TempDir::new().expect("tempdir");
-        let path = write_file(&dir, "cgj.txt", "a\u{034F}b\n".as_bytes());
-        assert_ask(&read_input(&path));
     }
 
     #[test]
