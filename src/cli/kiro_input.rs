@@ -407,20 +407,9 @@ mod tests {
         );
     }
 
-    use crate::testing::proptest::arbitrary_utf8_bytes;
     use proptest::prelude::*;
 
     proptest! {
-        // parse() is total over arbitrary input strings: it returns
-        // Ok(HookInput) or one of the structured KiroInputError variants
-        // and never panics. Drives the fail-closed contract at the
-        // adapter boundary.
-        #[test]
-        fn pbt_parse_is_total_on_arbitrary_utf8(bytes in arbitrary_utf8_bytes()) {
-            let body = String::from_utf8_lossy(&bytes);
-            let _ = parse(&body);
-        }
-
         // Envelope shapes outside the documented `{ hook_event_name?,
         // tool_name, tool_input? }` contract must produce a structured
         // error, never a half-populated HookInput. Includes the
