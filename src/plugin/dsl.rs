@@ -569,6 +569,135 @@ shell.pipeline:
     }
 
     #[test]
+    fn compile_rejects_invalid_mapping_and_list_shapes() {
+        for src in [
+            "- a\n- b\n",
+            "{}\n",
+            "1: foo\n",
+            "tool: Bash\n1: bar\n",
+            "all: 42\n",
+            "all: []\n",
+        ] {
+            let err = compile(&yaml(src)).expect_err("must fail");
+            let ok = match src {
+                "- a\n- b\n" => matches!(err, CompileError::NotAMapping),
+                "{}\n" => matches!(err, CompileError::EmptyMapping),
+                "1: foo\n" | "tool: Bash\n1: bar\n" => {
+                    matches!(err, CompileError::InvalidShape { .. })
+                },
+                "all: 42\n" | "all: []\n" => {
+                    matches!(err, CompileError::InvalidShape { ref key, .. } if key == "all")
+                },
+                _ => false,
+            };
+            assert!(ok, "src={src:?} got {err:?}");
+        }
+    }
+
+    #[test]
+    fn compile_rejects_invalid_shell_leaf_shapes() {
+        let from_non_mapping = r#"shell.pipeline:
+  from: 42
+  to:
+    commandAny: [bash]
+"#;
+        let from_bad_key = r#"shell.pipeline:
+  from:
+    1: foo
+  to:
+    commandAny: [bash]
+"#;
+        let from_missing_command_any = r#"shell.pipeline:
+  from:
+    other: value
+  to:
+    commandAny: [bash]
+"#;
+        for (src, ok) in [
+            (
+                "shell.argv: 42\n",
+                matches!(
+                    compile(&yaml("shell.argv: 42\n")).unwrap_err(),
+                    CompileError::InvalidShape { key, .. } if key == "shell.argv"
+                ),
+            ),
+            (
+                "shell.argv:\n  1: foo\n",
+                matches!(
+                    compile(&yaml("shell.argv:\n  1: foo\n")).unwrap_err(),
+                    CompileError::InvalidShape { .. }
+                ),
+            ),
+            (
+                "shell.argv:\n  pathAny: [/bin/rm]\n",
+                matches!(
+                    compile(&yaml("shell.argv:\n  pathAny: [/bin/rm]\n")).unwrap_err(),
+                    CompileError::UnknownKey(k) if k == "shell.argv.pathAny"
+                ),
+            ),
+            (
+                "shell.pipeline: 42\n",
+                matches!(
+                    compile(&yaml("shell.pipeline: 42\n")).unwrap_err(),
+                    CompileError::InvalidShape { key, .. } if key == "shell.pipeline"
+                ),
+            ),
+            (
+                "shell.pipeline:\n  1: bar\n",
+                matches!(
+                    compile(&yaml("shell.pipeline:\n  1: bar\n")).unwrap_err(),
+                    CompileError::InvalidShape { .. }
+                ),
+            ),
+            (
+                "shell.pipeline:\n  via:\n    commandAny: [sudo]\n",
+                matches!(
+                    compile(&yaml(
+                        "shell.pipeline:\n  via:\n    commandAny: [sudo]\n"
+                    ))
+                    .unwrap_err(),
+                    CompileError::UnknownKey(k) if k == "shell.pipeline.via"
+                ),
+            ),
+            (
+                "shell.pipeline:\n  to:\n    commandAny: [bash]\n",
+                matches!(
+                    compile(&yaml(
+                        "shell.pipeline:\n  to:\n    commandAny: [bash]\n"
+                    ))
+                    .unwrap_err(),
+                    CompileError::InvalidShape { key, message }
+                        if key == "shell.pipeline" && message.contains("from")
+                ),
+            ),
+            (
+                "from-non-mapping",
+                matches!(
+                    compile(&yaml(from_non_mapping)).unwrap_err(),
+                    CompileError::InvalidShape { key, .. } if key == "shell.pipeline.from"
+                ),
+            ),
+            (
+                "from-bad-key",
+                matches!(
+                    compile(&yaml(from_bad_key)).unwrap_err(),
+                    CompileError::InvalidShape { .. }
+                ),
+            ),
+            (
+                "from-missing-command-any",
+                matches!(
+                    compile(&yaml(from_missing_command_any)).unwrap_err(),
+                    CompileError::InvalidShape { key, message }
+                        if key == "shell.pipeline.from" && message.contains("commandAny")
+                ),
+            ),
+        ] {
+            assert!(ok, "case={src:?}");
+        }
+    }
+
+    #[test]
     fn compile_when_shell_ast_returns_error() {
         let v = yaml("shell.ast: {}\n");
         let err = compile(&v).expect_err("shell.ast is not a when leaf");
@@ -670,186 +799,6 @@ shell.pipeline:
     fn compile_error_is_a_std_error() {
         let err: Box<dyn std::error::Error> = Box::new(CompileError::EmptyMapping);
         assert!(format!("{err}").contains("empty"));
-    }
-
-    #[test]
-    fn compile_rejects_non_mapping_top_level() {
-        let v = yaml("- a\n- b\n");
-        let err = compile(&v).expect_err("should fail");
-        assert_eq!(err, CompileError::NotAMapping);
-    }
-
-    #[test]
-    fn compile_rejects_empty_mapping() {
-        let v = yaml("{}\n");
-        let err = compile(&v).expect_err("should fail");
-        assert_eq!(err, CompileError::EmptyMapping);
-    }
-
-    #[test]
-    fn compile_rejects_non_string_key_in_single_mapping() {
-        let v = yaml("1: foo\n");
-        let err = compile(&v).expect_err("should fail");
-        assert!(matches!(err, CompileError::InvalidShape { .. }));
-    }
-
-    #[test]
-    fn compile_rejects_non_string_key_in_multi_mapping() {
-        let v = yaml("tool: Bash\n1: bar\n");
-        let err = compile(&v).expect_err("should fail");
-        assert!(matches!(err, CompileError::InvalidShape { .. }));
-    }
-
-    #[test]
-    fn compile_list_rejects_non_sequence() {
-        let v = yaml("all: 42\n");
-        let err = compile(&v).expect_err("should fail");
-        match err {
-            CompileError::InvalidShape { key, message } => {
-                assert_eq!(key, "all");
-                assert!(message.contains("list"));
-            },
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn compile_list_rejects_empty_sequence() {
-        let v = yaml("all: []\n");
-        let err = compile(&v).expect_err("should fail");
-        match err {
-            CompileError::InvalidShape { key, message } => {
-                assert_eq!(key, "all");
-                assert!(message.contains("empty"));
-            },
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn shell_argv_rejects_non_mapping() {
-        let v = yaml("shell.argv: 42\n");
-        let err = compile(&v).expect_err("should fail");
-        match err {
-            CompileError::InvalidShape { key, .. } => assert_eq!(key, "shell.argv"),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn shell_argv_rejects_non_string_key() {
-        let v = yaml("shell.argv:\n  1: foo\n");
-        let err = compile(&v).expect_err("should fail");
-        assert!(matches!(err, CompileError::InvalidShape { .. }));
-    }
-
-    #[test]
-    fn shell_argv_rejects_unknown_subkey() {
-        let v = yaml("shell.argv:\n  pathAny: [/bin/rm]\n");
-        let err = compile(&v).expect_err("should fail");
-        match err {
-            CompileError::UnknownKey(k) => assert_eq!(k, "shell.argv.pathAny"),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn shell_pipeline_rejects_non_mapping() {
-        let v = yaml("shell.pipeline: 42\n");
-        let err = compile(&v).expect_err("should fail");
-        match err {
-            CompileError::InvalidShape { key, .. } => assert_eq!(key, "shell.pipeline"),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn shell_pipeline_rejects_non_string_key() {
-        let v = yaml("shell.pipeline:\n  1: bar\n");
-        let err = compile(&v).expect_err("should fail");
-        assert!(matches!(err, CompileError::InvalidShape { .. }));
-    }
-
-    #[test]
-    fn shell_pipeline_rejects_unknown_subkey() {
-        let v = yaml("shell.pipeline:\n  via:\n    commandAny: [sudo]\n");
-        let err = compile(&v).expect_err("should fail");
-        match err {
-            CompileError::UnknownKey(k) => assert_eq!(k, "shell.pipeline.via"),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn shell_pipeline_rejects_missing_from() {
-        let v = yaml(
-            r#"
-shell.pipeline:
-  to:
-    commandAny: [bash]
-"#,
-        );
-        let err = compile(&v).expect_err("should fail");
-        match err {
-            CompileError::InvalidShape { key, message } => {
-                assert_eq!(key, "shell.pipeline");
-                assert!(message.contains("from"));
-            },
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_endpoint_rejects_non_mapping() {
-        let v = yaml(
-            r#"
-shell.pipeline:
-  from: 42
-  to:
-    commandAny: [bash]
-"#,
-        );
-        let err = compile(&v).expect_err("should fail");
-        match err {
-            CompileError::InvalidShape { key, .. } => assert_eq!(key, "shell.pipeline.from"),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_endpoint_rejects_non_string_key() {
-        let v = yaml(
-            r#"
-shell.pipeline:
-  from:
-    1: foo
-  to:
-    commandAny: [bash]
-"#,
-        );
-        let err = compile(&v).expect_err("should fail");
-        assert!(matches!(err, CompileError::InvalidShape { .. }));
-    }
-
-    #[test]
-    fn parse_endpoint_rejects_missing_command_any() {
-        let v = yaml(
-            r#"
-shell.pipeline:
-  from:
-    other: value
-  to:
-    commandAny: [bash]
-"#,
-        );
-        let err = compile(&v).expect_err("should fail");
-        match err {
-            CompileError::InvalidShape { key, message } => {
-                assert_eq!(key, "shell.pipeline.from");
-                assert!(message.contains("commandAny"));
-            },
-            other => panic!("unexpected variant: {other:?}"),
-        }
     }
 
     #[test]

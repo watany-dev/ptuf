@@ -314,39 +314,27 @@ rules:
     // cross-variant invariant relied on by the fail-closed audit
     // record.
     #[test]
-    fn yaml_error_path_is_round_tripped() {
-        let path = PathBuf::from("/abs/plugin.yaml");
-        let err = load_str(&path, "::not yaml::").expect_err("yaml err");
-        match err {
-            PluginError::Yaml { path: returned, .. } => assert_eq!(returned, path),
-            other => panic!("expected Yaml error, got {other:?}"),
+    fn plugin_load_errors_carry_path_and_observed_fields() {
+        let yaml_path = PathBuf::from("/abs/plugin.yaml");
+        match load_str(&yaml_path, "::not yaml::").expect_err("yaml") {
+            PluginError::Yaml { path, .. } => assert_eq!(path, yaml_path),
+            other => panic!("expected Yaml, got {other:?}"),
         }
-    }
 
-    #[test]
-    fn api_version_error_path_is_round_tripped() {
-        let path = PathBuf::from("/abs/api.yaml");
-        let yaml = "apiVersion: foo/v0\nkind: Plugin\nmetadata:\n  name: x\n";
-        let err = load_str(&path, yaml).expect_err("api version err");
-        match err {
-            PluginError::ApiVersion {
-                path: returned,
-                found,
-            } => {
-                assert_eq!(returned, path);
+        let api_path = PathBuf::from("/abs/api.yaml");
+        let bad_api = "apiVersion: foo/v0\nkind: Plugin\nmetadata:\n  name: x\n";
+        match load_str(&api_path, bad_api).expect_err("api version") {
+            PluginError::ApiVersion { path, found } => {
+                assert_eq!(path, api_path);
                 assert_eq!(found, "foo/v0");
             },
-            other => panic!("expected ApiVersion error, got {other:?}"),
+            other => panic!("expected ApiVersion, got {other:?}"),
         }
-    }
 
-    #[test]
-    fn kind_error_carries_observed_kind() {
-        let yaml = "apiVersion: ptuf.dev/v1\nkind: Bogus\nmetadata:\n  name: x\n";
-        let err = load_str(&p(), yaml).expect_err("kind err");
-        match err {
+        let kind_yaml = "apiVersion: ptuf.dev/v1\nkind: Bogus\nmetadata:\n  name: x\n";
+        match load_str(&p(), kind_yaml).expect_err("kind") {
             PluginError::Kind { found, .. } => assert_eq!(found, "Bogus"),
-            other => panic!("expected Kind error, got {other:?}"),
+            other => panic!("expected Kind, got {other:?}"),
         }
     }
 
