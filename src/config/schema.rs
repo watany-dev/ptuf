@@ -239,11 +239,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn redaction_mode_parses_strict_and_off() {
-        let strict: RedactionMode = serde_yaml_ng::from_str("strict").expect("strict");
-        assert_eq!(strict, RedactionMode::Strict);
-        let off: RedactionMode = serde_yaml_ng::from_str("off").expect("off");
-        assert_eq!(off, RedactionMode::Off);
+    fn enum_variants_parse_from_yaml_strings() {
+        let cases: &[(&str, &str)] = &[
+            ("strict", "RedactionMode"),
+            ("off", "RedactionMode"),
+            ("enforce", "Mode"),
+            ("monitor", "Mode"),
+        ];
+        for (raw, kind) in cases {
+            match *kind {
+                "RedactionMode" => {
+                    let v: RedactionMode = serde_yaml_ng::from_str(raw).expect("parse");
+                    if *raw == "strict" {
+                        assert_eq!(v, RedactionMode::Strict);
+                    } else if *raw == "off" {
+                        assert_eq!(v, RedactionMode::Off);
+                    } else {
+                        panic!("unexpected redaction raw={raw}");
+                    }
+                },
+                "Mode" => {
+                    let v: Mode = serde_yaml_ng::from_str(raw).expect("parse");
+                    if *raw == "enforce" {
+                        assert_eq!(v, Mode::Enforce);
+                    } else if *raw == "monitor" {
+                        assert_eq!(v, Mode::Monitor);
+                    } else {
+                        panic!("unexpected mode raw={raw}");
+                    }
+                },
+                _ => panic!("unknown kind {kind}"),
+            }
+        }
     }
 
     #[test]
@@ -255,11 +282,34 @@ mod tests {
     }
 
     #[test]
-    fn mode_parses_each_known_variant() {
-        let enforce: Mode = serde_yaml_ng::from_str("enforce").expect("enforce");
-        assert_eq!(enforce, Mode::Enforce);
-        let monitor: Mode = serde_yaml_ng::from_str("monitor").expect("monitor");
-        assert_eq!(monitor, Mode::Monitor);
+    fn raw_config_conversions_pass_fields_through() {
+        let allow_raw = RawAllowlist {
+            id: "x".into(),
+            applies_to: RawAllowlistApplies {
+                rules: vec!["r1".into(), "r2".into()],
+            },
+            when: None,
+            expires_at: Some("2099-01-01T00:00:00Z".into()),
+            reason: Some("ok".into()),
+        };
+        let a: Allowlist = allow_raw.into();
+        assert_eq!(a.id, "x");
+        assert_eq!(a.rule_ids, vec!["r1".to_string(), "r2".to_string()]);
+        assert_eq!(a.expires_at.as_deref(), Some("2099-01-01T00:00:00Z"));
+        assert_eq!(a.reason.as_deref(), Some("ok"));
+
+        let override_raw = RawRuleOverride {
+            enabled: Some(false),
+            decision: Some(crate::decision::DecisionKind::Monitor),
+            severity: Some(crate::decision::Severity::Low),
+        };
+        let overlay: RuleOverride = override_raw.into();
+        assert_eq!(overlay.enabled, Some(false));
+        assert_eq!(
+            overlay.decision,
+            Some(crate::decision::DecisionKind::Monitor)
+        );
+        assert_eq!(overlay.severity, Some(crate::decision::Severity::Low));
     }
 
     #[test]
@@ -293,22 +343,6 @@ mod tests {
         assert_eq!(a.rule_ids, vec!["r1".to_string(), "r2".to_string()]);
         assert_eq!(a.expires_at.as_deref(), Some("2099-01-01T00:00:00Z"));
         assert_eq!(a.reason.as_deref(), Some("ok"));
-    }
-
-    #[test]
-    fn raw_rule_override_into_runtime_overlay_passes_fields_through() {
-        let raw = RawRuleOverride {
-            enabled: Some(false),
-            decision: Some(crate::decision::DecisionKind::Monitor),
-            severity: Some(crate::decision::Severity::Low),
-        };
-        let overlay: RuleOverride = raw.into();
-        assert_eq!(overlay.enabled, Some(false));
-        assert_eq!(
-            overlay.decision,
-            Some(crate::decision::DecisionKind::Monitor)
-        );
-        assert_eq!(overlay.severity, Some(crate::decision::Severity::Low));
     }
 
     #[test]

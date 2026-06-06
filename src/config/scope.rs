@@ -123,32 +123,28 @@ mod tests {
     }
 
     #[test]
-    fn ordered_paths_skips_none_entries() {
-        let layout = Layout {
+    fn ordered_paths_skips_none_and_preserves_priority() {
+        let sparse = Layout {
             system: Some(PathBuf::from("/etc/ptuf/policy.yaml")),
             user: None,
             project: Some(PathBuf::from("/repo/.ptuf.yaml")),
             project_local: None,
         };
         assert_eq!(
-            layout.ordered_paths(),
+            sparse.ordered_paths(),
             vec![
                 PathBuf::from("/etc/ptuf/policy.yaml"),
                 PathBuf::from("/repo/.ptuf.yaml"),
             ]
         );
-    }
-
-    #[test]
-    fn ordered_paths_preserves_priority_order() {
-        let layout = Layout {
+        let full = Layout {
             system: Some(PathBuf::from("a")),
             user: Some(PathBuf::from("b")),
             project: Some(PathBuf::from("c")),
             project_local: Some(PathBuf::from("d")),
         };
         assert_eq!(
-            layout.ordered_paths(),
+            full.ordered_paths(),
             vec![
                 PathBuf::from("a"),
                 PathBuf::from("b"),
