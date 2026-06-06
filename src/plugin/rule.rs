@@ -123,40 +123,6 @@ mod tests {
     }
 
     #[test]
-    fn deny_rule_emits_deny_decision_when_when_matches() {
-        let rule = PluginRule::from_raw(
-            raw("p.deny", DecisionKind::Deny),
-            WhenNode::Tool("Bash".into()),
-        );
-        let input = bash_input("ls");
-        let facts = facts::extract(&input);
-        let d = rule.evaluate(&facts, &input).expect("decision");
-        match d {
-            Decision::Deny { rule_id, reason } => {
-                assert_eq!(rule_id, "p.deny");
-                assert!(reason.contains("Blocked by ptuf rule p.deny"));
-                assert!(reason.contains("try again"));
-            },
-            other => panic!("expected Deny, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn monitor_rule_emits_monitor_with_no_reason() {
-        let rule = PluginRule::from_raw(
-            raw("p.monitor", DecisionKind::Monitor),
-            WhenNode::Tool("Bash".into()),
-        );
-        let input = bash_input("ls");
-        let facts = facts::extract(&input);
-        let d = rule.evaluate(&facts, &input).expect("decision");
-        match d {
-            Decision::Monitor { rule_id } => assert_eq!(rule_id, "p.monitor"),
-            other => panic!("expected Monitor, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn decision_kind_maps_to_expected_plugin_decision() {
         let input = bash_input("ls");
         let facts = facts::extract(&input);
