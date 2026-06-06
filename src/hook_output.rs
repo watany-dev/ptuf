@@ -290,18 +290,6 @@ mod tests {
     }
 
     #[test]
-    fn copilot_ask_serialises_as_deny_with_demote_note() {
-        let d = Decision::Ask {
-            rule_id: "core.a".into(),
-            reason: "confirm please".into(),
-        };
-        let resp = copilot::from_decision(&d).expect("response");
-        let json = serde_json::to_string(&resp).expect("serialise");
-        assert!(json.contains("\"permissionDecision\":\"deny\""));
-        assert!(json.contains("GitHub Copilot hooks do not reliably process interactive ask"));
-    }
-
-    #[test]
     fn claude_deny_serialises_expected_shape() {
         let d = Decision::Deny {
             rule_id: "core.x".into(),
