@@ -37,13 +37,9 @@ mod tests {
         assert!(s.contains("1. Do A first."));
         assert!(s.contains("2. Then ask the user."));
         assert!(s.contains("3. Finally run B."));
-    }
-
-    #[test]
-    fn full_layout_snapshot() {
-        let s = build("core.x", "Problem statement.", &["Step one.", "Step two."]);
+        let snapshot = build("core.x", "Problem statement.", &["Step one.", "Step two."]);
         let expected = "Blocked by ptuf rule core.x.\n\nProblem statement.\n\nSafer alternative:\n1. Step one.\n2. Step two.\n";
-        assert_eq!(s, expected);
+        assert_eq!(snapshot, expected);
     }
 
     use crate::testing::proptest::{reason_text, rule_id};
