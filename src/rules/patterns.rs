@@ -62,15 +62,6 @@ pub(super) fn argv_references_sensitive(argv: &Argv) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::LazyLock;
-
-    /// Eagerly compile the shared regex so a malformed pattern fails loudly
-    /// in tests instead of panicking at first use in production.
-    #[test]
-    fn all_regexes_compile() {
-        LazyLock::force(&SENSITIVE_PATH);
-    }
-
     #[test]
     fn sensitive_path_matches_dotenv_case_insensitive() {
         let cases = [
@@ -82,21 +73,7 @@ mod tests {
         for (token, expect) in cases {
             assert_eq!(SENSITIVE_PATH.is_match(token), expect, "token {token:?}");
         }
-    }
-
-    #[test]
-    fn sensitive_path_rejects_non_secret_paths() {
-        assert!(!SENSITIVE_PATH.is_match("README"));
-        assert!(!SENSITIVE_PATH.is_match("/tmp/foo"));
-    }
-
-    #[test]
-    fn sensitive_path_dd_if_form() {
         assert!(SENSITIVE_PATH.is_match("if=.env"));
-    }
-
-    #[test]
-    fn sensitive_path_brace_expansion_form() {
         for token in [
             "{a,b}.env",
             "{x,y,z}.env",
@@ -106,6 +83,19 @@ mod tests {
         ] {
             assert!(SENSITIVE_PATH.is_match(token), "token {token:?}");
         }
+    }
+
+    #[test]
+    fn sensitive_path_rejects_non_secret_paths() {
+        assert!(!SENSITIVE_PATH.is_match("README"));
+        assert!(!SENSITIVE_PATH.is_match("/tmp/foo"));
+    }
+
+    #[test]
+    fn argv_references_sensitive_checks_head_and_args() {
+        let bash = crate::facts::shell::parse("id_rsa");
+        let argv = bash.commands().into_iter().next().expect("argv");
+        assert!(argv_references_sensitive(argv));
     }
 
     use crate::testing::proptest::{

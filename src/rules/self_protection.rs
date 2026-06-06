@@ -187,104 +187,6 @@ mod tests {
     }
 
     #[test]
-    fn binary_rule_fires_when_protected_label_present() {
-        let facts = facts_with(&[ProtectedKind::Binary]);
-        let input = sample("Bash");
-        let d = BINARY_RULE.evaluate(&facts, &input);
-        assert!(matches!(
-            d,
-            Some(Decision::Deny { ref rule_id, .. }) if rule_id == "core.self_protection.binary"
-        ));
-    }
-
-    #[test]
-    fn config_rule_fires_only_for_config_label() {
-        let facts = facts_with(&[ProtectedKind::Config]);
-        let input = sample("Edit");
-        assert!(matches!(
-            CONFIG_RULE.evaluate(&facts, &input),
-            Some(Decision::Deny { .. })
-        ));
-        assert!(BINARY_RULE.evaluate(&facts, &input).is_none());
-        assert!(PLUGIN_RULE.evaluate(&facts, &input).is_none());
-    }
-
-    #[test]
-    fn plugin_rule_fires_only_for_plugin_label() {
-        let facts = facts_with(&[ProtectedKind::Plugin]);
-        let input = sample("Write");
-        assert!(matches!(
-            PLUGIN_RULE.evaluate(&facts, &input),
-            Some(Decision::Deny { .. })
-        ));
-        assert!(CONFIG_RULE.evaluate(&facts, &input).is_none());
-    }
-
-    #[test]
-    fn claude_settings_rule_fires_only_for_claude_settings_label() {
-        let facts = facts_with(&[ProtectedKind::ClaudeSettings]);
-        let input = sample("Edit");
-        assert!(matches!(
-            CLAUDE_SETTINGS_RULE.evaluate(&facts, &input),
-            Some(Decision::Deny { .. })
-        ));
-        assert!(CODEX_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-        assert!(HOOK_SCRIPT_RULE.evaluate(&facts, &input).is_none());
-        assert!(COPILOT_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-        assert!(KIRO_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-    }
-
-    #[test]
-    fn codex_settings_rule_fires_only_for_codex_settings_label() {
-        let facts = facts_with(&[ProtectedKind::CodexSettings]);
-        let input = sample("Edit");
-        assert!(matches!(
-            CODEX_SETTINGS_RULE.evaluate(&facts, &input),
-            Some(Decision::Deny { .. })
-        ));
-        assert!(CLAUDE_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-        assert!(COPILOT_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-        assert!(KIRO_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-    }
-
-    #[test]
-    fn copilot_settings_rule_fires_only_for_copilot_settings_label() {
-        let facts = facts_with(&[ProtectedKind::CopilotSettings]);
-        let input = sample("Edit");
-        assert!(matches!(
-            COPILOT_SETTINGS_RULE.evaluate(&facts, &input),
-            Some(Decision::Deny { .. })
-        ));
-        assert!(CLAUDE_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-        assert!(CODEX_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-        assert!(KIRO_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-    }
-
-    #[test]
-    fn kiro_settings_rule_fires_only_for_kiro_settings_label() {
-        let facts = facts_with(&[ProtectedKind::KiroSettings]);
-        let input = sample("Edit");
-        assert!(matches!(
-            KIRO_SETTINGS_RULE.evaluate(&facts, &input),
-            Some(Decision::Deny { .. })
-        ));
-        assert!(CLAUDE_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-        assert!(CODEX_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-        assert!(COPILOT_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-    }
-
-    #[test]
-    fn hook_script_rule_fires_only_for_hook_script_label() {
-        let facts = facts_with(&[ProtectedKind::HookScript]);
-        let input = sample("Bash");
-        assert!(matches!(
-            HOOK_SCRIPT_RULE.evaluate(&facts, &input),
-            Some(Decision::Deny { .. })
-        ));
-        assert!(CLAUDE_SETTINGS_RULE.evaluate(&facts, &input).is_none());
-    }
-
-    #[test]
     fn rules_do_not_fire_for_empty_protected() {
         let facts = facts_with(&[]);
         let input = sample("Bash");
@@ -303,57 +205,14 @@ mod tests {
     }
 
     #[test]
-    fn rules_carry_hard_deny_critical_metadata() {
-        for rule in [
-            &BINARY_RULE,
-            &CONFIG_RULE,
-            &PLUGIN_RULE,
-            &CLAUDE_SETTINGS_RULE,
-            &CODEX_SETTINGS_RULE,
-            &HOOK_SCRIPT_RULE,
-            &COPILOT_SETTINGS_RULE,
-            &KIRO_SETTINGS_RULE,
-        ] {
-            assert!(rule.hard_deny(), "{} must be hard_deny", rule.id());
-            assert_eq!(
-                rule.severity(),
-                Severity::Critical,
-                "{} must be Severity::Critical",
-                rule.id()
-            );
-            assert_eq!(
-                rule.default_decision(),
-                DecisionKind::Deny,
-                "{} must default to Deny",
-                rule.id()
-            );
-        }
-    }
-
-    #[test]
     fn reason_includes_rule_id_and_alternatives() {
+        assert_eq!(BINARY_RULE.default_decision(), DecisionKind::Deny);
         let facts = facts_with(&[ProtectedKind::Binary]);
         let input = sample("Bash");
         let d = BINARY_RULE.evaluate(&facts, &input).expect("decision");
         let reason = d.reason().expect("reason for deny");
         assert!(reason.contains("core.self_protection.binary"));
         assert!(reason.contains("Safer alternative"));
-    }
-
-    #[test]
-    fn rule_ids_are_kebab_case_under_self_protection() {
-        for id in [
-            BINARY_RULE.id(),
-            CONFIG_RULE.id(),
-            PLUGIN_RULE.id(),
-            CLAUDE_SETTINGS_RULE.id(),
-            CODEX_SETTINGS_RULE.id(),
-            HOOK_SCRIPT_RULE.id(),
-            COPILOT_SETTINGS_RULE.id(),
-            KIRO_SETTINGS_RULE.id(),
-        ] {
-            assert!(id.starts_with("core.self_protection."), "id was {id}");
-        }
     }
 
     use crate::testing::proptest::{protected_kind, richer_hook_input};

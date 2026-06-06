@@ -695,6 +695,11 @@ mod tests {
     }
 
     #[test]
+    fn detect_binary_delegates_to_shared_impl() {
+        assert!(!detect_binary().is_empty());
+    }
+
+    #[test]
     fn install_creates_new_local_config_with_default_template() {
         let dir = workdir("install-local");
         let path = dir.join(".kiro/agents/ptuf-guarded.json");

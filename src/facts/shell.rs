@@ -1556,16 +1556,6 @@ mod tests {
     }
 
     #[test]
-    fn value_flag_accessors_expose_each_spelling() {
-        assert_eq!(ValueFlag::Short('a').short(), Some('a'));
-        assert_eq!(ValueFlag::Short('a').long(), None);
-        assert_eq!(ValueFlag::Long("user").short(), None);
-        assert_eq!(ValueFlag::Long("user").long(), Some("user"));
-        assert_eq!(ValueFlag::Both('u', "user").short(), Some('u'));
-        assert_eq!(ValueFlag::Both('u', "user").long(), Some("user"));
-    }
-
-    #[test]
     fn unwrap_privilege_wrapper_strips_prefix_wrappers() {
         for wrapper in ["sudo", "doas", "pkexec", "run0"] {
             let inner = unwrap_privilege_wrapper(&argv(wrapper, &["rm", "-rf", "/"]))

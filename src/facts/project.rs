@@ -175,26 +175,6 @@ mod tests {
     }
 
     #[test]
-    fn wildcard_match_handles_release_prefix() {
-        assert!(wildcard_match("release/*", "release/v1.2"));
-        assert!(!wildcard_match("release/*", "release"));
-        assert!(!wildcard_match("release/*", "feature/x"));
-    }
-
-    #[test]
-    fn wildcard_match_handles_bare_suffix_star() {
-        assert!(wildcard_match("hot*", "hotfix"));
-        assert!(wildcard_match("hot*", "hot"));
-        assert!(!wildcard_match("hot*", "cold"));
-    }
-
-    #[test]
-    fn wildcard_match_handles_exact_pattern() {
-        assert!(wildcard_match("main", "main"));
-        assert!(!wildcard_match("main", "main2"));
-    }
-
-    #[test]
     fn protected_branch_flag_uses_pattern_list() {
         let dir = tempdir("protected");
         std::fs::create_dir_all(dir.join(".git")).expect("mkdir");

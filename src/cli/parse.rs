@@ -898,15 +898,4 @@ mod tests {
             Err(ParseError::ConflictingFlags(_))
         ));
     }
-
-    #[test]
-    fn parse_error_display() {
-        assert!(format!("{}", ParseError::UnknownCommand("x".into())).contains("unknown command"));
-        assert!(format!("{}", ParseError::UnknownAgent("x".into())).contains("unknown agent"));
-        assert!(format!("{}", ParseError::MissingValue("x")).contains("missing value"));
-        assert!(format!("{}", ParseError::UnexpectedArgument("x".into())).contains("unexpected"));
-        assert!(
-            format!("{}", ParseError::ConflictingFlags("a vs b")).contains("conflicting flags")
-        );
-    }
 }

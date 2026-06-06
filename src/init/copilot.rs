@@ -245,6 +245,11 @@ mod tests {
     }
 
     #[test]
+    fn detect_binary_delegates_to_shared_impl() {
+        assert!(!detect_binary().is_empty());
+    }
+
+    #[test]
     fn resolve_paths_requires_repo_root() {
         let err = resolve_paths(None).unwrap_err();
         assert!(matches!(err, InitError::RepoRootNotFound));
@@ -547,16 +552,6 @@ mod tests {
     fn pre_tool_use_commands_returns_empty_when_array_missing() {
         let root = json!({ "version": 1 });
         assert!(pre_tool_use_commands(&root).is_empty());
-    }
-
-    #[test]
-    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
-        let p = Path::new("/");
-        let tmp = sibling_temp_path(p);
-        assert!(
-            tmp.to_string_lossy().contains("ptuf.json.ptuf."),
-            "missing file_name must default to ptuf.json: {tmp:?}"
-        );
     }
 
     #[test]

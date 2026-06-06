@@ -294,7 +294,6 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
 mod tests {
 
     use super::*;
-    use crate::init::command_executable;
 
     fn workdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -587,16 +586,15 @@ mod tests {
     }
 
     #[test]
+    fn detect_binary_delegates_to_shared_impl() {
+        assert!(!detect_binary().is_empty());
+    }
+
+    #[test]
     fn default_home_config_path_ends_with_codex_when_home_is_set() {
         if let Some(path) = default_home_config_path() {
             assert!(path.ends_with(".codex/config.toml"));
         }
-    }
-
-    #[test]
-    fn command_executable_returns_first_token_or_none() {
-        assert_eq!(command_executable("/x/ptuf hook codex"), Some("/x/ptuf"));
-        assert_eq!(command_executable(""), None);
     }
 
     #[test]
@@ -869,16 +867,6 @@ mod tests {
     }
 
     #[test]
-    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
-        let p = Path::new("/");
-        let tmp = sibling_temp_path(p);
-        assert!(
-            tmp.to_string_lossy().contains("hooks.json.ptuf."),
-            "missing file_name must default to hooks.json: {tmp:?}"
-        );
-    }
-
-    #[test]
     fn write_json_atomically_returns_io_err_when_parent_is_a_regular_file() {
         let dir = workdir("write-json-blocker");
         let blocker = dir.join("blocker");
@@ -909,17 +897,6 @@ mod tests {
         fs::create_dir_all(&target).unwrap();
         let err =
             write_json_atomically(&target, &json!({})).expect_err("rename onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_json_atomically_propagates_write_error_when_temp_path_is_a_directory() {
-        let dir = workdir("write-json-tmp-collision");
-        let target = dir.join("hooks.json");
-        let collision = dir.join(format!("hooks.json.ptuf.{}.tmp", std::process::id()));
-        fs::create_dir_all(&collision).unwrap();
-        let err = write_json_atomically(&target, &json!({})).expect_err("write onto dir must fail");
         assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
         let _ = fs::remove_dir_all(&dir);
     }

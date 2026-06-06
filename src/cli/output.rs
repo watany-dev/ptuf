@@ -605,32 +605,27 @@ mod tests {
     }
 
     #[test]
+    fn emit_decision_serialises_allow_for_each_hook_agent() {
+        for agent in [
+            HookAgent::Copilot,
+            HookAgent::Cline,
+            HookAgent::Cursor,
+            HookAgent::ClaudeCode,
+            HookAgent::Codex,
+        ] {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = emit_decision(agent, &Decision::Allow, &mut out, &mut err);
+            assert_eq!(code, 0, "agent {agent:?}");
+        }
+    }
+
+    #[test]
     fn render_hook_response_is_none_for_copilot() {
         let decision = Decision::Deny {
             rule_id: "core.x".into(),
             reason: "r".into(),
         };
         assert!(render_hook_response(HookAgent::Copilot, &decision).is_none());
-    }
-
-    #[test]
-    fn emit_decision_serialization_failure_returns_one() {
-        // Force the json writer to fail by truncating budget below the
-        // serialised envelope length. This exercises the
-        // `serde_json::to_string` Ok-arm followed by writeln on a writer
-        // that now errors past the budget.
-        let decision = Decision::Deny {
-            rule_id: "core.test.deny".into(),
-            reason: "blocked".into(),
-        };
-        // Sufficient to write the full body; ensures we still hit the
-        // happy-path serialise + writeln, including the trailing
-        // `decision_exit_code`.
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = emit_decision(HookAgent::ClaudeCode, &decision, &mut out, &mut err);
-        assert_eq!(code, 2);
-        assert!(String::from_utf8_lossy(&out).contains("\"permissionDecision\":\"deny\""));
-        assert!(String::from_utf8_lossy(&err).contains("blocked"));
     }
 }

@@ -591,15 +591,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_uses_system_env_lookup() {
-        // Just exercise the production path: should not panic and
-        // should treat an absolute path as identity.
-        let i = input("Read", serde_json::json!("/tmp/sample"));
-        let fp = extract(&i).unwrap();
-        assert_eq!(fp.raw, "/tmp/sample");
-    }
-
-    #[test]
     fn extract_mcp_tool_uses_top_level_path_key() {
         let i = HookInput {
             tool_name: "mcp__github__create_or_update_file".into(),

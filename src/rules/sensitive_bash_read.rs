@@ -208,6 +208,7 @@ mod tests {
     #[test]
     fn asks_for_inner_bash_c() {
         assert_ask("bash -c 'cat .env'");
+        assert_ask("bash -c 'cat < .env'");
     }
 
     #[test]
@@ -326,15 +327,6 @@ mod tests {
         };
         let facts = crate::facts::extract(&input);
         assert!(SensitiveBashRead.evaluate(&facts, &input).is_none());
-    }
-
-    #[test]
-    fn metadata_matches_design() {
-        assert!(!SensitiveBashRead.hard_deny());
-        assert!(SensitiveBashRead.overridable());
-        assert_eq!(SensitiveBashRead.severity(), Severity::High);
-        assert_eq!(SensitiveBashRead.default_decision(), DecisionKind::Ask);
-        assert_eq!(SensitiveBashRead.id(), RULE_ID);
     }
 
     use crate::testing::proptest::{

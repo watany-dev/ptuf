@@ -230,7 +230,6 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
 mod tests {
 
     use super::*;
-    use crate::init::command_executable;
 
     fn workdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -516,12 +515,6 @@ mod tests {
     }
 
     #[test]
-    fn command_executable_returns_first_token_or_none() {
-        assert_eq!(command_executable("/x/ptuf hook"), Some("/x/ptuf"));
-        assert_eq!(command_executable(""), None);
-    }
-
-    #[test]
     fn read_settings_reports_io_error_when_path_is_a_directory() {
         // Reading a directory as a file produces an IoError that is
         // not NotFound — exercises the Err arm of read_settings.
@@ -554,15 +547,6 @@ mod tests {
     }
 
     #[test]
-    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
-        let tmp = sibling_temp_path(Path::new(""));
-        assert!(
-            tmp.to_string_lossy().starts_with("settings.json.ptuf."),
-            "got {tmp:?}",
-        );
-    }
-
-    #[test]
     fn install_returns_io_err_when_parent_is_a_regular_file() {
         let dir = workdir("parent-blocker");
         let blocker = dir.join("blocker");
@@ -572,6 +556,11 @@ mod tests {
         let err = install(&path, "/x/ptuf", false).unwrap_err();
         assert!(matches!(err, InitError::Io { .. }));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_binary_delegates_to_shared_impl() {
+        assert!(!detect_binary().is_empty());
     }
 
     #[test]

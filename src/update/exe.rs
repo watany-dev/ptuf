@@ -117,10 +117,11 @@ mod tests {
         let locator = RealExeLocator;
         let exe = locator.current_exe().expect("test runner has current_exe");
         assert!(exe.is_absolute());
+        let _ = locator.cargo_home();
     }
 
     #[test]
-    fn fake_exe_locator_round_trips_inputs() {
+    fn fake_exe_locator_delegates_to_configured_fields() {
         let locator = FakeExeLocator {
             exe: PathBuf::from("/tmp/ptuf"),
             cargo_home: Some(PathBuf::from("/tmp/.cargo")),
