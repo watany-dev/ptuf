@@ -225,41 +225,43 @@ mod tests {
     }
 
     #[test]
-    fn decision_exit_code_matrix_covers_codex_ask_demote() {
-        assert_eq!(
-            decision_exit_code(HookAgent::ClaudeCode, &Decision::Allow),
-            0
-        );
-        assert_eq!(
-            decision_exit_code(
-                HookAgent::ClaudeCode,
-                &Decision::Ask {
-                    rule_id: "x".into(),
-                    reason: "r".into()
-                }
-            ),
-            0
-        );
-        assert_eq!(
-            decision_exit_code(
-                HookAgent::Codex,
-                &Decision::Ask {
-                    rule_id: "x".into(),
-                    reason: "r".into()
-                }
-            ),
-            2
-        );
-        assert_eq!(
-            decision_exit_code(
-                HookAgent::ClaudeCode,
-                &Decision::Deny {
-                    rule_id: "x".into(),
-                    reason: "r".into()
-                }
-            ),
-            2
-        );
+    fn decision_exit_code_matrix_per_agent() {
+        let allow = Decision::Allow;
+        let monitor = Decision::Monitor {
+            rule_id: "x".into(),
+        };
+        let ask = Decision::Ask {
+            rule_id: "x".into(),
+            reason: "r".into(),
+        };
+        let deny = Decision::Deny {
+            rule_id: "x".into(),
+            reason: "r".into(),
+        };
+        let cases: &[(HookAgent, &Decision, u8)] = &[
+            (HookAgent::ClaudeCode, &allow, 0),
+            (HookAgent::ClaudeCode, &ask, 0),
+            (HookAgent::ClaudeCode, &deny, 2),
+            (HookAgent::Codex, &ask, 2),
+            (HookAgent::Kiro, &allow, 0),
+            (HookAgent::Kiro, &monitor, 0),
+            (HookAgent::Kiro, &ask, 2),
+            (HookAgent::Kiro, &deny, 2),
+            (HookAgent::Cline, &allow, 0),
+            (HookAgent::Cline, &ask, 0),
+            (HookAgent::Cline, &deny, 0),
+            (HookAgent::Cursor, &allow, 0),
+            (HookAgent::Cursor, &monitor, 0),
+            (HookAgent::Cursor, &ask, 0),
+            (HookAgent::Cursor, &deny, 2),
+        ];
+        for (agent, decision, expect) in cases {
+            assert_eq!(
+                decision_exit_code(*agent, decision),
+                *expect,
+                "agent={agent:?} decision={decision:?}"
+            );
+        }
     }
 
     #[test]
@@ -325,40 +327,6 @@ mod tests {
             reason: "r".into(),
         };
         assert!(render_hook_response(HookAgent::Kiro, &decision).is_none());
-    }
-
-    #[test]
-    fn decision_exit_code_kiro_matrix() {
-        assert_eq!(decision_exit_code(HookAgent::Kiro, &Decision::Allow), 0);
-        assert_eq!(
-            decision_exit_code(
-                HookAgent::Kiro,
-                &Decision::Monitor {
-                    rule_id: "x".into()
-                }
-            ),
-            0
-        );
-        assert_eq!(
-            decision_exit_code(
-                HookAgent::Kiro,
-                &Decision::Ask {
-                    rule_id: "x".into(),
-                    reason: "r".into()
-                }
-            ),
-            2
-        );
-        assert_eq!(
-            decision_exit_code(
-                HookAgent::Kiro,
-                &Decision::Deny {
-                    rule_id: "x".into(),
-                    reason: "r".into()
-                }
-            ),
-            2
-        );
     }
 
     #[test]
@@ -429,31 +397,6 @@ mod tests {
     }
 
     #[test]
-    fn decision_exit_code_cline_matrix() {
-        assert_eq!(decision_exit_code(HookAgent::Cline, &Decision::Allow), 0);
-        assert_eq!(
-            decision_exit_code(
-                HookAgent::Cline,
-                &Decision::Ask {
-                    rule_id: "x".into(),
-                    reason: "r".into()
-                }
-            ),
-            0
-        );
-        assert_eq!(
-            decision_exit_code(
-                HookAgent::Cline,
-                &Decision::Deny {
-                    rule_id: "x".into(),
-                    reason: "r".into()
-                }
-            ),
-            0
-        );
-    }
-
-    #[test]
     fn cursor_deny_emits_permission_json_with_exit_2() {
         let decision = Decision::Deny {
             rule_id: "core.filesystem.destructive-rm".into(),
@@ -512,40 +455,6 @@ mod tests {
             reason: "r".into(),
         };
         assert!(render_hook_response(HookAgent::Cursor, &decision).is_none());
-    }
-
-    #[test]
-    fn decision_exit_code_cursor_matrix() {
-        assert_eq!(decision_exit_code(HookAgent::Cursor, &Decision::Allow), 0);
-        assert_eq!(
-            decision_exit_code(
-                HookAgent::Cursor,
-                &Decision::Monitor {
-                    rule_id: "x".into()
-                }
-            ),
-            0
-        );
-        assert_eq!(
-            decision_exit_code(
-                HookAgent::Cursor,
-                &Decision::Ask {
-                    rule_id: "x".into(),
-                    reason: "r".into()
-                }
-            ),
-            0
-        );
-        assert_eq!(
-            decision_exit_code(
-                HookAgent::Cursor,
-                &Decision::Deny {
-                    rule_id: "x".into(),
-                    reason: "r".into()
-                }
-            ),
-            2
-        );
     }
 
     #[test]
