@@ -30,8 +30,8 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
 | [x] | `triple_nested_su_bash_c_surfaces_inner_rm` | `src/facts/shell.rs` `mod tests` | `su -c 'bash -c "su -c '\''rm -rf /'\''"'`（3 段） | `Argv.inner_argv` の最深 head に `rm` が含まれる **か**、取り逃しを文書化するなら `inner_argv` が空でないことと `chain <= 2` の上限を明示 |
-| [x] | `wrapper_triple_nested_su_rm_rf_root` | `tests/bypass/corpus.jsonl` + 既存 runner | 上記コマンドを `hook_input` に | **修正後**: `"kind":"must_catch","decision":"deny"`；**現状 pin**: `"kind":"known_gap","decision":"allow"` のどちらかを選び ADR / open-issues を同期 |
-| [x] | `engine_decide_triple_nested_su_allows_destructive` | `src/engine/mod.rs` `mod tests` | `Engine::builder()` + 上記 Bash | `destructive-rm` は発火せず `core.engine.dynamic-eval` の Ask（known_gap pin） |
+| [x] | `wrapper_triple_nested_su_rm_rf_root` | `tests/bypass/corpus.jsonl` + 既存 runner | 上記コマンドを `hook_input` に | `must_catch` + `deny` (ADR 0002 B3) |
+| [x] | `engine_decide_triple_nested_su_denies_destructive_rm` | `src/engine/mod.rs` `mod tests` | `Engine::builder()` + 上記 Bash | `destructive-rm` Deny (ADR 0002 B3) |
 
 ---
 

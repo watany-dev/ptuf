@@ -324,11 +324,15 @@ fn is_flag(a: &str) -> bool {
     a.starts_with('-') && a != "-" && a != "--"
 }
 
+/// Maximum depth for unrolling `bash -c` / `su -c` / `eval` / `xargs` /
+/// `find -exec` inner payloads. See ADR 0002 (B3).
+pub const NESTING_BUDGET: usize = 3;
+
 /// Parse a raw Bash command string into a [`Bash`] structure.
 ///
 /// Returns an empty `Bash` (no segments) for an entirely blank command.
 pub fn parse(command: &str) -> Bash {
-    parse_with_depth(command, 2)
+    parse_with_depth(command, NESTING_BUDGET)
 }
 
 fn parse_with_depth(command: &str, nesting_budget: usize) -> Bash {
@@ -1331,27 +1335,21 @@ mod tests {
     }
 
     #[test]
-    fn inner_argv_chain_one_above_budget_is_capped_at_two() {
-        let b = parse(r#"bash -c 'bash -c "bash -c \"rm -rf /\""'"#);
+    fn inner_argv_chain_one_above_budget_is_capped_at_three() {
+        let b = parse(r#"bash -c 'bash -c "bash -c \"bash -c \\\"rm -rf /\\\""'"'"#);
         let chain = deepest_inner_chain(&b.segments[0].commands[0]);
-        assert!(chain <= 2, "chain {chain} exceeded nesting_budget=2");
+        assert!(chain <= NESTING_BUDGET, "chain {chain} exceeded nesting_budget={NESTING_BUDGET}");
     }
 
     #[test]
     fn triple_nested_su_bash_c_surfaces_inner_rm() {
-        // Three privilege wrappers exceed `nesting_budget=2`; the innermost
-        // `rm` is not surfaced today — pin the budget cap and partial unroll.
         let cmd = r#"su -c 'bash -c "su -c '\''rm -rf /'\''"'"#;
         let b = parse(cmd);
         let outer = &b.segments[0].commands[0];
         let chain = deepest_inner_chain(outer);
         assert!(
-            chain <= 2,
-            "inner_argv chain {chain} must respect nesting_budget=2 cap"
-        );
-        assert!(
-            !outer.inner_argv.is_empty(),
-            "at least one wrapper hop must be unrolled into inner_argv"
+            chain <= NESTING_BUDGET,
+            "inner_argv chain {chain} must respect nesting_budget={NESTING_BUDGET} cap"
         );
         let heads: Vec<_> = b
             .commands()
@@ -1359,8 +1357,8 @@ mod tests {
             .map(|argv| argv.head.as_str())
             .collect();
         assert!(
-            !heads.contains(&"rm"),
-            "known gap: triple-nested su/bash hides rm from commands(); got {heads:?}"
+            heads.contains(&"rm"),
+            "triple-nested su/bash must surface rm via inner_argv; got {heads:?}"
         );
     }
 
@@ -1853,8 +1851,7 @@ mod tests {
         // testing.md L53-54: wrapper unrolling is bounded — even when
         // the source nests `bash -c` deeper than the budget, the parser
         // must terminate and the surfaced `inner_argv` chain must not
-        // exceed the static `nesting_budget` (currently 2, see
-        // `parse(...)` in this file).
+        // exceed the static `NESTING_BUDGET` (see `parse(...)` in this file).
         #[test]
         fn pbt_inner_argv_chain_is_bounded(cmd in bash_wrapper_nested(4)) {
             let b = parse(&cmd);
@@ -1862,8 +1859,8 @@ mod tests {
                 for argv in &pipe.commands {
                     let chain = deepest_inner_chain(argv);
                     prop_assert!(
-                        chain <= 2,
-                        "inner_argv chain {chain} exceeded nesting_budget=2",
+                        chain <= NESTING_BUDGET,
+                        "inner_argv chain {chain} exceeded nesting_budget={NESTING_BUDGET}",
                     );
                 }
             }

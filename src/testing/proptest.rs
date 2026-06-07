@@ -642,7 +642,7 @@ pub fn combined_short_opts() -> impl Strategy<Value = String> {
 /// Wrapper command nested up to `depth` levels deep using `bash -c`,
 /// `sh -c`, `eval`, or `xargs sh -c`. The innermost layer is a single
 /// safe head. Used to verify the bounded-depth `inner_argv` chain
-/// (the parser uses `nesting_budget = 2` from `parse_with_depth`,
+/// (the parser uses `NESTING_BUDGET = 3` from `parse_with_depth`,
 /// so chains never grow beyond two).
 pub fn bash_wrapper_nested(depth: usize) -> impl Strategy<Value = String> {
     let depth = depth.min(4);
