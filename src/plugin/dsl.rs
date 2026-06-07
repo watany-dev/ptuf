@@ -232,7 +232,6 @@ fn expect_string_list(key: &str, value: &Value) -> Result<Vec<String>, CompileEr
     Ok(out)
 }
 
-
 /// Walk one argv node and any nested `inner_argv` payloads, tracking whether a
 /// `from` head was seen before a matching `to` head in pipeline order.
 fn walk_argv_for_pipeline_from_to(

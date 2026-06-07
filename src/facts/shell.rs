@@ -1338,7 +1338,10 @@ mod tests {
     fn inner_argv_chain_one_above_budget_is_capped_at_three() {
         let b = parse(r#"bash -c 'bash -c "bash -c \"bash -c \\\"rm -rf /\\\""'"'"#);
         let chain = deepest_inner_chain(&b.segments[0].commands[0]);
-        assert!(chain <= NESTING_BUDGET, "chain {chain} exceeded nesting_budget={NESTING_BUDGET}");
+        assert!(
+            chain <= NESTING_BUDGET,
+            "chain {chain} exceeded nesting_budget={NESTING_BUDGET}"
+        );
     }
 
     #[test]
