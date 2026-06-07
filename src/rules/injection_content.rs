@@ -541,10 +541,16 @@ mod tests {
     }
 
     #[test]
+    fn metadata_matches_design() {
+        assert_eq!(InvisibleChars.id(), RULE_ID);
+        assert_eq!(InvisibleChars.severity(), Severity::High);
+        assert_eq!(InvisibleChars.default_decision(), DecisionKind::Ask);
+        assert!(InvisibleChars.overridable());
+        assert!(!InvisibleChars.hard_deny());
+    }
+
+    #[test]
     fn reason_names_category_and_line() {
-        let rule: &dyn ConfigRule = &InvisibleChars;
-        assert_eq!(rule.severity(), Severity::High);
-        assert_eq!(rule.default_decision(), DecisionKind::Ask);
         let finding = Finding {
             category: Category::BidiControl,
             codepoint: 0x202E,

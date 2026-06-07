@@ -321,6 +321,15 @@ mod tests {
         assert!(SensitiveBashRead.evaluate(&facts, &input).is_none());
     }
 
+    #[test]
+    fn metadata_matches_design() {
+        assert!(!SensitiveBashRead.hard_deny());
+        assert!(SensitiveBashRead.overridable());
+        assert_eq!(SensitiveBashRead.severity(), Severity::High);
+        assert_eq!(SensitiveBashRead.default_decision(), DecisionKind::Ask);
+        assert_eq!(SensitiveBashRead.id(), RULE_ID);
+    }
+
     use crate::testing::proptest::{
         arbitrary_command, bash_command, bash_reader_brace_dotenv_command, dotenv_brace_token,
         non_bash_hook_input,

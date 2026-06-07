@@ -92,11 +92,32 @@ mod tests {
     }
 
     #[test]
+    fn denies_read_of_ssh_key() {
+        let input = read("~/.ssh/id_ed25519");
+        let facts = crate::facts::extract(&input);
+        let d = SensitiveRead.evaluate(&facts, &input);
+        assert!(matches!(
+            d,
+            Some(Decision::Deny { ref rule_id, .. }) if rule_id == RULE_ID
+        ));
+    }
+
+    #[test]
     fn denies_edit_of_dotenv() {
         let input = edit("/repo/.env.production", "API_KEY=value");
         let facts = crate::facts::extract(&input);
         let d = SensitiveRead.evaluate(&facts, &input);
         assert!(matches!(d, Some(Decision::Deny { .. })));
+    }
+
+    #[test]
+    fn denies_read_of_aws_credentials() {
+        let input = read("~/.aws/credentials");
+        let facts = crate::facts::extract(&input);
+        assert!(matches!(
+            SensitiveRead.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
     }
 
     #[test]
@@ -193,6 +214,14 @@ mod tests {
         };
         let facts = crate::facts::extract(&input);
         assert!(SensitiveRead.evaluate(&facts, &input).is_none());
+    }
+
+    #[test]
+    fn metadata_matches_design() {
+        assert!(SensitiveRead.hard_deny());
+        assert_eq!(SensitiveRead.severity(), Severity::High);
+        assert_eq!(SensitiveRead.default_decision(), DecisionKind::Deny);
+        assert_eq!(SensitiveRead.id(), RULE_ID);
     }
 
     #[test]

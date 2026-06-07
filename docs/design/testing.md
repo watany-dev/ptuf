@@ -83,14 +83,20 @@ ClaudeCode / Copilot / Kiro / Cline の各 adapter parser と CLI hook entry
 point は、外部 agent との信頼境界として以下の不変を持つ。
 
 - `arbitrary_utf8_bytes()` から生成した任意のバイト列を `run` 関数に
-  ClaudeCode adapter として流すと、必ず exit `0`/`1`/`2` のいずれかを
-  返し panic しない。exit `2` の場合は stdout に
-  `"permissionDecision":"deny"` を含む (`src/cli/run.rs` の
-  `pbt_run_hook_fails_closed_for_arbitrary_stdin`)
+  各 adapter として流すと panic しない。Claude Code / Cursor は exit
+  `0`/`1`/`2` のいずれかで、invalid payload 時は exit `2` + deny
+  envelope。Copilot は常に exit `0`/`1`（invalid payload も exit `0` +
+  bare deny）。Kiro は exit `0`/`1`/`2`（invalid payload 時は exit `2` +
+  stdout 空 + stderr reason）。対応 PBT:
+  `pbt_run_hook_fails_closed_for_arbitrary_stdin` (Claude Code),
+  `pbt_cursor_run_hook_fails_closed_for_arbitrary_stdin`,
+  `pbt_copilot_run_hook_fails_closed_for_arbitrary_stdin`,
+  `pbt_kiro_run_hook_fails_closed_for_arbitrary_stdin` (`src/cli/run.rs`)
 - `copilot_input::parse` / `kiro_input::parse` / `cline_input::parse` /
-  `cursor_input::parse` は任意の `&str` に対し `Ok` / `Err(ParseProblem |
-  KiroInputError | ClineInputError | CursorInputError)` を返し panic しない
-  (`pbt_parse_is_total_on_arbitrary_utf8`)
+  `cursor_input::parse` はいずれも任意の `&str` に対し `Ok` / 構造化
+  `Err(...)` を返し panic しない。trust boundary ごとに
+  `pbt_parse_is_total_on_arbitrary_utf8` を各 adapter module が保持する
+  （dedupe しない）
 - 非 object / `toolName`/`tool_name` 欠落 / Kiro の `hook_event_name !=
   "preToolUse"` / Cline の `tool_call`・`preToolUse` 双方欠落や非対応
   `hookName` といった各異常 envelope は対応する parser error variant を
@@ -138,7 +144,7 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   10 worker × 100 並列 hook + 単一 audit JSONL の flock 整合性、
   `/etc/ptuf` から project local まで 4 層 + plugin + audit を tempdir に
   組み上げた end-to-end。後半 4 軸はクラッシュ / ハング / 遅延を回帰検出
-  する: 5 adapter (claude-code / codex / copilot / kiro / cline) の出力契約
+  する: 6 adapter (claude-code / codex / copilot / kiro / cline / cursor) の出力契約
   parity、病的入力 (非 UTF-8 / NUL / 深いネスト JSON・bash / 打ち切り
   envelope / 巨大 secret 列) を fail-closed で弾くか、per-call latency 予算、
   `check` / `plugin check` / `init` / `update` subcommand の連続 / 敵対的

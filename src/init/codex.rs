@@ -891,12 +891,33 @@ mod tests {
     }
 
     #[test]
+    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
+        let p = Path::new("/");
+        let tmp = sibling_temp_path(p);
+        assert!(
+            tmp.to_string_lossy().contains("hooks.json.ptuf."),
+            "missing file_name must default to hooks.json: {tmp:?}"
+        );
+    }
+
+    #[test]
     fn write_json_atomically_propagates_rename_error_when_target_is_a_directory() {
         let dir = workdir("write-json-rename-dir");
         let target = dir.join("hooks.json");
         fs::create_dir_all(&target).unwrap();
         let err =
             write_json_atomically(&target, &json!({})).expect_err("rename onto dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_json_atomically_propagates_write_error_when_temp_path_is_a_directory() {
+        let dir = workdir("write-json-tmp-collision");
+        let target = dir.join("hooks.json");
+        let collision = dir.join(format!("hooks.json.ptuf.{}.tmp", std::process::id()));
+        fs::create_dir_all(&collision).unwrap();
+        let err = write_json_atomically(&target, &json!({})).expect_err("write onto dir must fail");
         assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
         let _ = fs::remove_dir_all(&dir);
     }

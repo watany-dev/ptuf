@@ -529,6 +529,24 @@ fn cursor_ask_is_preserved_not_demoted_and_exit_zero() {
 }
 
 #[test]
+fn cursor_ask_from_builtin_git_rule_is_preserved_not_demoted() {
+    let payload = r#"{"hook_event_name":"beforeShellExecution","command":"git reset --hard HEAD~3","cwd":"/tmp"}"#;
+    let (code, stdout, _stderr) = run(&["hook", "cursor"], payload);
+    assert_eq!(code, 0, "Cursor preserves Ask without demotion: exit 0");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid hook json");
+    assert_eq!(
+        value["permission"], "ask",
+        "Cursor must not demote Ask to Deny: {stdout}",
+    );
+    assert!(
+        value["agent_message"]
+            .as_str()
+            .is_some_and(|m| m.contains("core.git.reset-hard")),
+        "stdout: {stdout}",
+    );
+}
+
+#[test]
 fn cursor_allow_outputs_explicit_allow_and_exit_zero() {
     let payload = r#"{"hook_event_name":"beforeShellExecution","command":"ls","cwd":"/tmp"}"#;
     let (code, stdout, stderr) = run(&["hook", "cursor"], payload);

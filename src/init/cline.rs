@@ -260,6 +260,16 @@ mod tests {
     }
 
     #[test]
+    fn cline_hook_file_name_matches_platform() {
+        let name = cline_hook_file_name();
+        if cfg!(windows) {
+            assert_eq!(name, "PreToolUse.ps1");
+        } else {
+            assert_eq!(name, "PreToolUse");
+        }
+    }
+
+    #[test]
     fn install_writes_wrapper_with_marker_and_hook_command() {
         let dir = workdir("install-marker");
         let targets = repo_targets(&dir);

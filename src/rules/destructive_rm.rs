@@ -167,6 +167,36 @@ mod tests {
     }
 
     #[test]
+    fn denies_rm_rf_home_tilde() {
+        assert_deny("rm -rf ~");
+        assert_deny("rm -rf ~/");
+    }
+
+    #[test]
+    fn denies_rm_rf_home_envvar() {
+        assert_deny("rm -rf $HOME");
+        assert_deny("rm -rf ${HOME}");
+        assert_deny(r#"rm -rf "${HOME}""#);
+        assert_deny("rm -rf '$HOME'");
+    }
+
+    #[test]
+    fn denies_rm_rf_root_glob() {
+        assert_deny("rm -rf /*");
+    }
+
+    #[test]
+    fn denies_rm_rf_system_paths() {
+        for path in [
+            "/etc", "/usr", "/var", "/bin", "/boot", "/lib", "/lib32", "/lib64", "/sbin", "/opt",
+            "/root", "/sys", "/proc",
+        ] {
+            assert_deny(&format!("rm -rf {path}"));
+            assert_deny(&format!("rm -rf {path}/something"));
+        }
+    }
+
+    #[test]
     fn allows_lookalike_system_paths() {
         // Each target shares a prefix with a SYSTEM_ROOTS entry but is
         // not itself a member or a `{root}/` subpath. The rule uses
@@ -192,6 +222,43 @@ mod tests {
     fn denies_home_targets_with_trailing_slash() {
         assert_deny("rm -rf $HOME/");
         assert_deny("rm -rf ${HOME}/");
+    }
+
+    #[test]
+    fn denies_alternate_flag_orderings() {
+        assert_deny("rm -fr /");
+        assert_deny("rm -rfv /");
+        assert_deny("rm -vrf /");
+        assert_deny("rm --recursive --force /");
+        assert_deny("rm --force --recursive /");
+    }
+
+    #[test]
+    fn denies_separated_lowercase_short_flags() {
+        assert_deny("rm -r -f /");
+        assert_deny("rm -f -r /");
+    }
+
+    #[test]
+    fn denies_uppercase_recursive_flag() {
+        assert_deny("rm -Rf /");
+        assert_deny("rm -fR /");
+        assert_deny("rm -R -f /");
+        assert_deny("rm -f -R /");
+        assert_deny("rm -Rfv /etc");
+        assert_deny("rm -vRf /etc");
+        assert_deny("rm -fRv /");
+        assert_deny("rm -vfR /");
+    }
+
+    #[test]
+    fn denies_mixed_long_and_short_flags() {
+        assert_deny("rm --recursive -f /");
+        assert_deny("rm -r --force /");
+        assert_deny("rm --force -r /");
+        assert_deny("rm -R --force /usr");
+        assert_deny("rm -f --recursive /");
+        assert_deny("rm --force -R /");
     }
 
     #[test]
@@ -329,7 +396,21 @@ mod tests {
                 Just("~"),
                 Just("~/"),
                 Just("$HOME"),
+                Just("${HOME}"),
+                Just("\"${HOME}\""),
+                Just("'$HOME'"),
                 Just("/etc"),
+                Just("/usr"),
+                Just("/var"),
+                Just("/bin"),
+                Just("/boot"),
+                Just("/lib"),
+                Just("/lib32"),
+                Just("/lib64"),
+                Just("/opt"),
+                Just("/root"),
+                Just("/sys"),
+                Just("/proc"),
                 Just("/usr/local-fake/junk"),
                 Just("/proc/sys"),
                 Just("/sbin"),
@@ -344,6 +425,30 @@ mod tests {
             } else {
                 format!("{head} {force} {rec} {target}")
             };
+            let input = bash(&cmd);
+            let result = evaluate_for(&input);
+            prop_assert!(
+                matches!(&result, Some(Decision::Deny { rule_id, .. }) if rule_id == RULE_ID),
+                "expected deny for {cmd:?}, got {result:?}",
+            );
+        }
+
+        // Bundled short flags (`-Rf`, `-fR`, verbose permutations) must
+        // not slip past a refactor that only recognises separated tokens.
+        #[test]
+        fn pbt_bundled_destructive_flags_deny(
+            head_idx in 0usize..3,
+            bundle_idx in 0usize..8,
+            target in prop_oneof![
+                Just("/"),
+                Just("/etc"),
+                Just("~"),
+                Just("$HOME"),
+            ],
+        ) {
+            let head = ["rm", "/bin/rm", "/usr/bin/rm"][head_idx];
+            let bundle = ["-Rf", "-fR", "-rfv", "-vRf", "-Rfv", "-fRv", "-vfR", "-fr"][bundle_idx];
+            let cmd = format!("{head} {bundle} {target}");
             let input = bash(&cmd);
             let result = evaluate_for(&input);
             prop_assert!(

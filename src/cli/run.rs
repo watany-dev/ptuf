@@ -1684,5 +1684,119 @@ rules:
                 ),
             }
         }
+
+        // Cursor adapter: arbitrary stdin must never panic. Invalid
+        // payloads fail-closed with exit 2 and a bare `"permission":"deny"`
+        // envelope.
+        #[test]
+        fn pbt_cursor_run_hook_fails_closed_for_arbitrary_stdin(
+            bytes in arbitrary_utf8_bytes(),
+        ) {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = run(
+                GlobalFlags::default(),
+                Command::HookPreToolUse {
+                    agent: HookAgent::Cursor,
+                },
+                bytes.as_slice(),
+                &mut out,
+                &mut err,
+            );
+            let out_s = String::from_utf8_lossy(&out);
+            let err_s = String::from_utf8_lossy(&err);
+            match code {
+                0 | 1 => {
+                    prop_assert!(
+                        !err_s.contains(INVALID_PAYLOAD_RULE),
+                        "exit {code} but stderr mentions invalid payload: {err_s}",
+                    );
+                },
+                2 => {
+                    prop_assert!(
+                        out_s.contains("\"permission\":\"deny\""),
+                        "exit 2 must produce a Cursor deny envelope: stdout={out_s} stderr={err_s}",
+                    );
+                },
+                other => prop_assert!(
+                    false,
+                    "unexpected exit code {other}: stdout={out_s} stderr={err_s}",
+                ),
+            }
+        }
+
+        // Copilot adapter: invalid payloads fail-closed on exit 0 with a
+        // bare `"permissionDecision":"deny"` envelope (never a non-zero exit).
+        #[test]
+        fn pbt_copilot_run_hook_fails_closed_for_arbitrary_stdin(
+            bytes in arbitrary_utf8_bytes(),
+        ) {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = run(
+                GlobalFlags::default(),
+                Command::HookPreToolUse {
+                    agent: HookAgent::Copilot,
+                },
+                bytes.as_slice(),
+                &mut out,
+                &mut err,
+            );
+            let out_s = String::from_utf8_lossy(&out);
+            let err_s = String::from_utf8_lossy(&err);
+            prop_assert!(
+                code == 0 || code == 1,
+                "Copilot must never exit non-zero: code={code} stdout={out_s} stderr={err_s}",
+            );
+            if err_s.contains(INVALID_PAYLOAD_RULE) {
+                prop_assert!(
+                    out_s.contains("\"permissionDecision\":\"deny\""),
+                    "invalid payload must emit deny envelope: stdout={out_s} stderr={err_s}",
+                );
+            }
+        }
+
+        // Kiro adapter: invalid payloads fail-closed on exit 2 with stderr
+        // reason only (no JSON envelope on stdout).
+        #[test]
+        fn pbt_kiro_run_hook_fails_closed_for_arbitrary_stdin(
+            bytes in arbitrary_utf8_bytes(),
+        ) {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = run(
+                GlobalFlags::default(),
+                Command::HookPreToolUse {
+                    agent: HookAgent::Kiro,
+                },
+                bytes.as_slice(),
+                &mut out,
+                &mut err,
+            );
+            let out_s = String::from_utf8_lossy(&out);
+            let err_s = String::from_utf8_lossy(&err);
+            match code {
+                0 | 1 => {
+                    prop_assert!(
+                        !err_s.contains(INVALID_PAYLOAD_RULE),
+                        "exit {code} but stderr mentions invalid payload: {err_s}",
+                    );
+                },
+                2 => {
+                    prop_assert!(
+                        out_s.is_empty(),
+                        "Kiro deny must not write stdout: {out_s}",
+                    );
+                    prop_assert!(
+                        err_s.contains(INVALID_PAYLOAD_RULE),
+                        "exit 2 must mention invalid payload on stderr: {err_s}",
+                    );
+                },
+                other => prop_assert!(
+                    false,
+                    "unexpected exit code {other}: stdout={out_s} stderr={err_s}",
+                ),
+            }
+        }
     }
 }
