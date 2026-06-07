@@ -42,11 +42,8 @@ opaque な flag surface として扱う点に限定される。
 残存ギャップ (P2) の回帰テスト追加タスクは
 [substantive-test-checklist.md](substantive-test-checklist.md)（テスト名・期待 assert 付き）を参照。
 
-- 権限昇格ラッパーのネストは `nesting_budget = 2` の範囲のみ剥がす。
-  3 段超 (`su -c 'bash -c "su -c ..."'`) は最深層を取り逃す。
-- plugin DSL の `shell.pipeline` (`ShellPipelineFromTo`) は `pipe.commands`
-  を直走査するため `inner_argv` が見えず、`su -c '... | sink'` 経由の
-  pipeline を捕捉できない (prefix ラッパーは対応済み)。
+- 権限昇格ラッパーのネストは `nesting_budget = 3` まで展開する。
+  4 段超は最深層を取り逃す (`tests/bypass/corpus.jsonl` で上限を pin)。
 
 (§3.3 / §3.5 は解消済み。`Bash::has_command_substitution`
 で command substitution を pessimistic 扱いに surface できるようになった。
