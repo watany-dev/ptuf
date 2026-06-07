@@ -110,9 +110,9 @@ fn is_destructive_target(arg: &str) -> bool {
     normalized == "/"
         || normalized == "/*"
         || HOME_TARGETS.contains(&normalized.as_str())
-        || SYSTEM_ROOTS.iter().any(|root| {
-            normalized == *root || normalized.starts_with(&format!("{root}/"))
-        })
+        || SYSTEM_ROOTS
+            .iter()
+            .any(|root| normalized == *root || normalized.starts_with(&format!("{root}/")))
 }
 
 /// Collapse POSIX duplicate slashes and trim a trailing `/` before
@@ -226,7 +226,7 @@ mod tests {
         assert_deny("rm -rf /tmp/foo/../etc/passwd");
     }
 
-        #[test]
+    #[test]
     fn denies_rm_rf_system_paths() {
         for path in [
             "/etc", "/usr", "/var", "/bin", "/boot", "/lib", "/lib32", "/lib64", "/sbin", "/opt",
