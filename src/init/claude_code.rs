@@ -547,6 +547,15 @@ mod tests {
     }
 
     #[test]
+    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
+        let tmp = sibling_temp_path(Path::new(""));
+        assert!(
+            tmp.to_string_lossy().starts_with("settings.json.ptuf."),
+            "got {tmp:?}",
+        );
+    }
+
+    #[test]
     fn install_returns_io_err_when_parent_is_a_regular_file() {
         let dir = workdir("parent-blocker");
         let blocker = dir.join("blocker");

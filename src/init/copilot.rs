@@ -555,6 +555,16 @@ mod tests {
     }
 
     #[test]
+    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
+        let p = Path::new("/");
+        let tmp = sibling_temp_path(p);
+        assert!(
+            tmp.to_string_lossy().contains("ptuf.json.ptuf."),
+            "missing file_name must default to ptuf.json: {tmp:?}"
+        );
+    }
+
+    #[test]
     fn install_returns_io_error_when_parent_directory_cannot_be_created() {
         let dir = workdir("io-parent");
         let blocker = dir.join("blocker");

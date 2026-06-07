@@ -537,4 +537,18 @@ mod tests {
         };
         assert!(render_hook_response(HookAgent::Copilot, &decision).is_none());
     }
+
+    #[test]
+    fn emit_decision_serialization_failure_returns_one() {
+        let decision = Decision::Deny {
+            rule_id: "core.test.deny".into(),
+            reason: "blocked".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::ClaudeCode, &decision, &mut out, &mut err);
+        assert_eq!(code, 2);
+        assert!(String::from_utf8_lossy(&out).contains("\"permissionDecision\":\"deny\""));
+        assert!(String::from_utf8_lossy(&err).contains("blocked"));
+    }
 }

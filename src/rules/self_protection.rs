@@ -205,6 +205,34 @@ mod tests {
     }
 
     #[test]
+    fn rules_carry_hard_deny_critical_metadata() {
+        for rule in [
+            &BINARY_RULE,
+            &CONFIG_RULE,
+            &PLUGIN_RULE,
+            &CLAUDE_SETTINGS_RULE,
+            &CODEX_SETTINGS_RULE,
+            &HOOK_SCRIPT_RULE,
+            &COPILOT_SETTINGS_RULE,
+            &KIRO_SETTINGS_RULE,
+        ] {
+            assert!(rule.hard_deny(), "{} must be hard_deny", rule.id());
+            assert_eq!(
+                rule.severity(),
+                Severity::Critical,
+                "{} must be Severity::Critical",
+                rule.id()
+            );
+            assert_eq!(
+                rule.default_decision(),
+                DecisionKind::Deny,
+                "{} must default to Deny",
+                rule.id()
+            );
+        }
+    }
+
+    #[test]
     fn reason_includes_rule_id_and_alternatives() {
         assert_eq!(BINARY_RULE.default_decision(), DecisionKind::Deny);
         let facts = facts_with(&[ProtectedKind::Binary]);
@@ -213,6 +241,22 @@ mod tests {
         let reason = d.reason().expect("reason for deny");
         assert!(reason.contains("core.self_protection.binary"));
         assert!(reason.contains("Safer alternative"));
+    }
+
+    #[test]
+    fn rule_ids_are_kebab_case_under_self_protection() {
+        for id in [
+            BINARY_RULE.id(),
+            CONFIG_RULE.id(),
+            PLUGIN_RULE.id(),
+            CLAUDE_SETTINGS_RULE.id(),
+            CODEX_SETTINGS_RULE.id(),
+            HOOK_SCRIPT_RULE.id(),
+            COPILOT_SETTINGS_RULE.id(),
+            KIRO_SETTINGS_RULE.id(),
+        ] {
+            assert!(id.starts_with("core.self_protection."), "id was {id}");
+        }
     }
 
     use crate::testing::proptest::{protected_kind, richer_hook_input};

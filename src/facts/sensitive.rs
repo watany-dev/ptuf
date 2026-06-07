@@ -262,6 +262,13 @@ mod tests {
         assert!(m.raw.contains(".env"));
     }
 
+    #[test]
+    fn multiple_kinds_can_match_one_token() {
+        let ms = classify("~/.ssh/id_rsa");
+        assert!(ms.iter().any(|m| m.kind == SensitiveKind::SshDir));
+        assert!(ms.iter().any(|m| m.kind == SensitiveKind::PrivateKeyFile));
+    }
+
     use crate::testing::proptest::sensitive_kind;
     use proptest::prelude::*;
 

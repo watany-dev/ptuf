@@ -643,12 +643,12 @@ mod full_config_stack {
 // Axis 5: cross-adapter parity — every agent's native shape end-to-end
 // ---------------------------------------------------------------------
 
-/// Drives all five adapters (claude-code / codex / copilot / kiro /
-/// cline) through real process boundaries in their native payload
+/// Drives all six adapters (claude-code / codex / copilot / kiro /
+/// cline / cursor) through real process boundaries in their native payload
 /// shapes and pins the per-agent exit-code and stdout/stderr contract
 /// from `docs/design/cli-and-hooks.md`. The leak / concurrent / giant
 /// axes only ever exercise `claude-code`; this axis guards the other
-/// four against silent contract drift.
+/// five against silent contract drift.
 mod adapter_parity {
     use super::common::{SpawnConfig, SpawnOutcome, assert_clean_exit, spawn};
 
@@ -660,6 +660,9 @@ mod adapter_parity {
     const CLINE_DENY: &[u8] = br#"{"hookName":"tool_call","tool_call":{"id":"c1","name":"execute_command","input":{"command":"rm -rf /"}}}"#;
     const CLINE_ALLOW: &[u8] = br#"{"hookName":"tool_call","tool_call":{"id":"c1","name":"execute_command","input":{"command":"ls"}}}"#;
     const CLINE_LEGACY_DENY: &[u8] = br#"{"hookName":"PreToolUse","preToolUse":{"toolName":"execute_command","parameters":{"command":"rm -rf /"}}}"#;
+    const CURSOR_DENY: &[u8] = br#"{"hook_event_name":"preToolUse","tool_name":"Shell","tool_input":{"command":"rm -rf /"},"cwd":"/tmp"}"#;
+    const CURSOR_ALLOW: &[u8] =
+        br#"{"hook_event_name":"beforeShellExecution","command":"ls","cwd":"/tmp"}"#;
 
     fn hook(agent: &str, stdin: &[u8]) -> SpawnOutcome {
         spawn(&SpawnConfig {
@@ -727,6 +730,20 @@ mod adapter_parity {
             "kiro deny reason must be on stderr"
         );
 
+        // Cursor: exit 2, bare permission envelope (no hookSpecificOutput wrap).
+        let r = hook("cursor", CURSOR_DENY);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 2, "cursor deny: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(
+            out.contains(r#""permission":"deny""#),
+            "cursor stdout: {out}"
+        );
+        assert!(
+            !out.contains("hookSpecificOutput"),
+            "cursor must emit a bare envelope: {out}"
+        );
+
         // Cline: exit 0, cancel-envelope JSON on stdout.
         let r = hook("cline", CLINE_DENY);
         assert_clean_exit(&r);
@@ -773,6 +790,16 @@ mod adapter_parity {
             r.stderr_string().trim().is_empty(),
             "kiro allow stderr must be empty: {}",
             r.stderr_string()
+        );
+
+        // Cursor: exit 0, explicit allow envelope.
+        let r = hook("cursor", CURSOR_ALLOW);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 0, "cursor allow: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(
+            out.contains(r#""permission":"allow""#),
+            "cursor stdout: {out}"
         );
 
         // Cline: exit 0, empty-object `{}` on stdout.
@@ -1383,7 +1410,7 @@ rules:
         let dir = tempfile::tempdir().expect("tempdir");
         let repo = dir.path();
         std::fs::create_dir_all(repo.join(".git")).expect("mkdir .git");
-        for agent in ["claude-code", "codex", "copilot", "kiro", "cline"] {
+        for agent in ["claude-code", "codex", "copilot", "kiro", "cline", "cursor"] {
             for round in 0..ROUNDS {
                 let r = spawn(&SpawnConfig {
                     args: &["init", agent, "--dry-run"],
