@@ -270,23 +270,20 @@ mod tests {
     }
 
     #[test]
-    fn config_error_source_returns_io_for_io_variant() {
-        let err = ConfigError::Io {
+    fn config_error_source_maps_variants() {
+        let io_err = ConfigError::Io {
             path: PathBuf::from("/x"),
             source: io::Error::other("boom"),
         };
-        let dyn_err: &dyn std::error::Error = &err;
-        assert!(dyn_err.source().is_some());
-    }
+        let dyn_io: &dyn std::error::Error = &io_err;
+        assert!(dyn_io.source().is_some());
 
-    #[test]
-    fn config_error_source_returns_none_for_yaml_variant() {
-        let err = ConfigError::Yaml {
+        let yaml_err = ConfigError::Yaml {
             path: PathBuf::from("/x"),
             message: "broken".into(),
         };
-        let dyn_err: &dyn std::error::Error = &err;
-        assert!(dyn_err.source().is_none());
+        let dyn_yaml: &dyn std::error::Error = &yaml_err;
+        assert!(dyn_yaml.source().is_none());
     }
 
     #[test]

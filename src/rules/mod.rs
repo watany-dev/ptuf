@@ -269,7 +269,12 @@ mod tests {
         // forces dynamic dispatch; otherwise the compiler can inline
         // the static-impl bodies and their lines never appear in the
         // coverage report.
-        let r: &dyn ConfigRule = &MinimalRule;
+        let concrete = MinimalRule;
+        assert_eq!(concrete.severity(), Severity::Medium);
+        assert_eq!(concrete.default_decision(), DecisionKind::Deny);
+        assert!(concrete.overridable());
+        assert!(!concrete.hard_deny());
+        let r: &dyn ConfigRule = &concrete;
         assert_eq!(r.severity(), Severity::Medium);
         assert_eq!(r.default_decision(), DecisionKind::Deny);
         assert!(r.overridable());

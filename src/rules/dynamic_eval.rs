@@ -190,40 +190,24 @@ mod tests {
     }
 
     #[test]
-    fn asks_on_sh_dash_c() {
-        assert_ask("sh -c 'rm -rf /'");
+    fn asks_on_interpreter_dash_eval_flags() {
+        for cmd in [
+            "sh -c 'rm -rf /'",
+            "python -c 'import os; os.system(\"id\")'",
+            "python3 -c 'print(1)'",
+            "node -e 'console.log(1)'",
+            "perl -e 'print 1'",
+            "ruby -e 'puts 1'",
+            "ruby -c file.rb",
+        ] {
+            assert_ask(cmd);
+        }
     }
 
     #[test]
     fn asks_on_combined_shell_short_options() {
         assert_ask("bash -lc 'echo hi'");
         assert_ask("sh -ec 'echo hi'");
-    }
-
-    #[test]
-    fn asks_on_python_dash_c() {
-        assert_ask("python -c 'import os; os.system(\"id\")'");
-        assert_ask("python3 -c 'print(1)'");
-    }
-
-    #[test]
-    fn asks_on_node_dash_e() {
-        assert_ask("node -e 'console.log(1)'");
-    }
-
-    #[test]
-    fn asks_on_perl_dash_e() {
-        assert_ask("perl -e 'print 1'");
-    }
-
-    #[test]
-    fn asks_on_ruby_dash_e() {
-        assert_ask("ruby -e 'puts 1'");
-    }
-
-    #[test]
-    fn asks_on_ruby_dash_c() {
-        assert_ask("ruby -c file.rb");
     }
 
     #[test]

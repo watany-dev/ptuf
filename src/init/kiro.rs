@@ -695,6 +695,11 @@ mod tests {
     }
 
     #[test]
+    fn detect_binary_delegates_to_shared_impl() {
+        assert!(!detect_binary().is_empty());
+    }
+
+    #[test]
     fn install_creates_new_local_config_with_default_template() {
         let dir = workdir("install-local");
         let path = dir.join(".kiro/agents/ptuf-guarded.json");
@@ -943,15 +948,12 @@ mod tests {
 
     #[test]
     fn write_json_atomically_propagates_rename_error_when_target_is_a_directory() {
-        let dir = workdir("rename-blocked");
-        let target = dir.join("target");
+        let dir = workdir("kiro-write-json-rename-dir");
+        let target = dir.join("ptuf-guarded.json");
         fs::create_dir_all(&target).unwrap();
         let err = write_json_atomically(&target, &json!({"x": 1}))
             .expect_err("rename onto dir must fail");
-        assert!(
-            matches!(err, InitError::Io { .. }),
-            "expected Io, got {err:?}"
-        );
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 

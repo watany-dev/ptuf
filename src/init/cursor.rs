@@ -333,6 +333,11 @@ mod tests {
     }
 
     #[test]
+    fn detect_binary_delegates_to_shared_impl() {
+        assert!(!detect_binary().is_empty());
+    }
+
+    #[test]
     fn resolve_paths_local_requires_repo_root() {
         let err = resolve_paths_with(None, None, &CursorInitOptions::default()).unwrap_err();
         assert!(matches!(err, InitError::RepoRootNotFound));

@@ -95,28 +95,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_simple_https_url() {
-        let u = parse("https://example.com/foo").unwrap();
-        assert_eq!(u.scheme, "https");
-        assert_eq!(u.host, "example.com");
-        assert_eq!(u.port, None);
-        assert_eq!(u.path, "/foo");
-        assert_eq!(u.raw, "https://example.com/foo");
-    }
-
-    #[test]
-    fn parses_url_without_path() {
-        let u = parse("http://example.com").unwrap();
-        assert_eq!(u.host, "example.com");
-        assert_eq!(u.path, "");
-    }
-
-    #[test]
-    fn parses_url_with_port() {
-        let u = parse("http://localhost:8080/admin").unwrap();
-        assert_eq!(u.host, "localhost");
-        assert_eq!(u.port, Some(8080));
-        assert_eq!(u.path, "/admin");
+    fn parses_https_and_http_url_shapes() {
+        let cases = [
+            (
+                "https://example.com/foo",
+                "https",
+                "example.com",
+                None,
+                "/foo",
+            ),
+            ("http://example.com", "http", "example.com", None, ""),
+            (
+                "http://localhost:8080/admin",
+                "http",
+                "localhost",
+                Some(8080),
+                "/admin",
+            ),
+            (
+                "http://169.254.169.254/latest/meta-data/",
+                "http",
+                "169.254.169.254",
+                None,
+                "/latest/meta-data/",
+            ),
+        ];
+        for (raw, scheme, host, port, path) in cases {
+            let u = parse(raw).unwrap();
+            assert_eq!(u.scheme, scheme, "raw={raw}");
+            assert_eq!(u.host, host, "raw={raw}");
+            assert_eq!(u.port, port, "raw={raw}");
+            assert_eq!(u.path, path, "raw={raw}");
+            assert_eq!(u.raw, raw);
+        }
     }
 
     #[test]
@@ -126,13 +137,6 @@ mod tests {
         assert_eq!(u.host, "example.com");
         // Path keeps its case.
         assert_eq!(u.path, "/Path");
-    }
-
-    #[test]
-    fn parses_cloud_metadata_endpoint() {
-        let u = parse("http://169.254.169.254/latest/meta-data/").unwrap();
-        assert_eq!(u.host, "169.254.169.254");
-        assert_eq!(u.path, "/latest/meta-data/");
     }
 
     #[test]

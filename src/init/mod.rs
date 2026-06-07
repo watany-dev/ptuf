@@ -461,15 +461,11 @@ mod tests {
             )
             .contains("not managed by ptuf")
         );
-    }
-
-    #[test]
-    fn init_error_source_exposes_io_only() {
-        let err = InitError::Io {
+        let io_err = InitError::Io {
             path: PathBuf::from("/p"),
             source: std::io::Error::other("x"),
         };
-        assert!(std::error::Error::source(&err).is_some());
+        assert!(std::error::Error::source(&io_err).is_some());
         assert!(std::error::Error::source(&InitError::HomeNotSet).is_none());
     }
 
@@ -652,6 +648,13 @@ mod tests {
     }
 
     #[test]
+    fn command_executable_returns_first_token_or_none() {
+        assert_eq!(command_executable("/x/ptuf hook"), Some("/x/ptuf"));
+        assert_eq!(command_executable("/x/ptuf hook codex"), Some("/x/ptuf"));
+        assert_eq!(command_executable(""), None);
+    }
+
+    #[test]
     fn detect_binary_impl_returns_a_non_empty_string() {
         // Every adapter's `detect_binary` delegates here; a non-empty
         // string is the contract the host config writers depend on.
@@ -704,6 +707,32 @@ mod tests {
         let tmp = sibling_temp_path(p);
         let s = tmp.to_string_lossy();
         assert!(s.contains("snapshot.tmp"), "got {s}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_secure_surfaces_non_already_exists_open_errors() {
+        use std::io::ErrorKind;
+        let dir = workdir("write-secure-open-fail");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, b"x").unwrap();
+        let tmp = blocker.join("child.tmp");
+        let err = write_secure(&tmp, b"x").expect_err("open on file parent must fail");
+        assert_ne!(err.kind(), ErrorKind::AlreadyExists);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_executable_surfaces_non_already_exists_open_errors() {
+        use std::io::ErrorKind;
+        let dir = workdir("write-exec-open-fail");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, b"x").unwrap();
+        let tmp = blocker.join("child.tmp");
+        let err = write_executable(&tmp, b"x").expect_err("open on file parent must fail");
+        assert_ne!(err.kind(), ErrorKind::AlreadyExists);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]

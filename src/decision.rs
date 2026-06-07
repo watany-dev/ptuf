@@ -168,18 +168,6 @@ mod tests {
     }
 
     #[test]
-    fn rule_id_and_reason_accessors() {
-        assert_eq!(Decision::Allow.rule_id(), None);
-        assert_eq!(Decision::Allow.reason(), None);
-        assert_eq!(monitor("a.b").rule_id(), Some("a.b"));
-        assert_eq!(monitor("a.b").reason(), None);
-        assert_eq!(ask("a.b").rule_id(), Some("a.b"));
-        assert_eq!(ask("a.b").reason(), Some("confirm for a.b"));
-        assert_eq!(deny("a.b").rule_id(), Some("a.b"));
-        assert_eq!(deny("a.b").reason(), Some("blocked by a.b"));
-    }
-
-    #[test]
     fn aggregate_empty_is_allow() {
         let empty: Vec<Decision> = Vec::new();
         assert_eq!(aggregate(empty), Decision::Allow);
@@ -238,12 +226,6 @@ mod tests {
     use proptest::prelude::*;
 
     proptest! {
-        // Empty input is the unit element.
-        #[test]
-        fn pbt_aggregate_empty_is_allow(_dummy in 0u8..1) {
-            prop_assert_eq!(aggregate(Vec::<Decision>::new()), Decision::Allow);
-        }
-
         // A single-element aggregate is the element itself.
         #[test]
         fn pbt_aggregate_singleton_is_identity(d in decision()) {

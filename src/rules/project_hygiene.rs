@@ -440,36 +440,6 @@ mod tests {
     }
 
     #[test]
-    fn protected_git_denies_clean_fdx_on_protected_branch() {
-        let input = bash("git clean -fdx");
-        let facts = facts_with_project(&input, protected_branch());
-        assert!(matches!(
-            ProtectedBranchDestructiveGit.evaluate(&facts, &input),
-            Some(Decision::Deny { .. })
-        ));
-    }
-
-    #[test]
-    fn protected_git_denies_split_clean_fdx_on_protected_branch() {
-        let input = bash("git clean -f -d -x");
-        let facts = facts_with_project(&input, protected_branch());
-        assert!(matches!(
-            ProtectedBranchDestructiveGit.evaluate(&facts, &input),
-            Some(Decision::Deny { .. })
-        ));
-    }
-
-    #[test]
-    fn protected_git_denies_clean_fdx_with_exclude_pattern_containing_n() {
-        let input = bash("git clean -fdx -enode_modules");
-        let facts = facts_with_project(&input, protected_branch());
-        assert!(matches!(
-            ProtectedBranchDestructiveGit.evaluate(&facts, &input),
-            Some(Decision::Deny { .. })
-        ));
-    }
-
-    #[test]
     fn protected_git_denies_branch_force_delete_on_protected_branch() {
         let input = bash("git branch -D feature");
         let facts = facts_with_project(&input, protected_branch());

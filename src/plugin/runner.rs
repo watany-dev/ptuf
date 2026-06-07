@@ -357,6 +357,34 @@ rules:
     }
 
     #[test]
+    fn render_labels_monitor_when_allow_expectation_fails() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: r
+rules:
+  - id: r.x
+    severity: low
+    defaultDecision: monitor
+    when:
+      tool: Bash
+    reason: r
+    tests:
+      allow:
+        - input:
+            tool_name: Bash
+            tool_input:
+              command: "ls"
+"#;
+        let report = run_str(&p(), yaml).expect("run");
+        let mut buf = Vec::new();
+        report.render(&mut buf).expect("render");
+        let s = String::from_utf8_lossy(&buf);
+        assert!(s.contains("got monitor"), "render output: {s}");
+    }
+
+    #[test]
     fn render_includes_pass_and_fail_summary() {
         let yaml = r#"
 apiVersion: ptuf.dev/v1
@@ -520,11 +548,11 @@ rules:
     }
 
     #[test]
-    fn decision_label_returns_each_label_directly() {
-        // The render path only ever calls `decision_label` for failing
-        // cases whose `got` is `Some(_)`, which in practice is always
-        // `Decision::Deny`. Hit Allow / Monitor / Ask directly so the
-        // remaining match arms are covered.
+    fn decision_label_maps_each_variant_for_render_diagnostics() {
+        // `render` only calls `decision_label` for failing cases whose `got`
+        // is `Some(_)`, which in practice is Deny / Monitor / Ask. The Allow
+        // arm is unreachable from plugin evaluation but is covered here so
+        // the match stays exhaustive under mutation testing.
         assert_eq!(decision_label(&Decision::Allow), "allow");
         assert_eq!(
             decision_label(&Decision::Monitor {

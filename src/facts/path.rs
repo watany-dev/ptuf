@@ -466,26 +466,38 @@ mod tests {
     }
 
     #[test]
-    fn extracts_read_file_path() {
-        let i = input("Read", serde_json::json!("/tmp/x.txt"));
-        let fp = extract_with_env(&i, &MapEnv::with_home("/h")).unwrap();
-        assert_eq!(fp.tool, PathTool::Read);
-        assert_eq!(fp.raw, "/tmp/x.txt");
-        assert_eq!(fp.absolute, PathBuf::from("/tmp/x.txt"));
+    fn extracts_path_tool_from_read_edit_write() {
+        let env = MapEnv::with_home("/h");
+        let cases = [
+            ("Read", "/tmp/x.txt", PathTool::Read, "/tmp/x.txt"),
+            ("Edit", "/etc/hosts", PathTool::Edit, "/etc/hosts"),
+            ("Write", "/etc/hosts", PathTool::Write, "/etc/hosts"),
+        ];
+        for (tool, raw, expect_tool, expect_abs) in cases {
+            let i = input(tool, serde_json::json!(raw));
+            let fp = extract_with_env(&i, &env).unwrap();
+            assert_eq!(fp.tool, expect_tool, "tool={tool}");
+            assert_eq!(fp.raw, raw, "tool={tool}");
+            assert_eq!(fp.absolute, PathBuf::from(expect_abs), "tool={tool}");
+        }
     }
 
     #[test]
-    fn extracts_edit_and_write() {
-        let e = input("Edit", serde_json::json!("/etc/hosts"));
-        let w = input("Write", serde_json::json!("/etc/hosts"));
-        assert_eq!(
-            extract_with_env(&e, &MapEnv::with_home("/h")).unwrap().tool,
-            PathTool::Edit
-        );
-        assert_eq!(
-            extract_with_env(&w, &MapEnv::with_home("/h")).unwrap().tool,
-            PathTool::Write
-        );
+    fn expands_tilde_and_home_envvar_forms() {
+        let env = MapEnv::with_home("/home/me");
+        let cases = [
+            ("~/.ssh/id_rsa", "/home/me/.ssh/id_rsa"),
+            ("~", "/home/me"),
+            ("$HOME/.ssh/id", "/home/me/.ssh/id"),
+            ("${HOME}/.ssh/id", "/home/me/.ssh/id"),
+            ("$HOME", "/home/me"),
+            ("${HOME}", "/home/me"),
+        ];
+        for (raw, expect_abs) in cases {
+            let i = input("Read", serde_json::json!(raw));
+            let fp = extract_with_env(&i, &env).unwrap();
+            assert_eq!(fp.absolute, PathBuf::from(expect_abs), "raw={raw:?}");
+        }
     }
 
     #[test]
@@ -503,38 +515,6 @@ mod tests {
         assert!(extract_with_env(&i, &MapEnv::with_home("/h")).is_none());
         let j = input("Read", serde_json::json!(123));
         assert!(extract_with_env(&j, &MapEnv::with_home("/h")).is_none());
-    }
-
-    #[test]
-    fn expands_tilde_to_home() {
-        let i = input("Read", serde_json::json!("~/.ssh/id_rsa"));
-        let fp = extract_with_env(&i, &MapEnv::with_home("/home/me")).unwrap();
-        assert_eq!(fp.absolute, PathBuf::from("/home/me/.ssh/id_rsa"));
-    }
-
-    #[test]
-    fn expands_lone_tilde() {
-        let i = input("Read", serde_json::json!("~"));
-        let fp = extract_with_env(&i, &MapEnv::with_home("/home/me")).unwrap();
-        assert_eq!(fp.absolute, PathBuf::from("/home/me"));
-    }
-
-    #[test]
-    fn expands_home_envvar_forms() {
-        for raw in ["$HOME/.ssh/id", "${HOME}/.ssh/id"] {
-            let i = input("Read", serde_json::json!(raw));
-            let fp = extract_with_env(&i, &MapEnv::with_home("/h")).unwrap();
-            assert_eq!(fp.absolute, PathBuf::from("/h/.ssh/id"));
-        }
-    }
-
-    #[test]
-    fn lone_home_envvar_expands() {
-        for raw in ["$HOME", "${HOME}"] {
-            let i = input("Read", serde_json::json!(raw));
-            let fp = extract_with_env(&i, &MapEnv::with_home("/h")).unwrap();
-            assert_eq!(fp.absolute, PathBuf::from("/h"));
-        }
     }
 
     #[test]
@@ -588,15 +568,6 @@ mod tests {
         let paths = extract_all_with_env(&i, &MapEnv::with_home("/h"));
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0].origin, PathOrigin::ToolInputNested);
-    }
-
-    #[test]
-    fn extract_uses_system_env_lookup() {
-        // Just exercise the production path: should not panic and
-        // should treat an absolute path as identity.
-        let i = input("Read", serde_json::json!("/tmp/sample"));
-        let fp = extract(&i).unwrap();
-        assert_eq!(fp.raw, "/tmp/sample");
     }
 
     #[test]

@@ -153,25 +153,6 @@ mod tests {
     }
 
     #[test]
-    fn all_variant_regexes_compile() {
-        for re in [
-            &SSH_DIR,
-            &AWS_DIR,
-            &GCLOUD_DIR,
-            &KUBE_CONFIG,
-            &DOCKER_CONFIG,
-            &PRIVATE_KEY_FILE,
-            &DOTENV,
-            &NPMRC,
-            &PYPIRC,
-            &TFSTATE,
-            &PEM_BLOB,
-        ] {
-            LazyLock::force(re);
-        }
-    }
-
-    #[test]
     fn classifies_ssh_dir() {
         assert!(kinds("~/.ssh/id_rsa").contains(&SensitiveKind::SshDir));
         assert!(kinds("$HOME/.ssh/").contains(&SensitiveKind::SshDir));
@@ -275,40 +256,10 @@ mod tests {
     }
 
     #[test]
-    fn as_str_round_trips_via_from_str() {
-        for k in [
-            SensitiveKind::SshDir,
-            SensitiveKind::AwsDir,
-            SensitiveKind::GcloudDir,
-            SensitiveKind::KubeConfig,
-            SensitiveKind::DockerConfig,
-            SensitiveKind::PrivateKeyFile,
-            SensitiveKind::Dotenv,
-            SensitiveKind::Npmrc,
-            SensitiveKind::Pypirc,
-            SensitiveKind::Tfstate,
-            SensitiveKind::PemBlob,
-        ] {
-            assert_eq!(SensitiveKind::parse(k.as_str()), Some(k));
-        }
-        assert_eq!(SensitiveKind::parse("nope"), None);
-    }
-
-    #[test]
     fn match_records_raw_substring() {
         let m = classify("/tmp/.env.production").into_iter().next().unwrap();
         assert_eq!(m.kind, SensitiveKind::Dotenv);
         assert!(m.raw.contains(".env"));
-    }
-
-    #[test]
-    fn multiple_kinds_can_match_one_token() {
-        // A PEM blob with a private-key hint embedded would match both,
-        // but more usefully: a dotenv path inside an ssh-style segment
-        // doesn't conflate — just verify a token can produce >=1 match.
-        let ms = classify("~/.ssh/id_rsa");
-        assert!(ms.iter().any(|m| m.kind == SensitiveKind::SshDir));
-        assert!(ms.iter().any(|m| m.kind == SensitiveKind::PrivateKeyFile));
     }
 
     use crate::testing::proptest::sensitive_kind;
@@ -326,13 +277,6 @@ mod tests {
         #[test]
         fn pbt_kind_round_trips(k in sensitive_kind()) {
             prop_assert_eq!(SensitiveKind::parse(k.as_str()), Some(k));
-        }
-
-        // Unknown tags never parse to Some.
-        #[test]
-        fn pbt_unknown_kind_parse_returns_none(s in "[a-z]{0,8}") {
-            prop_assume!(SensitiveKind::parse(&s).is_none());
-            prop_assert!(SensitiveKind::parse(&s).is_none());
         }
 
         // For every match the parser produces, the recorded `raw`

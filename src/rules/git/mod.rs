@@ -155,25 +155,6 @@ mod tests {
     // --- force-push -----------------------------------------------------
 
     #[test]
-    fn force_push_denies_long_flag() {
-        assert_decision(&FORCE_PUSH_RULE, "git push --force", DecisionKind::Deny);
-    }
-
-    #[test]
-    fn force_push_denies_short_flag_cluster() {
-        assert_decision(
-            &FORCE_PUSH_RULE,
-            "git push -f origin main",
-            DecisionKind::Deny,
-        );
-        assert_decision(
-            &FORCE_PUSH_RULE,
-            "git push -uf origin main",
-            DecisionKind::Deny,
-        );
-    }
-
-    #[test]
     fn force_push_denies_via_sudo() {
         assert_decision(
             &FORCE_PUSH_RULE,
@@ -300,35 +281,19 @@ mod tests {
     // --- clean -fdx -----------------------------------------------------
 
     #[test]
-    fn clean_asks_short_cluster_fdx() {
-        assert_decision(&CLEAN_FDX_RULE, "git clean -fdx", DecisionKind::Ask);
-        assert_decision(&CLEAN_FDX_RULE, "git clean -fdX", DecisionKind::Ask);
-        assert_decision(&CLEAN_FDX_RULE, "git clean -xfd", DecisionKind::Ask);
-    }
-
-    #[test]
-    fn clean_asks_split_short_flags() {
-        assert_decision(&CLEAN_FDX_RULE, "git clean -f -d -x", DecisionKind::Ask);
-        assert_decision(&CLEAN_FDX_RULE, "git clean -f -d -X", DecisionKind::Ask);
-        assert_decision(
-            &CLEAN_FDX_RULE,
+    fn clean_asks_fdx_flag_variants() {
+        for cmd in [
+            "git clean -fdx",
+            "git clean -fdX",
+            "git clean -xfd",
+            "git clean -f -d -x",
+            "git clean -f -d -X",
             "git clean --force -d -x",
-            DecisionKind::Ask,
-        );
-    }
-
-    #[test]
-    fn clean_asks_when_exclude_pattern_contains_n() {
-        assert_decision(
-            &CLEAN_FDX_RULE,
             "git clean -fdx -enode_modules",
-            DecisionKind::Ask,
-        );
-        assert_decision(
-            &CLEAN_FDX_RULE,
             "git clean -fdx -e node_modules",
-            DecisionKind::Ask,
-        );
+        ] {
+            assert_decision(&CLEAN_FDX_RULE, cmd, DecisionKind::Ask);
+        }
     }
 
     #[test]

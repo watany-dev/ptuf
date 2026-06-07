@@ -245,6 +245,52 @@ pub(crate) fn sample(tool: &str) -> HookInput {
 mod tests {
 
     use super::*;
+    #[test]
+    fn bash_command_accessor_handles_bash_tool_shapes() {
+        let cases: &[(&str, Option<&str>)] = &[
+            (
+                r#"{"tool_name":"Bash","tool_input":{"command":"ls -la"}}"#,
+                Some("ls -la"),
+            ),
+            (
+                r#"{"tool_name":"Read","tool_input":{"command":"ls"}}"#,
+                None,
+            ),
+            (r#"{"tool_name":"Bash","tool_input":{}}"#, None),
+            (r#"{"tool_name":"Bash","tool_input":{"command":123}}"#, None),
+        ];
+        for (raw, expect) in cases {
+            let parsed: HookInput = serde_json::from_str(raw).expect("parse");
+            assert_eq!(parsed.bash_command(), *expect, "raw={raw}");
+        }
+    }
+
+    #[test]
+    fn file_path_accessor_handles_path_tools() {
+        for tool in ["Read", "Edit", "Write"] {
+            let raw = format!(r#"{{"tool_name":"{tool}","tool_input":{{"file_path":"/tmp/x"}}}}"#);
+            let parsed: HookInput = serde_json::from_str(&raw).expect("parse");
+            assert_eq!(parsed.file_path(), Some("/tmp/x"), "tool={tool}");
+        }
+        let bash = r#"{"tool_name":"Bash","tool_input":{"file_path":"/tmp/x"}}"#;
+        assert_eq!(
+            serde_json::from_str::<HookInput>(bash).unwrap().file_path(),
+            None
+        );
+        let missing = r#"{"tool_name":"Read","tool_input":{}}"#;
+        assert_eq!(
+            serde_json::from_str::<HookInput>(missing)
+                .unwrap()
+                .file_path(),
+            None
+        );
+        let bad = r#"{"tool_name":"Read","tool_input":{"file_path":123}}"#;
+        assert_eq!(
+            serde_json::from_str::<HookInput>(bad).unwrap().file_path(),
+            None
+        );
+    }
+
     use crate::testing::proptest::hook_input;
     use proptest::prelude::*;
 
@@ -264,58 +310,6 @@ mod tests {
         assert_eq!(parsed.tool_input["command"], "ls");
         let cloned = parsed.clone();
         assert_eq!(cloned.tool_name, "Bash");
-    }
-
-    #[test]
-    fn bash_command_returns_string_for_bash_tool() {
-        let raw = r#"{"tool_name":"Bash","tool_input":{"command":"ls -la"}}"#;
-        let parsed: HookInput = serde_json::from_str(raw).expect("parse");
-        assert_eq!(parsed.bash_command(), Some("ls -la"));
-    }
-
-    #[test]
-    fn bash_command_is_none_for_other_tools() {
-        let raw = r#"{"tool_name":"Read","tool_input":{"command":"ls"}}"#;
-        let parsed: HookInput = serde_json::from_str(raw).expect("parse");
-        assert_eq!(parsed.bash_command(), None);
-    }
-
-    #[test]
-    fn bash_command_is_none_when_command_missing_or_non_string() {
-        let raw = r#"{"tool_name":"Bash","tool_input":{}}"#;
-        let parsed: HookInput = serde_json::from_str(raw).expect("parse");
-        assert_eq!(parsed.bash_command(), None);
-
-        let raw = r#"{"tool_name":"Bash","tool_input":{"command":123}}"#;
-        let parsed: HookInput = serde_json::from_str(raw).expect("parse");
-        assert_eq!(parsed.bash_command(), None);
-    }
-
-    #[test]
-    fn file_path_returns_string_for_read_edit_write() {
-        for tool in ["Read", "Edit", "Write"] {
-            let raw = format!(r#"{{"tool_name":"{tool}","tool_input":{{"file_path":"/tmp/x"}}}}"#);
-            let parsed: HookInput = serde_json::from_str(&raw).expect("parse");
-            assert_eq!(parsed.file_path(), Some("/tmp/x"));
-        }
-    }
-
-    #[test]
-    fn file_path_is_none_for_other_tools() {
-        let raw = r#"{"tool_name":"Bash","tool_input":{"file_path":"/tmp/x"}}"#;
-        let parsed: HookInput = serde_json::from_str(raw).expect("parse");
-        assert!(parsed.file_path().is_none());
-    }
-
-    #[test]
-    fn file_path_is_none_when_field_missing_or_non_string() {
-        let raw = r#"{"tool_name":"Read","tool_input":{}}"#;
-        let parsed: HookInput = serde_json::from_str(raw).expect("parse");
-        assert!(parsed.file_path().is_none());
-
-        let raw = r#"{"tool_name":"Read","tool_input":{"file_path":123}}"#;
-        let parsed: HookInput = serde_json::from_str(raw).expect("parse");
-        assert!(parsed.file_path().is_none());
     }
 
     #[test]

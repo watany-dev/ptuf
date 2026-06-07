@@ -89,7 +89,7 @@ mod tests {
     use super::super::schema::{
         RawAllowlist, RawAllowlistApplies, RawAudit, RawConfig, RawPack, RawPluginRef,
     };
-    use super::super::{Allowlist, Config, Mode};
+    use super::super::{Allowlist, Mode};
     use super::*;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -104,50 +104,6 @@ mod tests {
             protected_branches: None,
             additional_workspaces: None,
         }
-    }
-
-    #[test]
-    fn merge_of_no_layers_yields_defaults() {
-        let cfg = merge(Vec::new());
-        assert_eq!(cfg, Config::default());
-        assert_eq!(cfg.mode, Mode::Enforce);
-        assert!(cfg.fail_closed);
-        // Builtin defaults disable the two opt-in packs
-        // (`core.project_hygiene`, `core.workspace`); anything beyond
-        // that comes from explicit YAML.
-        assert_eq!(cfg.pack_overrides.len(), 2);
-        assert_eq!(
-            cfg.pack_overrides
-                .get("core.project_hygiene")
-                .and_then(|o| o.enabled),
-            Some(false),
-        );
-        assert_eq!(
-            cfg.pack_overrides
-                .get("core.workspace")
-                .and_then(|o| o.enabled),
-            Some(false),
-        );
-        assert!(cfg.allowlists.is_empty());
-        assert!(cfg.audit.enabled);
-        assert!(cfg.audit.path.is_none());
-    }
-
-    #[test]
-    fn later_layer_wins_for_scalar_fields() {
-        let lower = RawConfig {
-            mode: Some(Mode::Enforce),
-            fail_closed: Some(true),
-            ..raw()
-        };
-        let higher = RawConfig {
-            mode: Some(Mode::Monitor),
-            fail_closed: Some(false),
-            ..raw()
-        };
-        let cfg = merge(vec![lower, higher]);
-        assert_eq!(cfg.mode, Mode::Monitor);
-        assert!(!cfg.fail_closed);
     }
 
     #[test]

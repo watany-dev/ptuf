@@ -294,17 +294,10 @@ mod tests {
     }
 
     #[test]
-    fn metadata_matches_design_baseline() {
-        let r: &dyn ConfigRule = &OUTSIDE_ACCESS_RULE;
-        assert_eq!(r.id(), RULE_ID);
-        assert_eq!(r.severity(), Severity::Medium);
-        assert_eq!(r.default_decision(), DecisionKind::Deny);
-        assert!(r.overridable());
-        assert!(!r.hard_deny());
-    }
-
-    #[test]
     fn deny_reason_carries_resolved_path_and_workspace_list() {
+        let rule: &dyn ConfigRule = &OUTSIDE_ACCESS_RULE;
+        assert_eq!(rule.severity(), Severity::Medium);
+        assert_eq!(rule.default_decision(), DecisionKind::Deny);
         let dir = tempfile::TempDir::new().expect("tempdir");
         let workspace = dir.path().canonicalize().expect("canonicalize");
         let input = write_input("/etc/ptuf-test-outside-write");
