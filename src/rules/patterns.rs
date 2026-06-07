@@ -108,7 +108,7 @@ mod tests {
             ("$HOME/.aws/credentials", true),
         ];
         for (token, expect) in cases {
-            assert_eq!(SENSITIVE_PATH.is_match(token), expect, "token {token:?}",);
+            assert_eq!(SENSITIVE_PATH.is_match(token), expect, "token {token:?}");
         }
     }
 
