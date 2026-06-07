@@ -28,11 +28,11 @@ pub static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(?x)",
         r"(?:",
-        r"(?:~|\$HOME|\$\{HOME\})/(?i-u:\.ssh)(?:/|\b)",
-        r"|(?:~|\$HOME|\$\{HOME\})/(?i-u:\.aws)(?:/|\b)",
-        r"|(?:~|\$HOME|\$\{HOME\})/(?i-u:\.config/gcloud)(?:/|\b)",
-        r"|(?:~|\$HOME|\$\{HOME\})/(?i-u:\.kube/config)\b",
-        r"|(?:~|\$HOME|\$\{HOME\})/(?i-u:\.docker/config\.json)\b",
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.ssh)(?:/|\b)",
+        r"|(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.aws)(?:/|\b)",
+        r"|(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.config/gcloud)(?:/|\b)",
+        r"|(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.kube/config)\b",
+        r"|(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.docker/config\.json)\b",
         r"|\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b",
         r"|(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
         r"|\b(?i-u:\.npmrc)\b",
@@ -89,6 +89,27 @@ mod tests {
     fn sensitive_path_rejects_non_secret_paths() {
         assert!(!SENSITIVE_PATH.is_match("README"));
         assert!(!SENSITIVE_PATH.is_match("/tmp/foo"));
+    }
+
+    #[test]
+    fn sensitive_path_matches_absolute_secret_directories() {
+        let cases = [
+            ("/home/user/.ssh/config", true),
+            ("/root/.ssh/id_rsa", true),
+            ("/home/user/.aws/credentials", true),
+            ("/root/.aws/credentials", true),
+            (
+                "/home/user/.config/gcloud/application_default_credentials.json",
+                true,
+            ),
+            ("/home/alice/.kube/config", true),
+            ("/var/root/.docker/config.json", true),
+            ("~/.ssh/id_rsa", true),
+            ("$HOME/.aws/credentials", true),
+        ];
+        for (token, expect) in cases {
+            assert_eq!(SENSITIVE_PATH.is_match(token), expect, "token {token:?}");
+        }
     }
 
     #[test]

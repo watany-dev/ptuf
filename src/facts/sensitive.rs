@@ -91,15 +91,15 @@ fn build(pat: &str) -> Regex {
 // remains case-sensitive because RFC 7468 mandates uppercase header
 // labels.
 static SSH_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|\s)(?:~|\$HOME|\$\{HOME\})/(?i-u:\.ssh)(?:/|$|\b)"));
+    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.ssh)(?:/|$|\b)"));
 static AWS_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|\s)(?:~|\$HOME|\$\{HOME\})/(?i-u:\.aws)(?:/|$|\b)"));
+    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.aws)(?:/|$|\b)"));
 static GCLOUD_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|\s)(?:~|\$HOME|\$\{HOME\})/(?i-u:\.config/gcloud)(?:/|$|\b)"));
+    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.config/gcloud)(?:/|$|\b)"));
 static KUBE_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:~|\$HOME|\$\{HOME\})/(?i-u:\.kube/config)\b"));
+    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.kube/config)\b"));
 static DOCKER_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:~|\$HOME|\$\{HOME\})/(?i-u:\.docker/config\.json)\b"));
+    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.docker/config\.json)\b"));
 static PRIVATE_KEY_FILE: LazyLock<Regex> =
     LazyLock::new(|| build(r"\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b"));
 // Anchor includes glob metacharacters, brace-expansion punctuation, and
@@ -156,11 +156,14 @@ mod tests {
     fn classifies_ssh_dir() {
         assert!(kinds("~/.ssh/id_rsa").contains(&SensitiveKind::SshDir));
         assert!(kinds("$HOME/.ssh/").contains(&SensitiveKind::SshDir));
+        assert!(kinds("/home/user/.ssh/config").contains(&SensitiveKind::SshDir));
+        assert!(kinds("/root/.ssh/id_rsa").contains(&SensitiveKind::SshDir));
     }
 
     #[test]
     fn classifies_aws_dir() {
         assert!(kinds("~/.aws/credentials").contains(&SensitiveKind::AwsDir));
+        assert!(kinds("/home/user/.aws/credentials").contains(&SensitiveKind::AwsDir));
     }
 
     #[test]
@@ -175,6 +178,8 @@ mod tests {
     fn classifies_kube_and_docker_config() {
         assert!(kinds("~/.kube/config").contains(&SensitiveKind::KubeConfig));
         assert!(kinds("~/.docker/config.json").contains(&SensitiveKind::DockerConfig));
+        assert!(kinds("/home/alice/.kube/config").contains(&SensitiveKind::KubeConfig));
+        assert!(kinds("/var/root/.docker/config.json").contains(&SensitiveKind::DockerConfig));
     }
 
     #[test]
