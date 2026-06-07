@@ -103,12 +103,39 @@ fn has_force(flags: &[&str]) -> bool {
 }
 
 fn is_destructive_target(arg: &str) -> bool {
-    arg == "/"
-        || arg == "/*"
-        || HOME_TARGETS.contains(&arg)
+    if arg.contains("..") {
+        return true;
+    }
+    let normalized = normalize_rm_target(arg);
+    normalized == "/"
+        || normalized == "/*"
+        || HOME_TARGETS.contains(&normalized.as_str())
         || SYSTEM_ROOTS
             .iter()
-            .any(|root| arg == *root || arg.starts_with(&format!("{root}/")))
+            .any(|root| normalized == *root || normalized.starts_with(&format!("{root}/")))
+}
+
+/// Collapse POSIX duplicate slashes and trim a trailing `/` before
+/// comparing rm targets. Parent-segment tokens are handled pessimistically
+/// by the caller because the resolved path cannot be known pre-shell.
+fn normalize_rm_target(arg: &str) -> String {
+    let mut out = String::with_capacity(arg.len());
+    let mut prev_slash = false;
+    for ch in arg.chars() {
+        if ch == '/' {
+            if !prev_slash {
+                out.push(ch);
+            }
+            prev_slash = true;
+        } else {
+            out.push(ch);
+            prev_slash = false;
+        }
+    }
+    if out.len() > 1 && out.ends_with('/') {
+        out.pop();
+    }
+    out
 }
 
 #[cfg(test)]
@@ -183,6 +210,20 @@ mod tests {
     #[test]
     fn denies_rm_rf_root_glob() {
         assert_deny("rm -rf /*");
+    }
+
+    #[test]
+    fn destructive_rm_normalizes_double_slash() {
+        assert_deny("rm -rf //");
+        assert_deny("rm -rf //etc");
+        assert_deny("rm -rf /etc//");
+        assert_deny("rm -rf ///usr/local");
+    }
+
+    #[test]
+    fn destructive_rm_pessimistic_on_parent_segments() {
+        assert_deny("rm -rf ./safe/../etc");
+        assert_deny("rm -rf /tmp/foo/../etc/passwd");
     }
 
     #[test]
