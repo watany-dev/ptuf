@@ -121,6 +121,16 @@ mod tests {
     }
 
     #[test]
+    fn denies_read_of_absolute_kube_config() {
+        let input = read("/home/alice/.kube/config");
+        let facts = crate::facts::extract(&input);
+        assert!(matches!(
+            SensitiveRead.evaluate(&facts, &input),
+            Some(Decision::Deny { ref rule_id, .. }) if rule_id == RULE_ID,
+        ));
+    }
+
+    #[test]
     fn allows_read_of_non_sensitive_file() {
         let input = read("/repo/src/main.rs");
         let facts = crate::facts::extract(&input);

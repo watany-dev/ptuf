@@ -266,6 +266,12 @@ mod tests {
     }
 
     #[test]
+    fn asks_for_absolute_path_ssh_config() {
+        assert_ask("cat /home/user/.ssh/config");
+        assert_ask("cat /root/.aws/credentials");
+    }
+
+    #[test]
     fn allows_non_reader_with_dotenv_arg() {
         assert_silent("rm .env");
         assert_silent("chmod 600 .env");
