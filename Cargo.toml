@@ -63,6 +63,12 @@ proptest = { version = "1", default-features = false, features = ["std", "bit-se
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std", "bit-set"] }
 tempfile = "3"
+divan = "0.1"
+
+[[bench]]
+name = "perf"
+path = "benches/perf.rs"
+harness = false
 
 [lints.rust]
 unsafe_code = "forbid"
