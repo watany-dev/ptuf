@@ -7,7 +7,7 @@
 //! (`Read`, `Edit`, `Write`, plugin DSL) can match a typed
 //! [`SensitiveKind`] without disturbing the existing rule's tests.
 
-use regex::Regex;
+use regex::{Regex, RegexSet};
 use std::sync::LazyLock;
 
 /// Distinct kinds of sensitive token that `classify` recognises.
@@ -87,55 +87,89 @@ fn build(pat: &str) -> Regex {
 // Windows NTFS) still classify. The `-u` selects ASCII case folding so
 // the regex compiles without the optional `unicode-case` feature (kept
 // disabled per `Cargo.toml [dependencies] regex` to keep the binary
-// minimal). Surrounding `\s`/`\b`/`\S` stay Unicode-aware. PEM_BLOB
-// remains case-sensitive because RFC 7468 mandates uppercase header
+// minimal). Surrounding `\s`/`\b`/`\S` stay Unicode-aware. The PEM blob
+// pattern stays case-sensitive because RFC 7468 mandates uppercase header
 // labels.
-static SSH_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.ssh)(?:/|$|\b)"));
-static AWS_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.aws)(?:/|$|\b)"));
-static GCLOUD_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.config/gcloud)(?:/|$|\b)"));
-static KUBE_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.kube/config)\b"));
-static DOCKER_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.docker/config\.json)\b"));
-static PRIVATE_KEY_FILE: LazyLock<Regex> =
-    LazyLock::new(|| build(r"\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b"));
-// Anchor includes glob metacharacters, brace-expansion punctuation, and
-// `=` so `cat *.env`, `cat {a,b}.env`, `cp ?.env`, `rm [abc].env`, and
-// `dd if=.env`/`--env-file=.env` style flag values are caught at the token
-// boundary.
-static DOTENV: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b"));
-static NPMRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i-u:\.npmrc)\b"));
-static PYPIRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i-u:\.pypirc)\b"));
-static TFSTATE: LazyLock<Regex> = LazyLock::new(|| build(r"\S+(?i-u:\.tfstate)\b"));
-static PEM_BLOB: LazyLock<Regex> =
-    LazyLock::new(|| build(r"-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----"));
+//
+// Anchors on the `.env` pattern include glob metacharacters,
+// brace-expansion punctuation, and `=` so `cat *.env`, `cat {a,b}.env`,
+// `cp ?.env`, `rm [abc].env`, and `dd if=.env` / `--env-file=.env` style
+// flag values are caught at the token boundary.
+//
+// `PROBES` is the single source of truth: declaration order is the order
+// `classify` reports matches in, and each index lines up with the index
+// `SENSITIVE_SET` reports, so the set prefilter and the per-variant
+// regexes stay aligned.
+const PROBES: &[(SensitiveKind, &str)] = &[
+    (
+        SensitiveKind::SshDir,
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.ssh)(?:/|$|\b)",
+    ),
+    (
+        SensitiveKind::AwsDir,
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.aws)(?:/|$|\b)",
+    ),
+    (
+        SensitiveKind::GcloudDir,
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.config/gcloud)(?:/|$|\b)",
+    ),
+    (
+        SensitiveKind::KubeConfig,
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.kube/config)\b",
+    ),
+    (
+        SensitiveKind::DockerConfig,
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.docker/config\.json)\b",
+    ),
+    (
+        SensitiveKind::PrivateKeyFile,
+        r"\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b",
+    ),
+    (
+        SensitiveKind::Dotenv,
+        r"(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
+    ),
+    (SensitiveKind::Npmrc, r"(?i-u:\.npmrc)\b"),
+    (SensitiveKind::Pypirc, r"(?i-u:\.pypirc)\b"),
+    (SensitiveKind::Tfstate, r"\S+(?i-u:\.tfstate)\b"),
+    (
+        SensitiveKind::PemBlob,
+        r"-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----",
+    ),
+];
+
+/// One combined automaton over every probe pattern, used as a prefilter:
+/// a single pass reports which variants can match, so `classify` skips the
+/// per-variant regexes entirely for the common no-match token and only
+/// re-runs the ones the set flagged otherwise.
+static SENSITIVE_SET: LazyLock<RegexSet> = LazyLock::new(|| {
+    #[expect(
+        clippy::expect_used,
+        reason = "static pattern literals validated by tests"
+    )]
+    RegexSet::new(PROBES.iter().map(|(_, pat)| *pat)).expect("sensitive regex set")
+});
+
+/// Per-variant regexes, indexed parallel to [`PROBES`]. Lazily compiled and
+/// only consulted for the indices [`SENSITIVE_SET`] reports as matching, so
+/// no-secret commands never pay to build or run them.
+static SENSITIVE_REGEXES: LazyLock<Vec<Regex>> =
+    LazyLock::new(|| PROBES.iter().map(|(_, pat)| build(pat)).collect());
 
 /// Inspect a single string token and return every sensitive shape it
 /// matches. The slice preserves variant declaration order for
 /// determinism.
 pub fn classify(token: &str) -> Vec<SensitivePath> {
-    let probes: &[(&LazyLock<Regex>, SensitiveKind)] = &[
-        (&SSH_DIR, SensitiveKind::SshDir),
-        (&AWS_DIR, SensitiveKind::AwsDir),
-        (&GCLOUD_DIR, SensitiveKind::GcloudDir),
-        (&KUBE_CONFIG, SensitiveKind::KubeConfig),
-        (&DOCKER_CONFIG, SensitiveKind::DockerConfig),
-        (&PRIVATE_KEY_FILE, SensitiveKind::PrivateKeyFile),
-        (&DOTENV, SensitiveKind::Dotenv),
-        (&NPMRC, SensitiveKind::Npmrc),
-        (&PYPIRC, SensitiveKind::Pypirc),
-        (&TFSTATE, SensitiveKind::Tfstate),
-        (&PEM_BLOB, SensitiveKind::PemBlob),
-    ];
+    let matched = SENSITIVE_SET.matches(token);
+    if !matched.matched_any() {
+        return Vec::new();
+    }
     let mut out = Vec::new();
-    for (re, kind) in probes {
-        for m in re.find_iter(token) {
+    for idx in &matched {
+        let (kind, _) = PROBES[idx];
+        for m in SENSITIVE_REGEXES[idx].find_iter(token) {
             out.push(SensitivePath {
-                kind: *kind,
+                kind,
                 raw: m.as_str().to_string(),
             });
         }

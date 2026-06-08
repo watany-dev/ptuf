@@ -31,17 +31,20 @@ pub struct PluginRule {
 impl PluginRule {
     /// Build a rule from its raw schema representation and a
     /// pre-compiled `when:` AST. The loader is the only caller in
-    /// production code.
-    pub fn from_raw(raw: RawRule, when: WhenNode) -> Self {
+    /// production code. Only the small scalar/string fields are cloned;
+    /// the caller keeps ownership of `raw` (including the heavy `tests`
+    /// metadata) so it can be stashed for the `plugin test` runner
+    /// without a second deep copy.
+    pub fn from_raw(raw: &RawRule, when: WhenNode) -> Self {
         Self {
-            id: raw.id,
+            id: raw.id.clone(),
             severity: raw.severity,
             default_decision: raw.default_decision,
             overridable: raw.overridable.unwrap_or(true),
             hard_deny: raw.hard_deny.unwrap_or(false),
             when,
-            reason: raw.reason,
-            remediation: raw.remediation,
+            reason: raw.reason.clone(),
+            remediation: raw.remediation.clone(),
         }
     }
 
@@ -128,7 +131,7 @@ mod tests {
         let facts = facts::extract(&input);
 
         let deny = PluginRule::from_raw(
-            raw("p.deny", DecisionKind::Deny),
+            &raw("p.deny", DecisionKind::Deny),
             WhenNode::Tool("Bash".into()),
         );
         match deny.evaluate(&facts, &input).expect("deny") {
@@ -141,7 +144,7 @@ mod tests {
         }
 
         let ask = PluginRule::from_raw(
-            raw("p.ask", DecisionKind::Ask),
+            &raw("p.ask", DecisionKind::Ask),
             WhenNode::Tool("Bash".into()),
         );
         assert!(matches!(
@@ -150,7 +153,7 @@ mod tests {
         ));
 
         let monitor = PluginRule::from_raw(
-            raw("p.monitor", DecisionKind::Monitor),
+            &raw("p.monitor", DecisionKind::Monitor),
             WhenNode::Tool("Bash".into()),
         );
         match monitor.evaluate(&facts, &input).expect("monitor") {
@@ -159,7 +162,7 @@ mod tests {
         }
 
         let allow = PluginRule::from_raw(
-            raw("p.allow", DecisionKind::Allow),
+            &raw("p.allow", DecisionKind::Allow),
             WhenNode::Tool("Bash".into()),
         );
         assert!(allow.evaluate(&facts, &input).is_none());
@@ -168,7 +171,7 @@ mod tests {
     #[test]
     fn rule_returns_none_when_when_does_not_match() {
         let rule = PluginRule::from_raw(
-            raw("p.x", DecisionKind::Deny),
+            &raw("p.x", DecisionKind::Deny),
             WhenNode::Tool("Read".into()),
         );
         let input = bash_input("ls");
@@ -179,7 +182,7 @@ mod tests {
     #[test]
     fn defaults_overridable_true_and_hard_deny_false() {
         let rule = PluginRule::from_raw(
-            raw("p.x", DecisionKind::Deny),
+            &raw("p.x", DecisionKind::Deny),
             WhenNode::Tool("Bash".into()),
         );
         assert!(rule.overridable());
@@ -191,7 +194,7 @@ mod tests {
         let mut r = raw("p.x", DecisionKind::Deny);
         r.overridable = Some(false);
         r.hard_deny = Some(true);
-        let rule = PluginRule::from_raw(r, WhenNode::Tool("Bash".into()));
+        let rule = PluginRule::from_raw(&r, WhenNode::Tool("Bash".into()));
         assert!(!rule.overridable());
         assert!(rule.hard_deny());
     }
