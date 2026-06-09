@@ -515,16 +515,14 @@ mod tests {
     }
 
     #[test]
-    fn engine_decide_triple_nested_su_allows_destructive() {
-        // Pins nesting_budget gap: inner `rm` is hidden from destructive-rm;
-        // the outer `bash -c` wrappers still trip dynamic-eval (Ask).
+    fn engine_decide_triple_nested_su_denies_destructive_rm() {
         let cmd = r#"su -c 'bash -c "su -c '\''rm -rf /'\''"'"#;
         let outcome = engine_with(Config::default()).decide(&bash(cmd));
         match &outcome.decision {
-            Decision::Ask { rule_id, .. } => {
-                assert_eq!(rule_id, "core.engine.dynamic-eval");
+            Decision::Deny { rule_id, .. } => {
+                assert_eq!(rule_id, "core.filesystem.destructive-rm");
             },
-            other => panic!("expected dynamic-eval Ask, not destructive-rm deny: {other:?}"),
+            other => panic!("expected destructive-rm Deny: {other:?}"),
         }
     }
 
