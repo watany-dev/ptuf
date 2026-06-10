@@ -182,7 +182,10 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   `fuzz_engine_structured` は `arbitrary` クレートで valid な
   `HookInput` / `Config` を直接組み立て、毎イテレーションを判定コアへ
   確実に到達させる。`decide` の全域性 (panic なし) と決定論 (同一入力を
-  2 回評価して同一 `Decision`) を assert する。`arbitrary` 依存と手書き
+  2 回評価して同一 `Decision`) を assert する。override / allowlist が
+  キーにする rule id / pack 名は `ptuf::rules::iter()` から実行時に導出
+  するため、ルール改名でターゲットが実ルールから乖離しない。
+  `arbitrary` 依存と手書き
   `impl Arbitrary` は `fuzz/` workspace に閉じ、出荷バイナリ・公開 API・
   crates.io パッケージには一切現れない。`make fuzz-soak
   FUZZ_TARGET=<name>` で単一ターゲットを長時間走らせる。クラッシュ

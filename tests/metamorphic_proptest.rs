@@ -26,6 +26,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use proptest::prelude::*;
 
@@ -39,12 +40,17 @@ use ptuf::testing::proptest::{
 };
 use ptuf::{Engine, HookInput};
 
-/// Default engine via the public builder. Cannot fail for the default
-/// config because it lists no plugin paths; uses no filesystem I/O.
-fn default_engine() -> Engine {
-    Engine::builder()
-        .build()
-        .expect("Engine::builder with default config cannot fail")
+/// Default engine via the public builder, shared across all properties:
+/// `Engine::with_config` collects project facts and opens the audit
+/// sink, which is wasted work when rebuilt for every proptest case.
+/// Cannot fail for the default config because it lists no plugin paths.
+fn default_engine() -> &'static Engine {
+    static ENGINE: OnceLock<Engine> = OnceLock::new();
+    ENGINE.get_or_init(|| {
+        Engine::builder()
+            .build()
+            .expect("Engine::builder with default config cannot fail")
+    })
 }
 
 fn bash(cmd: &str) -> HookInput {
@@ -176,7 +182,7 @@ proptest! {
         wrap in 0usize..4,
     ) {
         let engine = default_engine();
-        let base_kind = kind_of(&engine, &render_tokens(&base));
+        let base_kind = kind_of(engine, &render_tokens(&base));
         prop_assume!(base_kind == DecisionKind::Deny);
 
         let mut tokens = base;
@@ -198,7 +204,7 @@ proptest! {
         };
 
         prop_assert!(
-            kind_of(&engine, &cmd) >= base_kind,
+            kind_of(engine, &cmd) >= base_kind,
             "decision weakened by transform: {}",
             cmd
         );
@@ -208,9 +214,9 @@ proptest! {
     #[test]
     fn pbt_split_bundled_flags_keeps_deny(base in dangerous_rm_tokens()) {
         let engine = default_engine();
-        let base_kind = kind_of(&engine, &render_tokens(&base));
+        let base_kind = kind_of(engine, &render_tokens(&base));
         let mutated = render_tokens(&split_bundled_flag(&base));
-        prop_assert!(kind_of(&engine, &mutated) >= base_kind);
+        prop_assert!(kind_of(engine, &mutated) >= base_kind);
     }
 
     // P3: a recognised privilege wrapper keeps the deny.
@@ -220,18 +226,18 @@ proptest! {
         form in any::<usize>(),
     ) {
         let engine = default_engine();
-        let base_kind = kind_of(&engine, &render_tokens(&base));
+        let base_kind = kind_of(engine, &render_tokens(&base));
         let mutated = render_tokens(&privilege_wrap(&base, form));
-        prop_assert!(kind_of(&engine, &mutated) >= base_kind);
+        prop_assert!(kind_of(engine, &mutated) >= base_kind);
     }
 
     // P4: `bash -c '…'` nesting keeps the deny.
     #[test]
     fn pbt_shellc_wrap_keeps_deny(base in dangerous_rm_tokens()) {
         let engine = default_engine();
-        let base_kind = kind_of(&engine, &render_tokens(&base));
+        let base_kind = kind_of(engine, &render_tokens(&base));
         let mutated = shellc_wrap(&render_tokens(&base));
-        prop_assert!(kind_of(&engine, &mutated) >= base_kind);
+        prop_assert!(kind_of(engine, &mutated) >= base_kind);
     }
 
     // P5: alternate rm head spellings leave the decision unchanged.
@@ -241,9 +247,9 @@ proptest! {
         form in any::<usize>(),
     ) {
         let engine = default_engine();
-        let base_kind = kind_of(&engine, &render_tokens(&base));
+        let base_kind = kind_of(engine, &render_tokens(&base));
         let mutated = render_tokens(&rewrite_rm_head(&base, form));
-        prop_assert_eq!(kind_of(&engine, &mutated), base_kind);
+        prop_assert_eq!(kind_of(engine, &mutated), base_kind);
     }
 
     // P6: semantics-preserving quoting leaves the decision unchanged.
@@ -254,9 +260,9 @@ proptest! {
         form in any::<usize>(),
     ) {
         let engine = default_engine();
-        let base_kind = kind_of(&engine, &render_tokens(&base));
+        let base_kind = kind_of(engine, &render_tokens(&base));
         let mutated = render_tokens(&quote_token(&base, idx, form));
-        prop_assert_eq!(kind_of(&engine, &mutated), base_kind);
+        prop_assert_eq!(kind_of(engine, &mutated), base_kind);
     }
 
     // P7: compounding a deny with a benign segment preserves the danger.
@@ -266,9 +272,9 @@ proptest! {
         form in any::<usize>(),
     ) {
         let engine = default_engine();
-        let base_kind = kind_of(&engine, &render_tokens(&base));
+        let base_kind = kind_of(engine, &render_tokens(&base));
         let mutated = conjoin_safe(&render_tokens(&base), form);
-        prop_assert!(kind_of(&engine, &mutated) >= base_kind);
+        prop_assert!(kind_of(engine, &mutated) >= base_kind);
     }
 
     // P8: normalising a sensitive path keeps every recognised kind.

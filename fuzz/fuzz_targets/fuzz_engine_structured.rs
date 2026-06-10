@@ -20,9 +20,13 @@
 //! The engine is built via `Engine::with_config` with `plugin_paths`
 //! forced empty, so the run is deterministic and free of filesystem I/O.
 
+use std::sync::OnceLock;
+
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use ptuf::config::{Allowlist, AuditConfig, Config, Mode, PackOverride, RedactionMode, RuleOverride};
+use ptuf::config::{
+    Allowlist, AuditConfig, Config, Mode, PackOverride, RedactionMode, RuleOverride,
+};
 use ptuf::decision::{DecisionKind, Severity};
 use ptuf::{Engine, HookInput};
 use serde_json::{json, Value};
@@ -109,15 +113,34 @@ const PATHS: &[&str] = &[
     "https://example.com/i.py",
 ];
 
-/// Rule ids the override / allowlist maps key on, so those code paths fire
-/// against rules that actually exist as well as unknown ids.
-const RULE_IDS: &[&str] = &[
-    "core.destructive.rm-rf",
-    "core.network.remote-exec",
-    "core.secrets.read",
-    "core.workspace.outside-access",
-    "unknown.rule.id",
-];
+/// Rule ids the override / allowlist maps key on. Derived from the
+/// engine's own registry so a rule rename can never silently decouple
+/// these code paths from real rules; one unknown id keeps the miss
+/// path covered.
+fn rule_ids() -> &'static [&'static str] {
+    static IDS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    IDS.get_or_init(|| {
+        let mut ids: Vec<&'static str> = ptuf::rules::iter().map(|r| r.id()).collect();
+        ids.push("unknown.rule.id");
+        ids
+    })
+}
+
+/// Pack prefixes (`core.filesystem`, …) the pack-override map keys on,
+/// derived from `rule_ids()` because pack matching is a prefix test on
+/// the rule id. Includes `unknown.rule` as the miss case.
+fn pack_names() -> &'static [&'static str] {
+    static PACKS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    PACKS.get_or_init(|| {
+        let mut packs: Vec<&'static str> = rule_ids()
+            .iter()
+            .filter_map(|id| id.rsplit_once('.').map(|(pack, _)| pack))
+            .collect();
+        packs.sort_unstable();
+        packs.dedup();
+        packs
+    })
+}
 
 /// A fully-assembled engine input + policy. Crate-local to this fuzz
 /// target; the shipped library never derives or depends on `arbitrary`.
@@ -143,14 +166,6 @@ fn build_tool_input(u: &mut Unstructured, tool: &str) -> arbitrary::Result<Value
         "WebFetch" => json!({ "url": *u.choose(PATHS)? }),
         "mcp__github__create_or_update_file" => json!({ "path": *u.choose(PATHS)? }),
         _ => json!({ "file_path": *u.choose(PATHS)? }),
-    })
-}
-
-fn arb_mode(u: &mut Unstructured) -> arbitrary::Result<Mode> {
-    Ok(if u.arbitrary()? {
-        Mode::Monitor
-    } else {
-        Mode::Enforce
     })
 }
 
@@ -194,19 +209,18 @@ fn arb_rule_override(u: &mut Unstructured) -> arbitrary::Result<RuleOverride> {
 
 fn arb_allowlist(u: &mut Unstructured) -> arbitrary::Result<Allowlist> {
     let rule_count = u.int_in_range(0..=3)?;
-    let mut rule_ids = Vec::with_capacity(rule_count);
+    let mut ids = Vec::with_capacity(rule_count);
     for _ in 0..rule_count {
-        rule_ids.push((*u.choose(RULE_IDS)?).to_string());
+        ids.push((*u.choose(rule_ids())?).to_string());
     }
     Ok(Allowlist {
         id: format!("al-{}", u.int_in_range(0..=99)?),
-        rule_ids,
+        rule_ids: ids,
         // The `when:` DSL is exercised by `fuzz_plugin_dsl`; keeping it
         // None here isolates the allowlist gating logic.
         when: None,
         expires_at: arb_opt(u, |u| {
-            Ok(*u.choose(&["2020-01-01T00:00:00Z", "2999-12-31T23:59:59Z"])?)
-                .map(str::to_string)
+            Ok(*u.choose(&["2020-01-01T00:00:00Z", "2999-12-31T23:59:59Z"])?).map(str::to_string)
         })?,
         reason: arb_opt(u, |u| Ok((*u.choose(&["ci", "manual"])?).to_string()))?,
     })
@@ -222,20 +236,14 @@ impl<'a> Arbitrary<'a> for FuzzCase {
         };
 
         let mut config = Config {
-            mode: arb_mode(u)?,
+            mode: *u.choose(&[Mode::Enforce, Mode::Monitor])?,
             fail_closed: u.arbitrary()?,
             ..Config::default()
         };
 
         let pack_count = u.int_in_range(0..=3)?;
         for _ in 0..pack_count {
-            let pack = *u.choose(&[
-                "core.destructive",
-                "core.network",
-                "core.secrets",
-                "core.workspace",
-                "core.project_hygiene",
-            ])?;
+            let pack = *u.choose(pack_names())?;
             config.pack_overrides.insert(
                 pack.to_string(),
                 PackOverride {
@@ -246,7 +254,7 @@ impl<'a> Arbitrary<'a> for FuzzCase {
 
         let rule_count = u.int_in_range(0..=4)?;
         for _ in 0..rule_count {
-            let id = (*u.choose(RULE_IDS)?).to_string();
+            let id = (*u.choose(rule_ids())?).to_string();
             config.rule_overrides.insert(id, arb_rule_override(u)?);
         }
 

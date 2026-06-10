@@ -34,8 +34,10 @@ fd / tempfile リーク・8 MiB stdin 境界・並列 hook と shared audit JSON
 `make check` 非対象の追加 QA 層 (`.github/workflows/nightly.yml` で夜間実行):
 
 - `make fuzz` / `make fuzz-soak` — `cargo fuzz` による信頼境界 4 種 (shell parser /
-  hook pipeline / config merge / plugin DSL) の coverage-guided fuzzing。`fuzz/` は
-  独立 workspace で nightly toolchain を要する。クラッシュ種は `fuzz/artifacts/` に commit。
+  hook pipeline / config merge / plugin DSL) の coverage-guided fuzzing に加え、
+  `arbitrary` で valid な入力を直接組み立て判定コアを毎回叩く構造化ターゲット
+  (`fuzz_engine_structured`)。`fuzz/` は独立 workspace で nightly toolchain を
+  要する。クラッシュ種は `fuzz/artifacts/` に commit。
 - `make mutants` — `cargo-mutants` による decision コア (`src/decision.rs` / `src/rules/**` /
   `src/engine/**`、スコープは `.cargo/mutants.toml`) の mutation testing。
 - `make semver` — `cargo-semver-checks` で公開 API の SemVer 破壊を検知 (PR CI でも実行)。
