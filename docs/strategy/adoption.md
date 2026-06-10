@@ -106,8 +106,13 @@ ptuf の差別化は一行で言える:
   `pretooluse`, `rust`, `cli`
 - [ ] Discussions を有効化 (質問の受け皿。issue より心理障壁が低い)
 - [ ] Social preview 画像を設定 (OGP。X でリンクが流れたときの見え方が激変)
-- [ ] asciinema か VHS (charmbracelet/vhs) で 20 秒デモ GIF を作り
+  — 画像は `assets/social-preview.png` に生成済み
+  (`scripts/gen-social-preview.py` で再生成可)。Settings → Social preview
+  へのアップロードのみ残り
+- [x] asciinema か VHS (charmbracelet/vhs) で 20 秒デモ GIF を作り
   README 冒頭へ (`ptuf check --tool Bash 'rm -rf /'` → deny が映る絵)
+  — `assets/demo.tape` から `vhs` で生成した `assets/demo.gif` を
+  README.md / README.ja.md 冒頭に埋め込み済み
 
 ### Phase 1: 日本での初期トラクション (1〜6 週間)
 

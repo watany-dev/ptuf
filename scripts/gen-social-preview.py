@@ -7,7 +7,8 @@ Run from the repo root:
     python3 scripts/gen-social-preview.py
 
 Upload the result manually: Settings -> General -> Social preview.
-Fonts: DejaVu (present on most Linux distributions).
+Requires the DejaVu fonts (Debian/Ubuntu: apt-get install fonts-dejavu);
+adjust FONT_DIR below for other platforms.
 """
 
 from pathlib import Path
