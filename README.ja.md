@@ -7,6 +7,8 @@
 
 [English README](README.md)
 
+![ptuf のデモ: rm -rf / や curl | bash、credential の外部送出は deny、ls は allow](assets/demo.gif)
+
 `ptuf` は、コーディングエージェント向けの**決定的ガードレール**です。
 エージェントの `PreToolUse` イベントにフックして、危険なツール呼び出し —
 破壊的な `rm`、`curl | sh`、`~/.ssh` のネットワーク送出など — を
