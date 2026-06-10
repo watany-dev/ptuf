@@ -16,6 +16,11 @@ ignored = ["libfuzzer-sys"]
 [dependencies]
 libfuzzer-sys = "0.4"
 serde_json = "1"
+# Structure-aware generation for `fuzz_engine_structured`: assembles valid
+# `HookInput` / `Config` values directly instead of bouncing arbitrary bytes
+# off the YAML/JSON parsers. Confined to this isolated fuzz workspace, so the
+# shipped library and its public API gain no dependency.
+arbitrary = { version = "1", features = ["derive"] }
 
 [dependencies.ptuf]
 path = ".."
@@ -61,6 +66,13 @@ bench = false
 [[bin]]
 name = "fuzz_copilot_parse"
 path = "fuzz_targets/fuzz_copilot_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_engine_structured"
+path = "fuzz_targets/fuzz_engine_structured.rs"
 test = false
 doc = false
 bench = false

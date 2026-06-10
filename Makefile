@@ -88,7 +88,7 @@ e2e:
 # touches `make check`. Not part of `make check` — see nightly.yml.
 #   - `fuzz` ........ short smoke run of every target (FUZZ_TIME each).
 #   - `fuzz-soak` ... long single-target run for pre-release / triage.
-FUZZ_TARGETS ?= fuzz_shell_parse fuzz_hook_pipeline fuzz_config_merge fuzz_plugin_dsl
+FUZZ_TARGETS ?= fuzz_shell_parse fuzz_hook_pipeline fuzz_config_merge fuzz_plugin_dsl fuzz_engine_structured
 FUZZ_TIME ?= 60
 fuzz: tools
 	@for t in $(FUZZ_TARGETS); do \
