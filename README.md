@@ -1,11 +1,38 @@
 # ptuf
 
+[![CI](https://github.com/watany-dev/ptuf/actions/workflows/ci.yml/badge.svg)](https://github.com/watany-dev/ptuf/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/ptuf.svg)](https://crates.io/crates/ptuf)
+[![Release](https://img.shields.io/github/v/release/watany-dev/ptuf)](https://github.com/watany-dev/ptuf/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+[日本語 README](README.ja.md)
+
 `ptuf` is a deterministic guardrail for coding agents. It hooks into the
 agent's `PreToolUse` event and blocks dangerous tool calls — destructive
 `rm`, piping `curl` into a shell, leaking `~/.ssh` over the network — using
 rules, not LLM heuristics.
 
 Supported hosts: **Claude Code**, **Codex**, **GitHub Copilot**, **Kiro CLI**, **Cline**, **Cursor**.
+
+## Why ptuf?
+
+Most guardrails today are hand-rolled hook scripts that grep the command
+for `rm -rf`. Those break the moment the agent writes `rm -rf "/"`,
+`$(echo rm) -rf /`, or `bash -c 'rm -rf /'`. ptuf takes a different
+approach:
+
+|  | DIY regex hook | Ask-the-LLM / permission prompts | Sandbox / container | ptuf |
+| --- | --- | --- | --- | --- |
+| Deterministic (same input → same decision) | partly | no | yes | **yes** |
+| Understands shell syntax (quotes, pipes, `bash -c`, var expansion) | no | n/a | n/a | **yes** |
+| Bypass resistance covered by versioned tests + fuzzing | no | no | n/a | **yes** ([`tests/bypass/corpus.jsonl`](tests/bypass/corpus.jsonl)) |
+| One policy across Claude Code / Codex / Copilot / Kiro / Cline / Cursor | rewrite per host | no | no | **yes** (`ptuf init`) |
+| Agent cannot disable it mid-session | rarely | no | yes | **yes** (`core.self_protection.*`) |
+| Audit trail of what was blocked and why | rarely | no | no | **yes** (JSONL) |
+| Works offline, no extra runtime | depends | no | heavy setup | **yes** (single binary) |
+
+A sandbox is complementary, not competing: it limits blast radius, while
+ptuf stops and audits the dangerous call itself — run both if you can.
 
 ## What it stops
 
@@ -79,13 +106,13 @@ CI / Docker builds are reproducible.
 
 ```bash
 # Linux / macOS
-PTUF_VERSION=v0.1.1
+PTUF_VERSION=v0.3.0
 curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
 ```
 
 ```powershell
 # Windows (PowerShell)
-$env:PTUF_VERSION = "v0.1.1"
+$env:PTUF_VERSION = "v0.3.0"
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/download/$env:PTUF_VERSION/ptuf-installer.ps1 | iex"
 ```
 
