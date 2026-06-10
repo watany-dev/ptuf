@@ -44,19 +44,53 @@ pub static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
     .expect("SENSITIVE_PATH regex")
 });
 
+/// Lowercase literal fragments — one per [`SENSITIVE_PATH`] alternation
+/// branch. A token that contains none of them cannot match the regex,
+/// so callers can skip both the `LazyLock` compilation (paid once per
+/// short-lived hook process) and the scan on the common safe-token
+/// path. Keep in sync with the pattern above; the
+/// `pbt_prefilter_matches_regex` property test pins the equivalence.
+const SENSITIVE_NEEDLES: &[&str] = &[
+    ".ssh",
+    ".aws",
+    "gcloud",
+    ".kube/config",
+    ".docker/config",
+    "id_",
+    ".env",
+    ".npmrc",
+    ".pypirc",
+    ".tfstate",
+    "-----begin",
+];
+
+/// Prefiltered equivalent of `SENSITIVE_PATH.is_match`. All rule-side
+/// callers go through this so the big alternation regex is only
+/// compiled when a token actually carries a credential-shaped
+/// fragment.
+pub(super) fn matches_sensitive_path(token: &str) -> bool {
+    // The regex only folds ASCII case (`(?i-u:…)`), so an ASCII
+    // lowercase of the token is enough for the needle gate.
+    let lower = token.to_ascii_lowercase();
+    if !SENSITIVE_NEEDLES.iter().any(|n| lower.contains(n)) {
+        return false;
+    }
+    SENSITIVE_PATH.is_match(token)
+}
+
 /// True when this argv has a token (head, positional/flag arg, or env
 /// assignment value) that matches [`SENSITIVE_PATH`]. Shared by every
 /// rule that needs "does this argv mention a credentials path?".
 pub(super) fn argv_references_sensitive(argv: &Argv) -> bool {
-    if SENSITIVE_PATH.is_match(&argv.head) {
+    if matches_sensitive_path(&argv.head) {
         return true;
     }
-    if argv.args.iter().any(|a| SENSITIVE_PATH.is_match(a)) {
+    if argv.args.iter().any(|a| matches_sensitive_path(a)) {
         return true;
     }
     argv.env_assignments
         .iter()
-        .any(|e| SENSITIVE_PATH.is_match(&e.value))
+        .any(|e| matches_sensitive_path(&e.value))
 }
 
 #[cfg(test)]
@@ -152,6 +186,20 @@ mod tests {
         #[test]
         fn pbt_sensitive_path_is_match_never_panics(s in "[ -~]{0,80}") {
             let _ = SENSITIVE_PATH.is_match(&s);
+        }
+
+        // The needle prefilter must be behaviour-preserving: for any
+        // printable-ASCII token the gated helper and the raw regex
+        // agree. Guards SENSITIVE_NEEDLES against drifting out of sync
+        // with the alternation branches.
+        #[test]
+        fn pbt_prefilter_matches_regex(s in "[ -~]{0,80}") {
+            prop_assert_eq!(
+                matches_sensitive_path(&s),
+                SENSITIVE_PATH.is_match(&s),
+                "prefilter diverged on {:?}",
+                s,
+            );
         }
     }
 }

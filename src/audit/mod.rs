@@ -59,6 +59,14 @@ impl std::error::Error for AuditError {
 /// trait object for the lifetime of the process.
 pub trait AuditSink: Send + Sync {
     fn record(&self, record: &AuditRecord) -> Result<(), AuditError>;
+
+    /// `false` when this sink discards every record (the [`NoopSink`]).
+    /// Lets the engine skip redaction and record assembly entirely —
+    /// per-call cost that would otherwise be paid for nothing on every
+    /// audited-class decision when audit is disabled.
+    fn is_active(&self) -> bool {
+        true
+    }
 }
 
 /// No-op sink used when audit is disabled.
@@ -68,6 +76,10 @@ pub struct NoopSink;
 impl AuditSink for NoopSink {
     fn record(&self, _record: &AuditRecord) -> Result<(), AuditError> {
         Ok(())
+    }
+
+    fn is_active(&self) -> bool {
+        false
     }
 }
 

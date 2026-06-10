@@ -27,7 +27,7 @@ use crate::hook_input::HookInput;
 use crate::reason;
 
 use super::ConfigRule;
-use super::patterns::{SENSITIVE_PATH, argv_references_sensitive};
+use super::patterns::{argv_references_sensitive, matches_sensitive_path};
 
 pub struct SensitiveBashRead;
 
@@ -129,10 +129,10 @@ fn argv_reads_sensitive(argv: &Argv) -> bool {
 }
 
 fn argv_has_sensitive_positional(argv: &Argv) -> bool {
-    if SENSITIVE_PATH.is_match(&argv.head) {
+    if matches_sensitive_path(&argv.head) {
         return true;
     }
-    argv.args.iter().any(|a| SENSITIVE_PATH.is_match(a))
+    argv.args.iter().any(|a| matches_sensitive_path(a))
 }
 
 fn invokes_reader(argv: &Argv) -> bool {
@@ -140,7 +140,7 @@ fn invokes_reader(argv: &Argv) -> bool {
 }
 
 fn stdin_target_is_sensitive(r: &Redirect) -> bool {
-    matches!(r.op, RedirectOp::Stdin) && SENSITIVE_PATH.is_match(&r.target)
+    matches!(r.op, RedirectOp::Stdin) && matches_sensitive_path(&r.target)
 }
 
 #[cfg(test)]

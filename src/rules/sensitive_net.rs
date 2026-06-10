@@ -7,7 +7,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 use super::ConfigRule;
-use super::patterns::{SENSITIVE_PATH, argv_references_sensitive};
+use super::patterns::{argv_references_sensitive, matches_sensitive_path};
 
 pub struct SensitivePathToNetwork;
 
@@ -91,14 +91,22 @@ fn bash_redirects_to_network(bash: &Bash) -> bool {
 }
 
 fn redirect_target_is_sensitive(r: &Redirect) -> bool {
-    SENSITIVE_PATH.is_match(&r.target)
+    matches_sensitive_path(&r.target)
 }
 
 fn redirect_target_is_network(r: &Redirect) -> bool {
     matches!(
         r.op,
         RedirectOp::Stdout | RedirectOp::StdoutAppend | RedirectOp::Stderr | RedirectOp::Merge
-    ) && DEVTCP_UDP.is_match(&r.target)
+    )
+        // Cheap ASCII prefix gate so the regex is only compiled when the
+        // target can actually be a /dev/tcp//dev/udp pseudo-path — the
+        // regex itself stays authoritative for the match.
+        && r.target
+            .as_bytes()
+            .get(..5)
+            .is_some_and(|head| head.eq_ignore_ascii_case(b"/dev/"))
+        && DEVTCP_UDP.is_match(&r.target)
 }
 
 fn invokes_network_sink(argv: &Argv) -> bool {

@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check check clean coverage deny doc e2e pbt pbt-quick pbt-deep fuzz fuzz-soak mutants semver tools install-hooks
+.PHONY: build test lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants semver tools install-hooks
 
 # Keep these aligned with .github/workflows/ci.yml and nightly.yml:
 # - CARGO_DENY_VERSION must match the cargo-deny pinned in
@@ -71,6 +71,13 @@ pbt:
 PBT_DEEP_CASES ?= 100000
 pbt-deep:
 	PROPTEST_CASES=$(PBT_DEEP_CASES) cargo test --locked --features testing
+
+# Hook hot-path benchmarks (benches/hot_path.rs, harness-free / no
+# extra dependencies). Builds the release binary first so the e2e tier
+# can measure real spawn-to-exit latency. Not part of `make check`;
+# run before/after performance-sensitive changes and compare output.
+bench: build
+	cargo bench --locked --bench hot_path
 
 # Heavy E2E tests reproducing real-world ptuf invocation patterns
 # (fd / tempfile leak checks, 8 MiB stdin boundary, sequential and

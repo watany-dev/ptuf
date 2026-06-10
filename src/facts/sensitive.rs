@@ -114,25 +114,40 @@ static TFSTATE: LazyLock<Regex> = LazyLock::new(|| build(r"\S+(?i-u:\.tfstate)\b
 static PEM_BLOB: LazyLock<Regex> =
     LazyLock::new(|| build(r"-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----"));
 
+/// Probe table: each entry pairs a regex with the lowercase literal
+/// fragment every one of its matches must contain. The needle gates the
+/// regex behind a cheap substring scan — ptuf runs as one short-lived
+/// process per hook call, so an ungated probe would pay the `LazyLock`
+/// regex *compilation* on every invocation even for `ls`-grade input.
+/// Keep each needle in sync with the pattern literal above; the
+/// `pbt_classify_matches_ungated_probes` property test pins the
+/// equivalence.
+const PROBES: &[(&str, &LazyLock<Regex>, SensitiveKind)] = &[
+    (".ssh", &SSH_DIR, SensitiveKind::SshDir),
+    (".aws", &AWS_DIR, SensitiveKind::AwsDir),
+    ("gcloud", &GCLOUD_DIR, SensitiveKind::GcloudDir),
+    (".kube", &KUBE_CONFIG, SensitiveKind::KubeConfig),
+    (".docker", &DOCKER_CONFIG, SensitiveKind::DockerConfig),
+    ("id_", &PRIVATE_KEY_FILE, SensitiveKind::PrivateKeyFile),
+    (".env", &DOTENV, SensitiveKind::Dotenv),
+    (".npmrc", &NPMRC, SensitiveKind::Npmrc),
+    (".pypirc", &PYPIRC, SensitiveKind::Pypirc),
+    (".tfstate", &TFSTATE, SensitiveKind::Tfstate),
+    ("-----begin", &PEM_BLOB, SensitiveKind::PemBlob),
+];
+
 /// Inspect a single string token and return every sensitive shape it
 /// matches. The slice preserves variant declaration order for
 /// determinism.
 pub fn classify(token: &str) -> Vec<SensitivePath> {
-    let probes: &[(&LazyLock<Regex>, SensitiveKind)] = &[
-        (&SSH_DIR, SensitiveKind::SshDir),
-        (&AWS_DIR, SensitiveKind::AwsDir),
-        (&GCLOUD_DIR, SensitiveKind::GcloudDir),
-        (&KUBE_CONFIG, SensitiveKind::KubeConfig),
-        (&DOCKER_CONFIG, SensitiveKind::DockerConfig),
-        (&PRIVATE_KEY_FILE, SensitiveKind::PrivateKeyFile),
-        (&DOTENV, SensitiveKind::Dotenv),
-        (&NPMRC, SensitiveKind::Npmrc),
-        (&PYPIRC, SensitiveKind::Pypirc),
-        (&TFSTATE, SensitiveKind::Tfstate),
-        (&PEM_BLOB, SensitiveKind::PemBlob),
-    ];
     let mut out = Vec::new();
-    for (re, kind) in probes {
+    // The probe regexes only fold ASCII case (`(?i-u:…)`), so an ASCII
+    // lowercase of the token is enough for the needle gate.
+    let lower = token.to_ascii_lowercase();
+    for (needle, re, kind) in PROBES {
+        if !lower.contains(needle) {
+            continue;
+        }
         for m in re.find_iter(token) {
             out.push(SensitivePath {
                 kind: *kind,
@@ -282,6 +297,24 @@ mod tests {
         #[test]
         fn pbt_classify_never_panics(s in "[ -~]{0,80}") {
             let _ = classify(&s);
+        }
+
+        // The needle prefilter must never change behaviour: running the
+        // probe regexes without any gating yields exactly the same
+        // matches as `classify`. Guards the per-probe needles against
+        // drifting out of sync with their regex literals.
+        #[test]
+        fn pbt_classify_matches_ungated_probes(s in "[ -~]{0,80}") {
+            let mut reference = Vec::new();
+            for (_, re, kind) in PROBES {
+                for m in re.find_iter(&s) {
+                    reference.push(SensitivePath {
+                        kind: *kind,
+                        raw: m.as_str().to_string(),
+                    });
+                }
+            }
+            prop_assert_eq!(classify(&s), reference);
         }
 
         // SensitiveKind::as_str is total and parse round-trips for every
