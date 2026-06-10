@@ -21,7 +21,19 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 全 rule にまたがる否定空間は `tests/rules_proptest.rs`、CLI argv 解析は
 `tests/cli_parse_proptest.rs`、`engine::filter` の合成則
 (`hard_deny` × `allowlist` × `rule_override` × `pack_override` × Mode demote)
-は `tests/filter_proptest.rs`。
+は `tests/filter_proptest.rs`、意味を保つ入力変換に対する判定の単調性
+(メタモルフィック) は `tests/metamorphic_proptest.rs`。
+
+メタモルフィッククラスタは ptuf の bypass 耐性を最も直接的に守る関係性
+(relational) property を所有する: 「意味を変えない書き換え (`-rf`↔`-r -f`
+分割・`sudo`/`bash -c` ラップ・引用挿入・パス別名・複合コマンド) は決して
+判定を弱めてはならない」。2 層で構成する。**H 群** (soundness) は各変換器
+(`src/testing/proptest.rs` の SPT 生成器) が parse 後の argv 構造を意図どおり
+保つことを先に固定し、**P 群** (monotonicity) が `DecisionKind` 順序
+(`Allow < Monitor < Ask < Deny`) で判定の非弱化を検証する。意味を完全に保存
+する変換 (rm head 別綴り・引用) のみ `==`、危険を足しうる変換 (権限ラッパ・
+`bash -c` ネスト・良性 segment との複合) は `>=` を主張する。H 群が先に落ちる
+ので、赤い P 群は常に生成器ではなくエンジン本体のバグを指す。
 
 ## 主要な不変条件
 
@@ -154,7 +166,7 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   が両者をまとめてアサートする。`make check` には含めず、nightly /
   リリース直前に手動実行する。
 - **Fuzzing (nightly / on demand)**: `make fuzz` は `cargo-fuzz`
-  (coverage-guided, nightly toolchain 必須) で 4 つの信頼境界を打つ
+  (coverage-guided, nightly toolchain 必須) で信頼境界を打つ
   — `fuzz_shell_parse` (shell tokenizer), `fuzz_hook_pipeline`
   (hook stdin JSON → `decide`), `fuzz_config_merge` (4 層 YAML config
   パース + merge), `fuzz_plugin_dsl` (plugin DSL コンパイラ)。
@@ -162,7 +174,17 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   --all-targets` / `cargo-deny` / crates.io パッケージに干渉しない。
   PBT が proptest 戦略から「構造化された」入力を生成するのに対し、
   fuzzing は任意バイト列を coverage-guided で当て続け panic 安全 /
-  forward-progress / hang 無しを検証する。`make fuzz-soak
+  forward-progress / hang 無しを検証する。
+
+  生バイトを JSON / YAML パーサに流す上記ターゲットは budget の大半を
+  パース失敗に費やし、エンジン深部 (fact extraction + 全 rule +
+  aggregation) に到達するのは稀である。これを補う構造化ターゲット
+  `fuzz_engine_structured` は `arbitrary` クレートで valid な
+  `HookInput` / `Config` を直接組み立て、毎イテレーションを判定コアへ
+  確実に到達させる。`decide` の全域性 (panic なし) と決定論 (同一入力を
+  2 回評価して同一 `Decision`) を assert する。`arbitrary` 依存と手書き
+  `impl Arbitrary` は `fuzz/` workspace に閉じ、出荷バイナリ・公開 API・
+  crates.io パッケージには一切現れない。`make fuzz-soak
   FUZZ_TARGET=<name>` で単一ターゲットを長時間走らせる。クラッシュ
   再現入力は `fuzz/artifacts/` に最小化のうえ git 管理し、
   `proptest-regressions/` と同様に恒久回帰種とする。CI では
