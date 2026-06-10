@@ -1880,4 +1880,125 @@ mod tests {
             let _ = parse(&s);
         }
     }
+
+    // --- edge-case unit tests for previously uncovered tokenizer paths ---
+
+    // Heredoc tag preceded by spaces: `<< TAG` (whitespace before tag name).
+    #[test]
+    fn heredoc_tag_with_leading_spaces() {
+        let b = parse("cat << EOF\nhello\nEOF\n");
+        assert!(b.has_heredoc);
+        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::Heredoc);
+        assert!(b.segments[0].redirects[0].target.contains("hello"));
+    }
+
+    // Empty heredoc tag `<<` with no following word degrades to a plain
+    // stdin redirect (lines 453-456).
+    #[test]
+    fn heredoc_empty_tag_degrades_to_stdin_redirect() {
+        let b = parse("cat <<");
+        let redirects = &b.segments[0].redirects;
+        assert_eq!(redirects.len(), 1);
+        assert_eq!(redirects[0].op, RedirectOp::Stdin);
+    }
+
+    // `2>>` appends to stderr — the three-byte advance branch (line 504).
+    #[test]
+    fn stderr_double_redirect_append() {
+        let b = parse("cmd 2>> err.log");
+        let redirects = &b.segments[0].redirects;
+        assert_eq!(redirects.len(), 1);
+        assert_eq!(redirects[0].op, RedirectOp::Stderr);
+        assert_eq!(redirects[0].target, "err.log");
+    }
+
+    // Heredoc tag found at EOF with no trailing newline — hits the
+    // `consumed = after_tag` branch (line 573).
+    #[test]
+    fn heredoc_body_tag_at_eof_no_trailing_newline() {
+        let b = parse("cat <<EOF\nhello\nEOF");
+        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::Heredoc);
+        assert_eq!(b.segments[0].redirects[0].target, "hello\n");
+    }
+
+    // Process substitution `<(...)` is flagged (line 466).
+    #[test]
+    fn process_substitution_input_is_flagged() {
+        let b = parse("diff <(ls a) <(ls b)");
+        assert!(b.has_process_substitution);
+    }
+
+    // Process substitution `>(...)` is flagged (line 483).
+    #[test]
+    fn process_substitution_output_is_flagged() {
+        let b = parse("tee >(gzip > out.gz)");
+        assert!(b.has_process_substitution);
+    }
+
+    // Separate `$(...)` in the same command confirms command substitution
+    // is flagged independently of process substitution.
+    #[test]
+    fn process_and_command_substitution_coexist() {
+        let b = parse("diff <(ls a) $(echo b)");
+        assert!(b.has_process_substitution);
+        assert!(b.has_command_substitution);
+    }
+
+    // Nested `$(...)` sets the command substitution flag.
+    #[test]
+    fn nested_command_substitution() {
+        let b = parse("echo $(echo $(date))");
+        assert!(b.has_command_substitution);
+    }
+
+    // `<(foo(bar))` — nested parens inside process substitution increments
+    // depth past 1 in `read_word` (line 636).
+    #[test]
+    fn process_substitution_with_nested_parens() {
+        let b = parse("cmd <(foo(bar))");
+        assert!(b.has_process_substitution);
+    }
+
+    // `xargs -- cmd` — the `--` end-of-flags case when followed by a command
+    // (line 902).
+    #[test]
+    fn xargs_double_dash_separates_flags_from_command() {
+        let b = parse("xargs -- rm -rf");
+        let inner = &b.segments[0].commands[0].inner_argv;
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0], argv("rm", &["-rf"]));
+    }
+
+    // `xargs --` at end with no following command: no inner command surfaced
+    // (line 902 returns None, covered by xargs_command_start returning None).
+    #[test]
+    fn xargs_double_dash_at_end_produces_no_inner() {
+        let b = parse("xargs --");
+        assert!(b.segments[0].commands[0].inner_argv.is_empty());
+    }
+
+    // `xargs -n` consumes the next token as its value (line 908).
+    #[test]
+    fn xargs_flag_takes_value_skips_extra_arg() {
+        let b = parse("xargs -n 10 rm -rf");
+        let inner = &b.segments[0].commands[0].inner_argv;
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0], argv("rm", &["-rf"]));
+    }
+
+    // `xargs` with only flags and no command: `xargs_command_start` returns
+    // None (line 913).
+    #[test]
+    fn xargs_only_flags_produces_no_inner() {
+        let b = parse("xargs -t -r");
+        assert!(b.segments[0].commands[0].inner_argv.is_empty());
+    }
+
+    // `find -exec {} ;` with only `{}` (filtered out) produces empty words:
+    // `extract_find_exec_inner` returns None (line 963).
+    #[test]
+    fn find_exec_only_placeholder_produces_no_inner() {
+        let b = parse(r"find . -exec {} \;");
+        assert!(b.segments[0].commands[0].inner_argv.is_empty());
+    }
 }

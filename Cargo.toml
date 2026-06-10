@@ -47,6 +47,11 @@ name = "filter_proptest"
 path = "tests/filter_proptest.rs"
 required-features = ["testing"]
 
+[[test]]
+name = "metamorphic_proptest"
+path = "tests/metamorphic_proptest.rs"
+required-features = ["testing"]
+
 [features]
 default = []
 testing = ["dep:proptest"]
