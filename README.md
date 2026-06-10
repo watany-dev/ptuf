@@ -7,6 +7,8 @@
 
 [日本語 README](README.ja.md)
 
+![ptuf demo: rm -rf /, curl | bash, and credential exfiltration are denied; ls is allowed](assets/demo.gif)
+
 `ptuf` is a deterministic guardrail for coding agents. It hooks into the
 agent's `PreToolUse` event and blocks dangerous tool calls — destructive
 `rm`, piping `curl` into a shell, leaking `~/.ssh` over the network — using
