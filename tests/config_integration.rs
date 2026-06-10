@@ -716,10 +716,20 @@ fn audit_open_failure_yaml(audit_path: &Path) -> String {
     )
 }
 
+/// An audit path whose parent is a regular file, so opening it fails with
+/// `ENOTDIR` for any uid. A merely missing directory (`/nonexistent/…`)
+/// is not enough: the sink `create_dir_all`s missing parents, which
+/// succeeds when the tests run as root.
+fn unopenable_audit_path(dir: &Path) -> PathBuf {
+    let blocker = dir.join("audit-blocker");
+    std::fs::write(&blocker, b"").expect("write blocker file");
+    blocker.join("audit.jsonl")
+}
+
 #[test]
 fn hook_surfaces_audit_open_failure_on_stderr() {
     let dir = repo();
-    let audit_path = PathBuf::from("/nonexistent/nope/audit.jsonl");
+    let audit_path = unopenable_audit_path(dir.path());
     std::fs::write(
         dir.path().join(".ptuf.yaml"),
         audit_open_failure_yaml(&audit_path),
@@ -737,7 +747,7 @@ fn hook_surfaces_audit_open_failure_on_stderr() {
 #[test]
 fn check_drains_audit_write_warnings() {
     let dir = repo();
-    let audit_path = PathBuf::from("/nonexistent/nope/audit.jsonl");
+    let audit_path = unopenable_audit_path(dir.path());
     std::fs::write(
         dir.path().join(".ptuf.yaml"),
         audit_open_failure_yaml(&audit_path),
@@ -754,7 +764,7 @@ fn check_drains_audit_write_warnings() {
 #[test]
 fn hook_still_denies_when_audit_sink_fails() {
     let dir = repo();
-    let audit_path = PathBuf::from("/nonexistent/nope/audit.jsonl");
+    let audit_path = unopenable_audit_path(dir.path());
     std::fs::write(
         dir.path().join(".ptuf.yaml"),
         audit_open_failure_yaml(&audit_path),
