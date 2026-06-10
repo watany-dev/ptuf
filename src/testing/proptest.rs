@@ -727,6 +727,277 @@ pub fn safe_heads() -> &'static [&'static str] {
     SAFE_HEADS
 }
 
+// --- Metamorphic semantics-preserving transforms (SPT) -----------------------
+//
+// These power `tests/metamorphic_proptest.rs`. The metamorphic layer asserts
+// a *relational* property the rest of the suite does not: rewriting a command
+// in a way that does not change its meaning must never weaken the engine's
+// decision (a denied command stays denied). That directly attacks the
+// bypass-resistance claim — flag-bundle splitting, privilege wrappers,
+// `bash -c` nesting, quoting, and command compounding are the classic
+// obfuscations an attacker reaches for.
+//
+// The hard part is the transforms' own correctness: a buggy "semantics-
+// preserving" rewrite would make the property lie. Two defences keep them
+// honest. First, every transform is a pure token/string rewrite here and
+// never calls `facts::shell::parse`, so it cannot accidentally couple to the
+// code under test. Second, each transform carries a *soundness* property
+// (the `H` group in the test file) that re-parses the rewritten string and
+// checks the decision-relevant tokens round-trip as intended; if a transform
+// is wrong, that property fails first, separating "generator bug" from
+// "engine bypass".
+//
+// Commands are carried as token vectors (`Vec<String>`) so transforms can
+// manipulate the head / flags / target without re-tokenising. Every token a
+// generator here produces is free of whitespace, quotes, and `;`/`|`/`&`
+// metacharacters, so `tokens.join(" ")` is an exact, lossless rendering.
+
+/// Absolute-path spellings of `rm` the destructive-delete rule treats as
+/// equivalent heads (`src/rules/destructive_rm.rs` `RM_HEADS`).
+const RM_HEAD_FORMS: &[&str] = &["rm", "/bin/rm", "/usr/bin/rm"];
+
+/// A deny-eliciting `rm` invocation, carried as a token vector
+/// (`["rm", "-rf", "/etc"]`). Every draw satisfies the destructive-rm
+/// rule's three conditions — an `rm` head, a recursive **and** force flag,
+/// and a system / home / root / parent-escape target — so the default
+/// engine denies it. Metamorphic properties rewrite this base and assert
+/// the deny survives.
+pub fn dangerous_rm_tokens() -> impl Strategy<Value = Vec<String>> {
+    let flags = prop_oneof![
+        Just(vec!["-rf".to_string()]),
+        Just(vec!["-fr".to_string()]),
+        Just(vec!["-Rf".to_string()]),
+        Just(vec!["-rfv".to_string()]),
+        Just(vec!["-r".to_string(), "-f".to_string()]),
+        Just(vec!["--recursive".to_string(), "--force".to_string()]),
+    ];
+    let target = proptest::sample::select(
+        &[
+            "/",
+            "/*",
+            "/etc",
+            "/usr",
+            "/var",
+            "~",
+            "$HOME",
+            "${HOME}",
+            "..",
+            "../../etc",
+        ][..],
+    )
+    .prop_map(std::string::ToString::to_string);
+    (flags, target).prop_map(|(flags, target)| {
+        let mut tokens = vec!["rm".to_string()];
+        tokens.extend(flags);
+        tokens.push(target);
+        tokens
+    })
+}
+
+/// Render a token vector to a space-joined command string. Lossless for
+/// the whitespace-free tokens the metamorphic generators produce.
+pub fn render_tokens(tokens: &[String]) -> String {
+    tokens.join(" ")
+}
+
+/// Split the first bundled short flag (`-rf`) into separate single-letter
+/// flags (`-r -f`). Long flags (`--recursive`) and already-split flags are
+/// left untouched. Semantics-preserving: bundled and split short flags are
+/// identical to a POSIX option parser.
+pub fn split_bundled_flag(tokens: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(tokens.len() + 2);
+    let mut done = false;
+    for token in tokens {
+        if !done && is_bundled_short_flag(token) {
+            for ch in token[1..].chars() {
+                out.push(format!("-{ch}"));
+            }
+            done = true;
+        } else {
+            out.push(token.clone());
+        }
+    }
+    out
+}
+
+fn is_bundled_short_flag(token: &str) -> bool {
+    token.starts_with('-')
+        && !token.starts_with("--")
+        && token.len() > 2
+        && token[1..].chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// Rewrite an `rm` head to an equivalent absolute-path spelling
+/// (`rm` ↔ `/bin/rm` ↔ `/usr/bin/rm`). `form` selects the target spelling.
+/// Decision-invariant: the rule matches all three forms identically.
+pub fn rewrite_rm_head(tokens: &[String], form: usize) -> Vec<String> {
+    let mut out = tokens.to_vec();
+    if let Some(head) = out.first_mut()
+        && RM_HEAD_FORMS.contains(&head.as_str())
+    {
+        *head = RM_HEAD_FORMS[form % RM_HEAD_FORMS.len()].to_string();
+    }
+    out
+}
+
+/// Insert a harmless value-less flag (`-v`, verbose) into the `rm`
+/// command's own flag list, immediately after the `rm` head. Adds output
+/// noise only; the recursive / force / target structure is untouched.
+///
+/// The flag is deliberately attached to the `rm` head rather than the
+/// first argument position: when the command is wrapped (`sudo -u root rm
+/// …`), inserting into the wrapper's option region would change which
+/// token the wrapper treats as its value and break meaning. Anchoring on
+/// the `rm` head keeps the rewrite genuinely semantics-preserving.
+pub fn insert_harmless_flag(tokens: &[String]) -> Vec<String> {
+    let mut out = tokens.to_vec();
+    let rm_pos = out.iter().position(|t| RM_HEAD_FORMS.contains(&t.as_str()));
+    if let Some(pos) = rm_pos {
+        out.insert(pos + 1, "-v".to_string());
+    }
+    out
+}
+
+/// Prefix a recognised privilege-escalation wrapper
+/// (`src/facts/shell.rs` `PREFIX_WRAPPERS`). `form` selects the wrapper and
+/// whether a value-taking option (`-u root` / `--user root`) is included.
+/// Decision-`>=`: the engine unwraps these wrappers, so the inner command's
+/// decision is preserved (and the wrapper can only add risk, never remove).
+pub fn privilege_wrap(tokens: &[String], form: usize) -> Vec<String> {
+    let prefix: &[&str] = match form % 6 {
+        0 => &["sudo"],
+        1 => &["sudo", "-u", "root"],
+        2 => &["doas"],
+        3 => &["doas", "-u", "root"],
+        4 => &["pkexec"],
+        _ => &["run0"],
+    };
+    let mut out: Vec<String> = prefix.iter().map(|s| (*s).to_string()).collect();
+    out.extend(tokens.iter().cloned());
+    out
+}
+
+/// Quote the token at `idx` (taken mod length) using one of four
+/// semantics-preserving spellings selected by `form`: double quotes,
+/// single quotes, an embedded empty single-quote pair (`r''m`), or a
+/// trailing backslash escape (`r\m`). The engine strips quoting, so the
+/// parsed token — and hence the decision — is unchanged. Tokens that
+/// already carry a quote or whitespace are returned untouched (defensive;
+/// the metamorphic generators never produce them).
+pub fn quote_token(tokens: &[String], idx: usize, form: usize) -> Vec<String> {
+    if tokens.is_empty() {
+        return tokens.to_vec();
+    }
+    let target = idx % tokens.len();
+    let mut out = tokens.to_vec();
+    let token = &out[target];
+    if token.is_empty() || token.contains(['\'', '"', ' ', '\t', '\\']) {
+        return out;
+    }
+    let chars: Vec<char> = token.chars().collect();
+    out[target] = match form % 4 {
+        0 => format!("\"{token}\""),
+        1 => format!("'{token}'"),
+        2 => {
+            let (first, rest) = chars.split_at(1);
+            let first: String = first.iter().collect();
+            let rest: String = rest.iter().collect();
+            format!("{first}''{rest}")
+        },
+        _ => {
+            let (init, last) = chars.split_at(chars.len() - 1);
+            let init: String = init.iter().collect();
+            let last: String = last.iter().collect();
+            format!("{init}\\{last}")
+        },
+    };
+    out
+}
+
+/// Render `tokens` joining them with 1–3 spaces per gap, taken from
+/// `widths`. Extra whitespace is insignificant to the shell tokeniser, so
+/// the parsed command is unchanged.
+pub fn whitespace_join(tokens: &[String], widths: &[usize]) -> String {
+    let mut out = String::new();
+    for (i, token) in tokens.iter().enumerate() {
+        if i > 0 {
+            let n = widths.get(i - 1).map_or(1, |w| w % 3 + 1);
+            for _ in 0..n {
+                out.push(' ');
+            }
+        }
+        out.push_str(token);
+    }
+    out
+}
+
+/// Wrap a command string in `bash -c '…'`, single-quote-escaping the body.
+/// The parser surfaces the inner command via `Argv::inner_argv`, so the
+/// inner decision is preserved (decision-`>=`).
+pub fn shellc_wrap(cmd: &str) -> String {
+    format!("bash -c '{}'", cmd.replace('\'', "'\\''"))
+}
+
+/// Compound `cmd` with a benign segment using `;`, `&&`, or `||`, in either
+/// order, selected by `form`. The dangerous segment is still present, so the
+/// aggregated decision is at least as strict (decision-`>=`).
+pub fn conjoin_safe(cmd: &str, form: usize) -> String {
+    match form % 5 {
+        0 => format!("echo ok && {cmd}"),
+        1 => format!("{cmd} && echo done"),
+        2 => format!("true; {cmd}"),
+        3 => format!("{cmd}; true"),
+        _ => format!("false || {cmd}"),
+    }
+}
+
+// --- Sensitive-path normalisation transforms ---------------------------------
+//
+// Powers the `classify`-level metamorphic property: a credential path stays
+// recognised as the same sensitive kind(s) under normalisations that do not
+// change which file it names.
+
+/// A path the sensitive classifier recognises, paired with the kind a
+/// caller can expect in the result. Kept as `~`-relative forms because the
+/// classifier anchors on `~` / `$HOME` / `${HOME}` boundaries.
+pub fn sensitive_base_path() -> impl Strategy<Value = String> {
+    proptest::sample::select(
+        &[
+            "~/.ssh/id_rsa",
+            "~/.ssh/config",
+            "~/.aws/credentials",
+            "~/.config/gcloud/creds.json",
+            "~/.kube/config",
+            "~/.docker/config.json",
+            "/srv/app/.env",
+            "infra/main.tfstate",
+        ][..],
+    )
+    .prop_map(std::string::ToString::to_string)
+}
+
+/// Rewrite a `~`-relative sensitive path into an equivalent home spelling
+/// (`~` ↔ `$HOME` ↔ `${HOME}`), optionally doubling an interior slash and
+/// optionally prefixing `./`. All of these name the same file, so the
+/// classifier must keep recognising it.
+pub fn normalize_sensitive_path(path: &str, form: usize) -> String {
+    let mut out = match form % 3 {
+        0 => path.to_string(),
+        1 => path.replacen('~', "$HOME", 1),
+        _ => path.replacen('~', "${HOME}", 1),
+    };
+    if form.is_multiple_of(2) {
+        // Double the first interior slash: `~/.ssh` -> `~//.ssh`.
+        if let Some(i) = out.find('/') {
+            out.insert(i, '/');
+        }
+    }
+    if form % 4 == 3 && !out.starts_with('~') {
+        out = format!("./{out}");
+    }
+    out
+}
+
 // --- Config filter strategies ------------------------------------------------
 //
 // These power `tests/filter_proptest.rs`. They generate the four
