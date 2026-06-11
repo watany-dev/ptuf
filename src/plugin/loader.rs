@@ -97,9 +97,12 @@ pub fn load_str(path: &Path, source: &str) -> Result<LoadedPlugin, PluginError> 
             rule_id: raw_rule.id.clone(),
             message: e.to_string(),
         })?;
-        let raw_clone = clone_raw_rule(&raw_rule);
-        compiled.push(PluginRule::from_raw(raw_rule, when));
-        originals.push(raw_clone);
+        // `from_raw` only borrows the few small fields it needs (id /
+        // reason / remediation), so the heavy `tests` and `when` payloads
+        // are never duplicated — the original `RawRule` is moved straight
+        // into `raw_rules` (consumed only by the `plugin test` runner).
+        compiled.push(PluginRule::from_raw(&raw_rule, when));
+        originals.push(raw_rule);
     }
 
     Ok(LoadedPlugin {
@@ -109,33 +112,6 @@ pub fn load_str(path: &Path, source: &str) -> Result<LoadedPlugin, PluginError> 
         raw_rules: originals,
         source: path.to_path_buf(),
     })
-}
-
-fn clone_raw_rule(raw: &RawRule) -> RawRule {
-    RawRule {
-        id: raw.id.clone(),
-        title: raw.title.clone(),
-        severity: raw.severity,
-        default_decision: raw.default_decision,
-        overridable: raw.overridable,
-        hard_deny: raw.hard_deny,
-        when: raw.when.clone(),
-        reason: raw.reason.clone(),
-        remediation: raw.remediation.clone(),
-        tests: super::schema::RawTests {
-            deny: raw.tests.deny.iter().map(clone_raw_case).collect(),
-            allow: raw.tests.allow.iter().map(clone_raw_case).collect(),
-        },
-    }
-}
-
-fn clone_raw_case(c: &super::schema::RawTestCase) -> super::schema::RawTestCase {
-    super::schema::RawTestCase {
-        input: super::schema::RawTestInput {
-            tool_name: c.input.tool_name.clone(),
-            tool_input: c.input.tool_input.clone(),
-        },
-    }
 }
 
 #[cfg(test)]

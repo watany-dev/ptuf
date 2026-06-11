@@ -8,7 +8,7 @@
 //! [`SensitiveKind`] without disturbing the existing rule's tests.
 
 use regex::Regex;
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
 /// Distinct kinds of sensitive token that `classify` recognises.
 ///
@@ -87,54 +87,76 @@ fn build(pat: &str) -> Regex {
 // Windows NTFS) still classify. The `-u` selects ASCII case folding so
 // the regex compiles without the optional `unicode-case` feature (kept
 // disabled per `Cargo.toml [dependencies] regex` to keep the binary
-// minimal). Surrounding `\s`/`\b`/`\S` stay Unicode-aware. PEM_BLOB
-// remains case-sensitive because RFC 7468 mandates uppercase header
+// minimal). Surrounding `\s`/`\b`/`\S` stay Unicode-aware. The PEM blob
+// pattern stays case-sensitive because RFC 7468 mandates uppercase header
 // labels.
-static SSH_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.ssh)(?:/|$|\b)"));
-static AWS_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.aws)(?:/|$|\b)"));
-static GCLOUD_DIR: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.config/gcloud)(?:/|$|\b)"));
-static KUBE_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.kube/config)\b"));
-static DOCKER_CONFIG: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.docker/config\.json)\b"));
-static PRIVATE_KEY_FILE: LazyLock<Regex> =
-    LazyLock::new(|| build(r"\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b"));
-// Anchor includes glob metacharacters, brace-expansion punctuation, and
-// `=` so `cat *.env`, `cat {a,b}.env`, `cp ?.env`, `rm [abc].env`, and
-// `dd if=.env`/`--env-file=.env` style flag values are caught at the token
-// boundary.
-static DOTENV: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b"));
-static NPMRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i-u:\.npmrc)\b"));
-static PYPIRC: LazyLock<Regex> = LazyLock::new(|| build(r"(?i-u:\.pypirc)\b"));
-static TFSTATE: LazyLock<Regex> = LazyLock::new(|| build(r"\S+(?i-u:\.tfstate)\b"));
-static PEM_BLOB: LazyLock<Regex> =
-    LazyLock::new(|| build(r"-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----"));
-
-/// Probe table: each entry pairs a regex with the lowercase literal
-/// fragment every one of its matches must contain. The needle gates the
-/// regex behind a cheap substring scan — ptuf runs as one short-lived
-/// process per hook call, so an ungated probe would pay the `LazyLock`
-/// regex *compilation* on every invocation even for `ls`-grade input.
-/// Keep each needle in sync with the pattern literal above; the
-/// `pbt_classify_matches_ungated_probes` property test pins the
-/// equivalence.
-const PROBES: &[(&str, &LazyLock<Regex>, SensitiveKind)] = &[
-    (".ssh", &SSH_DIR, SensitiveKind::SshDir),
-    (".aws", &AWS_DIR, SensitiveKind::AwsDir),
-    ("gcloud", &GCLOUD_DIR, SensitiveKind::GcloudDir),
-    (".kube", &KUBE_CONFIG, SensitiveKind::KubeConfig),
-    (".docker", &DOCKER_CONFIG, SensitiveKind::DockerConfig),
-    ("id_", &PRIVATE_KEY_FILE, SensitiveKind::PrivateKeyFile),
-    (".env", &DOTENV, SensitiveKind::Dotenv),
-    (".npmrc", &NPMRC, SensitiveKind::Npmrc),
-    (".pypirc", &PYPIRC, SensitiveKind::Pypirc),
-    (".tfstate", &TFSTATE, SensitiveKind::Tfstate),
-    ("-----begin", &PEM_BLOB, SensitiveKind::PemBlob),
+//
+// Anchors on the `.env` pattern include glob metacharacters,
+// brace-expansion punctuation, and `=` so `cat *.env`, `cat {a,b}.env`,
+// `cp ?.env`, `rm [abc].env`, and `dd if=.env` / `--env-file=.env` style
+// flag values are caught at the token boundary.
+//
+// `PROBES` is the single source of truth: declaration order is the order
+// `classify` reports matches in. Each entry pairs the variant's pattern
+// with the lowercase literal fragment every one of its matches must
+// contain. The needle gates the regex behind a cheap substring scan —
+// ptuf runs as one short-lived process per hook call, so an ungated
+// probe would pay regex *compilation* on every invocation even for
+// `ls`-grade input. Keep each needle in sync with its pattern literal;
+// the `pbt_classify_matches_ungated_probes` property test pins the
+// equivalence.
+const PROBES: &[(SensitiveKind, &str, &str)] = &[
+    (
+        SensitiveKind::SshDir,
+        ".ssh",
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.ssh)(?:/|$|\b)",
+    ),
+    (
+        SensitiveKind::AwsDir,
+        ".aws",
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.aws)(?:/|$|\b)",
+    ),
+    (
+        SensitiveKind::GcloudDir,
+        "gcloud",
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.config/gcloud)(?:/|$|\b)",
+    ),
+    (
+        SensitiveKind::KubeConfig,
+        ".kube",
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.kube/config)\b",
+    ),
+    (
+        SensitiveKind::DockerConfig,
+        ".docker",
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.docker/config\.json)\b",
+    ),
+    (
+        SensitiveKind::PrivateKeyFile,
+        "id_",
+        r"\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b",
+    ),
+    (
+        SensitiveKind::Dotenv,
+        ".env",
+        r"(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
+    ),
+    (SensitiveKind::Npmrc, ".npmrc", r"(?i-u:\.npmrc)\b"),
+    (SensitiveKind::Pypirc, ".pypirc", r"(?i-u:\.pypirc)\b"),
+    (SensitiveKind::Tfstate, ".tfstate", r"\S+(?i-u:\.tfstate)\b"),
+    (
+        SensitiveKind::PemBlob,
+        "-----begin",
+        r"-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----",
+    ),
 ];
+
+/// Per-variant regexes, indexed parallel to [`PROBES`]. Each slot
+/// compiles on first use and only for variants whose needle actually
+/// appeared in a token, so no-secret invocations never build any of
+/// them.
+static SENSITIVE_REGEXES: [OnceLock<Regex>; PROBES.len()] =
+    [const { OnceLock::new() }; PROBES.len()];
 
 /// Inspect a single string token and return every sensitive shape it
 /// matches. The slice preserves variant declaration order for
@@ -144,10 +166,11 @@ pub fn classify(token: &str) -> Vec<SensitivePath> {
     // The probe regexes only fold ASCII case (`(?i-u:…)`), so an ASCII
     // lowercase of the token is enough for the needle gate.
     let lower = token.to_ascii_lowercase();
-    for (needle, re, kind) in PROBES {
+    for (idx, (kind, needle, pat)) in PROBES.iter().enumerate() {
         if !lower.contains(needle) {
             continue;
         }
+        let re = SENSITIVE_REGEXES[idx].get_or_init(|| build(pat));
         for m in re.find_iter(token) {
             out.push(SensitivePath {
                 kind: *kind,
@@ -305,8 +328,11 @@ mod tests {
         // drifting out of sync with their regex literals.
         #[test]
         fn pbt_classify_matches_ungated_probes(s in "[ -~]{0,80}") {
+            static UNGATED: std::sync::LazyLock<Vec<Regex>> = std::sync::LazyLock::new(|| {
+                PROBES.iter().map(|(_, _, pat)| build(pat)).collect()
+            });
             let mut reference = Vec::new();
-            for (_, re, kind) in PROBES {
+            for ((kind, _, _), re) in PROBES.iter().zip(UNGATED.iter()) {
                 for m in re.find_iter(&s) {
                     reference.push(SensitivePath {
                         kind: *kind,

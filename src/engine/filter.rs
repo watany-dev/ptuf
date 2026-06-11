@@ -29,14 +29,24 @@ fn is_overridable(rule: &(dyn ConfigRule + Sync)) -> bool {
 }
 
 pub(super) fn is_pack_disabled(rule: &(dyn ConfigRule + Sync), config: &Config) -> bool {
-    if rule.hard_deny() {
+    if rule.hard_deny() || config.pack_overrides.is_empty() {
         return false;
     }
+    // A pack override applies when its key is `id` itself or a
+    // dot-boundary prefix of `id` (`core.filesystem` disables
+    // `core.filesystem.destructive-rm`). Probe exactly those candidate
+    // keys in the map rather than scanning every override, so the cost
+    // is O(id depth) lookups instead of O(pack count) comparisons —
+    // each previously allocating a `format!("{pack}.")`.
     let id = rule.id();
-    config
-        .pack_overrides
-        .iter()
-        .any(|(pack, overlay)| pack_disabled(overlay) && rule_matches_pack(id, pack))
+    pack_disabled_key(config, id)
+        || id
+            .match_indices('.')
+            .any(|(idx, _)| pack_disabled_key(config, &id[..idx]))
+}
+
+fn pack_disabled_key(config: &Config, key: &str) -> bool {
+    config.pack_overrides.get(key).is_some_and(pack_disabled)
 }
 
 pub(super) fn apply_rule_override(
@@ -156,10 +166,6 @@ fn pack_disabled(overlay: &PackOverride) -> bool {
     overlay.enabled == Some(false)
 }
 
-fn rule_matches_pack(rule_id: &str, pack: &str) -> bool {
-    rule_id == pack || rule_id.starts_with(&format!("{pack}."))
-}
-
 pub(super) fn demote_for_mode(decision: Decision, mode: Mode, plugins: &PluginSet) -> Decision {
     if matches!(mode, Mode::Monitor)
         && let Decision::Deny { rule_id, .. } = &decision
@@ -187,6 +193,22 @@ mod tests {
         SharedMemorySink, bash, engine_with, plugin_set_with_bash_deny,
     };
     use super::*;
+    use crate::facts::Facts;
+    use crate::hook_input::HookInput;
+
+    /// Minimal `ConfigRule` whose only observable property is its id, so
+    /// `is_pack_disabled`'s dot-boundary matching can be tested directly.
+    struct FakeRule(&'static str);
+
+    impl ConfigRule for FakeRule {
+        fn id(&self) -> &str {
+            self.0
+        }
+
+        fn evaluate(&self, _facts: &Facts, _input: &HookInput) -> Option<Decision> {
+            None
+        }
+    }
 
     #[test]
     fn monitor_mode_keeps_hard_deny_as_deny() {
@@ -251,14 +273,35 @@ rules:
     }
 
     #[test]
-    fn rule_matches_pack_uses_dot_boundary() {
-        assert!(rule_matches_pack(
-            "core.network.remote-script-pipe",
-            "core.network"
+    fn pack_disable_uses_dot_boundary() {
+        // A pack override keyed `core.network` disables its own rules and
+        // descendants, but must not bleed into sibling prefixes
+        // (`core.networking.*`) or rules where the name only appears
+        // mid-path (`foo.core.network.*`).
+        let cfg = {
+            let mut c = Config::default();
+            c.pack_overrides.insert(
+                "core.network".into(),
+                PackOverride {
+                    enabled: Some(false),
+                },
+            );
+            c
+        };
+        assert!(is_pack_disabled(
+            &FakeRule("core.network.remote-script-pipe"),
+            &cfg
         ));
-        assert!(rule_matches_pack("core.network", "core.network"));
-        assert!(!rule_matches_pack("core.networking.x", "core.network"));
-        assert!(!rule_matches_pack("foo.core.network.x", "core.network"));
+        assert!(is_pack_disabled(&FakeRule("core.network"), &cfg));
+        assert!(!is_pack_disabled(&FakeRule("core.networking.x"), &cfg));
+        assert!(!is_pack_disabled(&FakeRule("foo.core.network.x"), &cfg));
+    }
+
+    #[test]
+    fn pack_disable_short_circuits_with_no_overrides() {
+        let mut cfg = Config::default();
+        cfg.pack_overrides.clear();
+        assert!(!is_pack_disabled(&FakeRule("core.network.x"), &cfg));
     }
 
     #[test]

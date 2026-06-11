@@ -165,7 +165,7 @@ fn prepare_case(
         rule_id: raw_rule.id.clone(),
         message: e.to_string(),
     })?;
-    let rule = PluginRule::from_raw(clone_raw_rule(raw_rule), when);
+    let rule = PluginRule::from_raw(raw_rule, when);
     Ok(PreparedCase {
         rule_id: raw_rule.id.clone(),
         rule,
@@ -194,24 +194,6 @@ fn execute_case(prepared: PreparedCase) -> CaseOutcome {
         passed,
         command,
         got,
-    }
-}
-
-fn clone_raw_rule(raw: &RawRule) -> RawRule {
-    RawRule {
-        id: raw.id.clone(),
-        title: raw.title.clone(),
-        severity: raw.severity,
-        default_decision: raw.default_decision,
-        overridable: raw.overridable,
-        hard_deny: raw.hard_deny,
-        when: raw.when.clone(),
-        reason: raw.reason.clone(),
-        remediation: raw.remediation.clone(),
-        tests: super::schema::RawTests {
-            deny: raw.tests.deny.clone(),
-            allow: raw.tests.allow.clone(),
-        },
     }
 }
 
