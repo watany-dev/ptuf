@@ -199,6 +199,14 @@ mod tests {
     }
 
     #[test]
+    fn is_active_false_only_for_noop_sink() {
+        assert!(!NoopSink.is_active());
+        // Real sinks keep the default `true` so the engine still
+        // assembles and records audit rows.
+        assert!(MemorySink::new().is_active());
+    }
+
+    #[test]
     fn memory_sink_captures_records_in_order() {
         let s = MemorySink::new();
         s.record(&rec()).unwrap();
