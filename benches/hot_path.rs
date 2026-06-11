@@ -245,6 +245,13 @@ fn bench_e2e(bin: &std::path::Path, name: &str, payload: &str) {
 // ---------------------------------------------------------------------
 
 fn main() {
+    // nextest / libtest probe every test binary with `--list`; report
+    // zero tests so `cargo nextest run --all-targets` skips this
+    // harness instead of choking on benchmark output.
+    if std::env::args().any(|a| a == "--list") {
+        return;
+    }
+
     if let Ok(case) = std::env::var("PTUF_BENCH_COLD") {
         let elapsed = run_cold_case(&case);
         println!("{}", elapsed.as_nanos());
