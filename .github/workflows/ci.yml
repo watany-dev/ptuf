@@ -3,6 +3,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual trigger so CI can be (re)run on a branch without a new
+  # webhook-delivered event, e.g. from automation whose pushes do not
+  # create workflow runs.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
