@@ -24,9 +24,9 @@ mod copilot_input;
 mod cursor_input;
 mod input_helpers;
 mod kiro_input;
-mod pi_input;
 mod output;
 mod parse;
+mod pi_input;
 mod run;
 
 #[cfg(test)]
@@ -256,6 +256,13 @@ USAGE:
                             global patches $HOME/.cursor/hooks.json.
           --root <PATH>     Override the repo-discovery start directory.
           --hooks <PATH>    Patch this exact hooks.json file instead.
+        Pi-only flags:
+          --scope <local|global>
+                            global (default) writes $HOME/.pi/agent/extensions/ptuf.ts;
+                            local writes <repo>/.pi/extensions/ptuf.ts.
+          --root <PATH>     Override the repo-discovery start directory.
+          --extension <PATH>
+                            Write this exact extension file instead.
     ptuf hook <AGENT>
         (run as the agent's PreToolUse hook over stdin/stdout)
     ptuf [--json] check --tool <NAME> <COMMAND>

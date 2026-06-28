@@ -32,6 +32,7 @@ pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
 /// - `Cline`: `<repo>/.clinerules/` or `<repo>/.cline/`, or
 ///   `<home>/Documents/Cline/` or `<home>/.cline/`.
 /// - `Cursor`: `<repo>/.cursor/` or `<home>/.cursor/`.
+/// - `Pi`: `<home>/.pi/agent/` or `<repo>/.pi/`.
 ///
 /// Returns agents in a stable order so callers can install / report
 /// deterministically. Production callers pass `std::env::var_os("HOME")`
@@ -66,6 +67,11 @@ pub fn detect_agents(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> 
         || home.is_some_and(|h| h.join(".cursor").is_dir())
     {
         found.push(HookAgent::Cursor);
+    }
+    if home.is_some_and(|h| h.join(".pi/agent").is_dir())
+        || repo.as_deref().is_some_and(|r| r.join(".pi").is_dir())
+    {
+        found.push(HookAgent::Pi);
     }
     found
 }
@@ -893,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn detect_agents_returns_all_six_in_stable_order() {
+    fn detect_agents_returns_all_seven_in_stable_order() {
         let dir = workdir("detect-all");
         fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         fs::create_dir_all(dir.join(".codex")).expect("mkdir .codex");
@@ -901,6 +907,7 @@ mod tests {
         fs::create_dir_all(dir.join(".kiro")).expect("mkdir .kiro");
         fs::create_dir_all(dir.join(".clinerules")).expect("mkdir .clinerules");
         fs::create_dir_all(dir.join(".cursor")).expect("mkdir .cursor");
+        fs::create_dir_all(dir.join(".pi")).expect("mkdir .pi");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".claude")).expect("mkdir home/.claude");
         let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
@@ -913,7 +920,30 @@ mod tests {
                 HookAgent::Kiro,
                 HookAgent::Cline,
                 HookAgent::Cursor,
+                HookAgent::Pi,
             ],
         );
+    }
+
+    #[test]
+    fn detect_agents_finds_pi_via_home_dot_pi_agent() {
+        let dir = workdir("detect-pi-home");
+        let home = dir.join("home");
+        fs::create_dir_all(home.join(".pi/agent")).expect("mkdir home/.pi/agent");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Pi]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_agents_finds_pi_via_repo_dot_pi() {
+        let dir = workdir("detect-pi-repo");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        fs::create_dir_all(dir.join(".pi")).expect("mkdir .pi");
+        let home = dir.join("home");
+        fs::create_dir_all(&home).expect("mkdir home");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Pi]);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

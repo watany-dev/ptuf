@@ -30,9 +30,9 @@ pub(super) fn parse(body: &str) -> Result<HookInput, PiInputError> {
         .remove("tool_input")
         .or_else(|| map.remove("toolInput"))
         .unwrap_or(Value::Null);
-    let mut args = decode_args(raw_input);
+    let args = decode_args(raw_input);
 
-    let (tool_name, tool_input) = normalize(&raw_name, &mut args);
+    let (tool_name, tool_input) = normalize(&raw_name, args);
 
     Ok(HookInput {
         tool_name,
@@ -60,22 +60,19 @@ impl std::fmt::Display for PiInputError {
     }
 }
 
-fn normalize(raw_name: &str, args: &mut Map<String, Value>) -> (String, Value) {
+fn normalize(raw_name: &str, mut args: Map<String, Value>) -> (String, Value) {
     match raw_name {
-        "bash" => ("Bash".into(), reshape_bash(args)),
-        "read" => ("Read".into(), reshape_path(args)),
-        "write" => ("Write".into(), reshape_path(args)),
-        "edit" => ("Edit".into(), reshape_edit(args)),
+        "bash" => ("Bash".into(), reshape_bash(&args)),
+        "read" => ("Read".into(), reshape_path(&mut args)),
+        "write" => ("Write".into(), reshape_path(&mut args)),
+        "edit" => ("Edit".into(), reshape_edit(&mut args)),
         "grep" => ("mcp__pi__grep".into(), Value::Object(args.clone())),
         "find" => ("mcp__pi__find".into(), Value::Object(args.clone())),
         "ls" => ("mcp__pi__ls".into(), Value::Object(args.clone())),
         "fetch" | "web_fetch" => ("WebFetch".into(), Value::Object(args.clone())),
         other => {
             let sanitized = sanitize_tool_name(other);
-            (
-                format!("mcp__pi__{sanitized}"),
-                Value::Object(args.clone()),
-            )
+            (format!("mcp__pi__{sanitized}"), Value::Object(args.clone()))
         },
     }
 }
@@ -120,7 +117,7 @@ fn decode_args(raw: Value) -> Map<String, Value> {
     }
 }
 
-fn reshape_bash(args: &mut Map<String, Value>) -> Value {
+fn reshape_bash(args: &Map<String, Value>) -> Value {
     Value::Object(args.clone())
 }
 

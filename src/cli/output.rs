@@ -477,8 +477,7 @@ mod tests {
         let mut err = Vec::new();
         let code = emit_decision(HookAgent::Pi, &decision, &mut out, &mut err);
         assert_eq!(code, 2, "Pi deny exits 2");
-        let json: serde_json::Value =
-            serde_json::from_slice(&out).expect("Pi stdout must be JSON");
+        let json: serde_json::Value = serde_json::from_slice(&out).expect("Pi stdout must be JSON");
         assert_eq!(json["decision"], "deny");
         assert_eq!(json["rule_id"], "core.filesystem.destructive-rm");
         assert_eq!(json["reason"], "blocked");
@@ -499,8 +498,7 @@ mod tests {
         let mut err = Vec::new();
         let code = emit_decision(HookAgent::Pi, &decision, &mut out, &mut err);
         assert_eq!(code, 0, "Pi Ask must exit 0, not demote to deny");
-        let json: serde_json::Value =
-            serde_json::from_slice(&out).expect("Pi stdout must be JSON");
+        let json: serde_json::Value = serde_json::from_slice(&out).expect("Pi stdout must be JSON");
         assert_eq!(json["decision"], "ask");
         assert!(String::from_utf8_lossy(&err).contains("please confirm"));
     }
@@ -511,8 +509,7 @@ mod tests {
         let mut err = Vec::new();
         let code = emit_decision(HookAgent::Pi, &Decision::Allow, &mut out, &mut err);
         assert_eq!(code, 0);
-        let json: serde_json::Value =
-            serde_json::from_slice(&out).expect("Pi stdout must be JSON");
+        let json: serde_json::Value = serde_json::from_slice(&out).expect("Pi stdout must be JSON");
         assert_eq!(json["decision"], "allow");
         assert!(err.is_empty());
     }

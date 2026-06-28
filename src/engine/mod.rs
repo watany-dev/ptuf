@@ -960,6 +960,7 @@ rules:
             hook_scripts: Vec::new(),
             copilot_settings: Vec::new(),
             kiro_settings: Vec::new(),
+            pi_settings: Vec::new(),
         };
         let input = HookInput {
             tool_name: "Edit".into(),

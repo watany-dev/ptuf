@@ -21,8 +21,8 @@ use super::cline_input;
 use super::copilot_input;
 use super::cursor_input;
 use super::kiro_input;
-use super::pi_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
+use super::pi_input;
 use super::{
     GlobalFlags, HookAgent, INVALID_PAYLOAD_RULE, InitOptions, build_engine_or_fail_closed,
 };
@@ -464,7 +464,20 @@ impl AgentPlan {
                     }),
                 })
             },
-            HookAgent::Pi => Err(init::InitError::UnknownAgent("pi".into())),
+            HookAgent::Pi => {
+                let targets = init::pi::resolve_paths(cwd, &options.pi)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.extension_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::pi::detect_binary();
+                        let outcome = init::pi::install(&targets, &binary, dry_run)?;
+                        Ok(init::AdapterRunReport {
+                            outcome,
+                            kiro: None,
+                        })
+                    }),
+                })
+            },
         }
     }
 }

@@ -1,7 +1,7 @@
 # Wiring ptuf into a coding agent
 
 ptuf ships first-class adapters for **Claude Code**, **Codex**, **GitHub
-Copilot**, **Kiro CLI**, **Cline**, and **Cursor**. The same policy engine
+Copilot**, **Kiro CLI**, **Cline**, **Cursor**, and **Pi Coding Agent**. The same policy engine
 and YAML plugins back every host; only the hook-protocol envelope differs.
 
 This page is the user-facing how-to. For the underlying hook protocol, exit
@@ -25,6 +25,7 @@ codes per agent, and the full payload contract, see the design notes:
 | Kiro        | `<repo>/.kiro/` or `$HOME/.kiro/`                | `<repo>/.kiro/agents/*.json` and `$HOME/.kiro/agents/*.json` (all existing JSONs are patched; empty scope falls back to `agents/default.json`) |
 | Cline       | `<repo>/.clinerules/`, `<repo>/.cline/`, `$HOME/Documents/Cline/`, or `$HOME/.cline/` | `<repo>/.clinerules/hooks/PreToolUse` |
 | Cursor      | `<repo>/.cursor/` or `$HOME/.cursor/`            | `<repo>/.cursor/hooks.json` (`--scope global` → `$HOME/.cursor/hooks.json`) |
+| Pi          | `<repo>/.pi/` or `$HOME/.pi/agent/`              | `$HOME/.pi/agent/extensions/ptuf.ts` (default global) or `<repo>/.pi/extensions/ptuf.ts` |
 
 Pin to a single adapter with `ptuf init <agent>` (`claude-code` / `codex`
 / `copilot` / `kiro` / `cline` / `cursor`).
@@ -185,6 +186,33 @@ exit `0`) rather than demoted to a hard deny. Only hook-driven agent tool
 execution is guarded; Tab completion, manual edits, and commands typed
 directly into the terminal never reach a hook and are out of scope.
 
+## Pi Coding Agent
+
+```bash
+ptuf init pi                     # writes $HOME/.pi/agent/extensions/ptuf.ts
+ptuf init pi --scope local       # writes <repo>/.pi/extensions/ptuf.ts
+ptuf init pi --root <path>       # start repo discovery from <path>
+ptuf init pi --extension <path>  # write this exact extension file
+ptuf init pi --dry-run
+ptuf init pi --no-verify
+```
+
+The installer writes a managed TypeScript extension that registers a
+`tool_call` handler spawning `ptuf hook pi` with Pi's raw event payload.
+Normalisation (`bash`→`Bash`, `grep`→`mcp__pi__grep`, unknown tools→
+`mcp__pi__*`) happens in Rust, not in the extension.
+
+Environment variables read by the extension:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PTUF_PI_ASK_MODE` | `confirm-if-ui-else-deny` | How to handle `ask` decisions |
+| `PTUF_PI_TIMEOUT_MS` | `10000` | Hook subprocess timeout |
+
+Limitations: project-local installs trust the repo; **global scope is
+recommended**. Each tool call spawns a fresh `ptuf` process. Non-interactive
+`ask` decisions deny by default.
+
 ## Behavior summary
 
 | Host | Allow / Monitor | Ask | Deny | Failure mode |
@@ -195,6 +223,7 @@ directly into the terminal never reach a hook and are out of scope.
 | Kiro CLI | exit `0`, empty stdout | converted to **deny** | exit `2`, reason on stderr only (no envelope) | `core.engine.invalid-payload` deny at exit `2` |
 | Cline | exit `0`, stdout `{}` | converted to **deny**, exit `0`, cancel JSON | exit `0`, `{"cancel":true,…}` JSON + reason on stderr | `core.engine.invalid-payload` cancel JSON at exit `0` |
 | Cursor | exit `0`, `{"permission":"allow"}` JSON | **preserved**, exit `0`, `{"permission":"ask",…}` JSON | exit `2`, `{"permission":"deny",…}` JSON + reason on stderr | `core.engine.invalid-payload` deny JSON at exit `2` |
+| Pi | exit `0`, `{"decision":"allow"}` JSON | **preserved**, exit `0`, `{"decision":"ask",…}` JSON | exit `2`, `{"decision":"deny",…}` JSON + reason on stderr | `core.engine.invalid-payload` deny JSON at exit `2` |
 
 Hook stdin payloads are capped at 8 MiB across every host. Unreadable,
 oversized, or invalid-JSON stdin is rejected with the reserved

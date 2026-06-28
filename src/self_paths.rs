@@ -25,6 +25,7 @@ pub enum ProtectedKind {
     HookScript,
     CopilotSettings,
     KiroSettings,
+    PiSettings,
 }
 
 impl ProtectedKind {
@@ -38,13 +39,14 @@ impl ProtectedKind {
             Self::HookScript => "hook_script",
             Self::CopilotSettings => "copilot_settings",
             Self::KiroSettings => "kiro_settings",
+            Self::PiSettings => "pi_settings",
         }
     }
 }
 
 /// Small, allocation-free set of protected target labels.
 ///
-/// There are only eight [`ProtectedKind`] variants, so a fixed buffer is
+/// There are only nine [`ProtectedKind`] variants, so a fixed buffer is
 /// simpler than pulling in a small-vector dependency for the hook hot path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProtectedKinds {
@@ -53,7 +55,7 @@ pub struct ProtectedKinds {
 }
 
 impl ProtectedKinds {
-    const CAPACITY: usize = 8;
+    const CAPACITY: usize = 9;
 
     pub fn new() -> Self {
         Self::default()
@@ -118,6 +120,7 @@ pub struct ProtectedPaths {
     pub hook_scripts: Vec<PathBuf>,
     pub copilot_settings: Vec<PathBuf>,
     pub kiro_settings: Vec<PathBuf>,
+    pub pi_settings: Vec<PathBuf>,
 }
 
 impl ProtectedPaths {
@@ -250,6 +253,7 @@ impl ProtectedPaths {
 
         let home_path = env.var_os("HOME").map(PathBuf::from);
         let kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
+        let pi_settings = collect_pi_paths(repo_root, home_path.as_deref());
 
         for agent_path in &kiro_settings {
             // `collect_kiro_agent_jsons` enumerates via `read_dir`, so
@@ -293,6 +297,7 @@ impl ProtectedPaths {
         let hook_scripts = canonicalize_each(hook_scripts);
         let copilot_settings = canonicalize_each(copilot_settings);
         let kiro_settings = canonicalize_each(kiro_settings);
+        let pi_settings = canonicalize_each(pi_settings);
 
         Self {
             repo_root: repo_root.map(Path::to_path_buf),
@@ -304,6 +309,7 @@ impl ProtectedPaths {
             hook_scripts,
             copilot_settings,
             kiro_settings,
+            pi_settings,
         }
     }
 
@@ -389,6 +395,9 @@ impl ProtectedPaths {
         {
             return Some(ProtectedKind::KiroSettings);
         }
+        if self.pi_settings.iter().any(|p| path_matches(candidate, p)) {
+            return Some(ProtectedKind::PiSettings);
+        }
         if self.hook_scripts.iter().any(|p| path_matches(candidate, p)) {
             return Some(ProtectedKind::HookScript);
         }
@@ -426,6 +435,25 @@ fn collect_kiro_agent_jsons(repo_root: Option<&Path>, home: Option<&Path>) -> Ve
         }
     }
 
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn collect_pi_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(home) = home {
+        let agent = home.join(".pi/agent");
+        paths.push(agent.join("settings.json"));
+        paths.push(agent.join("extensions/ptuf.ts"));
+        paths.push(agent.join("extensions/ptuf/index.ts"));
+    }
+    if let Some(root) = repo_root {
+        let pi = root.join(".pi");
+        paths.push(pi.join("settings.json"));
+        paths.push(pi.join("extensions/ptuf.ts"));
+        paths.push(pi.join("extensions/ptuf/index.ts"));
+    }
     paths.sort();
     paths.dedup();
     paths
