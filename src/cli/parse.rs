@@ -308,7 +308,7 @@ mod tests {
 
     use crate::init::cursor::{CursorInitOptions, CursorScope};
     use crate::init::kiro::{KiroInitOptions, KiroMode, ScopeFilter};
-    use crate::init::pi::PiInitOptions;
+    use crate::init::pi::{PiInitOptions, PiScope};
     use crate::update::UpdateOptions;
 
     use super::super::test_support::s;
@@ -700,6 +700,52 @@ mod tests {
                 "expected ConflictingFlags for {combo:?}",
             );
         }
+    }
+
+    #[test]
+    fn parse_init_accepts_scope_global_with_pi() {
+        assert_eq!(
+            cmd(&["init", "pi", "--scope", "global"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Pi),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions::default(),
+                pi: PiInitOptions {
+                    scope: PiScope::Global,
+                    root: None,
+                    extension: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_accepts_extension_with_pi() {
+        assert_eq!(
+            cmd(&["init", "pi", "--extension", "/tmp/ptuf.ts"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Pi),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions::default(),
+                pi: PiInitOptions {
+                    scope: PiScope::default(),
+                    root: None,
+                    extension: Some(PathBuf::from("/tmp/ptuf.ts")),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_rejects_pi_extension_without_pi_agent() {
+        assert!(matches!(
+            parse(&s(&["init", "--extension", "/tmp/ptuf.ts"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
     }
 
     #[test]

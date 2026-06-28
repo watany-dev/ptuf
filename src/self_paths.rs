@@ -1104,6 +1104,53 @@ mod tests {
     }
 
     #[test]
+    fn collect_includes_pi_settings_paths() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-self-pi-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        std::fs::create_dir_all(dir.join(".pi/extensions")).expect("mkdir .pi");
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join(".pi/agent/extensions")).expect("mkdir agent");
+        let home_string = home.to_string_lossy().into_owned();
+        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
+        assert!(
+            p.pi_settings
+                .iter()
+                .any(|q| q == &dir.join(".pi/extensions/ptuf.ts"))
+        );
+        assert!(
+            p.pi_settings
+                .iter()
+                .any(|q| q == &home.join(".pi/agent/extensions/ptuf.ts"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn classify_matches_edit_of_pi_settings() {
+        let p = ProtectedPaths {
+            pi_settings: vec![PathBuf::from("/repo/.pi/extensions/ptuf.ts")],
+            ..ProtectedPaths::default()
+        };
+        let input = HookInput {
+            tool_name: "Write".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/.pi/extensions/ptuf.ts"
+            }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(labels.contains(&ProtectedKind::PiSettings));
+    }
+
+    #[test]
+    fn protected_kind_pi_settings_as_str() {
+        assert_eq!(ProtectedKind::PiSettings.as_str(), "pi_settings");
+    }
+
+    #[test]
     fn classify_matches_edit_of_binary_path() {
         let p = ProtectedPaths {
             binary: Some(PathBuf::from("/usr/bin/ptuf")),

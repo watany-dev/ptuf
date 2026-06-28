@@ -195,4 +195,118 @@ mod tests {
             crate::Decision::Deny { .. }
         ));
     }
+
+    #[test]
+    fn pi_input_error_display_covers_all_variants() {
+        assert!(format!("{}", PiInputError::Empty).contains("empty"));
+        assert!(
+            format!(
+                "{}",
+                PiInputError::Json(serde_json::from_str::<Value>("x").unwrap_err())
+            )
+            .contains("JSON")
+        );
+        assert!(format!("{}", PiInputError::NotAnObject).contains("JSON object"));
+        assert!(format!("{}", PiInputError::MissingToolName).contains("tool_name"));
+    }
+
+    #[test]
+    fn pi_fail_closed_on_empty_invalid_and_missing_fields() {
+        assert!(matches!(parse(""), Err(PiInputError::Empty)));
+        assert!(matches!(parse("{"), Err(PiInputError::Json(_))));
+        assert!(matches!(parse("[]"), Err(PiInputError::NotAnObject)));
+        assert!(matches!(
+            parse(r#"{"tool_input":{}}"#),
+            Err(PiInputError::MissingToolName)
+        ));
+    }
+
+    #[test]
+    fn pi_write_and_edit_normalization() {
+        let write = parse(r#"{"tool_name":"write","tool_input":{"path":"a.txt"}}"#).unwrap();
+        assert_eq!(write.tool_name, "Write");
+        assert_eq!(write.tool_input["file_path"], "a.txt");
+
+        let edit = parse(
+            r#"{"tool_name":"edit","tool_input":{"path":"a.rs","edits":[{"newText":"x"},{"new_text":"y"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(edit.tool_name, "Edit");
+        assert_eq!(edit.tool_input["new_string"], "x\ny");
+    }
+
+    #[test]
+    fn pi_find_ls_and_fetch_map_to_canonical_tools() {
+        assert_eq!(
+            parse(r#"{"tool_name":"find","tool_input":{"path":"."}}"#)
+                .unwrap()
+                .tool_name,
+            "mcp__pi__find"
+        );
+        assert_eq!(
+            parse(r#"{"tool_name":"ls","tool_input":{"path":"."}}"#)
+                .unwrap()
+                .tool_name,
+            "mcp__pi__ls"
+        );
+        assert_eq!(
+            parse(r#"{"tool_name":"fetch","tool_input":{"url":"https://x"}}"#)
+                .unwrap()
+                .tool_name,
+            "WebFetch"
+        );
+        assert_eq!(
+            parse(r#"{"tool_name":"web_fetch","tool_input":{"url":"https://x"}}"#)
+                .unwrap()
+                .tool_name,
+            "WebFetch"
+        );
+    }
+
+    #[test]
+    fn pi_unknown_tool_sanitizes_and_accepts_name_aliases() {
+        assert_eq!(
+            parse(r#"{"tool_name":"my-tool@v2","tool_input":{}}"#)
+                .unwrap()
+                .tool_name,
+            "mcp__pi__my_tool_v2"
+        );
+        assert_eq!(
+            parse(r#"{"tool_name":"!!!","tool_input":{}}"#)
+                .unwrap()
+                .tool_name,
+            "mcp__pi__unknown"
+        );
+        assert_eq!(
+            parse(r#"{"toolName":"bash","tool_input":{"command":"ls"}}"#)
+                .unwrap()
+                .tool_name,
+            "Bash"
+        );
+        assert_eq!(
+            parse(r#"{"name":"bash","tool_input":{"command":"ls"}}"#)
+                .unwrap()
+                .tool_name,
+            "Bash"
+        );
+    }
+
+    #[test]
+    fn pi_decode_args_handles_string_and_scalar_fallbacks() {
+        let from_obj = parse(r#"{"tool_name":"bash","tool_input":{"command":"ls"}}"#).unwrap();
+        assert_eq!(from_obj.bash_command(), Some("ls"));
+
+        let from_json_str =
+            parse(r#"{"tool_name":"bash","tool_input":"{\"command\":\"ls\"}"}"#).unwrap();
+        assert_eq!(from_json_str.bash_command(), Some("ls"));
+
+        let from_plain_str = parse(r#"{"tool_name":"bash","tool_input":"plain-text"}"#).unwrap();
+        assert_eq!(from_plain_str.tool_input["text"], "plain-text");
+
+        let from_null = parse(r#"{"tool_name":"bash"}"#).unwrap();
+        assert!(from_null.tool_input.as_object().unwrap().is_empty());
+
+        let from_number = parse(r#"{"tool_name":"bash","tool_input":42}"#).unwrap();
+        assert_eq!(from_number.tool_input["text"], 42);
+    }
 }

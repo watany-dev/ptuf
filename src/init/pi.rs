@@ -315,4 +315,61 @@ mod tests {
         assert_eq!(mode, 0o600);
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn resolve_paths_global_errors_when_home_unset() {
+        let options = PiInitOptions::default();
+        let err = resolve_paths_with(None, None, &options).expect_err("needs HOME");
+        assert!(matches!(err, InitError::HomeNotSet));
+    }
+
+    #[test]
+    fn resolve_paths_local_errors_outside_repo() {
+        let dir = workdir("no-repo");
+        let options = PiInitOptions {
+            scope: PiScope::Local,
+            root: None,
+            extension: None,
+        };
+        let err = resolve_paths_with(Some(dir.as_path()), None, &options).expect_err("no repo");
+        assert!(matches!(err, InitError::RepoRootNotFound));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_already_present_when_desired_matches() {
+        let dir = workdir("already");
+        let extension = dir.join("ptuf.ts");
+        let targets = TargetPaths {
+            root: dir.clone(),
+            extension_path: extension.clone(),
+        };
+        let desired = render_extension("/bin/ptuf", env!("CARGO_PKG_VERSION"));
+        fs::write(&extension, &desired).unwrap();
+        let outcome = install(&targets, "/bin/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::AlreadyPresent);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_updates_managed_extension_when_binary_changes() {
+        let dir = workdir("update");
+        let extension = dir.join("ptuf.ts");
+        let targets = TargetPaths {
+            root: dir.clone(),
+            extension_path: extension.clone(),
+        };
+        fs::write(&extension, render_extension("/old/ptuf", "0.0.0")).unwrap();
+        let outcome = install(&targets, "/new/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        let body = fs::read_to_string(&extension).unwrap();
+        assert!(body.contains("/new/ptuf"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn is_ptuf_managed_requires_all_markers() {
+        assert!(!is_ptuf_managed(b"// random file\n"));
+        assert!(is_ptuf_managed(&render_extension("/bin/ptuf", "1.0.0")));
+    }
 }

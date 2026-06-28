@@ -7,9 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-28
+
+### Changed (BREAKING)
+- `HookAgent` に `Pi` variant を追加。
+- `InitOptions` に `pi: PiInitOptions` field を追加。
+- `ProtectedKind` に `PiSettings` variant を追加。
+- `ProtectedPaths` に `pi_settings` field を追加。
+
 ### Added
-- **Pi Coding Agent** host adapter: `ptuf hook pi`, `ptuf init pi`, Rust input normalisation, TypeScript extension template, self-protection for `.pi/` paths, and auto-detect.
-- `HookAgent::Pi` variant and `InitOptions.pi` field.
+- **Pi Coding Agent** host adapter: `ptuf hook pi`, `ptuf init pi`, Rust
+  input normalisation (`pi_input.rs`), TypeScript extension template,
+  self-protection for `.pi/` paths, and auto-detect via `~/.pi/agent/` or
+  `<repo>/.pi/`.
 
 ## [0.3.0] - 2026-05-31
 
