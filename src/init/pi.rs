@@ -382,9 +382,7 @@ mod tests {
     fn resolve_paths_reads_home_from_environment() {
         let options = PiInitOptions::default();
         let targets = resolve_paths(None, &options).expect("HOME is set in test env");
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .expect("HOME");
+        let home = std::env::var_os("HOME").map(PathBuf::from).expect("HOME");
         assert_eq!(
             targets.extension_path,
             home.join(".pi/agent/extensions/ptuf.ts")
