@@ -722,6 +722,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_init_accepts_scope_local_with_pi_and_root() {
+        assert_eq!(
+            cmd(&["init", "pi", "--scope", "local", "--root", "/repo"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Pi),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions::default(),
+                pi: PiInitOptions {
+                    scope: PiScope::Local,
+                    root: Some(PathBuf::from("/repo")),
+                    extension: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_rejects_scope_without_cursor_or_pi_agent() {
+        assert!(matches!(
+            parse(&s(&["init", "--scope", "global"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
     fn parse_init_accepts_extension_with_pi() {
         assert_eq!(
             cmd(&["init", "pi", "--extension", "/tmp/ptuf.ts"]),

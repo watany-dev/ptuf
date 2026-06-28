@@ -514,6 +514,16 @@ mod tests {
         assert!(json.get("hookSpecificOutput").is_none());
     }
 
+    #[test]
+    fn pi_monitor_serialises_bare_decision_envelope() {
+        let resp = pi::from_decision(&Decision::Monitor {
+            rule_id: "core.m".into(),
+        });
+        let json = serde_json::to_value(&resp).expect("serialise");
+        assert_eq!(json["decision"], "monitor");
+        assert_eq!(json["rule_id"], "core.m");
+    }
+
     use crate::testing::proptest::{decision, reason_text, rule_id};
     use proptest::prelude::*;
 

@@ -372,4 +372,53 @@ mod tests {
         assert!(!is_ptuf_managed(b"// random file\n"));
         assert!(is_ptuf_managed(&render_extension("/bin/ptuf", "1.0.0")));
     }
+
+    #[test]
+    fn detect_binary_returns_non_empty_string() {
+        assert!(!detect_binary().is_empty());
+    }
+
+    #[test]
+    fn resolve_paths_reads_home_from_environment() {
+        let options = PiInitOptions::default();
+        let targets = resolve_paths(None, &options).expect("HOME is set in test env");
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .expect("HOME");
+        assert_eq!(
+            targets.extension_path,
+            home.join(".pi/agent/extensions/ptuf.ts")
+        );
+    }
+
+    #[test]
+    fn install_surfaces_io_error_when_extension_path_is_unreadable() {
+        let dir = workdir("io-read");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, b"x").unwrap();
+        let extension = blocker.join("ptuf.ts");
+        let targets = TargetPaths {
+            root: dir.clone(),
+            extension_path: extension,
+        };
+        let err = install(&targets, "/bin/ptuf", false).expect_err("parent is file");
+        assert!(matches!(err, InitError::Io { .. }));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_dry_run_updates_managed_extension_without_writing() {
+        let dir = workdir("dry-update");
+        let extension = dir.join("ptuf.ts");
+        fs::write(&extension, render_extension("/old/ptuf", "0.0.0")).unwrap();
+        let targets = TargetPaths {
+            root: dir.clone(),
+            extension_path: extension.clone(),
+        };
+        let outcome = install(&targets, "/new/ptuf", true).unwrap();
+        assert_eq!(outcome.status, InstallStatus::WouldInstall);
+        let body = fs::read(&extension).unwrap();
+        assert!(body.windows(9).any(|w| w == b"/old/ptuf"));
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

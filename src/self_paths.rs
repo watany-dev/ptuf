@@ -1151,6 +1151,25 @@ mod tests {
     }
 
     #[test]
+    fn match_path_detects_pi_settings_targets() {
+        let p = ProtectedPaths {
+            pi_settings: vec![
+                PathBuf::from("/repo/.pi/settings.json"),
+                PathBuf::from("/home/user/.pi/agent/extensions/ptuf/index.ts"),
+            ],
+            ..ProtectedPaths::default()
+        };
+        assert_eq!(
+            p.match_path(Path::new("/repo/.pi/settings.json")),
+            Some(ProtectedKind::PiSettings)
+        );
+        assert_eq!(
+            p.match_path(Path::new("/home/user/.pi/agent/extensions/ptuf/index.ts")),
+            Some(ProtectedKind::PiSettings)
+        );
+    }
+
+    #[test]
     fn classify_matches_edit_of_binary_path() {
         let p = ProtectedPaths {
             binary: Some(PathBuf::from("/usr/bin/ptuf")),
