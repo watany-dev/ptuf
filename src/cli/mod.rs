@@ -14,6 +14,7 @@ use crate::Decision;
 use crate::engine::Engine;
 use crate::init::cursor::CursorInitOptions;
 use crate::init::kiro::KiroInitOptions;
+use crate::init::pi::PiInitOptions;
 use crate::reason;
 
 pub use crate::update::UpdateOptions;
@@ -23,6 +24,7 @@ mod copilot_input;
 mod cursor_input;
 mod input_helpers;
 mod kiro_input;
+mod pi_input;
 mod output;
 mod parse;
 mod run;
@@ -54,6 +56,7 @@ pub enum HookAgent {
     Kiro,
     Cline,
     Cursor,
+    Pi,
 }
 
 impl HookAgent {
@@ -65,6 +68,7 @@ impl HookAgent {
             Self::Kiro => "kiro",
             Self::Cline => "cline",
             Self::Cursor => "cursor",
+            Self::Pi => "pi",
         }
     }
 }
@@ -93,6 +97,7 @@ pub struct InitOptions {
     pub dry_run: bool,
     pub kiro: KiroInitOptions,
     pub cursor: CursorInitOptions,
+    pub pi: PiInitOptions,
 }
 
 /// Top-level flags that apply uniformly across subcommands.
@@ -101,7 +106,7 @@ pub struct InitOptions {
 /// subcommand token (`ptuf --json init`). Per-subcommand
 /// `--json` was removed in the v0 simplification; `hook` rejects
 /// `--json` at parse time because the hook protocol output shape
-/// is fixed by Claude Code / Codex / Copilot / Kiro / Cline / Cursor.
+/// is fixed by Claude Code / Codex / Copilot / Kiro / Cline / Cursor / Pi.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GlobalFlags {
     pub json: bool,
@@ -238,7 +243,7 @@ USAGE:
         (auto-detect every agent under cwd / $HOME and install the
          PreToolUse hook with verify enabled by default. AGENT pins
          to a single adapter: claude-code | codex | copilot | kiro
-         | cline | cursor)
+         | cline | cursor | pi)
         Kiro-only flags:
           --new-agent       Create a dedicated ptuf-guarded.json agent
                             (legacy single-file behavior) instead of
@@ -309,5 +314,6 @@ mod tests {
         assert_eq!(HookAgent::Kiro.audit_name(), "kiro");
         assert_eq!(HookAgent::Cline.audit_name(), "cline");
         assert_eq!(HookAgent::Cursor.audit_name(), "cursor");
+        assert_eq!(HookAgent::Pi.audit_name(), "pi");
     }
 }

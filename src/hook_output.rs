@@ -208,6 +208,53 @@ pub mod cline {
     }
 }
 
+pub mod pi {
+    use serde::Serialize;
+
+    use crate::Decision;
+
+    /// Bare decision envelope expected by the Pi Coding Agent extension.
+    /// Unlike Claude Code / Codex, Pi reads `decision` / `rule_id` / `reason`
+    /// directly (no `hookSpecificOutput` wrapper). `Ask` is preserved because
+    /// the TS extension can surface an interactive confirm channel.
+    #[derive(Debug, Serialize)]
+    pub struct PiHookResponse {
+        pub decision: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub rule_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub reason: Option<String>,
+    }
+
+    /// Build a Pi hook response from a decision. Every variant serialises to
+    /// JSON on stdout so the extension can interpret allow/monitor/notify/ask/
+    /// deny without relying on exit code alone.
+    pub fn from_decision(decision: &Decision) -> PiHookResponse {
+        match decision {
+            Decision::Allow => PiHookResponse {
+                decision: "allow",
+                rule_id: None,
+                reason: None,
+            },
+            Decision::Monitor { rule_id } => PiHookResponse {
+                decision: "monitor",
+                rule_id: Some(rule_id.clone()),
+                reason: None,
+            },
+            Decision::Ask { rule_id, reason } => PiHookResponse {
+                decision: "ask",
+                rule_id: Some(rule_id.clone()),
+                reason: Some(reason.clone()),
+            },
+            Decision::Deny { rule_id, reason } => PiHookResponse {
+                decision: "deny",
+                rule_id: Some(rule_id.clone()),
+                reason: Some(reason.clone()),
+            },
+        }
+    }
+}
+
 pub mod cursor {
     use serde::Serialize;
 
@@ -428,6 +475,43 @@ mod tests {
             "Cursor has an ask channel; Ask must not demote to deny"
         );
         assert_eq!(json["user_message"], "confirm please");
+    }
+
+    #[test]
+    fn pi_allow_serialises_bare_decision_envelope() {
+        let resp = pi::from_decision(&Decision::Allow);
+        let json = serde_json::to_value(&resp).expect("serialise");
+        assert_eq!(json["decision"], "allow");
+        assert!(json.get("rule_id").is_none());
+        assert!(json.get("reason").is_none());
+        assert!(json.get("hookSpecificOutput").is_none());
+    }
+
+    #[test]
+    fn pi_ask_is_preserved_not_demoted() {
+        let d = Decision::Ask {
+            rule_id: "core.a".into(),
+            reason: "confirm please".into(),
+        };
+        let resp = pi::from_decision(&d);
+        let json = serde_json::to_value(&resp).expect("serialise");
+        assert_eq!(json["decision"], "ask");
+        assert_eq!(json["rule_id"], "core.a");
+        assert_eq!(json["reason"], "confirm please");
+    }
+
+    #[test]
+    fn pi_deny_includes_rule_id_and_reason() {
+        let d = Decision::Deny {
+            rule_id: "core.x".into(),
+            reason: "blocked".into(),
+        };
+        let resp = pi::from_decision(&d);
+        let json = serde_json::to_value(&resp).expect("serialise");
+        assert_eq!(json["decision"], "deny");
+        assert_eq!(json["rule_id"], "core.x");
+        assert_eq!(json["reason"], "blocked");
+        assert!(json.get("hookSpecificOutput").is_none());
     }
 
     use crate::testing::proptest::{decision, reason_text, rule_id};

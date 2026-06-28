@@ -21,6 +21,7 @@ use super::cline_input;
 use super::copilot_input;
 use super::cursor_input;
 use super::kiro_input;
+use super::pi_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
 use super::{
     GlobalFlags, HookAgent, INVALID_PAYLOAD_RULE, InitOptions, build_engine_or_fail_closed,
@@ -111,6 +112,7 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
         HookAgent::Kiro => kiro_input::parse(body).map_err(|err| err.to_string()),
         HookAgent::Cline => cline_input::parse(body).map_err(|err| err.to_string()),
         HookAgent::Cursor => cursor_input::parse(body).map_err(|err| err.to_string()),
+        HookAgent::Pi => pi_input::parse(body).map_err(|err| err.to_string()),
     }
 }
 
@@ -205,7 +207,7 @@ where
         if detected.is_empty() {
             let _ = writeln!(
                 stderr,
-                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro | cline | cursor)",
+                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro | cline | cursor | pi)",
             );
             return 1;
         }
@@ -462,6 +464,7 @@ impl AgentPlan {
                     }),
                 })
             },
+            HookAgent::Pi => Err(init::InitError::UnknownAgent("pi".into())),
         }
     }
 }
@@ -603,6 +606,7 @@ mod tests {
             dry_run,
             kiro: init::kiro::KiroInitOptions::default(),
             cursor: init::cursor::CursorInitOptions::default(),
+            pi: init::pi::PiInitOptions::default(),
         })
     }
 
@@ -961,6 +965,7 @@ rules:
                 dry_run: false,
                 kiro: init::kiro::KiroInitOptions::default(),
                 cursor: init::cursor::CursorInitOptions::default(),
+                pi: init::pi::PiInitOptions::default(),
             },
             passing_report,
             &mut out,
@@ -991,6 +996,7 @@ rules:
                 dry_run: false,
                 kiro: init::kiro::KiroInitOptions::default(),
                 cursor: init::cursor::CursorInitOptions::default(),
+                pi: init::pi::PiInitOptions::default(),
             },
             failing_report,
             &mut out,
@@ -1023,6 +1029,7 @@ rules:
                 dry_run: false,
                 kiro: init::kiro::KiroInitOptions::default(),
                 cursor: init::cursor::CursorInitOptions::default(),
+                pi: init::pi::PiInitOptions::default(),
             },
             passing_report,
             &mut out,

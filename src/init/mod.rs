@@ -13,6 +13,7 @@ pub mod codex;
 pub mod copilot;
 pub mod cursor;
 pub mod kiro;
+pub mod pi;
 pub mod verify;
 
 /// Return the first whitespace-delimited token of `cmd`, which is the

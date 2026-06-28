@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crate::init::cursor::{CursorInitOptions, CursorScope};
 use crate::init::kiro::{KiroInitOptions, KiroMode, ScopeFilter};
+use crate::init::pi::PiInitOptions;
 use crate::update::UpdateOptions;
 
 use super::{Command, HookAgent, InitOptions, ParseError};
@@ -41,7 +42,7 @@ where
                 "--new-agent" => new_agent = true,
                 "--workspace-only" => workspace_only = true,
                 "--global" => global = true,
-                "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" => {
+                "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" | "pi" => {
                     if agent.is_some() {
                         return Err(ParseError::UnexpectedArgument(arg.to_string()));
                     }
@@ -101,6 +102,7 @@ where
         dry_run,
         kiro,
         cursor,
+        pi: PiInitOptions::default(),
     }))
 }
 
@@ -144,6 +146,7 @@ fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
         "kiro" => Ok(HookAgent::Kiro),
         "cline" => Ok(HookAgent::Cline),
         "cursor" => Ok(HookAgent::Cursor),
+        "pi" => Ok(HookAgent::Pi),
         other => Err(ParseError::UnknownAgent(other.to_string())),
     }
 }
@@ -246,6 +249,7 @@ mod tests {
 
     use crate::init::cursor::{CursorInitOptions, CursorScope};
     use crate::init::kiro::{KiroInitOptions, KiroMode, ScopeFilter};
+    use crate::init::pi::PiInitOptions;
     use crate::update::UpdateOptions;
 
     use super::super::test_support::s;
@@ -305,6 +309,18 @@ mod tests {
             cmd(&["hook", "cline"]),
             Command::HookPreToolUse {
                 agent: HookAgent::Cline
+            }
+        );
+        assert_eq!(
+            cmd(&["hook", "cursor"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::Cursor
+            }
+        );
+        assert_eq!(
+            cmd(&["hook", "pi"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::Pi
             }
         );
     }
@@ -445,6 +461,7 @@ mod tests {
                 dry_run: false,
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -458,6 +475,7 @@ mod tests {
             ("kiro", HookAgent::Kiro),
             ("cline", HookAgent::Cline),
             ("cursor", HookAgent::Cursor),
+            ("pi", HookAgent::Pi),
         ] {
             let c = cmd(&["init", token]);
             assert_eq!(
@@ -468,6 +486,7 @@ mod tests {
                     dry_run: false,
                     kiro: KiroInitOptions::default(),
                     cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
                 }),
                 "agent token {token}",
             );
@@ -484,6 +503,7 @@ mod tests {
                 dry_run: false,
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -498,6 +518,7 @@ mod tests {
                 dry_run: true,
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -512,6 +533,7 @@ mod tests {
                 dry_run: true,
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -529,6 +551,7 @@ mod tests {
                     scope: ScopeFilter::Both,
                 },
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -546,6 +569,7 @@ mod tests {
                     scope: ScopeFilter::WorkspaceOnly,
                 },
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -563,6 +587,7 @@ mod tests {
                     scope: ScopeFilter::GlobalOnly,
                 },
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -580,6 +605,7 @@ mod tests {
                     scope: ScopeFilter::GlobalOnly,
                 },
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -631,6 +657,7 @@ mod tests {
                     root: None,
                     hooks: None,
                 },
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -649,6 +676,7 @@ mod tests {
                     root: None,
                     hooks: None,
                 },
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -674,6 +702,7 @@ mod tests {
                     root: Some(PathBuf::from("/repo")),
                     hooks: Some(PathBuf::from("/tmp/h.json")),
                 },
+                pi: PiInitOptions::default(),
             })
         );
     }
