@@ -403,6 +403,9 @@ impl Engine {
     }
 
     fn record_audit(&self, input: &HookInput, outcome: &Outcome) {
+        if !self.audit_sink.is_active() {
+            return;
+        }
         if !should_record(&outcome.decision, &self.config) {
             return;
         }

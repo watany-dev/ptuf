@@ -47,6 +47,10 @@ name = "filter_proptest"
 path = "tests/filter_proptest.rs"
 required-features = ["testing"]
 
+[[bench]]
+name = "hot_path"
+harness = false
+
 [features]
 default = []
 testing = ["dep:proptest"]

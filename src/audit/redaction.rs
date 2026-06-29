@@ -100,39 +100,91 @@ static PEM_BLOB: LazyLock<Regex> = LazyLock::new(|| {
         .expect("pem blob")
 });
 
+/// Keyword fragments shared by [`SENSITIVE_KEY`] and
+/// [`JSON_SENSITIVE_KEY`] — both regexes require one of these in the
+/// key, case-insensitively.
+const KEYWORD_NEEDLES: &[&str] = &[
+    "token",
+    "key",
+    "secret",
+    "password",
+    "credential",
+    "private",
+];
+
 /// Strict redactor used by the JSONL audit sink. The algorithm runs
 /// each pattern in turn — the order is from most specific (PEM blob,
 /// env assignments) to most generic (free-floating tokens).
+///
+/// Every pattern is gated behind a literal-needle scan of the original
+/// input so its `LazyLock` regex is only compiled when the input can
+/// actually contain that token shape (ptuf is one process per hook
+/// call, so an ungated chain would recompile all ten regexes on every
+/// audited decision). Gating on the *original* input is sound: each
+/// replacement only deletes matched text or splices in `***` /
+/// captured substrings, so no pass can introduce a needle that the
+/// original input did not already contain.
 pub fn redact_strict(input: &str) -> String {
-    let mut out = PEM_BLOB.replace_all(input, PLACEHOLDER).into_owned();
+    let lower = input.to_ascii_lowercase();
+    let has_keyword = KEYWORD_NEEDLES.iter().any(|n| lower.contains(n));
 
-    out = JSON_SENSITIVE_KEY
-        .replace_all(&out, |caps: &regex::Captures| {
-            format!(r#""{}":"{}""#, &caps[1], PLACEHOLDER)
-        })
-        .into_owned();
+    let mut out = if input.contains("-----BEGIN") {
+        PEM_BLOB.replace_all(input, PLACEHOLDER).into_owned()
+    } else {
+        input.to_owned()
+    };
 
-    out = SENSITIVE_KEY
-        .replace_all(&out, |caps: &regex::Captures| {
-            format!("{}={}", &caps[1], PLACEHOLDER)
-        })
-        .into_owned();
+    if has_keyword {
+        out = JSON_SENSITIVE_KEY
+            .replace_all(&out, |caps: &regex::Captures| {
+                format!(r#""{}":"{}""#, &caps[1], PLACEHOLDER)
+            })
+            .into_owned();
 
-    out = BASIC_AUTH
-        .replace_all(&out, |caps: &regex::Captures| {
-            format!("{}{}:{}@", &caps["scheme"], &caps["user"], PLACEHOLDER)
-        })
-        .into_owned();
+        out = SENSITIVE_KEY
+            .replace_all(&out, |caps: &regex::Captures| {
+                format!("{}={}", &caps[1], PLACEHOLDER)
+            })
+            .into_owned();
+    }
 
-    out = GH_TOKEN.replace_all(&out, PLACEHOLDER).into_owned();
-    out = GH_FINE_GRAINED_TOKEN
-        .replace_all(&out, PLACEHOLDER)
-        .into_owned();
-    out = SLACK_TOKEN.replace_all(&out, PLACEHOLDER).into_owned();
-    out = STRIPE_KEY.replace_all(&out, PLACEHOLDER).into_owned();
-    out = OPENAI_KEY.replace_all(&out, PLACEHOLDER).into_owned();
-    out = AWS_AKID.replace_all(&out, PLACEHOLDER).into_owned();
-    out = JWT.replace_all(&out, PLACEHOLDER).into_owned();
+    if input.contains("://") {
+        out = BASIC_AUTH
+            .replace_all(&out, |caps: &regex::Captures| {
+                format!("{}{}:{}@", &caps["scheme"], &caps["user"], PLACEHOLDER)
+            })
+            .into_owned();
+    }
+
+    if ["ghp_", "gho_", "ghu_", "ghs_", "ghr_"]
+        .iter()
+        .any(|p| input.contains(p))
+    {
+        out = GH_TOKEN.replace_all(&out, PLACEHOLDER).into_owned();
+    }
+    if input.contains("github_pat_") {
+        out = GH_FINE_GRAINED_TOKEN
+            .replace_all(&out, PLACEHOLDER)
+            .into_owned();
+    }
+    if input.contains("xox") {
+        out = SLACK_TOKEN.replace_all(&out, PLACEHOLDER).into_owned();
+    }
+    if ["sk_", "pk_", "rk_", "whsec_"]
+        .iter()
+        .any(|p| input.contains(p))
+    {
+        out = STRIPE_KEY.replace_all(&out, PLACEHOLDER).into_owned();
+    }
+    if input.contains("sk-") {
+        out = OPENAI_KEY.replace_all(&out, PLACEHOLDER).into_owned();
+    }
+    if input.contains("AKIA") {
+        out = AWS_AKID.replace_all(&out, PLACEHOLDER).into_owned();
+    }
+    if input.contains("eyJ") {
+        out = JWT.replace_all(&out, PLACEHOLDER).into_owned();
+    }
 
     out
 }

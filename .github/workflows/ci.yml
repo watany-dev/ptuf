@@ -3,6 +3,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual trigger so CI can be (re)run on a branch without a new
+  # webhook-delivered event, e.g. from automation whose pushes do not
+  # create workflow runs.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -145,6 +149,7 @@ jobs:
             --exclude-files "src/**/windows*.rs" \
             --exclude-files "src/**/*_windows.rs" \
             --exclude-files "src/testing/**" \
+            --exclude-files "benches/**" \
             --timeout 300 \
             -- --test-threads=1
       - name: Upload coverage report

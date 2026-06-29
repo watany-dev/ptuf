@@ -7,8 +7,8 @@
 //! (`Read`, `Edit`, `Write`, plugin DSL) can match a typed
 //! [`SensitiveKind`] without disturbing the existing rule's tests.
 
-use regex::{Regex, RegexSet};
-use std::sync::LazyLock;
+use regex::Regex;
+use std::sync::OnceLock;
 
 /// Distinct kinds of sensitive token that `classify` recognises.
 ///
@@ -97,79 +97,83 @@ fn build(pat: &str) -> Regex {
 // flag values are caught at the token boundary.
 //
 // `PROBES` is the single source of truth: declaration order is the order
-// `classify` reports matches in, and each index lines up with the index
-// `SENSITIVE_SET` reports, so the set prefilter and the per-variant
-// regexes stay aligned.
-const PROBES: &[(SensitiveKind, &str)] = &[
+// `classify` reports matches in. Each entry pairs the variant's pattern
+// with the lowercase literal fragment every one of its matches must
+// contain. The needle gates the regex behind a cheap substring scan —
+// ptuf runs as one short-lived process per hook call, so an ungated
+// probe would pay regex *compilation* on every invocation even for
+// `ls`-grade input. Keep each needle in sync with its pattern literal;
+// the `pbt_classify_matches_ungated_probes` property test pins the
+// equivalence.
+const PROBES: &[(SensitiveKind, &str, &str)] = &[
     (
         SensitiveKind::SshDir,
+        ".ssh",
         r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.ssh)(?:/|$|\b)",
     ),
     (
         SensitiveKind::AwsDir,
+        ".aws",
         r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.aws)(?:/|$|\b)",
     ),
     (
         SensitiveKind::GcloudDir,
+        "gcloud",
         r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.config/gcloud)(?:/|$|\b)",
     ),
     (
         SensitiveKind::KubeConfig,
+        ".kube",
         r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.kube/config)\b",
     ),
     (
         SensitiveKind::DockerConfig,
+        ".docker",
         r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.docker/config\.json)\b",
     ),
     (
         SensitiveKind::PrivateKeyFile,
+        "id_",
         r"\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b",
     ),
     (
         SensitiveKind::Dotenv,
+        ".env",
         r"(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
     ),
-    (SensitiveKind::Npmrc, r"(?i-u:\.npmrc)\b"),
-    (SensitiveKind::Pypirc, r"(?i-u:\.pypirc)\b"),
-    (SensitiveKind::Tfstate, r"\S+(?i-u:\.tfstate)\b"),
+    (SensitiveKind::Npmrc, ".npmrc", r"(?i-u:\.npmrc)\b"),
+    (SensitiveKind::Pypirc, ".pypirc", r"(?i-u:\.pypirc)\b"),
+    (SensitiveKind::Tfstate, ".tfstate", r"\S+(?i-u:\.tfstate)\b"),
     (
         SensitiveKind::PemBlob,
+        "-----begin",
         r"-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----",
     ),
 ];
 
-/// One combined automaton over every probe pattern, used as a prefilter:
-/// a single pass reports which variants can match, so `classify` skips the
-/// per-variant regexes entirely for the common no-match token and only
-/// re-runs the ones the set flagged otherwise.
-static SENSITIVE_SET: LazyLock<RegexSet> = LazyLock::new(|| {
-    #[expect(
-        clippy::expect_used,
-        reason = "static pattern literals validated by tests"
-    )]
-    RegexSet::new(PROBES.iter().map(|(_, pat)| *pat)).expect("sensitive regex set")
-});
-
-/// Per-variant regexes, indexed parallel to [`PROBES`]. Lazily compiled and
-/// only consulted for the indices [`SENSITIVE_SET`] reports as matching, so
-/// no-secret commands never pay to build or run them.
-static SENSITIVE_REGEXES: LazyLock<Vec<Regex>> =
-    LazyLock::new(|| PROBES.iter().map(|(_, pat)| build(pat)).collect());
+/// Per-variant regexes, indexed parallel to [`PROBES`]. Each slot
+/// compiles on first use and only for variants whose needle actually
+/// appeared in a token, so no-secret invocations never build any of
+/// them.
+static SENSITIVE_REGEXES: [OnceLock<Regex>; PROBES.len()] =
+    [const { OnceLock::new() }; PROBES.len()];
 
 /// Inspect a single string token and return every sensitive shape it
 /// matches. The slice preserves variant declaration order for
 /// determinism.
 pub fn classify(token: &str) -> Vec<SensitivePath> {
-    let matched = SENSITIVE_SET.matches(token);
-    if !matched.matched_any() {
-        return Vec::new();
-    }
     let mut out = Vec::new();
-    for idx in &matched {
-        let (kind, _) = PROBES[idx];
-        for m in SENSITIVE_REGEXES[idx].find_iter(token) {
+    // The probe regexes only fold ASCII case (`(?i-u:…)`), so an ASCII
+    // lowercase of the token is enough for the needle gate.
+    let lower = token.to_ascii_lowercase();
+    for (idx, (kind, needle, pat)) in PROBES.iter().enumerate() {
+        if !lower.contains(needle) {
+            continue;
+        }
+        let re = SENSITIVE_REGEXES[idx].get_or_init(|| build(pat));
+        for m in re.find_iter(token) {
             out.push(SensitivePath {
-                kind,
+                kind: *kind,
                 raw: m.as_str().to_string(),
             });
         }
@@ -316,6 +320,27 @@ mod tests {
         #[test]
         fn pbt_classify_never_panics(s in "[ -~]{0,80}") {
             let _ = classify(&s);
+        }
+
+        // The needle prefilter must never change behaviour: running the
+        // probe regexes without any gating yields exactly the same
+        // matches as `classify`. Guards the per-probe needles against
+        // drifting out of sync with their regex literals.
+        #[test]
+        fn pbt_classify_matches_ungated_probes(s in "[ -~]{0,80}") {
+            static UNGATED: std::sync::LazyLock<Vec<Regex>> = std::sync::LazyLock::new(|| {
+                PROBES.iter().map(|(_, _, pat)| build(pat)).collect()
+            });
+            let mut reference = Vec::new();
+            for ((kind, _, _), re) in PROBES.iter().zip(UNGATED.iter()) {
+                for m in re.find_iter(&s) {
+                    reference.push(SensitivePath {
+                        kind: *kind,
+                        raw: m.as_str().to_string(),
+                    });
+                }
+            }
+            prop_assert_eq!(classify(&s), reference);
         }
 
         // SensitiveKind::as_str is total and parse round-trips for every
