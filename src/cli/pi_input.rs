@@ -66,13 +66,13 @@ fn normalize(raw_name: &str, mut args: Map<String, Value>) -> (String, Value) {
         "read" => ("Read".into(), reshape_path(&mut args)),
         "write" => ("Write".into(), reshape_path(&mut args)),
         "edit" => ("Edit".into(), reshape_edit(&mut args)),
-        "grep" => ("mcp__pi__grep".into(), Value::Object(args.clone())),
-        "find" => ("mcp__pi__find".into(), Value::Object(args.clone())),
-        "ls" => ("mcp__pi__ls".into(), Value::Object(args.clone())),
-        "fetch" | "web_fetch" => ("WebFetch".into(), Value::Object(args.clone())),
+        "grep" => ("mcp__pi__grep".into(), Value::Object(args)),
+        "find" => ("mcp__pi__find".into(), Value::Object(args)),
+        "ls" => ("mcp__pi__ls".into(), Value::Object(args)),
+        "fetch" | "web_fetch" => ("WebFetch".into(), Value::Object(args)),
         other => {
             let sanitized = sanitize_tool_name(other);
-            (format!("mcp__pi__{sanitized}"), Value::Object(args.clone()))
+            (format!("mcp__pi__{sanitized}"), Value::Object(args))
         },
     }
 }

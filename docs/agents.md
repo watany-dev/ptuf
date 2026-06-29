@@ -28,7 +28,7 @@ codes per agent, and the full payload contract, see the design notes:
 | Pi          | `<repo>/.pi/` or `$HOME/.pi/agent/`              | `$HOME/.pi/agent/extensions/ptuf.ts` (default global) or `<repo>/.pi/extensions/ptuf.ts` |
 
 Pin to a single adapter with `ptuf init <agent>` (`claude-code` / `codex`
-/ `copilot` / `kiro` / `cline` / `cursor`).
+/ `copilot` / `kiro` / `cline` / `cursor` / `pi`).
 
 ## Common flags
 
