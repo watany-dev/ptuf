@@ -22,6 +22,7 @@ use super::copilot_input;
 use super::cursor_input;
 use super::kiro_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
+use super::pi_input;
 use super::{
     GlobalFlags, HookAgent, INVALID_PAYLOAD_RULE, InitOptions, build_engine_or_fail_closed,
 };
@@ -111,6 +112,7 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
         HookAgent::Kiro => kiro_input::parse(body).map_err(|err| err.to_string()),
         HookAgent::Cline => cline_input::parse(body).map_err(|err| err.to_string()),
         HookAgent::Cursor => cursor_input::parse(body).map_err(|err| err.to_string()),
+        HookAgent::Pi => pi_input::parse(body).map_err(|err| err.to_string()),
     }
 }
 
@@ -205,7 +207,7 @@ where
         if detected.is_empty() {
             let _ = writeln!(
                 stderr,
-                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro | cline | cursor)",
+                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro | cline | cursor | pi)",
             );
             return 1;
         }
@@ -462,6 +464,20 @@ impl AgentPlan {
                     }),
                 })
             },
+            HookAgent::Pi => {
+                let targets = init::pi::resolve_paths(cwd, &options.pi)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.extension_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::pi::detect_binary();
+                        let outcome = init::pi::install(&targets, &binary, dry_run)?;
+                        Ok(init::AdapterRunReport {
+                            outcome,
+                            kiro: None,
+                        })
+                    }),
+                })
+            },
         }
     }
 }
@@ -603,6 +619,7 @@ mod tests {
             dry_run,
             kiro: init::kiro::KiroInitOptions::default(),
             cursor: init::cursor::CursorInitOptions::default(),
+            pi: init::pi::PiInitOptions::default(),
         })
     }
 
@@ -961,6 +978,7 @@ rules:
                 dry_run: false,
                 kiro: init::kiro::KiroInitOptions::default(),
                 cursor: init::cursor::CursorInitOptions::default(),
+                pi: init::pi::PiInitOptions::default(),
             },
             passing_report,
             &mut out,
@@ -991,6 +1009,7 @@ rules:
                 dry_run: false,
                 kiro: init::kiro::KiroInitOptions::default(),
                 cursor: init::cursor::CursorInitOptions::default(),
+                pi: init::pi::PiInitOptions::default(),
             },
             failing_report,
             &mut out,
@@ -1023,6 +1042,7 @@ rules:
                 dry_run: false,
                 kiro: init::kiro::KiroInitOptions::default(),
                 cursor: init::cursor::CursorInitOptions::default(),
+                pi: init::pi::PiInitOptions::default(),
             },
             passing_report,
             &mut out,
@@ -1716,6 +1736,45 @@ rules:
                     prop_assert!(
                         out_s.contains("\"permission\":\"deny\""),
                         "exit 2 must produce a Cursor deny envelope: stdout={out_s} stderr={err_s}",
+                    );
+                },
+                other => prop_assert!(
+                    false,
+                    "unexpected exit code {other}: stdout={out_s} stderr={err_s}",
+                ),
+            }
+        }
+
+        // Pi adapter: invalid payloads fail-closed on exit 2 with a bare
+        // `"decision":"deny"` envelope (Ask is preserved on valid payloads).
+        #[test]
+        fn pbt_pi_run_hook_fails_closed_for_arbitrary_stdin(
+            bytes in arbitrary_utf8_bytes(),
+        ) {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = run(
+                GlobalFlags::default(),
+                Command::HookPreToolUse {
+                    agent: HookAgent::Pi,
+                },
+                bytes.as_slice(),
+                &mut out,
+                &mut err,
+            );
+            let out_s = String::from_utf8_lossy(&out);
+            let err_s = String::from_utf8_lossy(&err);
+            match code {
+                0 | 1 => {
+                    prop_assert!(
+                        !err_s.contains(INVALID_PAYLOAD_RULE),
+                        "exit {code} but stderr mentions invalid payload: {err_s}",
+                    );
+                },
+                2 => {
+                    prop_assert!(
+                        out_s.contains("\"decision\":\"deny\""),
+                        "exit 2 must produce a Pi deny envelope: stdout={out_s} stderr={err_s}",
                     );
                 },
                 other => prop_assert!(

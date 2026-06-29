@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crate::init::cursor::{CursorInitOptions, CursorScope};
 use crate::init::kiro::{KiroInitOptions, KiroMode, ScopeFilter};
+use crate::init::pi::{PiInitOptions, PiScope};
 use crate::update::UpdateOptions;
 
 use super::{Command, HookAgent, InitOptions, ParseError};
@@ -23,17 +24,20 @@ where
     let mut new_agent = false;
     let mut workspace_only = false;
     let mut global = false;
-    let mut cursor_scope: Option<CursorScope> = None;
-    let mut cursor_root: Option<PathBuf> = None;
+    let mut shared_scope: Option<SharedScope> = None;
+    let mut shared_root: Option<PathBuf> = None;
     let mut cursor_hooks: Option<PathBuf> = None;
+    let mut pi_extension: Option<PathBuf> = None;
     while let Some(arg) = iter.next() {
         let arg = arg.as_str();
         if let Some(value) = value_flag(arg, "--scope", iter)? {
-            cursor_scope = Some(parse_cursor_scope(&value)?);
+            shared_scope = Some(parse_shared_scope(&value)?);
         } else if let Some(value) = value_flag(arg, "--root", iter)? {
-            cursor_root = Some(PathBuf::from(value));
+            shared_root = Some(PathBuf::from(value));
         } else if let Some(value) = value_flag(arg, "--hooks", iter)? {
             cursor_hooks = Some(PathBuf::from(value));
+        } else if let Some(value) = value_flag(arg, "--extension", iter)? {
+            pi_extension = Some(PathBuf::from(value));
         } else {
             match arg {
                 "--dry-run" => dry_run = true,
@@ -41,7 +45,7 @@ where
                 "--new-agent" => new_agent = true,
                 "--workspace-only" => workspace_only = true,
                 "--global" => global = true,
-                "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" => {
+                "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" | "pi" => {
                     if agent.is_some() {
                         return Err(ParseError::UnexpectedArgument(arg.to_string()));
                     }
@@ -65,11 +69,22 @@ where
             "Kiro-only flag requires `kiro` agent",
         ));
     }
-    let cursor_only_flag_set =
-        cursor_scope.is_some() || cursor_root.is_some() || cursor_hooks.is_some();
-    if cursor_only_flag_set && agent != Some(HookAgent::Cursor) {
+    if cursor_hooks.is_some() && agent != Some(HookAgent::Cursor) {
         return Err(ParseError::ConflictingFlags(
             "Cursor-only flag requires `cursor` agent",
+        ));
+    }
+    if (shared_scope.is_some() || shared_root.is_some())
+        && agent != Some(HookAgent::Cursor)
+        && agent != Some(HookAgent::Pi)
+    {
+        return Err(ParseError::ConflictingFlags(
+            "`--scope` / `--root` require `cursor` or `pi` agent",
+        ));
+    }
+    if pi_extension.is_some() && agent != Some(HookAgent::Pi) {
+        return Err(ParseError::ConflictingFlags(
+            "Pi-only flag requires `pi` agent",
         ));
     }
     // Dry-run never writes, so the synthetic-deny check would just
@@ -91,9 +106,30 @@ where
         },
     };
     let cursor = CursorInitOptions {
-        scope: cursor_scope.unwrap_or_default(),
-        root: cursor_root,
+        scope: if agent == Some(HookAgent::Cursor) {
+            shared_scope.map(Into::into).unwrap_or_default()
+        } else {
+            CursorScope::default()
+        },
+        root: if agent == Some(HookAgent::Cursor) {
+            shared_root.clone()
+        } else {
+            None
+        },
         hooks: cursor_hooks,
+    };
+    let pi = PiInitOptions {
+        scope: if agent == Some(HookAgent::Pi) {
+            shared_scope.map(Into::into).unwrap_or_default()
+        } else {
+            PiScope::default()
+        },
+        root: if agent == Some(HookAgent::Pi) {
+            shared_root
+        } else {
+            None
+        },
+        extension: pi_extension,
     };
     Ok(Command::Init(InitOptions {
         agent,
@@ -101,6 +137,7 @@ where
         dry_run,
         kiro,
         cursor,
+        pi,
     }))
 }
 
@@ -128,11 +165,35 @@ where
     }
 }
 
-fn parse_cursor_scope(value: &str) -> Result<CursorScope, ParseError> {
+fn parse_shared_scope(value: &str) -> Result<SharedScope, ParseError> {
     match value {
-        "local" => Ok(CursorScope::Local),
-        "global" => Ok(CursorScope::Global),
+        "local" => Ok(SharedScope::Local),
+        "global" => Ok(SharedScope::Global),
         other => Err(ParseError::UnexpectedArgument(format!("--scope {other}"))),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SharedScope {
+    Local,
+    Global,
+}
+
+impl From<SharedScope> for CursorScope {
+    fn from(scope: SharedScope) -> Self {
+        match scope {
+            SharedScope::Local => Self::Local,
+            SharedScope::Global => Self::Global,
+        }
+    }
+}
+
+impl From<SharedScope> for PiScope {
+    fn from(scope: SharedScope) -> Self {
+        match scope {
+            SharedScope::Local => Self::Local,
+            SharedScope::Global => Self::Global,
+        }
     }
 }
 
@@ -144,6 +205,7 @@ fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
         "kiro" => Ok(HookAgent::Kiro),
         "cline" => Ok(HookAgent::Cline),
         "cursor" => Ok(HookAgent::Cursor),
+        "pi" => Ok(HookAgent::Pi),
         other => Err(ParseError::UnknownAgent(other.to_string())),
     }
 }
@@ -246,6 +308,7 @@ mod tests {
 
     use crate::init::cursor::{CursorInitOptions, CursorScope};
     use crate::init::kiro::{KiroInitOptions, KiroMode, ScopeFilter};
+    use crate::init::pi::{PiInitOptions, PiScope};
     use crate::update::UpdateOptions;
 
     use super::super::test_support::s;
@@ -305,6 +368,18 @@ mod tests {
             cmd(&["hook", "cline"]),
             Command::HookPreToolUse {
                 agent: HookAgent::Cline
+            }
+        );
+        assert_eq!(
+            cmd(&["hook", "cursor"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::Cursor
+            }
+        );
+        assert_eq!(
+            cmd(&["hook", "pi"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::Pi
             }
         );
     }
@@ -445,6 +520,7 @@ mod tests {
                 dry_run: false,
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -458,6 +534,7 @@ mod tests {
             ("kiro", HookAgent::Kiro),
             ("cline", HookAgent::Cline),
             ("cursor", HookAgent::Cursor),
+            ("pi", HookAgent::Pi),
         ] {
             let c = cmd(&["init", token]);
             assert_eq!(
@@ -468,6 +545,7 @@ mod tests {
                     dry_run: false,
                     kiro: KiroInitOptions::default(),
                     cursor: CursorInitOptions::default(),
+                    pi: PiInitOptions::default(),
                 }),
                 "agent token {token}",
             );
@@ -484,6 +562,7 @@ mod tests {
                 dry_run: false,
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -498,6 +577,7 @@ mod tests {
                 dry_run: true,
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -512,6 +592,7 @@ mod tests {
                 dry_run: true,
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -529,6 +610,7 @@ mod tests {
                     scope: ScopeFilter::Both,
                 },
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -546,6 +628,7 @@ mod tests {
                     scope: ScopeFilter::WorkspaceOnly,
                 },
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -563,6 +646,7 @@ mod tests {
                     scope: ScopeFilter::GlobalOnly,
                 },
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -580,6 +664,7 @@ mod tests {
                     scope: ScopeFilter::GlobalOnly,
                 },
                 cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -618,6 +703,79 @@ mod tests {
     }
 
     #[test]
+    fn parse_init_accepts_scope_global_with_pi() {
+        assert_eq!(
+            cmd(&["init", "pi", "--scope", "global"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Pi),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions::default(),
+                pi: PiInitOptions {
+                    scope: PiScope::Global,
+                    root: None,
+                    extension: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_accepts_scope_local_with_pi_and_root() {
+        assert_eq!(
+            cmd(&["init", "pi", "--scope", "local", "--root", "/repo"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Pi),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions::default(),
+                pi: PiInitOptions {
+                    scope: PiScope::Local,
+                    root: Some(PathBuf::from("/repo")),
+                    extension: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_rejects_scope_without_cursor_or_pi_agent() {
+        assert!(matches!(
+            parse(&s(&["init", "--scope", "global"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn parse_init_accepts_extension_with_pi() {
+        assert_eq!(
+            cmd(&["init", "pi", "--extension", "/tmp/ptuf.ts"]),
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::Pi),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions::default(),
+                pi: PiInitOptions {
+                    scope: PiScope::default(),
+                    root: None,
+                    extension: Some(PathBuf::from("/tmp/ptuf.ts")),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_init_rejects_pi_extension_without_pi_agent() {
+        assert!(matches!(
+            parse(&s(&["init", "--extension", "/tmp/ptuf.ts"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
     fn parse_init_accepts_scope_global_with_cursor() {
         assert_eq!(
             cmd(&["init", "cursor", "--scope", "global"]),
@@ -631,6 +789,7 @@ mod tests {
                     root: None,
                     hooks: None,
                 },
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -649,6 +808,7 @@ mod tests {
                     root: None,
                     hooks: None,
                 },
+                pi: PiInitOptions::default(),
             })
         );
     }
@@ -674,6 +834,7 @@ mod tests {
                     root: Some(PathBuf::from("/repo")),
                     hooks: Some(PathBuf::from("/tmp/h.json")),
                 },
+                pi: PiInitOptions::default(),
             })
         );
     }

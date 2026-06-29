@@ -1376,7 +1376,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.0".to_string()),
+            version: Some("v0.5.0".to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1404,7 +1404,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.0".to_string()),
+            version: Some("v0.5.0".to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1430,7 +1430,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.0".to_string()),
+            version: Some("v0.5.0".to_string()),
             force: false,
             skip_attestation: true,
         };
@@ -1467,7 +1467,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.0".to_string()),
+            version: Some("v0.5.0".to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1485,7 +1485,7 @@ mod tests {
             err_s.contains("gh attestation verify rejected"),
             "stderr: {err_s}",
         );
-        assert!(err_s.contains("v0.4.0"), "stderr: {err_s}");
+        assert!(err_s.contains("v0.5.0"), "stderr: {err_s}");
     }
 
     #[test]
@@ -1500,7 +1500,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.0".to_string()),
+            version: Some("v0.5.0".to_string()),
             force: false,
             skip_attestation: true,
         };
@@ -1527,7 +1527,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.0".to_string()),
+            version: Some("v0.5.0".to_string()),
             force: false,
             skip_attestation: true,
         };
@@ -1547,7 +1547,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.0".to_string()),
+            version: Some("v0.5.0".to_string()),
             force: false,
             skip_attestation: true,
         };
@@ -1581,7 +1581,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.0".to_string()),
+            version: Some("v0.5.0".to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1606,7 +1606,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.0".to_string()),
+            version: Some("v0.5.0".to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1634,7 +1634,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.0".to_string()),
+            version: Some("v0.5.0".to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1659,7 +1659,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.0".to_string()),
+            version: Some("v0.5.0".to_string()),
             force: false,
             skip_attestation: true,
         };

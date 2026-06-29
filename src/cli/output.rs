@@ -33,6 +33,9 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         HookAgent::Cursor => Some(serde_json::to_string(&hook_output::cursor::from_decision(
             &adapted,
         ))),
+        HookAgent::Pi => Some(serde_json::to_string(&hook_output::pi::from_decision(
+            &adapted,
+        ))),
         HookAgent::ClaudeCode | HookAgent::Codex => {
             render_hook_response(agent, &adapted).map(|r| serde_json::to_string(&r))
         },
@@ -83,6 +86,9 @@ pub(super) fn render_hook_response(
         // Cursor uses a bare permission envelope; `emit_decision`
         // dispatches through `hook_output::cursor` directly.
         HookAgent::Cursor => None,
+        // Pi uses a bare decision envelope; `emit_decision` dispatches
+        // through `hook_output::pi` directly.
+        HookAgent::Pi => None,
     }
 }
 
@@ -254,6 +260,10 @@ mod tests {
             (HookAgent::Cursor, &monitor, 0),
             (HookAgent::Cursor, &ask, 0),
             (HookAgent::Cursor, &deny, 2),
+            (HookAgent::Pi, &allow, 0),
+            (HookAgent::Pi, &monitor, 0),
+            (HookAgent::Pi, &ask, 0),
+            (HookAgent::Pi, &deny, 2),
         ];
         for (agent, decision, expect) in cases {
             assert_eq!(
@@ -458,6 +468,62 @@ mod tests {
     }
 
     #[test]
+    fn pi_deny_emits_decision_json_with_exit_2() {
+        let decision = Decision::Deny {
+            rule_id: "core.filesystem.destructive-rm".into(),
+            reason: "blocked".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Pi, &decision, &mut out, &mut err);
+        assert_eq!(code, 2, "Pi deny exits 2");
+        let json: serde_json::Value = serde_json::from_slice(&out).expect("Pi stdout must be JSON");
+        assert_eq!(json["decision"], "deny");
+        assert_eq!(json["rule_id"], "core.filesystem.destructive-rm");
+        assert_eq!(json["reason"], "blocked");
+        assert!(
+            json.get("hookSpecificOutput").is_none(),
+            "Pi must emit a bare envelope"
+        );
+        assert!(String::from_utf8_lossy(&err).contains("blocked"));
+    }
+
+    #[test]
+    fn pi_ask_is_preserved_with_exit_0() {
+        let decision = Decision::Ask {
+            rule_id: "core.test.ask".into(),
+            reason: "please confirm".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Pi, &decision, &mut out, &mut err);
+        assert_eq!(code, 0, "Pi Ask must exit 0, not demote to deny");
+        let json: serde_json::Value = serde_json::from_slice(&out).expect("Pi stdout must be JSON");
+        assert_eq!(json["decision"], "ask");
+        assert!(String::from_utf8_lossy(&err).contains("please confirm"));
+    }
+
+    #[test]
+    fn pi_allow_emits_explicit_allow_with_zero_exit() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::Pi, &Decision::Allow, &mut out, &mut err);
+        assert_eq!(code, 0);
+        let json: serde_json::Value = serde_json::from_slice(&out).expect("Pi stdout must be JSON");
+        assert_eq!(json["decision"], "allow");
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn render_hook_response_is_none_for_pi() {
+        let decision = Decision::Deny {
+            rule_id: "core.x".into(),
+            reason: "r".into(),
+        };
+        assert!(render_hook_response(HookAgent::Pi, &decision).is_none());
+    }
+
+    #[test]
     fn copilot_deny_emits_bare_json_with_zero_exit() {
         // Copilot expresses fail-closed via the JSON envelope, not the
         // exit code; the host treats non-zero exits as hook failures and
@@ -519,6 +585,7 @@ mod tests {
             HookAgent::Copilot,
             HookAgent::Cline,
             HookAgent::Cursor,
+            HookAgent::Pi,
             HookAgent::ClaudeCode,
             HookAgent::Codex,
         ] {

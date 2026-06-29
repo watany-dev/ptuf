@@ -14,7 +14,7 @@ agent's `PreToolUse` event and blocks dangerous tool calls — destructive
 `rm`, piping `curl` into a shell, leaking `~/.ssh` over the network — using
 rules, not LLM heuristics.
 
-Supported hosts: **Claude Code**, **Codex**, **GitHub Copilot**, **Kiro CLI**, **Cline**, **Cursor**.
+Supported hosts: **Claude Code**, **Codex**, **GitHub Copilot**, **Kiro CLI**, **Cline**, **Cursor**, **Pi Coding Agent**.
 
 ## Why ptuf?
 
@@ -28,7 +28,7 @@ approach:
 | Deterministic (same input → same decision) | partly | no | yes | **yes** |
 | Understands shell syntax (quotes, pipes, `bash -c`, var expansion) | no | n/a | n/a | **yes** |
 | Bypass resistance covered by versioned tests + fuzzing | no | no | n/a | **yes** ([`tests/bypass/corpus.jsonl`](tests/bypass/corpus.jsonl)) |
-| One policy across Claude Code / Codex / Copilot / Kiro / Cline / Cursor | rewrite per host | no | no | **yes** (`ptuf init`) |
+| One policy across Claude Code / Codex / Copilot / Kiro / Cline / Cursor / Pi | rewrite per host | no | no | **yes** (`ptuf init`) |
 | Agent cannot disable it mid-session | rarely | no | yes | **yes** (`core.self_protection.*`) |
 | Audit trail of what was blocked and why | rarely | no | no | **yes** (JSONL) |
 | Works offline, no extra runtime | depends | no | heavy setup | **yes** (single binary) |
@@ -233,6 +233,22 @@ never demoted to a hard deny:
 | Deny             | `{"permission":"deny",...}`         | 2    |
 | invalid payload  | `{"permission":"deny",...}`         | 2    |
 
+
+**Pi Coding Agent** — writes a TypeScript extension to
+`$HOME/.pi/agent/extensions/ptuf.ts` (`--scope global`, default) or
+`<repo>/.pi/extensions/ptuf.ts` (`--scope local`):
+
+```bash
+ptuf init pi                     # global extension (recommended)
+ptuf init pi --scope local       # repo-local extension
+ptuf init pi --root <path>       # start repo discovery from <path>
+ptuf init pi --extension <path>  # exact extension file path
+```
+
+The extension spawns `ptuf hook pi` on every `tool_call` event. Normalisation
+happens in Rust; the extension is a thin bridge. `Ask` is preserved for
+interactive Pi; non-interactive runs default to deny.
+
 `ptuf init` with no agent auto-detects every reachable host under cwd /
 `$HOME` and installs the `PreToolUse` hook into each. Pass `--dry-run`
 to show the plan without writing, or `--no-verify` to skip the
@@ -248,7 +264,9 @@ ptuf hook <agent>
 ptuf [--json] check --tool <name> <command>
 ptuf [--json] plugin check <path>
 ptuf [--json] init [<agent>] [--no-verify] [--dry-run]
-                   [--scope <local|global>] [--root <PATH>] [--hooks <PATH>]  # cursor only
+                   [--scope <local|global>] [--root <PATH>]  # cursor + pi
+                   [--hooks <PATH>]  # cursor only
+                   [--extension <PATH>]  # pi only
 ptuf update [--check] [--version <TAG>] [--force]
 ptuf --help
 ptuf --version

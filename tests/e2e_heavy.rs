@@ -643,8 +643,8 @@ mod full_config_stack {
 // Axis 5: cross-adapter parity — every agent's native shape end-to-end
 // ---------------------------------------------------------------------
 
-/// Drives all six adapters (claude-code / codex / copilot / kiro /
-/// cline / cursor) through real process boundaries in their native payload
+/// Drives all seven adapters (claude-code / codex / copilot / kiro /
+/// cline / cursor / pi) through real process boundaries in their native payload
 /// shapes and pins the per-agent exit-code and stdout/stderr contract
 /// from `docs/design/cli-and-hooks.md`. The leak / concurrent / giant
 /// axes only ever exercise `claude-code`; this axis guards the other
@@ -663,6 +663,8 @@ mod adapter_parity {
     const CURSOR_DENY: &[u8] = br#"{"hook_event_name":"preToolUse","tool_name":"Shell","tool_input":{"command":"rm -rf /"},"cwd":"/tmp"}"#;
     const CURSOR_ALLOW: &[u8] =
         br#"{"hook_event_name":"beforeShellExecution","command":"ls","cwd":"/tmp"}"#;
+    const PI_DENY: &[u8] = br#"{"tool_name":"bash","tool_input":{"command":"rm -rf /"}}"#;
+    const PI_ALLOW: &[u8] = br#"{"tool_name":"bash","tool_input":{"command":"ls"}}"#;
 
     fn hook(agent: &str, stdin: &[u8]) -> SpawnOutcome {
         spawn(&SpawnConfig {
@@ -744,6 +746,17 @@ mod adapter_parity {
             "cursor must emit a bare envelope: {out}"
         );
 
+        // Pi: exit 2, bare decision envelope (no hookSpecificOutput wrap).
+        let r = hook("pi", PI_DENY);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 2, "pi deny: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(out.contains(r#""decision":"deny""#), "pi stdout: {out}");
+        assert!(
+            !out.contains("hookSpecificOutput"),
+            "pi must emit a bare envelope: {out}"
+        );
+
         // Cline: exit 0, cancel-envelope JSON on stdout.
         let r = hook("cline", CLINE_DENY);
         assert_clean_exit(&r);
@@ -801,6 +814,13 @@ mod adapter_parity {
             out.contains(r#""permission":"allow""#),
             "cursor stdout: {out}"
         );
+
+        // Pi: exit 0, explicit allow decision envelope.
+        let r = hook("pi", PI_ALLOW);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 0, "pi allow: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(out.contains(r#""decision":"allow""#), "pi stdout: {out}");
 
         // Cline: exit 0, empty-object `{}` on stdout.
         let r = hook("cline", CLINE_ALLOW);

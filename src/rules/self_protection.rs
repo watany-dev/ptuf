@@ -154,6 +154,19 @@ const KIRO_SETTINGS: RuleSpec = RuleSpec {
     ],
 };
 
+const PI_SETTINGS: RuleSpec = RuleSpec {
+    id: "core.self_protection.pi-settings",
+    kind: ProtectedKind::PiSettings,
+    problem: "The command modifies a Pi Coding Agent settings file or the managed ptuf TypeScript \
+         extension under .pi/. The hook registration lives there, so this edit could remove or \
+         short-circuit the ptuf hook entirely.",
+    alternatives: &[
+        "Use `ptuf init pi` to manage the extension safely.",
+        "Have the user edit Pi settings outside an agent session.",
+        "If the change is unrelated to hooks, narrow the edit to a non-hook field.",
+    ],
+};
+
 pub static BINARY_RULE: SelfRule = SelfRule { spec: &BINARY };
 pub static CONFIG_RULE: SelfRule = SelfRule { spec: &CONFIG };
 pub static PLUGIN_RULE: SelfRule = SelfRule { spec: &PLUGIN };
@@ -170,6 +183,7 @@ pub static COPILOT_SETTINGS_RULE: SelfRule = SelfRule {
 pub static KIRO_SETTINGS_RULE: SelfRule = SelfRule {
     spec: &KIRO_SETTINGS,
 };
+pub static PI_SETTINGS_RULE: SelfRule = SelfRule { spec: &PI_SETTINGS };
 
 #[cfg(test)]
 mod tests {
@@ -199,6 +213,7 @@ mod tests {
             &HOOK_SCRIPT_RULE,
             &COPILOT_SETTINGS_RULE,
             &KIRO_SETTINGS_RULE,
+            &PI_SETTINGS_RULE,
         ] {
             assert!(rule.evaluate(&facts, &input).is_none());
         }
@@ -215,6 +230,7 @@ mod tests {
             &HOOK_SCRIPT_RULE,
             &COPILOT_SETTINGS_RULE,
             &KIRO_SETTINGS_RULE,
+            &PI_SETTINGS_RULE,
         ] {
             assert!(rule.hard_deny(), "{} must be hard_deny", rule.id());
             assert_eq!(
@@ -254,6 +270,7 @@ mod tests {
             HOOK_SCRIPT_RULE.id(),
             COPILOT_SETTINGS_RULE.id(),
             KIRO_SETTINGS_RULE.id(),
+            PI_SETTINGS_RULE.id(),
         ] {
             assert!(id.starts_with("core.self_protection."), "id was {id}");
         }
@@ -262,7 +279,7 @@ mod tests {
     use crate::testing::proptest::{protected_kind, richer_hook_input};
     use proptest::prelude::*;
 
-    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 8] {
+    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 9] {
         [
             (&BINARY_RULE, ProtectedKind::Binary),
             (&CONFIG_RULE, ProtectedKind::Config),
@@ -272,6 +289,7 @@ mod tests {
             (&HOOK_SCRIPT_RULE, ProtectedKind::HookScript),
             (&COPILOT_SETTINGS_RULE, ProtectedKind::CopilotSettings),
             (&KIRO_SETTINGS_RULE, ProtectedKind::KiroSettings),
+            (&PI_SETTINGS_RULE, ProtectedKind::PiSettings),
         ]
     }
 
