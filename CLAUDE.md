@@ -27,7 +27,7 @@ PBT は 3 段の予算で同じ proptest ブロックを繰り返し打つ:
 
 `make e2e` (`tests/e2e_heavy.rs`, `--test-threads=1`) は実 `ptuf` を subprocess で連続 spawn し、
 fd / tempfile リーク・8 MiB stdin 境界・並列 hook と shared audit JSONL・4 層 config フル統合・
-5 adapter parity・病的入力 (クラッシュ / ハング検出)・per-call latency 予算・subcommand 連続実行の
+7 adapter parity・病的入力 (クラッシュ / ハング検出)・per-call latency 予算・subcommand 連続実行の
 8 軸 40 ケースを `#[ignore]` で実行する重 E2E。spawn ハーネスはタイムアウト付きで、ハングは
 失敗化し signal kill (クラッシュ) も検出する。`make check` には含めず、nightly / リリース直前に手動実行する。
 

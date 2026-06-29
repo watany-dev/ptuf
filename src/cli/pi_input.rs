@@ -62,7 +62,7 @@ impl std::fmt::Display for PiInputError {
 
 fn normalize(raw_name: &str, mut args: Map<String, Value>) -> (String, Value) {
     match raw_name {
-        "bash" => ("Bash".into(), reshape_bash(&args)),
+        "bash" => ("Bash".into(), Value::Object(args)),
         "read" => ("Read".into(), reshape_path(&mut args)),
         "write" => ("Write".into(), reshape_path(&mut args)),
         "edit" => ("Edit".into(), reshape_edit(&mut args)),
@@ -115,10 +115,6 @@ fn decode_args(raw: Value) -> Map<String, Value> {
             m
         },
     }
-}
-
-fn reshape_bash(args: &Map<String, Value>) -> Value {
-    Value::Object(args.clone())
 }
 
 fn reshape_path(args: &mut Map<String, Value>) -> Value {
@@ -308,5 +304,41 @@ mod tests {
 
         let from_number = parse(r#"{"tool_name":"bash","tool_input":42}"#).unwrap();
         assert_eq!(from_number.tool_input["text"], 42);
+    }
+
+    use crate::testing::proptest::arbitrary_utf8_bytes;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn pbt_parse_is_total_on_arbitrary_utf8(bytes in arbitrary_utf8_bytes()) {
+            let body = String::from_utf8_lossy(&bytes);
+            let _ = parse(&body);
+        }
+
+        #[test]
+        fn pbt_invalid_envelope_returns_err(
+            body in prop_oneof![
+                Just("null".to_string()),
+                Just("true".to_string()),
+                Just("0".to_string()),
+                Just("\"x\"".to_string()),
+                Just("[]".to_string()),
+                Just(r#"{"tool_input":{}}"#.to_string()),
+            ],
+        ) {
+            match parse(&body) {
+                Err(
+                    PiInputError::Empty
+                    | PiInputError::NotAnObject
+                    | PiInputError::MissingToolName
+                    | PiInputError::Json(_),
+                ) => {},
+                other => prop_assert!(
+                    false,
+                    "expected structured error for body {body:?}, got {other:?}",
+                ),
+            }
+        }
     }
 }

@@ -31,12 +31,12 @@ deny > ask > monitor > allow
 
 ## CLI / hook との対応
 
-| 条件 | Claude Code | Codex | GitHub Copilot | Kiro | Cline |
-| --- | --- | --- | --- | --- | --- |
-| `Allow` | exit `0` | exit `0` | exit `0`、stdout 空 | exit `0` | exit `0`、stdout `{}` |
-| `Monitor` | exit `0` | exit `0` | exit `0`、stdout 空 | exit `0` | exit `0`、stdout `{}` |
-| `Ask` | exit `0` + hook response `ask` | adapter で `Deny` に変換され exit `2` | adapter で `Deny` に変換、bare JSON envelope を stdout、exit `0` | adapter で `Deny` に変換され exit `2` (stderr のみ) | adapter で `Deny` に変換、cancel JSON を stdout、exit `0` |
-| `Deny` | exit `2` | exit `2` | bare JSON envelope を stdout、exit `0` | exit `2` (stderr のみ) | cancel JSON を stdout、exit `0` |
+| 条件 | Claude Code | Codex | GitHub Copilot | Kiro | Cline | Cursor | Pi |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `Allow` | exit `0` | exit `0` | exit `0`、stdout 空 | exit `0` | exit `0`、stdout `{}` | exit `0`、bare `permission:allow` JSON | exit `0`、bare `decision:allow` JSON |
+| `Monitor` | exit `0` | exit `0` | exit `0`、stdout 空 | exit `0` | exit `0`、stdout `{}` | exit `0`、bare `permission:allow` JSON | exit `0`、bare `decision:monitor` JSON |
+| `Ask` | exit `0` + hook response `ask` | adapter で `Deny` に変換され exit `2` | adapter で `Deny` に変換、bare JSON envelope を stdout、exit `0` | adapter で `Deny` に変換され exit `2` (stderr のみ) | adapter で `Deny` に変換、cancel JSON を stdout、exit `0` | exit `0`、bare `permission:ask` JSON (**降格しない**) | exit `0`、bare `decision:ask` JSON (**降格しない**) |
+| `Deny` | exit `2` | exit `2` | bare JSON envelope を stdout、exit `0` | exit `2` (stderr のみ) | cancel JSON を stdout、exit `0` | exit `2`、bare `permission:deny` JSON | exit `2`、bare `decision:deny` JSON |
 
 `Ask` / `Deny` は reason を stderr にも書く。GitHub Copilot は preToolUse
 hook の非ゼロ exit を hook 失敗として扱うため、`Deny` / `Ask` でも exit

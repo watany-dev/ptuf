@@ -56,7 +56,7 @@ P1 として削除)。embed 利用者は `Engine::builder()` 直接利用も可�
 | `paths` | tool 入力 (`Read` / `Edit` / `Write` / `apply_patch` / MCP) 由来の全 `PathFact`。`Read` / `Edit` / `Write` の `paths[]` (string array) と `operations[].path` (object array) も canonical な `file_path` と並んで重複排除しつつ収集する (Kiro batch read/write 経路用)。Bash redirect target はここには含まれない (engine が self-protection 用に別 slice として供給する) |
 | `url` | `WebFetch` または MCP の top-level `url` |
 | `sensitive` | path / URL / write payload などから検出した機密分類 |
-| `protected` | self-protection 対象との一致。engine 側で `Facts.paths` と Bash redirect target (`Pipeline.redirects[].target` に加え wrapper 由来の `Argv.inner_redirects[].target`) を `ProtectedPaths::classify_input_with_paths_pair` に二本のスライスとして渡して補完する。戻り値は固定長の `ProtectedKinds` (`[ProtectedKind; 8] + len`) で、中間 path clone や `ProtectedKind` 用 heap allocation は発生させない |
+| `protected` | self-protection 対象との一致。engine 側で `Facts.paths` と Bash redirect target (`Pipeline.redirects[].target` に加え wrapper 由来の `Argv.inner_redirects[].target`) を `ProtectedPaths::classify_input_with_paths_pair` に二本のスライスとして渡して補完する。戻り値は固定長の `ProtectedKinds` (`[ProtectedKind; 9] + len`) で、中間 path clone や `ProtectedKind` 用 heap allocation は発生させない |
 | `project` | lock file、現在 branch、protected branch 判定。engine 側で補完 |
 
 `PathFact.origin` は `ToolInputDirect` (top-level `file_path` / MCP `path`) /
@@ -80,7 +80,7 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 
 ## Agent adapter
 
-現在の adapter は 6 つ。
+現在の adapter は 7 つ。
 
 - `claude-code`
 - `codex`
@@ -88,6 +88,7 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 - `kiro` (Kiro CLI)
 - `cline` (Cline)
 - `cursor` (Cursor)
+- `pi` (Pi Coding Agent)
 
 adapter は stdin payload をまず `RawHookInput` として受け、内部では
 normalized `Event { agent, event, tool, inputs, paths, urls, content }`
@@ -120,6 +121,11 @@ normalized `Event { agent, event, tool, inputs, paths, urls, content }`
   `permission:deny` JSON + exit `2` で fail-closed する。Cursor の全機能ではなく
   hook 駆動の agent tool execution のみが対象 (Tab 補完・手動編集・手動
   ターミナルは hook を経由しないため対象外)。
+- Pi: TypeScript extension が raw tool event を `ptuf hook pi` に渡す。
+  すべての Decision で bare `{"decision":"…"}` JSON を stdout に書き、
+  `Ask` を降格せず保持する (Cursor と同型)。`Allow` / `Monitor` / `Ask` は
+  exit `0`、`Deny` と reserved rule は exit `2`。正規化は
+  `src/cli/pi_input.rs` で行う。
 
 Copilot 入力は CLI 層の `src/cli/copilot_input.rs` で snake (`tool_name` /
 `tool_input`) と camel (`toolName` / `toolArgs`) の両形を正規化し、tool 名
@@ -144,6 +150,10 @@ legacy 形 (`preToolUse`) の両 envelope を正規化する。`tool_call` が�
 alias キー (`command` / `file_path` / `content` 等) を非破壊的に正規化する。
 canonical 化した tool 名と `tool_call` の id は `_cline_tool_name` /
 `_cline_tool_call_id` として `tool_input` に保持する。
+
+Pi 入力は CLI 層の `src/cli/pi_input.rs` で Pi native tool 名を canonical
+形へ正規化する (`bash`→`Bash`, `grep`→`mcp__pi__grep`, unknown→`mcp__pi__*`,
+`path`→`file_path` など)。
 
 Cursor 入力は CLI 層の `src/cli/cursor_input.rs` で `hook_event_name`
 (camelCase `hookEventName` 互換) を event dispatcher として正規化する。
@@ -186,6 +196,8 @@ stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit 
 | `ptuf hook copilot` | `Deny` のときだけ bare JSON envelope (no `hookSpecificOutput`) | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
 | `ptuf hook kiro` | 常に空 (Kiro hook には JSON envelope が無い) | `Ask` / `Deny` reason | `0` or `2` |
 | `ptuf hook cline` | `Allow` / `Monitor` は `{}`、`Deny` は cancel JSON envelope | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
+| `ptuf hook cursor` | `Allow` / `Monitor` は bare `permission:allow` JSON、`Ask` / `Deny` は bare JSON | `Ask` / `Deny` reason | `0` or `2` |
+| `ptuf hook pi` | すべての Decision で bare `decision` JSON | `Ask` / `Deny` reason | `0` or `2` |
 
 ### check
 

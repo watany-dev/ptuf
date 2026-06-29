@@ -11,6 +11,7 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合)、`v0.1.0` (M5
 - `PreToolUse` 向け CLI とライブラリ
 - Claude Code / Codex / GitHub Copilot / Kiro CLI / Cline adapter (frozen)
 - Cursor adapter (MVP — hook 駆動の agent tool execution のみ)
+- Pi Coding Agent adapter (`ptuf hook pi` + `ptuf init pi` TypeScript extension)
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
   `core.self_protection` / `core.engine` / `core.injection` /
@@ -68,6 +69,8 @@ CLI 経路はこれと異なり fail-closed で動作する。
 - `ptuf hook kiro`
 - `ptuf hook cline`
 - `ptuf hook cursor`
+- `ptuf hook pi`
+- `ptuf [--json] init pi` (および他 adapter)
 - `ptuf [--json] check --tool <name> <command>`
 - `ptuf [--json] plugin check <path>`
 - `ptuf [--json] init [<agent>] [--no-verify] [--dry-run]`

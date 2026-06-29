@@ -209,6 +209,10 @@ Environment variables read by the extension:
 | `PTUF_PI_ASK_MODE` | `confirm-if-ui-else-deny` | How to handle `ask` decisions |
 | `PTUF_PI_TIMEOUT_MS` | `10000` | Hook subprocess timeout |
 
+Patched extension paths are covered by
+`core.self_protection.pi-settings`, so a guarded session cannot rewrite
+the extension to remove the hook.
+
 Limitations: project-local installs trust the repo; **global scope is
 recommended**. Each tool call spawns a fresh `ptuf` process. Non-interactive
 `ask` decisions deny by default.

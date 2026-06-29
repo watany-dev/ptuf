@@ -1,7 +1,7 @@
 # CLI と Hook 統合
 
 ptuf は CLI バイナリとして配布され、同時に Claude Code / Codex / GitHub
-Copilot / Kiro CLI / Cline / Cursor の `PreToolUse` hook adapter を提供する。
+Copilot / Kiro CLI / Cline / Cursor / Pi Coding Agent の `PreToolUse` hook adapter を提供する。
 Kiro 固有の正規化や fail-closed 経路の詳細は [`kiro-cli.md`](kiro-cli.md) を参照。
 
 ## 実装済みサブコマンド
@@ -13,6 +13,7 @@ ptuf hook copilot
 ptuf hook kiro
 ptuf hook cline
 ptuf hook cursor
+ptuf hook pi
 ptuf [--json] check --tool Bash 'git reset --hard HEAD~1'
 ptuf [--json] plugin check ./ptuf-plugin.yaml
 ptuf [--json] init                       # auto-detect every agent
@@ -45,6 +46,7 @@ ptuf update [--check] [--version <TAG>] [--force]
 | Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | 両 scope の `.kiro/agents/*.json` を一括 patch (空 scope は `agents/default.json` で fallback) |
 | Cline | `<repo>/.clinerules/` `.cline/`、または `$HOME/Documents/Cline/` `.cline/` | repo 配下 `.clinerules/hooks/PreToolUse` または `$HOME/Documents/Cline/Hooks/PreToolUse` |
 | Cursor | `<repo>/.cursor/` または `$HOME/.cursor/` | `<repo>/.cursor/hooks.json` (`--scope global` で `$HOME/.cursor/hooks.json`) |
+| Pi | `<repo>/.pi/` または `$HOME/.pi/agent/` | `$HOME/.pi/agent/extensions/ptuf.ts` (default global) または `<repo>/.pi/extensions/ptuf.ts` (local) |
 
 検出 0 件 → exit `1` + `no agent detected` を stderr に出す。1 件以上
 → 全部 install + verify。verify がいずれかで失敗すれば exit `1`。
@@ -56,14 +58,23 @@ install になる。
 
 | 条件 | exit |
 | --- | --- |
-| `Allow` / `Monitor` / Claude Code・Cursor の `Ask` | `0` |
-| `Deny` (Claude Code / Codex / Kiro / Cursor) | `2` |
+| `Allow` / `Monitor` / Claude Code・Cursor・Pi の `Ask` | `0` |
+| `Deny` (Claude Code / Codex / Kiro / Cursor / Pi) | `2` |
 | Copilot / Cline の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
 | 内部エラー、引数不正、plugin check fail、init verify fail、update 失敗 (curl 不在 / updater 非ゼロ) | `1` |
 
 Codex / Kiro では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
 Cursor は Claude Code と同じく `Ask` channel を持つため `Ask` を降格せず、
 `{"permission":"ask",…}` を exit `0` で返す (下記「Cursor への登録」参照)。
+
+
+Pi Coding Agent extension は TypeScript bridge 経由で `ptuf hook pi` を
+spawn する。すべての Decision で bare JSON envelope
+(`{"decision":"allow"|"monitor"|"ask"|"deny",…}`) を stdout に書き、
+`Allow` / `Monitor` / `Ask` は exit `0`、`Deny` と reserved rule は exit `2`
+とする。Cursor と同じく `Ask` を降格しない。extension 側は exit `0` と
+`2` のみを有効とみなし、exit `1` や空 stdout は fail-closed deny として
+扱う。
 
 Copilot は protocol 上 non-zero exit が hook failure として扱われ得るため、
 **すべての Decision で exit `0`** に固定する。Deny は bare JSON envelope
@@ -345,9 +356,50 @@ merge 契約 (Copilot と同型):
 - temp file + rename の原子的更新、mode `0600`
 - object であるべき箇所が他の型なら非破壊で `InitError`
 
-`--scope` / `--root` / `--hooks` は Cursor 専用フラグで、他 adapter や
-auto-detect へ渡すと parse error (`ConflictingFlags`)。Kiro の `--global`
-との取り違えを避けるため Cursor は `--scope global` を採用している。
+`--scope` / `--root` は Cursor と Pi で共有する。`--hooks` は Cursor 専用、
+`--extension` は Pi 専用。他 adapter や auto-detect へ渡すと parse error
+(`ConflictingFlags`)。Kiro の `--global` との取り違えを避けるため Cursor /
+Pi は `--scope global` を採用している。
+
+
+## Pi Coding Agent への登録
+
+`ptuf init pi` は managed TypeScript extension (`extensions/ptuf.ts`) を
+書き込む。デフォルト scope は **global** (`$HOME/.pi/agent/extensions/ptuf.ts`)。
+
+path 解決の優先順位 (`init::pi::resolve_paths`):
+
+- `--extension <path>` が最優先。指定ファイルをそのまま対象にする
+- `--scope global` (default): `$HOME/.pi/agent/extensions/ptuf.ts`。
+  `$HOME` 不在は `InitError::HomeNotSet`
+- `--scope local`: `--root <path>` を起点 (無ければ cwd) に
+  `config::repo::discover` で repo root を探し、
+  `<repo>/.pi/extensions/ptuf.ts`。repo root 不在は `InitError::RepoRootNotFound`
+
+extension は `pi.on("tool_call", …)` で raw event を `ptuf hook pi` に渡す。
+正規化 (`bash`→`Bash`, `grep`→`mcp__pi__grep`, unknown→`mcp__pi__*`) は
+Rust (`src/cli/pi_input.rs`) で行う。managed marker (`Managed by ptuf…`,
+`ptuf-agent: pi`) を持たない既存ファイルは `InitError::HookFileConflict`。
+temp file + rename の原子的更新、Unix では mode `0600`。
+
+`--scope` / `--root` は Cursor と Pi で共有する。`--extension` は Pi 専用。
+`--hooks` は Cursor 専用。他 adapter や auto-detect へ渡すと
+`ParseError::ConflictingFlags`。
+
+### Pi 入力正規化 (`src/cli/pi_input.rs`)
+
+| Pi tool | Canonical `tool_name` | 備考 |
+| --- | --- | --- |
+| `bash` | `Bash` | `tool_input.command` をそのまま渡す |
+| `read` / `write` | `Read` / `Write` | `path` → `file_path` |
+| `edit` | `Edit` | `path` → `file_path`; `edits[].newText` / `new_text` → `new_string` |
+| `grep` / `find` / `ls` | `mcp__pi__grep` / `mcp__pi__find` / `mcp__pi__ls` | args を object のまま渡す |
+| `fetch` / `web_fetch` | `WebFetch` | |
+| その他 | `mcp__pi__<sanitized>` | 非英数字 → `_` |
+
+`tool_name` / `toolName` / `name`、`tool_input` / `toolInput` の alias を受け付ける。
+`tool_input` は object / JSON 文字列 / scalar / null。空 payload / 非 object /
+tool name 欠如は `core.engine.invalid-payload` で fail-closed。
 
 ## install verification
 
@@ -487,11 +539,23 @@ Cursor (bare envelope, `hookSpecificOutput` wrap なし。`permission` は
 }
 ```
 
+Pi Coding Agent (bare envelope, `hookSpecificOutput` wrap なし。`decision` は
+`allow` / `monitor` / `ask` / `deny`。Cursor と同じく `Ask` を保持し降格しない):
+
+```json
+{
+  "decision": "deny",
+  "rule_id": "core.filesystem.destructive-rm",
+  "reason": "..."
+}
+```
+
 `Allow` と `Monitor` は hook response を出さない (Claude Code / Codex /
 Copilot / Kiro)。Cline は Allow / Monitor でも空 object `{}` を stdout に
 書き、Cursor は `failClosed` hook の空 stdout が invalid 扱いになるため
-`{"permission":"allow"}` を明示する。block 時のみ Cline は
-`cancel: true` envelope を出す。`Ask` は Claude Code / Cursor では保持、
+`{"permission":"allow"}` を明示する。Pi はすべての Decision で bare
+`decision` JSON を stdout に書く。block 時のみ Cline は
+`cancel: true` envelope を出す。`Ask` は Claude Code / Cursor / Pi では保持、
 それ以外では `Deny` へ demote する。
 
 agent 別の Decision → exit / 出力契約:
@@ -504,6 +568,7 @@ agent 別の Decision → exit / 出力契約:
 | Kiro | exit `0`, 空 stdout / 空 stderr | `Ask` → `Deny` に demote (exit `2`, stderr reason のみ) | exit `2`, stderr reason のみ | exit `2`, stderr reason のみ |
 | Cline | exit `0`, stdout `{}` | `Ask` → `Deny` に demote (exit `0`, cancel JSON) | exit `0`, cancel JSON | exit `0`, cancel JSON |
 | Cursor | exit `0`, bare `permission:allow` JSON | exit `0`, bare `permission:ask` JSON (**降格しない**) | exit `2`, bare `permission:deny` JSON | exit `2`, deny |
+| Pi | exit `0`, bare `decision:allow` / `monitor` JSON | exit `0`, bare `decision:ask` JSON (**降格しない**) | exit `2`, bare `decision:deny` JSON | exit `2`, deny JSON |
 
 Copilot の `Ask` demote 文言は仕様で固定:
 
@@ -522,7 +587,7 @@ Cline の `Ask` demote 文言も仕様で固定:
 > instead.`
 
 reserved rule `core.engine.invalid-payload` / `core.engine.policy-load-failed`
-は 6 agent で共通だが、Copilot では bare JSON + exit `0`、Kiro では stderr +
+は 7 agent で共通だが、Copilot では bare JSON + exit `0`、Kiro では stderr +
 exit `2`、Cline では cancel JSON + exit `0`、Cursor では bare
 `permission:deny` JSON + exit `2` で出す。
 

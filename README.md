@@ -241,6 +241,7 @@ never demoted to a hard deny:
 ```bash
 ptuf init pi                     # global extension (recommended)
 ptuf init pi --scope local       # repo-local extension
+ptuf init pi --root <path>       # start repo discovery from <path>
 ptuf init pi --extension <path>  # exact extension file path
 ```
 
@@ -263,7 +264,9 @@ ptuf hook <agent>
 ptuf [--json] check --tool <name> <command>
 ptuf [--json] plugin check <path>
 ptuf [--json] init [<agent>] [--no-verify] [--dry-run]
-                   [--scope <local|global>] [--root <PATH>] [--hooks <PATH>]  # cursor only
+                   [--scope <local|global>] [--root <PATH>]  # cursor + pi
+                   [--hooks <PATH>]  # cursor only
+                   [--extension <PATH>]  # pi only
 ptuf update [--check] [--version <TAG>] [--force]
 ptuf --help
 ptuf --version
