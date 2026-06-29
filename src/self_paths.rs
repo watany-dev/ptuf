@@ -511,7 +511,7 @@ fn candidate_targets<'a>(
     // missing a target can let an unsafe write through.
     if let Some(cmd) = event.command {
         let bash = crate::facts::shell::parse(cmd);
-        let writer_heads = ["rm", "mv", "cp", "chmod", "chown", "tee", "ln"];
+        let writer_heads = ["rm", "mv", "cp", "chmod", "chown", "tee", "ln", "sed"];
         for outer in bash.commands() {
             // Peel a privilege-escalation wrapper (`sudo rm ...`) so the
             // writer head and its destinations are the inner command's.

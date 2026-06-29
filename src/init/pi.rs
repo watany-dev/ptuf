@@ -202,9 +202,16 @@ mod tests {
         assert!(TEMPLATE.contains(VERSION_PLACEHOLDER));
         assert!(TEMPLATE.contains(r#"pi.on("tool_call""#));
         assert!(TEMPLATE.contains(r#""hook", "pi""#));
+        assert!(TEMPLATE.contains(r#"spawn(PTUF_BINARY, ["hook", "pi"]"#));
+        assert!(TEMPLATE.contains("eventInput"));
+        assert!(TEMPLATE.contains("event as { input?: unknown; toolInput?: unknown }"));
+        assert!(TEMPLATE.contains("ctx.hasUI"));
+        assert!(TEMPLATE.contains("ctx.ui.confirm"));
         assert!(TEMPLATE.contains("PTUF_PI_ASK_MODE"));
         assert!(TEMPLATE.contains("decision"));
         assert!(TEMPLATE.contains("block: true"));
+        assert!(TEMPLATE.contains("reason: result.reason"));
+        assert!(!TEMPLATE.contains("Bun.spawn"));
     }
 
     #[test]

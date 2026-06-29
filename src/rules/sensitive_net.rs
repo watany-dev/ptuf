@@ -20,7 +20,7 @@ const NETWORK_SINK_HEADS: &[&str] = &["curl", "wget", "nc", "ncat", "scp", "rsyn
     reason = "static pattern literal validated by tests"
 )]
 static DEVTCP_UDP: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^/dev/(?:tcp|udp)/").expect("DEVTCP_UDP regex"));
+    LazyLock::new(|| Regex::new(r"(?i-u:^/dev/(?:tcp|udp)/)").expect("DEVTCP_UDP regex"));
 
 impl ConfigRule for SensitivePathToNetwork {
     fn id(&self) -> &str {

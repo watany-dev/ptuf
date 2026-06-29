@@ -3,7 +3,8 @@
 // ptuf-binary: __PTUF_BINARY__
 // ptuf-version: __PTUF_VERSION__
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { spawn } from "node:child_process";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const PTUF_BINARY = "__PTUF_BINARY__";
 const ASK_MODE = process.env.PTUF_PI_ASK_MODE ?? "confirm-if-ui-else-deny";
@@ -15,22 +16,43 @@ type PtufDecision = {
   reason?: string;
 };
 
+function readText(stream: NodeJS.ReadableStream): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let text = "";
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk) => {
+      text += chunk;
+    });
+    stream.on("error", reject);
+    stream.on("end", () => {
+      resolve(text);
+    });
+  });
+}
+
 async function runPtufHook(payload: Record<string, unknown>): Promise<PtufDecision> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const proc = Bun.spawn({
-      cmd: [PTUF_BINARY, "hook", "pi"],
-      stdin: JSON.stringify(payload),
-      stdout: "pipe",
-      stderr: "pipe",
+    const proc = spawn(PTUF_BINARY, ["hook", "pi"], {
+      stdio: ["pipe", "pipe", "pipe"],
       signal: controller.signal,
     });
+    proc.stdin.end(JSON.stringify(payload));
+
+    const exited = new Promise<number | null>((resolve, reject) => {
+      proc.on("error", reject);
+      proc.on("close", (code) => {
+        resolve(code);
+      });
+    });
+
     const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
+      readText(proc.stdout),
+      readText(proc.stderr),
+      exited,
     ]);
+
     if (exitCode !== 0 && exitCode !== 2) {
       throw new Error(`ptuf hook pi exited ${exitCode}: ${stderr}`);
     }
@@ -67,12 +89,15 @@ function shouldConfirmAsk(decision: PtufDecision, hasUi: boolean): boolean {
 
 export default function register(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
+    const eventInput = (event as { input?: unknown; toolInput?: unknown }).input
+      ?? (event as { input?: unknown; toolInput?: unknown }).toolInput
+      ?? {};
     const payload = {
       tool_name: event.toolName,
-      tool_input: event.toolInput ?? {},
+      tool_input: eventInput,
       pi: {
         cwd: ctx.cwd,
-        sessionId: ctx.sessionId,
+        sessionId: ctx.sessionManager.getSessionId(),
       },
     };
 
@@ -83,21 +108,21 @@ export default function register(pi: ExtensionAPI) {
     }
 
     if (result.decision === "ask") {
-      const hasUi = Boolean((ctx as { ui?: unknown }).ui);
-      if (shouldConfirmAsk(result, hasUi)) {
-        const ok = await ctx.confirm?.(
+      if (shouldConfirmAsk(result, ctx.hasUI)) {
+        const ok = await ctx.ui.confirm(
+          "ptuf requires confirmation",
           result.reason ?? "ptuf requires confirmation for this tool call",
         );
         if (ok) {
           return;
         }
       }
-      return { block: true, message: result.reason ?? "blocked by ptuf ask policy" };
+      return { block: true, reason: result.reason ?? "blocked by ptuf ask policy" };
     }
 
     return {
       block: true,
-      message: result.reason ?? "blocked by ptuf",
+      reason: result.reason ?? "blocked by ptuf",
     };
   });
 }
