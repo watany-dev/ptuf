@@ -108,13 +108,13 @@ CI / Docker builds are reproducible.
 
 ```bash
 # Linux / macOS
-PTUF_VERSION=v0.3.0
+PTUF_VERSION=v0.4.0
 curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
 ```
 
 ```powershell
 # Windows (PowerShell)
-$env:PTUF_VERSION = "v0.3.0"
+$env:PTUF_VERSION = "v0.4.0"
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/download/$env:PTUF_VERSION/ptuf-installer.ps1 | iex"
 ```
 
