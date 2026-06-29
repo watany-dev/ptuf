@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-29
+
+### Fixed
+- Pi Coding Agent extension template now targets the current package/API,
+  uses Node child process spawning instead of Bun-only APIs, reads the current
+  event input shape, and returns Pi's expected block reason fields.
+- Sensitive-path network exfiltration checks now deny `/dev/tcp` and
+  `/dev/udp` redirections without panicking.
+- Self-protection path extraction now treats `sed` as a writer command.
+
 ## [0.4.0] - 2026-06-29
 
 ### Changed (BREAKING)
@@ -345,7 +355,8 @@ Initial public release.
 - `curl | sh` and PowerShell installers via cargo-dist
 - crates.io publication
 
-[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/watany-dev/ptuf/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/watany-dev/ptuf/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/watany-dev/ptuf/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/watany-dev/ptuf/compare/v0.1.1...v0.2.0
