@@ -540,7 +540,6 @@ fn tokenize(s: &str) -> TokenizeOutput {
                 i = d + 1;
                 continue;
             }
-            // Not an fd redirect: fall through to `read_word` below.
         }
         // Otherwise: read a word, honouring quotes.
         let (word, advanced, word_subst) = read_word(&bytes[i..]);

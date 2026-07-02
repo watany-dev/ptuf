@@ -49,7 +49,10 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - セパレータをシングルクォートで囲んだ文字列は単一 segment になる
 - `flags()` と `positional()` は `args` の互いに素な分割
 - redirect operator (`>` / `>>` / `<` / `2>` / `&>`) は `Pipeline.redirects`
-  に保存され、続く word が target になる
+  に保存され、続く word が target になる。`1>` / `0<` / `3>` / `10>` などの
+  数値 fd 形も、fd 2 のみ `Stderr` に、それ以外は演算子ごとに `Stdout` /
+  `StdoutAppend` / `Stdin` に collapse されて同様に保存される (`n<<` の
+  数値 fd heredoc は対象外でフォールスルーする)
 - heredoc (`<<TAG` / `<<-TAG`) の body は terminator までを 1 word として
   `Redirect.target` に保持し、`Bash::has_heredoc` を true にする
 - process substitution (`<(...)` / `>(...)`) は paren-balance で 1 word として

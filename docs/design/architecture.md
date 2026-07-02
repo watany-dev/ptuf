@@ -62,7 +62,8 @@ P1 として削除)。embed 利用者は `Engine::builder()` 直接利用も可�
 `PathFact.origin` は `ToolInputDirect` (top-level `file_path` / MCP `path`) /
 `ToolInputNested` (`files[].path` / `paths[]` / `items[].path`) /
 `ApplyPatch` (`*** Add/Update/Delete/Move` 行) / `BashRedirect` (`>` / `>>` /
-`<` / `2>` / `&>` の operand。engine のみが emit する) の 4 種で、書込み先かど
+`<` / `2>` / `&>` の operand。`1>` 等の数値 fd 形も同じ shape に collapse
+されて含まれる。engine のみが emit する) の 4 種で、書込み先かど
 うかの判定や cross-tool 一貫性の根拠に使う。`canonical_or_raw` は構築時に 1
 回だけ `canonicalize()` を試み、I/O 失敗時は `absolute` に fallback する
 (symlink loop / permission denied / 未存在 path で panic しない不変条件)。
