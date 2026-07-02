@@ -8,10 +8,14 @@
 # bypass.
 #
 # The full ~31k-line crate is too slow to mutate on every run, so the
-# scope is pinned to the security-critical decision core:
-#   - src/decision.rs  — decision aggregation (deny > ask > monitor > allow)
-#   - src/rules/**     — every built-in rule matcher / threshold
-#   - src/engine/**    — filter composition, aggregate, mode demotion
+# scope is pinned to the security-critical decision core and the trust
+# boundaries that feed it (kept in sync with `examine_globs` below):
+#   - src/decision.rs     — decision aggregation (deny > ask > monitor > allow)
+#   - src/rules/**        — every built-in rule matcher / threshold
+#   - src/engine/**       — filter composition, aggregate, mode demotion
+#   - src/plugin/dsl.rs   — plugin `when:` DSL compiler / evaluator
+#   - src/facts/shell.rs  — shell parser / privilege-wrapper unwrapping
+#   - src/config/merge.rs — layered config merge (last-write-wins, union)
 #
 # Run via `make mutants`; CI runs the full scope nightly (see
 # .github/workflows/nightly.yml). Not part of `make check`.

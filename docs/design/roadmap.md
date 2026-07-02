@@ -131,9 +131,9 @@
 
 ## 今後の候補
 
-現時点でコードに入っていない候補:
+現時点でコードに入っていない候補 (Cursor / Pi adapter は実装済みのため対象外):
 
-- Cursor / Gemini など追加 adapter
+- Gemini CLI など追加 adapter
 - cloud Copilot agent 向け wrapper script + JSON (network egress /
   firewall / installer 取得経路の整理が必要。クラウド/エフェメラル環境での
   2 フェーズ・ブートストラップと fail-open 落とし穴の考え方は `docs/install.md`

@@ -89,13 +89,14 @@ bench: build
 e2e:
 	cargo test --locked --features testing --test e2e_heavy -- --ignored --test-threads=1
 
-# Coverage-guided fuzzing of the four trust boundaries (shell parser,
-# hook pipeline, config merge, plugin DSL). `cargo fuzz` needs a nightly
-# toolchain; the `fuzz/` crate is a standalone workspace so it never
-# touches `make check`. Not part of `make check` — see nightly.yml.
+# Coverage-guided fuzzing of the five trust boundaries (shell parser,
+# hook pipeline, config merge, plugin DSL, copilot payload parse).
+# `cargo fuzz` needs a nightly toolchain; the `fuzz/` crate is a
+# standalone workspace so it never touches `make check`. Not part of
+# `make check` — see nightly.yml.
 #   - `fuzz` ........ short smoke run of every target (FUZZ_TIME each).
 #   - `fuzz-soak` ... long single-target run for pre-release / triage.
-FUZZ_TARGETS ?= fuzz_shell_parse fuzz_hook_pipeline fuzz_config_merge fuzz_plugin_dsl
+FUZZ_TARGETS ?= fuzz_shell_parse fuzz_hook_pipeline fuzz_config_merge fuzz_plugin_dsl fuzz_copilot_parse
 FUZZ_TIME ?= 60
 fuzz: tools
 	@for t in $(FUZZ_TARGETS); do \
