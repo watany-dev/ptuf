@@ -95,7 +95,7 @@ fn invokes_dynamic_eval(argv: &Argv) -> bool {
 }
 
 fn matches_dynamic_eval(argv: &Argv) -> bool {
-    let head = head_basename(&argv.head);
+    let head = argv.head_basename();
     let Some(shape) = DYNAMIC_EVAL_HEADS
         .iter()
         .find(|(name, _)| *name == head)
@@ -104,10 +104,6 @@ fn matches_dynamic_eval(argv: &Argv) -> bool {
         return false;
     };
     shape_triggers(shape, &argv.args)
-}
-
-fn head_basename(head: &str) -> &str {
-    head.rsplit('/').next().unwrap_or(head)
 }
 
 fn shape_triggers(shape: EvalShape, args: &[String]) -> bool {
