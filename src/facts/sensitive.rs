@@ -297,7 +297,10 @@ mod tests {
         // Real credential files live at a path boundary; each of these
         // must classify.
         for token in [".npmrc", "~/.npmrc", "/home/user/.npmrc", "$HOME/.npmrc"] {
-            assert!(kinds(token).contains(&SensitiveKind::Npmrc), "missed {token:?}");
+            assert!(
+                kinds(token).contains(&SensitiveKind::Npmrc),
+                "missed {token:?}"
+            );
         }
         for token in [".pypirc", "~/.pypirc", "/root/.pypirc", "${HOME}/.pypirc"] {
             assert!(

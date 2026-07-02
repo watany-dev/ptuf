@@ -149,7 +149,13 @@ mod tests {
 
     #[test]
     fn sensitive_path_matches_all_ssh_key_families() {
-        for token in ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "~/.ssh/id_dsa"] {
+        for token in [
+            "id_rsa",
+            "id_dsa",
+            "id_ecdsa",
+            "id_ed25519",
+            "~/.ssh/id_dsa",
+        ] {
             assert!(SENSITIVE_PATH.is_match(token), "missed {token:?}");
         }
     }
