@@ -182,9 +182,9 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   は版管理された敵対的入力の負テストスイートで、`tests/bypass_corpus.rs`
   が通常の `cargo test` (= `make check` の `test` step) で実行する。
   各ケースは `must_catch` (指定 rank 以上で必ず捕捉) か `known_gap`
-  (ADR 0001 の既知限界 — 現状の振る舞いを固定し、改善・退行の双方を
-  test 失敗として可視化) の期待値を持つ。fuzzing や監査で新規バイパスを
-  発見するたび corpus に追記する。
+  (ADR (0001, 0003 等) に記録した既知限界 — 現状の振る舞いを固定し、
+  改善・退行の双方を test 失敗として可視化) の期待値を持つ。fuzzing や
+  監査で新規バイパスを発見するたび corpus に追記する。
 - **新ツールの tier**: `cargo-fuzz` / `cargo-mutants` /
   `cargo-semver-checks` は `make tools` で版固定インストールする
   (`Makefile` の `CARGO_*_VERSION`)。`cargo-semver-checks` は高速な

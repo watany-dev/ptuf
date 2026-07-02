@@ -134,15 +134,23 @@ const PROBES: &[(SensitiveKind, &str, &str)] = &[
     (
         SensitiveKind::PrivateKeyFile,
         "id_",
-        r"\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b",
+        r"\b(?i-u:id_(?:rsa|dsa|ecdsa|ed25519))\b",
     ),
     (
         SensitiveKind::Dotenv,
         ".env",
         r"(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
     ),
-    (SensitiveKind::Npmrc, ".npmrc", r"(?i-u:\.npmrc)\b"),
-    (SensitiveKind::Pypirc, ".pypirc", r"(?i-u:\.pypirc)\b"),
+    (
+        SensitiveKind::Npmrc,
+        ".npmrc",
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.npmrc)\b",
+    ),
+    (
+        SensitiveKind::Pypirc,
+        ".pypirc",
+        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.pypirc)\b",
+    ),
     (SensitiveKind::Tfstate, ".tfstate", r"\S+(?i-u:\.tfstate)\b"),
     (
         SensitiveKind::PemBlob,
@@ -222,9 +230,16 @@ mod tests {
 
     #[test]
     fn classifies_private_key_file() {
+        // All four standard OpenSSH private-key filenames, including the
+        // DSA form (`id_dsa`) that the alternation originally omitted.
         assert!(kinds("id_rsa").contains(&SensitiveKind::PrivateKeyFile));
-        assert!(kinds("id_ed25519").contains(&SensitiveKind::PrivateKeyFile));
+        assert!(kinds("id_dsa").contains(&SensitiveKind::PrivateKeyFile));
         assert!(kinds("id_ecdsa").contains(&SensitiveKind::PrivateKeyFile));
+        assert!(kinds("id_ed25519").contains(&SensitiveKind::PrivateKeyFile));
+        assert!(kinds("~/.ssh/id_dsa").contains(&SensitiveKind::PrivateKeyFile));
+        // Lookalikes that are not real key names must not classify.
+        assert!(!kinds("id_dss").contains(&SensitiveKind::PrivateKeyFile));
+        assert!(!kinds("id_rsational").contains(&SensitiveKind::PrivateKeyFile));
     }
 
     #[test]
@@ -279,9 +294,31 @@ mod tests {
 
     #[test]
     fn classifies_npmrc_pypirc_tfstate() {
-        assert!(kinds(".npmrc").contains(&SensitiveKind::Npmrc));
-        assert!(kinds(".pypirc").contains(&SensitiveKind::Pypirc));
+        // Real credential files live at a path boundary; each of these
+        // must classify.
+        for token in [".npmrc", "~/.npmrc", "/home/user/.npmrc", "$HOME/.npmrc"] {
+            assert!(
+                kinds(token).contains(&SensitiveKind::Npmrc),
+                "missed {token:?}"
+            );
+        }
+        for token in [".pypirc", "~/.pypirc", "/root/.pypirc", "${HOME}/.pypirc"] {
+            assert!(
+                kinds(token).contains(&SensitiveKind::Pypirc),
+                "missed {token:?}"
+            );
+        }
         assert!(kinds("infra/main.tfstate").contains(&SensitiveKind::Tfstate));
+    }
+
+    #[test]
+    fn does_not_misclassify_npmrc_pypirc_lookalikes() {
+        // `.` preceded by a word char is not a path boundary, so these
+        // lookalikes must not classify (the previous unanchored probe
+        // wrongly matched `data.npmrc`).
+        assert!(!kinds("data.npmrc").contains(&SensitiveKind::Npmrc));
+        assert!(!kinds("xpypirc").contains(&SensitiveKind::Pypirc));
+        assert!(!kinds("npmrc").contains(&SensitiveKind::Npmrc));
     }
 
     #[test]
@@ -396,6 +433,22 @@ mod tests {
                 classify(&token).iter().all(|m| m.kind != SensitiveKind::Dotenv),
                 "false positive Dotenv for {token:?}: {:?}",
                 classify(&token),
+            );
+        }
+
+        // Every standard OpenSSH private-key filename classifies as
+        // PrivateKeyFile under any representative path prefix. Pins the
+        // `id_dsa` hole shut across the full key family.
+        #[test]
+        fn pbt_ssh_key_family_always_classifies(
+            key in "id_(rsa|dsa|ecdsa|ed25519)",
+            prefix in "(|~/\\.ssh/|\\$HOME/\\.ssh/|/home/user/\\.ssh/|/root/\\.ssh/)",
+        ) {
+            let s = format!("{prefix}{key}");
+            let kinds: Vec<_> = classify(&s).into_iter().map(|m| m.kind).collect();
+            prop_assert!(
+                kinds.contains(&SensitiveKind::PrivateKeyFile),
+                "expected PrivateKeyFile from {s:?}, got {kinds:?}",
             );
         }
 
