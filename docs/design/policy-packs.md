@@ -50,12 +50,22 @@ option も skip する)。
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`scp`/`rsync`/`nc` 等、および bash の `/dev/(tcp\|udp)/` への書き込み redirect) が共存。pipeline の redirect 先が機密 path の場合も対象 |
+| `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`nc`/`ncat`/`socat`/`telnet`/`scp`/`rsync`/`ftp`/`sftp`、および bash の `/dev/(tcp\|udp)/` への書き込み redirect) が共存。pipeline の redirect 先が機密 path の場合も対象。`ssh` は `ssh -i ~/.ssh/id_rsa host` 等の正当用途で偽陽性が多いため sink に含めない |
 | `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする |
 | `core.secrets.sensitive-bash-read` | ask | false | high | Bash の reader head (`cat`/`head`/`tail`/`source`/`.`/`grep`/`awk`/`sed`/`dd` 等) または `<` redirect が機密 path を読む |
 
 機密分類は `~/.ssh/**`, `~/.aws/**`, `~/.config/gcloud/**`, `~/.kube/config`,
-`~/.docker/config.json`, `.env*`, `.npmrc`, `.pypirc`, `*.tfstate`, PEM blob など。
+`~/.docker/config.json`, SSH 秘密鍵 `id_{rsa,dsa,ecdsa,ed25519}`, `.env*`,
+`.npmrc`, `.pypirc`, `*.tfstate`, PEM blob など。
+機密 path の分類器は Bash 系ルール用 (`src/rules/patterns.rs` の
+`SENSITIVE_PATH`) とファイルツール系ルール用 (`src/facts/sensitive.rs` の
+`classify`) の 2 系統があり、両者は同じ shape 集合を分類しなければならない。
+`.npmrc` / `.pypirc` は `~/.npmrc` のようにパス境界 (`^` / `/` / 空白 /
+`~`・`$HOME`・`${HOME}` + `/`) に接する場合のみ機密とみなし、`data.npmrc`
+のような lookalike は除外する。2 系統の一致は
+`pbt_sensitive_path_matches_classify` property (`src/rules/patterns.rs`) と
+engine レベルの `pbt_sensitive_path_parity_across_surfaces`
+(`tests/engine_proptest.rs`) が恒久的に縛る。
 `~` / `$HOME` 展開済みの絶対パス (`/home/user/.ssh/config`,
 `/root/.aws/credentials` 等) も同一 regex で分類する (Claude Code の Read が
 絶対 `file_path` を渡す bypass 対策)。判定は case-insensitive で行うため
