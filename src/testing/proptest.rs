@@ -935,3 +935,60 @@ pub fn dotenv_false_positive_token() -> impl Strategy<Value = String> {
     )
     .prop_map(std::string::ToString::to_string)
 }
+
+/// Credential-shaped path tokens spanning every `SensitiveKind`, in both
+/// clearly-sensitive (`~/.ssh/id_dsa`, `/home/u/.npmrc`) and near-miss
+/// lookalike (`data.npmrc`, `notakey`) forms, with realistic path prefixes
+/// (`~`, `$HOME`, absolute, bare). Used by the classifier-parity property
+/// so the Bash-side `SENSITIVE_PATH` regex and the file-tool-side
+/// `classify` are forced to agree across the whole secret-shape space.
+pub fn sensitive_shaped_token() -> impl Strategy<Value = String> {
+    let prefix = prop_oneof![
+        Just(String::new()),
+        Just("~/".to_string()),
+        Just("$HOME/".to_string()),
+        Just("${HOME}/".to_string()),
+        Just("/home/user/".to_string()),
+        Just("/root/".to_string()),
+        Just("dir/sub/".to_string()),
+    ];
+    let leaf = prop_oneof![
+        proptest::sample::select(
+            &[
+                ".ssh/id_rsa",
+                ".ssh/id_dsa",
+                ".ssh/id_ecdsa",
+                ".ssh/id_ed25519",
+                ".ssh/config",
+                ".aws/credentials",
+                ".config/gcloud/creds.json",
+                ".kube/config",
+                ".docker/config.json",
+                "id_rsa",
+                "id_dsa",
+                "id_ecdsa",
+                "id_ed25519",
+                ".env",
+                ".env.production",
+                ".npmrc",
+                ".pypirc",
+                "main.tfstate",
+            ][..],
+        )
+        .prop_map(std::string::ToString::to_string),
+        // Lookalikes: parity must also hold on the negative space.
+        proptest::sample::select(
+            &[
+                "data.npmrc",
+                "notakey",
+                "id_dss",
+                "README.md",
+                "config",
+                "envfile",
+                "npmrc",
+            ][..],
+        )
+        .prop_map(std::string::ToString::to_string),
+    ];
+    (prefix, leaf).prop_map(|(p, l)| format!("{p}{l}"))
+}

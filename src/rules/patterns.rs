@@ -33,10 +33,10 @@ pub static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
         r"|(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.config/gcloud)(?:/|\b)",
         r"|(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.kube/config)\b",
         r"|(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.docker/config\.json)\b",
-        r"|\b(?i-u:id_(?:rsa|ed25519|ecdsa))\b",
+        r"|\b(?i-u:id_(?:rsa|dsa|ecdsa|ed25519))\b",
         r"|(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
-        r"|\b(?i-u:\.npmrc)\b",
-        r"|\b(?i-u:\.pypirc)\b",
+        r"|(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.npmrc)\b",
+        r"|(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.pypirc)\b",
         r"|\S+(?i-u:\.tfstate)\b",
         r"|-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----",
         r")",
@@ -126,6 +126,35 @@ mod tests {
     }
 
     #[test]
+    fn sensitive_path_matches_npmrc_pypirc_at_path_boundaries() {
+        // Real credential files live at a path boundary (`~/.npmrc`,
+        // `/home/u/.pypirc`, or a bare leading `.npmrc`). A leading `\b`
+        // anchor would miss all of these because `.` is a non-word char,
+        // yet it would wrongly match the `data.npmrc` lookalike.
+        for token in [
+            ".npmrc",
+            "~/.npmrc",
+            "/home/user/.npmrc",
+            "$HOME/.npmrc",
+            ".pypirc",
+            "~/.pypirc",
+            "/root/.pypirc",
+        ] {
+            assert!(SENSITIVE_PATH.is_match(token), "missed {token:?}");
+        }
+        for token in ["data.npmrc", "xpypirc", "npmrc"] {
+            assert!(!SENSITIVE_PATH.is_match(token), "false positive {token:?}");
+        }
+    }
+
+    #[test]
+    fn sensitive_path_matches_all_ssh_key_families() {
+        for token in ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "~/.ssh/id_dsa"] {
+            assert!(SENSITIVE_PATH.is_match(token), "missed {token:?}");
+        }
+    }
+
+    #[test]
     fn sensitive_path_matches_absolute_secret_directories() {
         let cases = [
             ("/home/user/.ssh/config", true),
@@ -198,6 +227,36 @@ mod tests {
                 matches_sensitive_path(&s),
                 SENSITIVE_PATH.is_match(&s),
                 "prefilter diverged on {:?}",
+                s,
+            );
+        }
+
+        // Classifier parity: the Bash-side `SENSITIVE_PATH` (source of
+        // truth for `sensitive-path-to-network` / `sensitive-bash-read`)
+        // and the file-tool-side `classify` (which feeds `facts.sensitive`
+        // and `sensitive-read`) must agree on whether a token is a
+        // credentials path. A divergence means one surface catches a
+        // secret shape the other lets through — exactly the npmrc/pypirc
+        // anchor bug this property was added to pin. Exercised over both
+        // arbitrary printable ASCII and credential-shaped tokens.
+        #[test]
+        fn pbt_sensitive_path_matches_classify(s in "[ -~]{0,80}") {
+            prop_assert_eq!(
+                SENSITIVE_PATH.is_match(&s),
+                !crate::facts::sensitive::classify(&s).is_empty(),
+                "SENSITIVE_PATH and classify diverged on {:?}",
+                s,
+            );
+        }
+
+        #[test]
+        fn pbt_sensitive_path_matches_classify_on_secret_shapes(
+            s in crate::testing::proptest::sensitive_shaped_token(),
+        ) {
+            prop_assert_eq!(
+                SENSITIVE_PATH.is_match(&s),
+                !crate::facts::sensitive::classify(&s).is_empty(),
+                "SENSITIVE_PATH and classify diverged on {:?}",
                 s,
             );
         }
