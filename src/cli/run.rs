@@ -21,6 +21,7 @@ use super::cline_input;
 use super::copilot_input;
 use super::cursor_input;
 use super::kiro_input;
+use super::opencode_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
 use super::pi_input;
 use super::{
@@ -113,6 +114,7 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
         HookAgent::Cline => cline_input::parse(body).map_err(|err| err.to_string()),
         HookAgent::Cursor => cursor_input::parse(body).map_err(|err| err.to_string()),
         HookAgent::Pi => pi_input::parse(body).map_err(|err| err.to_string()),
+        HookAgent::Opencode => opencode_input::parse(body).map_err(|err| err.to_string()),
     }
 }
 
@@ -478,6 +480,20 @@ impl AgentPlan {
                     }),
                 })
             },
+            HookAgent::Opencode => {
+                let targets = init::opencode::resolve_paths(cwd, &options.opencode)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.plugin_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::opencode::detect_binary();
+                        let outcome = init::opencode::install(&targets, &binary, dry_run)?;
+                        Ok(init::AdapterRunReport {
+                            outcome,
+                            kiro: None,
+                        })
+                    }),
+                })
+            },
         }
     }
 }
@@ -599,6 +615,7 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::init;
+    use crate::init::opencode::OpencodeInitOptions;
 
     use super::super::test_support::{
         CwdGuard, FailingReader, FailingWriter, make_engine_failing_repo, run_with,
@@ -620,6 +637,7 @@ mod tests {
             kiro: init::kiro::KiroInitOptions::default(),
             cursor: init::cursor::CursorInitOptions::default(),
             pi: init::pi::PiInitOptions::default(),
+            opencode: OpencodeInitOptions::default(),
         })
     }
 
@@ -979,6 +997,7 @@ rules:
                 kiro: init::kiro::KiroInitOptions::default(),
                 cursor: init::cursor::CursorInitOptions::default(),
                 pi: init::pi::PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
             },
             passing_report,
             &mut out,
@@ -1010,6 +1029,7 @@ rules:
                 kiro: init::kiro::KiroInitOptions::default(),
                 cursor: init::cursor::CursorInitOptions::default(),
                 pi: init::pi::PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
             },
             failing_report,
             &mut out,
@@ -1043,6 +1063,7 @@ rules:
                 kiro: init::kiro::KiroInitOptions::default(),
                 cursor: init::cursor::CursorInitOptions::default(),
                 pi: init::pi::PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
             },
             passing_report,
             &mut out,

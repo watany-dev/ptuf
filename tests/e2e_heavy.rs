@@ -643,8 +643,8 @@ mod full_config_stack {
 // Axis 5: cross-adapter parity — every agent's native shape end-to-end
 // ---------------------------------------------------------------------
 
-/// Drives all seven adapters (claude-code / codex / copilot / kiro /
-/// cline / cursor / pi) through real process boundaries in their native payload
+/// Drives all eight adapters (claude-code / codex / copilot / kiro /
+/// cline / cursor / pi / opencode) through real process boundaries in their native payload
 /// shapes and pins the per-agent exit-code and stdout/stderr contract
 /// from `docs/design/cli-and-hooks.md`. The leak / concurrent / giant
 /// axes only ever exercise `claude-code`; this axis guards the other
@@ -665,6 +665,8 @@ mod adapter_parity {
         br#"{"hook_event_name":"beforeShellExecution","command":"ls","cwd":"/tmp"}"#;
     const PI_DENY: &[u8] = br#"{"tool_name":"bash","tool_input":{"command":"rm -rf /"}}"#;
     const PI_ALLOW: &[u8] = br#"{"tool_name":"bash","tool_input":{"command":"ls"}}"#;
+    const OPENCODE_DENY: &[u8] = br#"{"tool_name":"bash","tool_input":{"command":"rm -rf /"}}"#;
+    const OPENCODE_ALLOW: &[u8] = br#"{"tool_name":"bash","tool_input":{"command":"ls"}}"#;
 
     fn hook(agent: &str, stdin: &[u8]) -> SpawnOutcome {
         spawn(&SpawnConfig {
@@ -757,6 +759,20 @@ mod adapter_parity {
             "pi must emit a bare envelope: {out}"
         );
 
+        // OpenCode: exit 2, bare decision envelope (Ask demoted to deny upstream).
+        let r = hook("opencode", OPENCODE_DENY);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 2, "opencode deny: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(
+            out.contains(r#""decision":"deny""#),
+            "opencode stdout: {out}"
+        );
+        assert!(
+            !out.contains("hookSpecificOutput"),
+            "opencode must emit a bare envelope: {out}"
+        );
+
         // Cline: exit 0, cancel-envelope JSON on stdout.
         let r = hook("cline", CLINE_DENY);
         assert_clean_exit(&r);
@@ -821,6 +837,16 @@ mod adapter_parity {
         assert_eq!(r.code, 0, "pi allow: {}", r.stderr_string());
         let out = r.stdout_string();
         assert!(out.contains(r#""decision":"allow""#), "pi stdout: {out}");
+
+        // OpenCode: exit 0, explicit allow decision envelope.
+        let r = hook("opencode", OPENCODE_ALLOW);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 0, "opencode allow: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(
+            out.contains(r#""decision":"allow""#),
+            "opencode stdout: {out}"
+        );
 
         // Cline: exit 0, empty-object `{}` on stdout.
         let r = hook("cline", CLINE_ALLOW);

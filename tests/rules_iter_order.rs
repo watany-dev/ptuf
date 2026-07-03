@@ -45,6 +45,7 @@ fn rules_iter_order_matches_fixture() {
         "core.self_protection.copilot-settings",
         "core.self_protection.kiro-settings",
         "core.self_protection.pi-settings",
+        "core.self_protection.opencode-settings",
         "core.secrets.sensitive-read",
         "core.injection.invisible-chars",
         "core.project_hygiene.lock-mismatch-pnpm",

@@ -282,6 +282,7 @@ pub fn protected_kind() -> impl Strategy<Value = ProtectedKind> {
         Just(ProtectedKind::CopilotSettings),
         Just(ProtectedKind::KiroSettings),
         Just(ProtectedKind::PiSettings),
+        Just(ProtectedKind::OpencodeSettings),
     ]
 }
 

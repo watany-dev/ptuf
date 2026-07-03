@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crate::init::cursor::{CursorInitOptions, CursorScope};
 use crate::init::kiro::{KiroInitOptions, KiroMode, ScopeFilter};
+use crate::init::opencode::{OpencodeInitOptions, OpencodeScope};
 use crate::init::pi::{PiInitOptions, PiScope};
 use crate::update::UpdateOptions;
 
@@ -45,7 +46,8 @@ where
                 "--new-agent" => new_agent = true,
                 "--workspace-only" => workspace_only = true,
                 "--global" => global = true,
-                "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" | "pi" => {
+                "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" | "pi"
+                | "opencode" => {
                     if agent.is_some() {
                         return Err(ParseError::UnexpectedArgument(arg.to_string()));
                     }
@@ -77,9 +79,10 @@ where
     if (shared_scope.is_some() || shared_root.is_some())
         && agent != Some(HookAgent::Cursor)
         && agent != Some(HookAgent::Pi)
+        && agent != Some(HookAgent::Opencode)
     {
         return Err(ParseError::ConflictingFlags(
-            "`--scope` / `--root` require `cursor` or `pi` agent",
+            "`--scope` / `--root` require `cursor`, `pi`, or `opencode` agent",
         ));
     }
     if pi_extension.is_some() && agent != Some(HookAgent::Pi) {
@@ -125,11 +128,23 @@ where
             PiScope::default()
         },
         root: if agent == Some(HookAgent::Pi) {
-            shared_root
+            shared_root.clone()
         } else {
             None
         },
         extension: pi_extension,
+    };
+    let opencode = OpencodeInitOptions {
+        scope: if agent == Some(HookAgent::Opencode) {
+            shared_scope.map(Into::into).unwrap_or_default()
+        } else {
+            OpencodeScope::default()
+        },
+        root: if agent == Some(HookAgent::Opencode) {
+            shared_root
+        } else {
+            None
+        },
     };
     Ok(Command::Init(InitOptions {
         agent,
@@ -138,6 +153,7 @@ where
         kiro,
         cursor,
         pi,
+        opencode,
     }))
 }
 
@@ -197,6 +213,15 @@ impl From<SharedScope> for PiScope {
     }
 }
 
+impl From<SharedScope> for OpencodeScope {
+    fn from(scope: SharedScope) -> Self {
+        match scope {
+            SharedScope::Local => Self::Local,
+            SharedScope::Global => Self::Global,
+        }
+    }
+}
+
 fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
     match value {
         "claude-code" => Ok(HookAgent::ClaudeCode),
@@ -206,6 +231,7 @@ fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
         "cline" => Ok(HookAgent::Cline),
         "cursor" => Ok(HookAgent::Cursor),
         "pi" => Ok(HookAgent::Pi),
+        "opencode" => Ok(HookAgent::Opencode),
         other => Err(ParseError::UnknownAgent(other.to_string())),
     }
 }
@@ -308,6 +334,7 @@ mod tests {
 
     use crate::init::cursor::{CursorInitOptions, CursorScope};
     use crate::init::kiro::{KiroInitOptions, KiroMode, ScopeFilter};
+    use crate::init::opencode::OpencodeInitOptions;
     use crate::init::pi::{PiInitOptions, PiScope};
     use crate::update::UpdateOptions;
 
@@ -380,6 +407,12 @@ mod tests {
             cmd(&["hook", "pi"]),
             Command::HookPreToolUse {
                 agent: HookAgent::Pi
+            }
+        );
+        assert_eq!(
+            cmd(&["hook", "opencode"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::Opencode
             }
         );
     }
@@ -521,6 +554,7 @@ mod tests {
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
             })
         );
     }
@@ -535,6 +569,7 @@ mod tests {
             ("cline", HookAgent::Cline),
             ("cursor", HookAgent::Cursor),
             ("pi", HookAgent::Pi),
+            ("opencode", HookAgent::Opencode),
         ] {
             let c = cmd(&["init", token]);
             assert_eq!(
@@ -546,6 +581,7 @@ mod tests {
                     kiro: KiroInitOptions::default(),
                     cursor: CursorInitOptions::default(),
                     pi: PiInitOptions::default(),
+                    opencode: OpencodeInitOptions::default(),
                 }),
                 "agent token {token}",
             );
@@ -563,6 +599,7 @@ mod tests {
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
             })
         );
     }
@@ -578,6 +615,7 @@ mod tests {
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
             })
         );
     }
@@ -593,6 +631,7 @@ mod tests {
                 kiro: KiroInitOptions::default(),
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
             })
         );
     }
@@ -611,6 +650,7 @@ mod tests {
                 },
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
             })
         );
     }
@@ -629,6 +669,7 @@ mod tests {
                 },
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
             })
         );
     }
@@ -647,6 +688,7 @@ mod tests {
                 },
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
             })
         );
     }
@@ -665,6 +707,7 @@ mod tests {
                 },
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
             })
         );
     }
@@ -717,6 +760,7 @@ mod tests {
                     root: None,
                     extension: None,
                 },
+                opencode: OpencodeInitOptions::default(),
             })
         );
     }
@@ -736,6 +780,7 @@ mod tests {
                     root: Some(PathBuf::from("/repo")),
                     extension: None,
                 },
+                opencode: OpencodeInitOptions::default(),
             })
         );
     }
@@ -763,6 +808,7 @@ mod tests {
                     root: None,
                     extension: Some(PathBuf::from("/tmp/ptuf.ts")),
                 },
+                opencode: OpencodeInitOptions::default(),
             })
         );
     }
@@ -784,6 +830,7 @@ mod tests {
                 verify: true,
                 dry_run: false,
                 kiro: KiroInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
                 cursor: CursorInitOptions {
                     scope: CursorScope::Global,
                     root: None,
@@ -803,6 +850,7 @@ mod tests {
                 verify: true,
                 dry_run: false,
                 kiro: KiroInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
                 cursor: CursorInitOptions {
                     scope: CursorScope::Local,
                     root: None,
@@ -829,6 +877,7 @@ mod tests {
                 verify: true,
                 dry_run: false,
                 kiro: KiroInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
                 cursor: CursorInitOptions {
                     scope: CursorScope::Local,
                     root: Some(PathBuf::from("/repo")),

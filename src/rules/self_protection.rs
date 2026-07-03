@@ -167,6 +167,19 @@ const PI_SETTINGS: RuleSpec = RuleSpec {
     ],
 };
 
+const OPENCODE_SETTINGS: RuleSpec = RuleSpec {
+    id: "core.self_protection.opencode-settings",
+    kind: ProtectedKind::OpencodeSettings,
+    problem: "The command modifies the managed ptuf OpenCode plugin under .opencode/ or \
+         $XDG_CONFIG_HOME/opencode/. The guardrail registration lives there, so this edit could \
+         remove or short-circuit the ptuf plugin entirely.",
+    alternatives: &[
+        "Use `ptuf init opencode` to manage the plugin safely.",
+        "Have the user edit OpenCode plugin files outside an agent session.",
+        "If the change is unrelated to hooks, narrow the edit to a non-hook field.",
+    ],
+};
+
 pub static BINARY_RULE: SelfRule = SelfRule { spec: &BINARY };
 pub static CONFIG_RULE: SelfRule = SelfRule { spec: &CONFIG };
 pub static PLUGIN_RULE: SelfRule = SelfRule { spec: &PLUGIN };
@@ -184,6 +197,9 @@ pub static KIRO_SETTINGS_RULE: SelfRule = SelfRule {
     spec: &KIRO_SETTINGS,
 };
 pub static PI_SETTINGS_RULE: SelfRule = SelfRule { spec: &PI_SETTINGS };
+pub static OPENCODE_SETTINGS_RULE: SelfRule = SelfRule {
+    spec: &OPENCODE_SETTINGS,
+};
 
 #[cfg(test)]
 mod tests {
@@ -214,6 +230,7 @@ mod tests {
             &COPILOT_SETTINGS_RULE,
             &KIRO_SETTINGS_RULE,
             &PI_SETTINGS_RULE,
+            &OPENCODE_SETTINGS_RULE,
         ] {
             assert!(rule.evaluate(&facts, &input).is_none());
         }
@@ -231,6 +248,7 @@ mod tests {
             &COPILOT_SETTINGS_RULE,
             &KIRO_SETTINGS_RULE,
             &PI_SETTINGS_RULE,
+            &OPENCODE_SETTINGS_RULE,
         ] {
             assert!(rule.hard_deny(), "{} must be hard_deny", rule.id());
             assert_eq!(
@@ -271,6 +289,7 @@ mod tests {
             COPILOT_SETTINGS_RULE.id(),
             KIRO_SETTINGS_RULE.id(),
             PI_SETTINGS_RULE.id(),
+            OPENCODE_SETTINGS_RULE.id(),
         ] {
             assert!(id.starts_with("core.self_protection."), "id was {id}");
         }
@@ -279,7 +298,7 @@ mod tests {
     use crate::testing::proptest::{protected_kind, richer_hook_input};
     use proptest::prelude::*;
 
-    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 9] {
+    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 10] {
         [
             (&BINARY_RULE, ProtectedKind::Binary),
             (&CONFIG_RULE, ProtectedKind::Config),
@@ -290,6 +309,7 @@ mod tests {
             (&COPILOT_SETTINGS_RULE, ProtectedKind::CopilotSettings),
             (&KIRO_SETTINGS_RULE, ProtectedKind::KiroSettings),
             (&PI_SETTINGS_RULE, ProtectedKind::PiSettings),
+            (&OPENCODE_SETTINGS_RULE, ProtectedKind::OpencodeSettings),
         ]
     }
 

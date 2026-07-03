@@ -26,6 +26,7 @@ pub enum ProtectedKind {
     CopilotSettings,
     KiroSettings,
     PiSettings,
+    OpencodeSettings,
 }
 
 impl ProtectedKind {
@@ -40,13 +41,14 @@ impl ProtectedKind {
             Self::CopilotSettings => "copilot_settings",
             Self::KiroSettings => "kiro_settings",
             Self::PiSettings => "pi_settings",
+            Self::OpencodeSettings => "opencode_settings",
         }
     }
 }
 
 /// Small, allocation-free set of protected target labels.
 ///
-/// There are only nine [`ProtectedKind`] variants, so a fixed buffer is
+/// There are only ten [`ProtectedKind`] variants, so a fixed buffer is
 /// simpler than pulling in a small-vector dependency for the hook hot path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProtectedKinds {
@@ -55,7 +57,7 @@ pub struct ProtectedKinds {
 }
 
 impl ProtectedKinds {
-    const CAPACITY: usize = 9;
+    const CAPACITY: usize = 10;
 
     pub fn new() -> Self {
         Self::default()
@@ -121,6 +123,7 @@ pub struct ProtectedPaths {
     pub copilot_settings: Vec<PathBuf>,
     pub kiro_settings: Vec<PathBuf>,
     pub pi_settings: Vec<PathBuf>,
+    pub opencode_settings: Vec<PathBuf>,
 }
 
 impl ProtectedPaths {
@@ -254,6 +257,7 @@ impl ProtectedPaths {
         let home_path = env.var_os("HOME").map(PathBuf::from);
         let kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
         let pi_settings = collect_pi_paths(repo_root, home_path.as_deref());
+        let opencode_settings = collect_opencode_paths(repo_root, home_path.as_deref(), env);
 
         for agent_path in &kiro_settings {
             // `collect_kiro_agent_jsons` enumerates via `read_dir`, so
@@ -298,6 +302,7 @@ impl ProtectedPaths {
         let copilot_settings = canonicalize_each(copilot_settings);
         let kiro_settings = canonicalize_each(kiro_settings);
         let pi_settings = canonicalize_each(pi_settings);
+        let opencode_settings = canonicalize_each(opencode_settings);
 
         Self {
             repo_root: repo_root.map(Path::to_path_buf),
@@ -310,6 +315,7 @@ impl ProtectedPaths {
             copilot_settings,
             kiro_settings,
             pi_settings,
+            opencode_settings,
         }
     }
 
@@ -398,6 +404,13 @@ impl ProtectedPaths {
         if self.pi_settings.iter().any(|p| path_matches(candidate, p)) {
             return Some(ProtectedKind::PiSettings);
         }
+        if self
+            .opencode_settings
+            .iter()
+            .any(|p| path_matches(candidate, p))
+        {
+            return Some(ProtectedKind::OpencodeSettings);
+        }
         if self.hook_scripts.iter().any(|p| path_matches(candidate, p)) {
             return Some(ProtectedKind::HookScript);
         }
@@ -453,6 +466,25 @@ fn collect_pi_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBu
         paths.push(pi.join("settings.json"));
         paths.push(pi.join("extensions/ptuf.ts"));
         paths.push(pi.join("extensions/ptuf/index.ts"));
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn collect_opencode_paths(
+    repo_root: Option<&Path>,
+    home: Option<&Path>,
+    env: &dyn EnvLookup,
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(xdg) = env.var_os("XDG_CONFIG_HOME") {
+        paths.push(PathBuf::from(xdg).join("opencode/plugin/ptuf.ts"));
+    } else if let Some(home) = home {
+        paths.push(home.join(".config/opencode/plugin/ptuf.ts"));
+    }
+    if let Some(root) = repo_root {
+        paths.push(root.join(".opencode/plugin/ptuf.ts"));
     }
     paths.sort();
     paths.dedup();

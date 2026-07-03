@@ -90,6 +90,7 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 - `cline` (Cline)
 - `cursor` (Cursor)
 - `pi` (Pi Coding Agent)
+- `opencode` (OpenCode)
 
 adapter は stdin payload をまず `RawHookInput` として受け、内部では
 normalized `Event { agent, event, tool, inputs, paths, urls, content }`

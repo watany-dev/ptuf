@@ -14,7 +14,7 @@ agent's `PreToolUse` event and blocks dangerous tool calls — destructive
 `rm`, piping `curl` into a shell, leaking `~/.ssh` over the network — using
 rules, not LLM heuristics.
 
-Supported hosts: **Claude Code**, **Codex**, **GitHub Copilot**, **Kiro CLI**, **Cline**, **Cursor**, **Pi Coding Agent**.
+Supported hosts: **Claude Code**, **Codex**, **GitHub Copilot**, **Kiro CLI**, **Cline**, **Cursor**, **Pi Coding Agent**, **OpenCode**.
 
 ## Why ptuf?
 
@@ -28,7 +28,7 @@ approach:
 | Deterministic (same input → same decision) | partly | no | yes | **yes** |
 | Understands shell syntax (quotes, pipes, `bash -c`, var expansion) | no | n/a | n/a | **yes** |
 | Bypass resistance covered by versioned tests + fuzzing | no | no | n/a | **yes** ([`tests/bypass/corpus.jsonl`](tests/bypass/corpus.jsonl)) |
-| One policy across Claude Code / Codex / Copilot / Kiro / Cline / Cursor / Pi | rewrite per host | no | no | **yes** (`ptuf init`) |
+| One policy across Claude Code / Codex / Copilot / Kiro / Cline / Cursor / Pi / OpenCode | rewrite per host | no | no | **yes** (`ptuf init`) |
 | Agent cannot disable it mid-session | rarely | no | yes | **yes** (`core.self_protection.*`) |
 | Audit trail of what was blocked and why | rarely | no | no | **yes** (JSONL) |
 | Works offline, no extra runtime | depends | no | heavy setup | **yes** (single binary) |
@@ -233,6 +233,16 @@ never demoted to a hard deny:
 | Deny             | `{"permission":"deny",...}`         | 2    |
 | invalid payload  | `{"permission":"deny",...}`         | 2    |
 
+
+
+
+**OpenCode** — writes a TypeScript plugin to
+`$XDG_CONFIG_HOME/opencode/plugin/ptuf.ts` (default global) or
+`<repo>/.opencode/plugin/ptuf.ts` (local). The plugin hooks
+`tool.execute.before` and spawns `ptuf hook opencode` before every tool
+call. ptuf Ask decisions are demoted to Deny because OpenCode cannot
+reliably surface interactive confirmation from this hook.
+Environment variable: `PTUF_OPENCODE_TIMEOUT_MS` (default 10000).
 
 **Pi Coding Agent** — writes a TypeScript extension to
 `$HOME/.pi/agent/extensions/ptuf.ts` (`--scope global`, default) or

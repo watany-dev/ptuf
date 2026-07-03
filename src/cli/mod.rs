@@ -14,6 +14,7 @@ use crate::Decision;
 use crate::engine::Engine;
 use crate::init::cursor::CursorInitOptions;
 use crate::init::kiro::KiroInitOptions;
+use crate::init::opencode::OpencodeInitOptions;
 use crate::init::pi::PiInitOptions;
 use crate::reason;
 
@@ -24,6 +25,7 @@ mod copilot_input;
 mod cursor_input;
 mod input_helpers;
 mod kiro_input;
+mod opencode_input;
 mod output;
 mod parse;
 mod pi_input;
@@ -36,6 +38,12 @@ mod test_support;
 #[doc(hidden)]
 pub fn fuzz_copilot_parse(body: &str) {
     let _ = copilot_input::parse(body);
+}
+
+/// Lossy OpenCode stdin normaliser for coverage-guided fuzzing.
+#[doc(hidden)]
+pub fn fuzz_opencode_parse(body: &str) {
+    let _ = opencode_input::parse(body);
 }
 
 /// Reserved rule id used when the engine itself failed to load policy
@@ -57,6 +65,7 @@ pub enum HookAgent {
     Cline,
     Cursor,
     Pi,
+    Opencode,
 }
 
 impl HookAgent {
@@ -69,6 +78,7 @@ impl HookAgent {
             Self::Cline => "cline",
             Self::Cursor => "cursor",
             Self::Pi => "pi",
+            Self::Opencode => "opencode",
         }
     }
 }
@@ -98,6 +108,7 @@ pub struct InitOptions {
     pub kiro: KiroInitOptions,
     pub cursor: CursorInitOptions,
     pub pi: PiInitOptions,
+    pub opencode: OpencodeInitOptions,
 }
 
 /// Top-level flags that apply uniformly across subcommands.
@@ -106,7 +117,7 @@ pub struct InitOptions {
 /// subcommand token (`ptuf --json init`). Per-subcommand
 /// `--json` was removed in the v0 simplification; `hook` rejects
 /// `--json` at parse time because the hook protocol output shape
-/// is fixed by Claude Code / Codex / Copilot / Kiro / Cline / Cursor / Pi.
+/// is fixed by Claude Code / Codex / Copilot / Kiro / Cline / Cursor / Pi / OpenCode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GlobalFlags {
     pub json: bool,
@@ -243,7 +254,7 @@ USAGE:
         (auto-detect every agent under cwd / $HOME and install the
          PreToolUse hook with verify enabled by default. AGENT pins
          to a single adapter: claude-code | codex | copilot | kiro
-         | cline | cursor | pi)
+         | cline | cursor | pi | opencode)
         Kiro-only flags:
           --new-agent       Create a dedicated ptuf-guarded.json agent
                             (legacy single-file behavior) instead of
@@ -263,6 +274,11 @@ USAGE:
           --root <PATH>     Override the repo-discovery start directory.
           --extension <PATH>
                             Write this exact extension file instead.
+        OpenCode-only flags:
+          --scope <local|global>
+                            global (default) writes $XDG_CONFIG_HOME/opencode/plugin/ptuf.ts;
+                            local writes <repo>/.opencode/plugin/ptuf.ts.
+          --root <PATH>     Override the repo-discovery start directory.
     ptuf hook <AGENT>
         (run as the agent's PreToolUse hook over stdin/stdout)
     ptuf [--json] check --tool <NAME> <COMMAND>
@@ -322,5 +338,6 @@ mod tests {
         assert_eq!(HookAgent::Cline.audit_name(), "cline");
         assert_eq!(HookAgent::Cursor.audit_name(), "cursor");
         assert_eq!(HookAgent::Pi.audit_name(), "pi");
+        assert_eq!(HookAgent::Opencode.audit_name(), "opencode");
     }
 }

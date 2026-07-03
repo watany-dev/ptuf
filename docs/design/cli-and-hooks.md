@@ -47,6 +47,7 @@ ptuf update [--check] [--version <TAG>] [--force]
 | Cline | `<repo>/.clinerules/` `.cline/`、または `$HOME/Documents/Cline/` `.cline/` | repo 配下 `.clinerules/hooks/PreToolUse` または `$HOME/Documents/Cline/Hooks/PreToolUse` |
 | Cursor | `<repo>/.cursor/` または `$HOME/.cursor/` | `<repo>/.cursor/hooks.json` (`--scope global` で `$HOME/.cursor/hooks.json`) |
 | Pi | `<repo>/.pi/` または `$HOME/.pi/agent/` | `$HOME/.pi/agent/extensions/ptuf.ts` (default global) または `<repo>/.pi/extensions/ptuf.ts` (local) |
+| OpenCode | `<repo>/.opencode/` または `<repo>/opencode.json` | `$XDG_CONFIG_HOME/opencode/plugin/ptuf.ts` (default global) または `<repo>/.opencode/plugin/ptuf.ts` (local) |
 
 検出 0 件 → exit `1` + `no agent detected` を stderr に出す。1 件以上
 → 全部 install + verify。verify がいずれかで失敗すれば exit `1`。
@@ -385,6 +386,24 @@ temp file + rename の原子的更新、Unix では mode `0600`。
 `--scope` / `--root` は Cursor と Pi で共有する。`--extension` は Pi 専用。
 `--hooks` は Cursor 専用。他 adapter や auto-detect へ渡すと
 `ParseError::ConflictingFlags`。
+
+
+
+### OpenCode 入力正規化 (`src/cli/opencode_input.rs`)
+
+| OpenCode tool | Canonical `tool_name` | 備考 |
+| --- | --- | --- |
+| bash | Bash | |
+| read / write / edit | Read / Write / Edit | camelCase `filePath` → `file_path` |
+| patch | apply_patch | patch 本文を `command` に複製 |
+| webfetch | WebFetch | |
+| grep / glob / list | `mcp__opencode__grep` 等 | 既存 MCP 汎用 path 抽出 |
+| todowrite / todoread / task | `mcp__opencode__<name>` | |
+| 未知 | `mcp__opencode__<sanitized>` | |
+
+OpenCode の stdout は Pi と同型の bare envelope (`decision` / `rule_id` /
+`reason`)。**Ask は Rust 側で Deny に降格**（OpenCode の `permission.ask`
+hook は既知の不発火があり、`tool.execute.before` から対話確認を開始できないため）。
 
 ### Pi 入力正規化 (`src/cli/pi_input.rs`)
 
