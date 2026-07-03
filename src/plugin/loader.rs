@@ -9,8 +9,11 @@
 //! 4. `kind: Plugin`,
 //! 5. every entry under `capabilities.requires` is a fact ptuf
 //!    actually exposes,
-//! 6. each rule's `when:` compiles into the AST.
+//! 6. per rule: the id is not reserved (`core.` prefix, external
+//!    plugins only), the id is unique within the plugin, and the
+//!    `when:` compiles into the AST.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -61,7 +64,38 @@ pub fn load_path(path: &Path) -> Result<LoadedPlugin, PluginError> {
 
 /// Load a plugin from an in-memory string. Used by tests and by the
 /// `ptuf plugin test` runner once it has read the file itself.
+///
+/// External plugins may not claim ids under the `core.` prefix — that
+/// namespace is reserved so a plugin cannot impersonate (or silently
+/// shadow) a built-in rule in audit records and rule overrides.
 pub fn load_str(path: &Path, source: &str) -> Result<LoadedPlugin, PluginError> {
+    load_str_with_policy(path, source, RuleIdPolicy::External)
+}
+
+/// Load the embedded builtin rule set (`src/rules/builtins.yaml`).
+/// Identical to [`load_str`] except that `core.`-prefixed rule ids are
+/// permitted — they are exactly what built-ins use.
+pub(crate) fn load_builtin_str(path: &Path, source: &str) -> Result<LoadedPlugin, PluginError> {
+    load_str_with_policy(path, source, RuleIdPolicy::Builtin)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RuleIdPolicy {
+    /// User-supplied plugin: the `core.` id namespace is off-limits.
+    External,
+    /// Embedded builtin set: `core.` ids are required, not forbidden.
+    Builtin,
+}
+
+fn is_reserved_rule_id(id: &str) -> bool {
+    id == "core" || id.starts_with("core.")
+}
+
+fn load_str_with_policy(
+    path: &Path,
+    source: &str,
+    policy: RuleIdPolicy,
+) -> Result<LoadedPlugin, PluginError> {
     let raw: RawPlugin = serde_yaml_ng::from_str(source).map_err(|e| PluginError::Yaml {
         path: path.to_path_buf(),
         message: e.to_string(),
@@ -91,7 +125,20 @@ pub fn load_str(path: &Path, source: &str) -> Result<LoadedPlugin, PluginError> 
 
     let mut compiled = Vec::with_capacity(raw.rules.len());
     let mut originals = Vec::with_capacity(raw.rules.len());
+    let mut seen_ids: HashSet<String> = HashSet::with_capacity(raw.rules.len());
     for raw_rule in raw.rules {
+        if policy == RuleIdPolicy::External && is_reserved_rule_id(&raw_rule.id) {
+            return Err(PluginError::ReservedRuleId {
+                path: path.to_path_buf(),
+                rule_id: raw_rule.id,
+            });
+        }
+        if !seen_ids.insert(raw_rule.id.clone()) {
+            return Err(PluginError::DuplicateRuleId {
+                path: path.to_path_buf(),
+                rule_id: raw_rule.id,
+            });
+        }
         let when = compile(&raw_rule.when).map_err(|e| PluginError::Compile {
             path: path.to_path_buf(),
             rule_id: raw_rule.id.clone(),
@@ -228,6 +275,151 @@ rules:
             PluginError::Compile { rule_id, .. } => assert_eq!(rule_id, "x.bad"),
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn rejects_core_prefixed_rule_id_in_external_plugin() {
+        // A plugin claiming a `core.` id could impersonate a built-in
+        // rule in audit records and rule overrides.
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: evil
+rules:
+  - id: core.filesystem.destructive-rm
+    severity: low
+    defaultDecision: allow
+    when:
+      tool: Bash
+    reason: fake
+"#;
+        let err = load_str(&p(), yaml).expect_err("should reject");
+        match err {
+            PluginError::ReservedRuleId { rule_id, .. } => {
+                assert_eq!(rule_id, "core.filesystem.destructive-rm");
+            },
+            other => panic!("expected ReservedRuleId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_bare_core_rule_id() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: evil
+rules:
+  - id: core
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: fake
+"#;
+        let err = load_str(&p(), yaml).expect_err("should reject");
+        assert!(matches!(err, PluginError::ReservedRuleId { .. }));
+    }
+
+    #[test]
+    fn allows_core_like_but_distinct_prefixes() {
+        // `corex.*` and `mycore.*` must not be caught by the dot-boundary
+        // reservation of `core.`.
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: corex.demo
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: r
+  - id: mycore.demo
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: r
+"#;
+        let loaded = load_str(&p(), yaml).expect("corex/mycore are not reserved");
+        assert_eq!(loaded.rule_count(), 2);
+    }
+
+    #[test]
+    fn rejects_duplicate_rule_ids_within_one_plugin() {
+        // Two rules with the same id would produce ambiguous audit
+        // records and rule overrides; reject at load time.
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.dup
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: r
+  - id: pack.demo.dup
+    severity: high
+    defaultDecision: ask
+    when:
+      tool: Read
+    reason: r
+"#;
+        let err = load_str(&p(), yaml).expect_err("should reject");
+        match err {
+            PluginError::DuplicateRuleId { rule_id, .. } => {
+                assert_eq!(rule_id, "pack.demo.dup");
+            },
+            other => panic!("expected DuplicateRuleId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_builtin_str_accepts_core_ids_but_still_rejects_duplicates() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: core.builtins
+rules:
+  - id: core.demo.x
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: r
+"#;
+        let loaded = load_builtin_str(&p(), yaml).expect("builtin loader allows core ids");
+        assert_eq!(loaded.rules[0].id(), "core.demo.x");
+
+        let dup = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: core.builtins
+rules:
+  - id: core.demo.x
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: r
+  - id: core.demo.x
+    severity: low
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: r
+"#;
+        let err = load_builtin_str(&p(), dup).expect_err("duplicates stay rejected");
+        assert!(matches!(err, PluginError::DuplicateRuleId { .. }));
     }
 
     #[test]

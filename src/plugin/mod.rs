@@ -44,6 +44,14 @@ pub enum PluginError {
         path: PathBuf,
         name: String,
     },
+    ReservedRuleId {
+        path: PathBuf,
+        rule_id: String,
+    },
+    DuplicateRuleId {
+        path: PathBuf,
+        rule_id: String,
+    },
     Compile {
         path: PathBuf,
         rule_id: String,
@@ -78,6 +86,21 @@ impl std::fmt::Display for PluginError {
                 write!(
                     f,
                     "plugin {}: requires fact `{name}` which this version of ptuf does not provide",
+                    path.display()
+                )
+            },
+            Self::ReservedRuleId { path, rule_id } => {
+                write!(
+                    f,
+                    "plugin {}: rule `{rule_id}`: the `core.` id prefix is reserved for ptuf \
+                     built-in rules",
+                    path.display()
+                )
+            },
+            Self::DuplicateRuleId { path, rule_id } => {
+                write!(
+                    f,
+                    "plugin {}: rule `{rule_id}`: duplicate rule id within the same plugin",
                     path.display()
                 )
             },
@@ -208,6 +231,14 @@ rules:
             PluginError::UnsupportedFact {
                 path: p.clone(),
                 name: "url.parse".into(),
+            },
+            PluginError::ReservedRuleId {
+                path: p.clone(),
+                rule_id: "core.fake".into(),
+            },
+            PluginError::DuplicateRuleId {
+                path: p.clone(),
+                rule_id: "x.dup".into(),
             },
             PluginError::Compile {
                 path: p.clone(),
