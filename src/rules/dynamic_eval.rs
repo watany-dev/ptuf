@@ -277,6 +277,14 @@ mod tests {
         assert_ask("echo hi; bash -c 'rm tmp'");
     }
 
+    #[test]
+    fn has_flag_with_value_ignores_multi_char_flag() {
+        // 実際の呼び出し元は常に "-c"/"-e" のような 1 文字フラグしか渡さない
+        // ため、この 1 文字以外の形の flag を渡すガード節は本番コードからは
+        // 到達不能。ここで直接叩いて分岐を踏む。
+        assert!(!has_flag_with_value(&["-c".to_string()], "--long"));
+    }
+
     use crate::testing::proptest::{arbitrary_command, bash_command, non_bash_hook_input};
     use proptest::prelude::*;
 
