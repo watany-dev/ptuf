@@ -6,15 +6,15 @@
 //! Keeping them in one file means the per-subcommand rule files
 //! only need to know the matchers they care about.
 
-use crate::facts::shell::{Argv, head_basename};
+use crate::facts::shell::Argv;
 
 /// Recognised invocation heads for `git`. Heads are compared by
 /// basename, so absolute and relative invocation paths
 /// (`/usr/bin/git`, `/opt/homebrew/bin/git`, `./git`) match too.
 pub(super) const GIT_HEADS: &[&str] = &["git"];
 
-pub(super) fn is_git(head: &str) -> bool {
-    GIT_HEADS.contains(&head_basename(head))
+pub(super) fn is_git(argv: &Argv) -> bool {
+    GIT_HEADS.contains(&argv.head_basename())
 }
 
 /// First non-flag argument after `git` — i.e. the subcommand
@@ -24,7 +24,7 @@ pub(super) fn is_git(head: &str) -> bool {
 /// `git -c core.hooksPath=/dev/null commit` resolves to `commit`, not to
 /// the `-c`'s value.
 pub(super) fn git_subcommand(argv: &Argv) -> Option<&str> {
-    if !is_git(&argv.head) {
+    if !is_git(argv) {
         return None;
     }
     let mut iter = argv.args.iter();
