@@ -615,7 +615,7 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::init;
-    use crate::init::opencode::OpencodeInitOptions;
+    use crate::init::opencode::{OpencodeInitOptions, OpencodeScope};
 
     use super::super::test_support::{
         CwdGuard, FailingReader, FailingWriter, make_engine_failing_repo, run_with,
@@ -638,6 +638,21 @@ mod tests {
             cursor: init::cursor::CursorInitOptions::default(),
             pi: init::pi::PiInitOptions::default(),
             opencode: OpencodeInitOptions::default(),
+        })
+    }
+
+    fn cmd_init_opencode_local(verify: bool, dry_run: bool) -> Command {
+        Command::Init(InitOptions {
+            agent: Some(HookAgent::Opencode),
+            verify,
+            dry_run,
+            kiro: init::kiro::KiroInitOptions::default(),
+            cursor: init::cursor::CursorInitOptions::default(),
+            pi: init::pi::PiInitOptions::default(),
+            opencode: OpencodeInitOptions {
+                scope: OpencodeScope::Local,
+                root: None,
+            },
         })
     }
 
@@ -936,6 +951,50 @@ rules:
     }
 
     #[test]
+    fn run_init_explicit_opencode_writes_plugin() {
+        let dir = workdir("init-opencode-real");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let plugin_path = dir.join(".opencode/plugin/ptuf.ts");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init_opencode_local(false, false),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out).contains("registered hook"));
+        assert!(plugin_path.exists());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_opencode_dry_run_does_not_write_plugin() {
+        let dir = workdir("init-opencode-dry");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let plugin_path = dir.join(".opencode/plugin/ptuf.ts");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init_opencode_local(false, true),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out).contains("would register hook"));
+        assert!(!plugin_path.exists());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn run_init_auto_detect_includes_cursor() {
         let dir = workdir("init-cursor-detect");
         std::fs::create_dir_all(dir.join(".git")).unwrap();
@@ -1188,6 +1247,33 @@ rules:
         assert!(
             !out_s.contains("hookSpecificOutput"),
             "Copilot must emit a bare envelope: {out_s}",
+        );
+    }
+
+    #[test]
+    fn run_hook_routes_opencode_payload_through_normaliser() {
+        let payload = r#"{"tool_name":"bash","tool_input":{"command":"rm -rf /"}}"#;
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            Command::HookPreToolUse {
+                agent: HookAgent::Opencode,
+            },
+            payload.as_bytes(),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 2, "OpenCode deny must exit 2");
+        let out_s = String::from_utf8_lossy(&out);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&out_s)
+                .expect("OpenCode stdout must be JSON")["decision"],
+            "deny"
+        );
+        assert!(
+            !out_s.contains("hookSpecificOutput"),
+            "OpenCode must emit a bare envelope: {out_s}",
         );
     }
 
