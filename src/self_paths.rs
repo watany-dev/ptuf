@@ -1179,6 +1179,73 @@ mod tests {
     }
 
     #[test]
+    fn collect_includes_opencode_settings_paths() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-self-oc-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        std::fs::create_dir_all(dir.join(".opencode/plugin")).expect("mkdir opencode");
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join(".config/opencode/plugin")).expect("mkdir config");
+        let home_string = home.to_string_lossy().into_owned();
+        let env = MapEnv::with(&[
+            ("HOME", home_string.as_str()),
+            ("XDG_CONFIG_HOME", "/xdg/opencode-config"),
+        ]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
+        assert!(
+            p.opencode_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/xdg/opencode-config/opencode/plugin/ptuf.ts"))
+        );
+        assert!(
+            p.opencode_settings
+                .iter()
+                .any(|q| q == &dir.join(".opencode/plugin/ptuf.ts"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_opencode_settings_falls_back_to_home_dot_config_without_xdg() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-oc-fallback-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join(".config/opencode/plugin")).expect("mkdir config");
+        let home_string = home.to_string_lossy().into_owned();
+        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
+        assert!(
+            p.opencode_settings
+                .iter()
+                .any(|q| q == &home.join(".config/opencode/plugin/ptuf.ts"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn classify_matches_edit_of_opencode_settings() {
+        let p = ProtectedPaths {
+            opencode_settings: vec![PathBuf::from("/repo/.opencode/plugin/ptuf.ts")],
+            ..ProtectedPaths::default()
+        };
+        let input = HookInput {
+            tool_name: "Write".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/.opencode/plugin/ptuf.ts"
+            }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(labels.contains(&ProtectedKind::OpencodeSettings));
+    }
+
+    #[test]
     fn match_path_detects_pi_settings_targets() {
         let p = ProtectedPaths {
             pi_settings: vec![
@@ -1194,6 +1261,33 @@ mod tests {
         assert_eq!(
             p.match_path(Path::new("/home/user/.pi/agent/extensions/ptuf/index.ts")),
             Some(ProtectedKind::PiSettings)
+        );
+    }
+
+    #[test]
+    fn protected_kind_opencode_settings_as_str() {
+        assert_eq!(
+            ProtectedKind::OpencodeSettings.as_str(),
+            "opencode_settings"
+        );
+    }
+
+    #[test]
+    fn match_path_detects_opencode_settings_targets() {
+        let p = ProtectedPaths {
+            opencode_settings: vec![
+                PathBuf::from("/xdg/opencode/plugin/ptuf.ts"),
+                PathBuf::from("/repo/.opencode/plugin/ptuf.ts"),
+            ],
+            ..ProtectedPaths::default()
+        };
+        assert_eq!(
+            p.match_path(Path::new("/xdg/opencode/plugin/ptuf.ts")),
+            Some(ProtectedKind::OpencodeSettings)
+        );
+        assert_eq!(
+            p.match_path(Path::new("/repo/.opencode/plugin/ptuf.ts")),
+            Some(ProtectedKind::OpencodeSettings)
         );
     }
 
