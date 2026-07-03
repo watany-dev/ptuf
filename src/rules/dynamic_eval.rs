@@ -4,7 +4,7 @@
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, unwrap_prefix_wrapper};
+use crate::facts::shell::{Argv, head_basename, unwrap_prefix_wrapper};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -104,10 +104,6 @@ fn matches_dynamic_eval(argv: &Argv) -> bool {
         return false;
     };
     shape_triggers(shape, &argv.args)
-}
-
-fn head_basename(head: &str) -> &str {
-    head.rsplit('/').next().unwrap_or(head)
 }
 
 fn shape_triggers(shape: EvalShape, args: &[String]) -> bool {

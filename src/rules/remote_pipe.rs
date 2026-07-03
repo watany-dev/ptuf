@@ -94,24 +94,19 @@ fn is_interpreter(head: &str) -> bool {
     INTERPRETERS.contains(&head_basename(head))
 }
 
+/// Test `matches` against `argv`'s head, or — failing that — the head one
+/// prefix-wrapper layer (`sudo`/`env`/...) down, so a wrapped invocation
+/// (`env curl ...`) is judged by the command it actually runs.
+fn matches_invocation(argv: &Argv, matches: impl Fn(&str) -> bool) -> bool {
+    matches(&argv.head) || unwrap_prefix_wrapper(argv).is_some_and(|inner| matches(&inner.head))
+}
+
 fn is_fetcher_invocation(argv: &Argv) -> bool {
-    if is_fetcher(&argv.head) {
-        return true;
-    }
-    if let Some(inner) = unwrap_prefix_wrapper(argv) {
-        return is_fetcher(&inner.head);
-    }
-    false
+    matches_invocation(argv, is_fetcher)
 }
 
 fn is_interpreter_invocation(argv: &Argv) -> bool {
-    if is_interpreter(&argv.head) {
-        return true;
-    }
-    if let Some(inner) = unwrap_prefix_wrapper(argv) {
-        return is_interpreter(&inner.head);
-    }
-    false
+    matches_invocation(argv, is_interpreter)
 }
 
 #[cfg(test)]

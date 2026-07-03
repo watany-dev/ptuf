@@ -196,11 +196,6 @@ struct PrefixWrapper {
     /// short and long views symmetric by construction — the asymmetry
     /// this guards against was a real bypass (`sudo -D /tmp rm -rf /`).
     value_flags: &'static [ValueFlag],
-    /// Whether inline `KEY=VALUE` assignments sit between the wrapper's
-    /// flags and the inner command. Only `env FOO=bar CMD` does this; for
-    /// every other wrapper such a token is the command head and must not
-    /// be skipped.
-    skip_env_assignments: bool,
 }
 
 impl PrefixWrapper {
@@ -218,6 +213,14 @@ impl PrefixWrapper {
             .iter()
             .filter_map(ValueFlag::long)
             .any(|long| long == name)
+    }
+
+    /// Whether inline `KEY=VALUE` assignments sit between this wrapper's
+    /// flags and the inner command. Only `env FOO=bar CMD` does this; for
+    /// every other wrapper such a token is the command head and must not
+    /// be skipped.
+    fn skips_env_assignments(&self) -> bool {
+        self.name == "env"
     }
 }
 
@@ -272,29 +275,24 @@ const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
     PrefixWrapper {
         name: "sudo",
         value_flags: SUDO_VALUE_FLAGS,
-        skip_env_assignments: false,
     },
     PrefixWrapper {
         name: "doas",
         value_flags: DOAS_VALUE_FLAGS,
-        skip_env_assignments: false,
     },
     PrefixWrapper {
         name: "pkexec",
         value_flags: PKEXEC_VALUE_FLAGS,
-        skip_env_assignments: false,
     },
     PrefixWrapper {
         name: "run0",
         value_flags: RUN0_VALUE_FLAGS,
-        skip_env_assignments: false,
     },
     // `env FOO=bar CMD ...` runs CMD after its own flags and inline
     // assignments; unwrapping to CMD keeps `env curl … | sh` visible.
     PrefixWrapper {
         name: "env",
         value_flags: ENV_VALUE_FLAGS,
-        skip_env_assignments: true,
     },
     // `command CMD` runs CMD; its own `-p`/`-v`/`-V` are valueless. Even
     // the lookup-only `command -v curl` unwraps to `curl` — the deny-safe
@@ -302,7 +300,6 @@ const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
     PrefixWrapper {
         name: "command",
         value_flags: &[],
-        skip_env_assignments: false,
     },
 ];
 
@@ -338,7 +335,7 @@ pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
         if !arg.starts_with('-') || arg == "-" {
             // `env FOO=bar CMD` interposes inline assignments before the
             // command; skip them so the head lands on CMD, not `FOO=bar`.
-            if wrapper.skip_env_assignments && split_env_assignment(arg).is_some() {
+            if wrapper.skips_env_assignments() && is_env_assignment(arg) {
                 i += 1;
                 continue;
             }
@@ -1063,23 +1060,26 @@ fn short_flag_cluster_contains(arg: &str, flag: char) -> bool {
     rest.chars().any(|c| c == flag)
 }
 
-fn split_env_assignment(word: &str) -> Option<(String, String)> {
-    let eq = word.find('=')?;
-    if eq == 0 {
-        return None;
-    }
-    let key = &word[..eq];
-    if !key
-        .chars()
+fn is_valid_env_key(key: &str) -> bool {
+    key.chars()
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-    {
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Allocation-free check for the `split_env_assignment` shape, for callers
+/// that only need to know whether a token is an assignment, not its parts.
+fn is_env_assignment(word: &str) -> bool {
+    word.find('=')
+        .is_some_and(|eq| eq != 0 && is_valid_env_key(&word[..eq]))
+}
+
+fn split_env_assignment(word: &str) -> Option<(String, String)> {
+    let eq = word.find('=')?;
+    if eq == 0 || !is_valid_env_key(&word[..eq]) {
         return None;
     }
-    if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return None;
-    }
-    Some((key.to_string(), word[eq + 1..].to_string()))
+    Some((word[..eq].to_string(), word[eq + 1..].to_string()))
 }
 
 #[cfg(test)]
