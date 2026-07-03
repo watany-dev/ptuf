@@ -256,47 +256,18 @@ pub mod pi {
 }
 
 pub mod opencode {
-    use serde::Serialize;
-
     use super::append_demote_note;
+    use super::pi::{self, PiHookResponse};
     use crate::Decision;
 
     const ASK_UNAVAILABLE_NOTE: &str = "OpenCode has a permission.ask plugin hook, but it is \
          known to fail silently in some builds, and tool.execute.before cannot start an \
          interactive confirmation; ptuf is blocking this request instead.";
 
-    #[derive(Debug, Serialize)]
-    pub struct OpencodeHookResponse {
-        pub decision: &'static str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pub rule_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pub reason: Option<String>,
-    }
+    pub type OpencodeHookResponse = PiHookResponse;
 
-    pub fn from_decision(decision: &Decision) -> OpencodeHookResponse {
-        match decision {
-            Decision::Allow => OpencodeHookResponse {
-                decision: "allow",
-                rule_id: None,
-                reason: None,
-            },
-            Decision::Monitor { rule_id } => OpencodeHookResponse {
-                decision: "monitor",
-                rule_id: Some(rule_id.clone()),
-                reason: None,
-            },
-            Decision::Ask { rule_id, reason } => OpencodeHookResponse {
-                decision: "ask",
-                rule_id: Some(rule_id.clone()),
-                reason: Some(reason.clone()),
-            },
-            Decision::Deny { rule_id, reason } => OpencodeHookResponse {
-                decision: "deny",
-                rule_id: Some(rule_id.clone()),
-                reason: Some(reason.clone()),
-            },
-        }
+    pub fn from_decision(decision: &Decision) -> PiHookResponse {
+        pi::from_decision(decision)
     }
 
     pub fn deny_reason_for_ask(reason: &str) -> String {

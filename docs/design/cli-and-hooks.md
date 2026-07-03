@@ -1,7 +1,7 @@
 # CLI と Hook 統合
 
 ptuf は CLI バイナリとして配布され、同時に Claude Code / Codex / GitHub
-Copilot / Kiro CLI / Cline / Cursor / Pi Coding Agent の `PreToolUse` hook adapter を提供する。
+Copilot / Kiro CLI / Cline / Cursor / Pi Coding Agent / OpenCode の hook adapter を提供する。
 Kiro 固有の正規化や fail-closed 経路の詳細は [`kiro-cli.md`](kiro-cli.md) を参照。
 
 ## 実装済みサブコマンド
@@ -14,6 +14,7 @@ ptuf hook kiro
 ptuf hook cline
 ptuf hook cursor
 ptuf hook pi
+ptuf hook opencode
 ptuf [--json] check --tool Bash 'git reset --hard HEAD~1'
 ptuf [--json] plugin check ./ptuf-plugin.yaml
 ptuf [--json] init                       # auto-detect every agent
