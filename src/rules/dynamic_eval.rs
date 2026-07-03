@@ -4,7 +4,7 @@
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, head_basename, unwrap_prefix_wrapper};
+use crate::facts::shell::{Argv, unwrap_prefix_wrapper};
 use crate::hook_input::HookInput;
 use crate::reason;
 
