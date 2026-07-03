@@ -1,3 +1,15 @@
+//! Legacy Rust implementation of `core.network.remote-script-pipe`.
+//!
+//! Since the first builtins-as-DSL slice
+//! (`docs/adr/0004-builtins-as-dsl-2026-07.md`) the engine serves this
+//! rule from `src/rules/builtins.yaml` via `super::builtin_dsl`; this
+//! implementation is no longer in the static `RULES` slice. It stays
+//! `pub` for API stability and acts as the parity oracle: the tests in
+//! `builtin_dsl` pin that whenever this rule fires, the DSL rule fires
+//! with an identical wire payload (the DSL walk is strictly stronger —
+//! it also unwraps privilege wrappers and `inner_argv` on the fetcher
+//! side).
+
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
 use crate::facts::shell::{Argv, Pipeline, unwrap_privilege_wrapper};

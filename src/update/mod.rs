@@ -752,6 +752,13 @@ mod tests {
     use super::spawn::testing::{RecordingSpawner, ok, ok_with_stderr};
     use super::*;
 
+    /// Pinned target tag for tests that exercise the updater pipeline.
+    /// Must stay strictly newer than `CARGO_PKG_VERSION`: an equal tag
+    /// short-circuits with "already up to date" and an older one trips
+    /// the downgrade guard, so either would silently skip the spawns
+    /// these tests assert on.
+    const PINNED_TAG: &str = "v99.0.0";
+
     fn cargo_locator(cargo_home: PathBuf) -> FakeExeLocator {
         FakeExeLocator {
             exe: cargo_home.join("bin").join("ptuf"),
@@ -1111,7 +1118,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.4.2".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1120,7 +1127,11 @@ mod tests {
         let calls = spawner.calls();
         assert_eq!(calls[1].program, "cargo");
         assert!(calls[1].args.contains(&"--version".to_string()));
-        assert!(calls[1].args.contains(&"0.4.2".to_string()));
+        assert!(
+            calls[1]
+                .args
+                .contains(&PINNED_TAG.trim_start_matches('v').to_string())
+        );
     }
 
     #[test]
@@ -1376,7 +1387,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.5.0".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1404,7 +1415,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.5.0".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1430,7 +1441,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.5.0".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: true,
         };
@@ -1467,7 +1478,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.5.0".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1485,7 +1496,7 @@ mod tests {
             err_s.contains("gh attestation verify rejected"),
             "stderr: {err_s}",
         );
-        assert!(err_s.contains("v0.5.0"), "stderr: {err_s}");
+        assert!(err_s.contains(PINNED_TAG), "stderr: {err_s}");
     }
 
     #[test]
@@ -1500,7 +1511,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.5.0".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: true,
         };
@@ -1527,7 +1538,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.5.0".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: true,
         };
@@ -1547,7 +1558,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.5.0".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: true,
         };
@@ -1581,7 +1592,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.5.0".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1606,7 +1617,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.5.0".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1634,7 +1645,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.5.0".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: false,
         };
@@ -1659,7 +1670,7 @@ mod tests {
         let mut err = Vec::new();
         let opts = UpdateOptions {
             check: false,
-            version: Some("v0.5.0".to_string()),
+            version: Some(PINNED_TAG.to_string()),
             force: false,
             skip_attestation: true,
         };

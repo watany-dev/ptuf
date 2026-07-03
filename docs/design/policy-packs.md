@@ -298,7 +298,6 @@ allowlists:
     appliesTo:
       rules: [core.workspace.outside-access]
     when:
-      path.absolute:
-        startsWith: /tmp/build-
+      path.filePathPrefixAny: [/tmp/build-]
     reason: ビルドキャッシュは workspace 外 OK
 ```

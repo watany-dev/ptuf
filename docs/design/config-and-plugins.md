@@ -210,6 +210,15 @@ rules:
 | `remediation` | string[] | 代替手順 |
 | `tests` | object | `deny` / `allow` ケース |
 
+`id` は loader が検証する:
+
+- `core` および `core.` prefix の id は ptuf 組み込み rule 用に**予約**
+  されており、外部 plugin が使うと `ReservedRuleId` エラーで load が
+  失敗する (builtin なりすましの防止 — mode demotion の hardDeny 判定や
+  audit 帰属が id で行われるため)。
+- 同一 plugin 内で id が重複すると `DuplicateRuleId` エラーで load が
+  失敗する。
+
 ## `when:` DSL
 
 サポートしている leaf は次のとおり。
@@ -232,3 +241,18 @@ rules:
 
 `ptuf plugin check <path>` は plugin の `tests.deny` / `tests.allow` を、その rule
 単体に対して実行する。built-in rule や engine の aggregate までは通さない。
+
+## 組み込み rule の DSL 化 (`src/rules/builtins.yaml`)
+
+ptuf 自身の組み込み rule も、DSL で表現できるものから順に同じ plugin
+スキーマの YAML (`src/rules/builtins.yaml`, バイナリに埋め込み) へ移して
+いる (ADR 0004)。`rules::iter()` が静的 Rust rule の後ろへ DSL 組み込みを
+chain するため、pack 無効化・rule override・allowlist・`hardDeny` は両者に
+同一機構で作用する。外部 plugin との違いは 2 点のみ:
+
+- 埋め込み経路 (`load_builtin_str`) だけが `core.*` id を使える
+- 埋め込み YAML のコンパイル失敗 (構造的に到達不能、テストで pin) 時は
+  deny-everything の fail-closed sentinel
+  (`core.engine.builtin-load-failed`) に縮退する
+
+現在 DSL 化済み: `core.network.remote-script-pipe`。
