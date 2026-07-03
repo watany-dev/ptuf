@@ -151,8 +151,8 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   10 worker × 100 並列 hook + 単一 audit JSONL の flock 整合性、
   `/etc/ptuf` から project local まで 4 層 + plugin + audit を tempdir に
   組み上げた end-to-end。後半 4 軸はクラッシュ / ハング / 遅延を回帰検出
-  する: 6 adapter (claude-code / codex / copilot / kiro / cline / cursor) の出力契約
-  parity、病的入力 (非 UTF-8 / NUL / 深いネスト JSON・bash / 打ち切り
+  する: 8 adapter (claude-code / codex / copilot / kiro / cline / cursor / pi /
+  opencode) の出力契約 parity、病的入力 (非 UTF-8 / NUL / 深いネスト JSON・bash /
   envelope / 巨大 secret 列) を fail-closed で弾くか、per-call latency 予算、
   `check` / `plugin check` / `init` / `update` subcommand の連続 / 敵対的
   実行。spawn ハーネスはタイムアウト付きで、`Child::try_wait()` ポーリング
@@ -161,10 +161,12 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   が両者をまとめてアサートする。`make check` には含めず、nightly /
   リリース直前に手動実行する。
 - **Fuzzing (nightly / on demand)**: `make fuzz` は `cargo-fuzz`
-  (coverage-guided, nightly toolchain 必須) で 4 つの信頼境界を打つ
+  (coverage-guided, nightly toolchain 必須) で 6 つの信頼境界を打つ
   — `fuzz_shell_parse` (shell tokenizer), `fuzz_hook_pipeline`
   (hook stdin JSON → `decide`), `fuzz_config_merge` (4 層 YAML config
-  パース + merge), `fuzz_plugin_dsl` (plugin DSL コンパイラ)。
+  パース + merge), `fuzz_plugin_dsl` (plugin DSL コンパイラ),
+  `fuzz_copilot_parse` (Copilot stdin normaliser),
+  `fuzz_opencode_parse` (OpenCode stdin normaliser)。
   `fuzz/` は独立 workspace のため `make check` / `cargo clippy
   --all-targets` / `cargo-deny` / crates.io パッケージに干渉しない。
   PBT が proptest 戦略から「構造化された」入力を生成するのに対し、

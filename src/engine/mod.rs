@@ -815,7 +815,7 @@ rules:
         // builtin Config — exercising the Engine::new happy path.
         let engine = Engine::new(None).expect("default-environment engine");
         assert_eq!(engine.config().mode, Mode::Enforce);
-        assert!(engine.plugins().rules().count() == 0);
+        assert_eq!(engine.plugins().rules().count(), 0);
     }
 
     #[test]
@@ -964,6 +964,7 @@ rules:
             copilot_settings: Vec::new(),
             kiro_settings: Vec::new(),
             pi_settings: Vec::new(),
+            opencode_settings: Vec::new(),
         };
         let input = HookInput {
             tool_name: "Edit".into(),

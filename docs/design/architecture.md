@@ -81,7 +81,7 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 
 ## Agent adapter
 
-現在の adapter は 7 つ。
+現在の adapter は 8 つ。
 
 - `claude-code`
 - `codex`
@@ -90,6 +90,7 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 - `cline` (Cline)
 - `cursor` (Cursor)
 - `pi` (Pi Coding Agent)
+- `opencode` (OpenCode)
 
 adapter は stdin payload をまず `RawHookInput` として受け、内部では
 normalized `Event { agent, event, tool, inputs, paths, urls, content }`
@@ -127,6 +128,10 @@ normalized `Event { agent, event, tool, inputs, paths, urls, content }`
   `Ask` を降格せず保持する (Cursor と同型)。`Allow` / `Monitor` / `Ask` は
   exit `0`、`Deny` と reserved rule は exit `2`。正規化は
   `src/cli/pi_input.rs` で行う。
+- OpenCode: TypeScript plugin が `tool.execute.before` で raw tool event を
+  `ptuf hook opencode` に渡す。stdout は Pi と同型の bare `decision` JSON だが
+  `Ask` は Rust 側で `Deny` に降格する (exit `2`)。正規化は
+  `src/cli/opencode_input.rs` で行う。
 
 Copilot 入力は CLI 層の `src/cli/copilot_input.rs` で snake (`tool_name` /
 `tool_input`) と camel (`toolName` / `toolArgs`) の両形を正規化し、tool 名
@@ -199,6 +204,7 @@ stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit 
 | `ptuf hook cline` | `Allow` / `Monitor` は `{}`、`Deny` は cancel JSON envelope | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
 | `ptuf hook cursor` | `Allow` / `Monitor` は bare `permission:allow` JSON、`Ask` / `Deny` は bare JSON | `Ask` / `Deny` reason | `0` or `2` |
 | `ptuf hook pi` | すべての Decision で bare `decision` JSON | `Ask` / `Deny` reason | `0` or `2` |
+| `ptuf hook opencode` | すべての Decision で bare `decision` JSON (`Ask` は demote 後 `deny`) | `Deny` reason | `0` or `2` |
 
 ### check
 

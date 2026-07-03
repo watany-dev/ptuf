@@ -13,6 +13,7 @@ pub mod codex;
 pub mod copilot;
 pub mod cursor;
 pub mod kiro;
+pub mod opencode;
 pub mod pi;
 pub mod verify;
 
@@ -33,6 +34,8 @@ pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
 ///   `<home>/Documents/Cline/` or `<home>/.cline/`.
 /// - `Cursor`: `<repo>/.cursor/` or `<home>/.cursor/`.
 /// - `Pi`: `<home>/.pi/agent/` or `<repo>/.pi/`.
+/// - `Opencode`: `<repo>/.opencode/` or `<repo>/opencode.json`, or
+///   `$XDG_CONFIG_HOME/opencode/` (fallback `~/.config/opencode/`).
 ///
 /// Returns agents in a stable order so callers can install / report
 /// deterministically. Production callers pass `std::env::var_os("HOME")`
@@ -73,7 +76,25 @@ pub fn detect_agents(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> 
     {
         found.push(HookAgent::Pi);
     }
+    if home.is_some_and(|h| h.join(".config/opencode").is_dir())
+        || env_opencode_config_dir(home).is_some_and(|p| p.is_dir())
+        || repo
+            .as_deref()
+            .is_some_and(|r| r.join(".opencode").is_dir())
+        || repo
+            .as_deref()
+            .is_some_and(|r| r.join("opencode.json").is_file())
+    {
+        found.push(HookAgent::Opencode);
+    }
     found
+}
+
+fn env_opencode_config_dir(home: Option<&Path>) -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .map(|p| p.join("opencode"))
+        .or_else(|| home.map(|h| h.join(".config/opencode")))
 }
 
 /// Errors surfaced by every `init` adapter.
@@ -899,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn detect_agents_returns_all_seven_in_stable_order() {
+    fn detect_agents_returns_all_eight_in_stable_order() {
         let dir = workdir("detect-all");
         fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         fs::create_dir_all(dir.join(".codex")).expect("mkdir .codex");
@@ -908,6 +929,7 @@ mod tests {
         fs::create_dir_all(dir.join(".clinerules")).expect("mkdir .clinerules");
         fs::create_dir_all(dir.join(".cursor")).expect("mkdir .cursor");
         fs::create_dir_all(dir.join(".pi")).expect("mkdir .pi");
+        fs::create_dir_all(dir.join(".opencode")).expect("mkdir .opencode");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".claude")).expect("mkdir home/.claude");
         let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
@@ -921,6 +943,7 @@ mod tests {
                 HookAgent::Cline,
                 HookAgent::Cursor,
                 HookAgent::Pi,
+                HookAgent::Opencode,
             ],
         );
     }
@@ -944,6 +967,28 @@ mod tests {
         fs::create_dir_all(&home).expect("mkdir home");
         let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Pi]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_agents_finds_opencode_via_repo_dot_opencode() {
+        let dir = workdir("detect-opencode-repo");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        fs::create_dir_all(dir.join(".opencode")).expect("mkdir .opencode");
+        let home = dir.join("home");
+        fs::create_dir_all(&home).expect("mkdir home");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Opencode]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_agents_finds_opencode_via_home_xdg_config() {
+        let dir = workdir("detect-opencode-home");
+        let home = dir.join("home");
+        fs::create_dir_all(home.join(".config/opencode")).expect("mkdir config/opencode");
+        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Opencode]);
         let _ = fs::remove_dir_all(&dir);
     }
 }

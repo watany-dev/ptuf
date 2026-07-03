@@ -1,7 +1,7 @@
 # Wiring ptuf into a coding agent
 
 ptuf ships first-class adapters for **Claude Code**, **Codex**, **GitHub
-Copilot**, **Kiro CLI**, **Cline**, **Cursor**, and **Pi Coding Agent**. The same policy engine
+Copilot**, **Kiro CLI**, **Cline**, **Cursor**, **Pi Coding Agent**, and **OpenCode**. The same policy engine
 and YAML plugins back every host; only the hook-protocol envelope differs.
 
 This page is the user-facing how-to. For the underlying hook protocol, exit
@@ -26,6 +26,7 @@ codes per agent, and the full payload contract, see the design notes:
 | Cline       | `<repo>/.clinerules/`, `<repo>/.cline/`, `$HOME/Documents/Cline/`, or `$HOME/.cline/` | `<repo>/.clinerules/hooks/PreToolUse` |
 | Cursor      | `<repo>/.cursor/` or `$HOME/.cursor/`            | `<repo>/.cursor/hooks.json` (`--scope global` → `$HOME/.cursor/hooks.json`) |
 | Pi          | `<repo>/.pi/` or `$HOME/.pi/agent/`              | `$HOME/.pi/agent/extensions/ptuf.ts` (default global) or `<repo>/.pi/extensions/ptuf.ts` |
+| OpenCode    | `<repo>/.opencode/` or `<repo>/opencode.json`     | `$XDG_CONFIG_HOME/opencode/plugin/ptuf.ts` (default global) or `<repo>/.opencode/plugin/ptuf.ts` |
 
 Pin to a single adapter with `ptuf init <agent>` (`claude-code` / `codex`
 / `copilot` / `kiro` / `cline` / `cursor` / `pi`).
@@ -233,3 +234,30 @@ Hook stdin payloads are capped at 8 MiB across every host. Unreadable,
 oversized, or invalid-JSON stdin is rejected with the reserved
 `core.engine.invalid-payload` rule so the host blocks the tool — `exit 1`
 would only surface a non-blocking warning and let the call through.
+
+## OpenCode
+
+`ptuf init opencode` installs a managed TypeScript plugin that OpenCode
+loads from the singular `plugin/` directory (not `plugins/`). The plugin
+registers `tool.execute.before`, builds a minimal JSON payload
+(`tool_name`, `tool_input`, optional `opencode` metadata), and spawns
+`ptuf hook opencode` with an absolute binary path embedded at init time.
+
+OpenCode native tool names (`bash`, `read`, `patch`, `grep`, …) are
+normalised in Rust (`src/cli/opencode_input.rs`) to the same canonical
+vocabulary as the other adapters. Unknown tools map to
+`mcp__opencode__<sanitized>` so existing MCP path extraction and
+self-protection rules apply without a new subsystem.
+
+**Ask demotion:** OpenCode has a `permission.ask` plugin hook, but it is
+known to fail silently in some builds and `tool.execute.before` cannot
+start interactive confirmation. ptuf therefore demotes Ask to Deny
+(exit `2`, bare `{"decision":"deny",…}` JSON) — same posture as Codex /
+Copilot / Kiro / Cline.
+
+**Environment:** `PTUF_OPENCODE_TIMEOUT_MS` (default 10000).
+
+**Limitations (MVP):** MCP / custom tools use generic `mcp__opencode__*`
+identity; `opencode.json` permissions are not modified; audit metadata
+(`sessionId`, `callId`, …) is not yet copied into audit records.
+
