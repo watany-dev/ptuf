@@ -339,6 +339,13 @@ mod tests {
     }
 
     #[test]
+    fn opencode_missing_tool_input_key_defaults_to_empty_object() {
+        let input = parse(r#"{"tool_name":"bash"}"#).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.tool_input, serde_json::json!({}));
+    }
+
+    #[test]
     fn opencode_patch_accepts_content_field() {
         let patch = "*** Begin Patch\n*** End Patch\n";
         let body = format!(

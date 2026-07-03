@@ -412,4 +412,50 @@ mod tests {
         assert_eq!(mode, 0o600);
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn write_atomically_propagates_create_dir_all_error_when_parent_is_a_regular_file() {
+        let dir = workdir("write-mkdir-fail");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, b"x").unwrap();
+        let target = blocker.join("nested").join("ptuf.ts");
+        let err = write_atomically(&target, b"data").expect_err("create_dir_all must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_atomically_propagates_write_error_when_temp_path_is_a_directory() {
+        let dir = workdir("write-tmp-collision");
+        let target = dir.join("ptuf.ts");
+        let collision = dir.join(format!("ptuf.ts.ptuf.{}.tmp", std::process::id()));
+        fs::create_dir_all(&collision).unwrap();
+        let err = write_atomically(&target, b"data").expect_err("write onto dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_atomically_propagates_rename_error_when_target_is_a_directory() {
+        let dir = workdir("write-rename-fail");
+        let target = dir.join("ptuf.ts");
+        fs::create_dir_all(&target).unwrap();
+        let err = write_atomically(&target, b"data").expect_err("rename onto dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_propagates_read_error_when_plugin_path_is_a_directory() {
+        let dir = workdir("install-read-fail");
+        let plugin = dir.join("ptuf.ts");
+        fs::create_dir_all(&plugin).unwrap();
+        let targets = TargetPaths {
+            root: dir.clone(),
+            plugin_path: plugin.clone(),
+        };
+        let err = install(&targets, "/bin/ptuf", false).expect_err("read on dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
