@@ -136,7 +136,7 @@ fn argv_has_sensitive_positional(argv: &Argv) -> bool {
 }
 
 fn invokes_reader(argv: &Argv) -> bool {
-    READER_HEADS.contains(&argv.head.as_str())
+    READER_HEADS.contains(&argv.head_basename())
 }
 
 fn stdin_target_is_sensitive(r: &Redirect) -> bool {
@@ -190,6 +190,14 @@ mod tests {
         ] {
             assert_ask(cmd);
         }
+    }
+
+    #[test]
+    fn asks_for_absolute_and_relative_path_reader_heads() {
+        // Reader heads must match on basename: /bin/cat is still cat.
+        assert_ask("/bin/cat ~/.ssh/id_rsa");
+        assert_ask("/usr/bin/head -n 5 ~/.aws/credentials");
+        assert_ask("./cat .env");
     }
 
     #[test]

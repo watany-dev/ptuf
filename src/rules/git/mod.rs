@@ -797,12 +797,23 @@ mod tests {
 
     #[test]
     fn rules_handle_full_path_to_git() {
-        let input = bash("/usr/bin/git push --force origin main");
-        let facts = crate::facts::extract(&input);
-        assert!(matches!(
-            FORCE_PUSH_RULE.evaluate(&facts, &input),
-            Some(Decision::Deny { .. })
-        ));
+        // Any invocation path must match on basename, not only the
+        // hand-enumerated system installs.
+        for cmd in [
+            "/usr/bin/git push --force origin main",
+            "/opt/homebrew/bin/git push --force origin main",
+            "./git push --force origin main",
+        ] {
+            let input = bash(cmd);
+            let facts = crate::facts::extract(&input);
+            assert!(
+                matches!(
+                    FORCE_PUSH_RULE.evaluate(&facts, &input),
+                    Some(Decision::Deny { .. })
+                ),
+                "expected deny for {cmd:?}",
+            );
+        }
     }
 
     #[test]

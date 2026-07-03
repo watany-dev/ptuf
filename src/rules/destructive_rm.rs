@@ -10,7 +10,9 @@ pub struct DestructiveRm;
 
 const RULE_ID: &str = "core.filesystem.destructive-rm";
 
-const RM_HEADS: &[&str] = &["rm", "/bin/rm", "/usr/bin/rm"];
+// Heads are compared by basename, so absolute and relative invocation
+// paths (`/bin/rm`, `/usr/local/bin/rm`, `./rm`) match without enumeration.
+const RM_HEADS: &[&str] = &["rm"];
 
 const SYSTEM_ROOTS: &[&str] = &[
     "/etc", "/usr", "/var", "/bin", "/boot", "/lib", "/lib32", "/lib64", "/sbin", "/opt", "/root",
@@ -64,7 +66,7 @@ fn is_destructive_rm_invocation(argv: &Argv) -> bool {
     if let Some(inner) = unwrap_prefix_wrapper(argv) {
         return is_destructive_rm_invocation(&inner);
     }
-    is_rm_head(&argv.head)
+    is_rm_head(argv.head_basename())
         && has_recursive_force_flag(argv)
         && argv.positional().any(is_destructive_target)
 }
@@ -181,6 +183,15 @@ mod tests {
     #[test]
     fn denies_rm_rf_root() {
         assert_deny("rm -rf /");
+    }
+
+    #[test]
+    fn denies_absolute_and_relative_rm_heads() {
+        // rm heads must match on basename, including install locations
+        // outside the hand-enumerated /bin//usr/bin pair.
+        assert_deny("/bin/rm -rf /");
+        assert_deny("/usr/local/bin/rm -rf /etc");
+        assert_deny("./rm -rf /");
     }
 
     #[test]

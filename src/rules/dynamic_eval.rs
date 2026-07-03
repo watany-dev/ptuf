@@ -95,7 +95,7 @@ fn invokes_dynamic_eval(argv: &Argv) -> bool {
 }
 
 fn matches_dynamic_eval(argv: &Argv) -> bool {
-    let head = head_basename(&argv.head);
+    let head = argv.head_basename();
     let Some(shape) = DYNAMIC_EVAL_HEADS
         .iter()
         .find(|(name, _)| *name == head)

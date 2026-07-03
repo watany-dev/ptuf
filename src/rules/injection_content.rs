@@ -162,12 +162,12 @@ fn is_content_reader(head: &str) -> bool {
 }
 
 fn collect_reader_args(argv: &Argv, out: &mut Vec<PathBuf>) {
-    if is_content_reader(&argv.head) {
+    if is_content_reader(argv.head_basename()) {
         out.extend(argv.positional().map(resolve_candidate));
         return;
     }
     if let Some(inner) = crate::facts::shell::unwrap_prefix_wrapper(argv)
-        && is_content_reader(&inner.head)
+        && is_content_reader(inner.head_basename())
     {
         out.extend(inner.positional().map(resolve_candidate));
     }
@@ -581,6 +581,22 @@ mod tests {
             let path = write_file(&dir, &format!("{head}.txt"), "x\u{200B}y\n".as_bytes());
             assert_silent(&bash(&format!("{head} {}", path.display())));
         }
+    }
+
+    #[test]
+    fn asks_for_bash_absolute_path_reader_head() {
+        // Reader heads must match on basename: /bin/cat is still cat.
+        let dir = TempDir::new().expect("tempdir");
+        let path = write_file(&dir, "abs.txt", "x\u{200B}y\n".as_bytes());
+        assert_ask(&bash(&format!("/bin/cat {}", path.display())));
+    }
+
+    #[test]
+    fn silent_for_bash_absolute_path_hex_dump_head() {
+        // The hex-dump exclusion must survive basename matching too.
+        let dir = TempDir::new().expect("tempdir");
+        let path = write_file(&dir, "abs-xxd.txt", "x\u{200B}y\n".as_bytes());
+        assert_silent(&bash(&format!("/usr/bin/xxd {}", path.display())));
     }
 
     #[test]

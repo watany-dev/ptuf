@@ -131,6 +131,13 @@ impl Argv {
         self.args.iter().filter(|a| !is_flag(a)).map(String::as_str)
     }
 
+    /// Final path component of the head, so absolute and relative
+    /// invocations (`/usr/bin/curl`, `./curl`) compare equal to the bare
+    /// name in rule head tables. `head` itself stays unnormalized.
+    pub(crate) fn head_basename(&self) -> &str {
+        head_basename(&self.head)
+    }
+
     fn collect_commands<'a>(&'a self, out: &mut Vec<&'a Self>) {
         out.push(self);
         for inner in &self.inner_argv {

