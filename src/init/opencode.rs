@@ -216,6 +216,9 @@ mod tests {
         assert!(TEMPLATE.contains("MAX_CAPTURE_BYTES"));
         assert!(TEMPLATE.contains("SIGKILL"));
         assert!(!TEMPLATE.contains("ASK_MODE"));
+        // §4.3 fail-closed matrix: allow/monitor must be accompanied by
+        // exit 0 — a deny exit paired with an allow body is thrown.
+        assert!(TEMPLATE.contains("permitted !== (exitCode === 0)"));
     }
 
     #[test]
