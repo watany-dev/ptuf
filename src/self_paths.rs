@@ -518,11 +518,7 @@ fn candidate_targets<'a>(
             let unwrapped = crate::facts::shell::unwrap_privilege_wrapper(outer);
             let argv = unwrapped.as_ref().unwrap_or(outer);
             let head = argv.head.as_str();
-            let head_base = std::path::Path::new(head)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or(head);
-            if !writer_heads.contains(&head_base) {
+            if !writer_heads.contains(&argv.head_basename()) {
                 continue;
             }
             for a in argv.positional() {
@@ -1188,7 +1184,7 @@ mod tests {
         // `echo` is not in the writer_heads allowlist, so its positional
         // arguments — even when they look like protected targets — must
         // not be added to the candidate set. This pins the
-        // `!writer_heads.contains(&head_base)` skip branch.
+        // `!writer_heads.contains(&argv.head_basename())` skip branch.
         let env = MapEnv::with(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);

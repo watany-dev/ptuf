@@ -156,23 +156,18 @@ impl ConfigRule for ProtectedBranchDestructiveGit {
     }
 }
 
-const NPM_HEADS: &[&str] = &["npm", "/usr/bin/npm", "/usr/local/bin/npm"];
-const YARN_HEADS: &[&str] = &["yarn", "/usr/bin/yarn", "/usr/local/bin/yarn"];
-const PIP_HEADS: &[&str] = &[
-    "pip",
-    "pip3",
-    "/usr/bin/pip",
-    "/usr/local/bin/pip",
-    "/usr/bin/pip3",
-    "/usr/local/bin/pip3",
-];
-const GIT_HEADS: &[&str] = &["git", "/usr/bin/git", "/usr/local/bin/git"];
+// Heads are compared by basename, so absolute and relative invocation
+// paths (`/usr/local/bin/npm`, `./pip3`) match without enumeration.
+const NPM_HEADS: &[&str] = &["npm"];
+const YARN_HEADS: &[&str] = &["yarn"];
+const PIP_HEADS: &[&str] = &["pip", "pip3"];
+const GIT_HEADS: &[&str] = &["git"];
 
 fn is_npm_or_yarn_install(argv: &Argv) -> bool {
     if let Some(unwrapped) = unwrap_privilege_wrapper(argv) {
         return is_npm_or_yarn_install(&unwrapped);
     }
-    let head = argv.head.as_str();
+    let head = argv.head_basename();
     if NPM_HEADS.contains(&head) {
         return is_install_subcommand(argv, &["install", "i", "ci", "add"]);
     }
@@ -190,7 +185,7 @@ fn is_pip_install(argv: &Argv) -> bool {
     if let Some(unwrapped) = unwrap_privilege_wrapper(argv) {
         return is_pip_install(&unwrapped);
     }
-    if !PIP_HEADS.contains(&argv.head.as_str()) {
+    if !PIP_HEADS.contains(&argv.head_basename()) {
         return false;
     }
     is_install_subcommand(argv, &["install"])
@@ -200,7 +195,7 @@ fn invokes_destructive_git(argv: &Argv) -> bool {
     if let Some(unwrapped) = unwrap_privilege_wrapper(argv) {
         return invokes_destructive_git(&unwrapped);
     }
-    if !GIT_HEADS.contains(&argv.head.as_str()) {
+    if !GIT_HEADS.contains(&argv.head_basename()) {
         return false;
     }
     let sub = match first_positional(argv) {
@@ -376,6 +371,26 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn pnpm_denies_absolute_path_package_manager_heads() {
+        // Heads must match on basename, including install locations
+        // outside the hand-enumerated /usr/bin//usr/local/bin pair.
+        for cmd in [
+            "/usr/local/bin/npm install lodash",
+            "/opt/homebrew/bin/yarn add lodash",
+        ] {
+            let input = bash(cmd);
+            let facts = facts_with_project(&input, pnpm_project());
+            assert!(
+                matches!(
+                    LockMismatchPnpm.evaluate(&facts, &input),
+                    Some(Decision::Deny { .. })
+                ),
+                "expected deny for {cmd:?}",
+            );
+        }
+    }
+
     // --- lock-mismatch-uv ----------------------------------------------
 
     #[test]
@@ -417,6 +432,16 @@ mod tests {
         assert!(LockMismatchUv.evaluate(&facts, &input).is_none());
     }
 
+    #[test]
+    fn uv_denies_absolute_path_pip_head() {
+        let input = bash("/opt/homebrew/bin/pip3 install requests");
+        let facts = facts_with_project(&input, uv_project());
+        assert!(matches!(
+            LockMismatchUv.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
+    }
+
     // --- protected-branch-destructive-git -------------------------------
 
     #[test]
@@ -432,6 +457,16 @@ mod tests {
     #[test]
     fn protected_git_denies_reset_hard_via_sudo_user_option() {
         let input = bash("sudo -u root git reset --hard HEAD~1");
+        let facts = facts_with_project(&input, protected_branch());
+        assert!(matches!(
+            ProtectedBranchDestructiveGit.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
+    }
+
+    #[test]
+    fn protected_git_denies_absolute_path_git_head() {
+        let input = bash("/opt/homebrew/bin/git reset --hard HEAD~1");
         let facts = facts_with_project(&input, protected_branch());
         assert!(matches!(
             ProtectedBranchDestructiveGit.evaluate(&facts, &input),
