@@ -181,19 +181,26 @@ impl ValueFlag {
     }
 }
 
-/// A privilege-escalation wrapper that prefixes its inner command argv
-/// (`sudo CMD`, `doas CMD`, `pkexec CMD`, `run0 CMD`).
+/// A prefix wrapper that runs an inner command after its own flags
+/// (`sudo CMD`, `doas CMD`, `pkexec CMD`, `run0 CMD`, `env CMD`,
+/// `command CMD`).
 ///
 /// `su` is deliberately *not* a prefix wrapper: its payload is shell code
 /// carried by `-c`, surfaced through `augment_inner_commands` instead.
 struct PrefixWrapper {
-    /// Wrapper command basename (`sudo`, `doas`, `pkexec`, `run0`).
+    /// Wrapper command basename (`sudo`, `doas`, `pkexec`, `run0`, `env`,
+    /// `command`).
     name: &'static str,
     /// Value-taking options, each listed exactly once in whichever
     /// spellings the wrapper accepts. A single source of truth keeps the
     /// short and long views symmetric by construction — the asymmetry
     /// this guards against was a real bypass (`sudo -D /tmp rm -rf /`).
     value_flags: &'static [ValueFlag],
+    /// Whether inline `KEY=VALUE` assignments sit between the wrapper's
+    /// flags and the inner command. Only `env FOO=bar CMD` does this; for
+    /// every other wrapper such a token is the command head and must not
+    /// be skipped.
+    skip_env_assignments: bool,
 }
 
 impl PrefixWrapper {
@@ -251,35 +258,71 @@ const RUN0_VALUE_FLAGS: &[ValueFlag] = &[
     Long("machine"),
 ];
 
+/// `env` value-taking options (`env(1)`). The valueless flags
+/// (`-i`/`--ignore-environment`, `-0`/`--null`, `-v`) fall through the
+/// "unknown flag = no value" path correctly, so only the ones that
+/// consume the next token need listing.
+const ENV_VALUE_FLAGS: &[ValueFlag] = &[
+    Both('u', "unset"),
+    Both('C', "chdir"),
+    Both('S', "split-string"),
+];
+
 const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
     PrefixWrapper {
         name: "sudo",
         value_flags: SUDO_VALUE_FLAGS,
+        skip_env_assignments: false,
     },
     PrefixWrapper {
         name: "doas",
         value_flags: DOAS_VALUE_FLAGS,
+        skip_env_assignments: false,
     },
     PrefixWrapper {
         name: "pkexec",
         value_flags: PKEXEC_VALUE_FLAGS,
+        skip_env_assignments: false,
     },
     PrefixWrapper {
         name: "run0",
         value_flags: RUN0_VALUE_FLAGS,
+        skip_env_assignments: false,
+    },
+    // `env FOO=bar CMD ...` runs CMD after its own flags and inline
+    // assignments; unwrapping to CMD keeps `env curl … | sh` visible.
+    PrefixWrapper {
+        name: "env",
+        value_flags: ENV_VALUE_FLAGS,
+        skip_env_assignments: true,
+    },
+    // `command CMD` runs CMD; its own `-p`/`-v`/`-V` are valueless. Even
+    // the lookup-only `command -v curl` unwraps to `curl` — the deny-safe
+    // over-approximation this filter prefers (cf. `RUN0_VALUE_FLAGS`).
+    PrefixWrapper {
+        name: "command",
+        value_flags: &[],
+        skip_env_assignments: false,
     },
 ];
 
-/// Return the command a privilege-escalation prefix wrapper
-/// (`sudo`/`doas`/`pkexec`/`run0`) would execute.
+/// Return the command a prefix wrapper would execute.
+///
+/// Covers privilege escalators (`sudo`/`doas`/`pkexec`/`run0`) and the
+/// POSIX command wrappers `env`/`command`, so `env curl ...` and
+/// `command rm ...` unwrap to the real head rather than hiding it.
 ///
 /// Each wrapper's common value-taking options are understood so
-/// `sudo -u root git ...` unwraps to `git ...`, not to `root ...`. A
-/// full-path head (`/usr/bin/sudo`) matches on its basename; unknown
+/// `sudo -u root git ...` unwraps to `git ...`, not to `root ...`, and
+/// `env` additionally skips leading `KEY=VALUE` assignments
+/// (`env FOO=bar curl ...` → `curl ...`). A full-path head
+/// (`/usr/bin/sudo`, `/usr/bin/env`) matches on its basename; unknown
 /// flags are assumed to take no value.
 ///
 /// `su` is handled elsewhere: its payload is shell code in `-c`, surfaced
-/// through `augment_inner_commands` as `inner_argv`.
+/// through `augment_inner_commands` as `inner_argv`. Chained wrappers
+/// (`sudo env curl`) unwrap one layer per call — callers that need to see
+/// through multiple layers loop (see `rules::git`).
 pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
     let wrapper = PREFIX_WRAPPERS
         .iter()
@@ -293,6 +336,12 @@ pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
             break;
         }
         if !arg.starts_with('-') || arg == "-" {
+            // `env FOO=bar CMD` interposes inline assignments before the
+            // command; skip them so the head lands on CMD, not `FOO=bar`.
+            if wrapper.skip_env_assignments && split_env_assignment(arg).is_some() {
+                i += 1;
+                continue;
+            }
             break;
         }
         if let Some(flag) = arg.strip_prefix("--") {
@@ -996,7 +1045,11 @@ fn extract_find_exec_inner(argv: &Argv, nesting_budget: usize) -> Option<Argv> {
     Some(parse_argv(words, nesting_budget))
 }
 
-fn head_basename(head: &str) -> &str {
+/// Reduce a command head to its basename for wrapper/interpreter
+/// matching. Splits on `/` only: the POSIX path separator. Windows `\`
+/// is deliberately not split — `ptuf` targets POSIX shells, so a
+/// backslash inside a head is a literal character, not a separator.
+pub(crate) fn head_basename(head: &str) -> &str {
     head.rsplit('/').next().unwrap_or(head)
 }
 
@@ -1636,6 +1689,56 @@ mod tests {
         let inner = unwrap_prefix_wrapper(&argv("/usr/bin/sudo", &["rm", "-rf", "/"]))
             .expect("full-path sudo unwraps");
         assert_eq!(inner, argv("rm", &["-rf", "/"]));
+        let inner = unwrap_prefix_wrapper(&argv("/usr/bin/env", &["curl", "https://x"]))
+            .expect("full-path env unwraps");
+        assert_eq!(inner, argv("curl", &["https://x"]));
+    }
+
+    #[test]
+    fn unwrap_prefix_wrapper_strips_env_and_command() {
+        // `env` / `command` are not privilege escalators but still hide
+        // the real head; unwrapping surfaces it for the deny filters.
+        let cases: &[(&str, &[&str], &str, &[&str])] = &[
+            ("env", &["curl", "https://x"], "curl", &["https://x"]),
+            ("command", &["bash"], "bash", &[]),
+            ("env", &["rm", "-rf", "/"], "rm", &["-rf", "/"]),
+            ("command", &["rm", "-rf", "/"], "rm", &["-rf", "/"]),
+            // `command -v curl` is lookup-only, but the deny-safe
+            // over-approximation still unwraps it to `curl`.
+            ("command", &["-v", "curl"], "curl", &[]),
+        ];
+        for &(wrapper, args, head, rest) in cases {
+            let inner = unwrap_prefix_wrapper(&argv(wrapper, args))
+                .unwrap_or_else(|| panic!("{wrapper} {args:?} should unwrap"));
+            assert_eq!(inner, argv(head, rest), "{wrapper} {args:?}");
+        }
+    }
+
+    #[test]
+    fn unwrap_prefix_wrapper_skips_env_assignments() {
+        // `env` interposes inline `KEY=VALUE` assignments (and its own
+        // value-taking flags) before the command head.
+        let cases: &[(&str, &[&str])] = &[
+            ("env", &["FOO=bar", "curl", "https://x"]),
+            ("env", &["-i", "FOO=bar", "BAZ=1", "curl", "https://x"]),
+            ("env", &["-u", "PATH", "curl", "https://x"]),
+            ("env", &["--unset=PATH", "curl", "https://x"]),
+            ("env", &["-C", "/tmp", "curl", "https://x"]),
+        ];
+        for &(wrapper, args) in cases {
+            let inner = unwrap_prefix_wrapper(&argv(wrapper, args))
+                .unwrap_or_else(|| panic!("{wrapper} {args:?} should unwrap"));
+            assert_eq!(inner, argv("curl", &["https://x"]), "{wrapper} {args:?}");
+        }
+    }
+
+    #[test]
+    fn unwrap_prefix_wrapper_env_alone_returns_none() {
+        // No command after the wrapper (assignments/flags only) yields None.
+        assert_eq!(unwrap_prefix_wrapper(&argv("env", &[])), None);
+        assert_eq!(unwrap_prefix_wrapper(&argv("command", &[])), None);
+        assert_eq!(unwrap_prefix_wrapper(&argv("env", &["FOO=bar"])), None);
+        assert_eq!(unwrap_prefix_wrapper(&argv("env", &["-i"])), None);
     }
 
     #[test]

