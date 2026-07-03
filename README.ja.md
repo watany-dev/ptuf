@@ -16,7 +16,7 @@
 同じ入力には常に同じ結果を返します。
 
 対応ホスト: **Claude Code** / **Codex** / **GitHub Copilot** /
-**Kiro CLI** / **Cline** / **Cursor**
+**Kiro CLI** / **Cline** / **Cursor** / **Pi Coding Agent** / **OpenCode**
 
 ## hooks の自作スクリプト、そのままで大丈夫ですか?
 
@@ -34,7 +34,7 @@ fuzzing / mutation testing で継続的に検証しています。
 | 決定的 (同じ入力 → 同じ判定) | 部分的 | ✕ | ○ | **○** |
 | シェル構文を解釈 (クォート / パイプ / `bash -c` / 変数展開) | ✕ | — | — | **○** |
 | bypass 耐性をテスト + fuzzing で担保 | ✕ | ✕ | — | **○** |
-| 6 エージェントに同一ポリシーを 1 コマンドで配布 | ホストごとに書き直し | ✕ | ✕ | **○** (`ptuf init`) |
+| 8 エージェントに同一ポリシーを 1 コマンドで配布 | ホストごとに書き直し | ✕ | ✕ | **○** (`ptuf init`) |
 | エージェント自身による無効化を防止 | ほぼ✕ | ✕ | ○ | **○** (`core.self_protection.*`) |
 | 何を止めたかの監査ログ | ほぼ✕ | ✕ | ✕ | **○** (JSONL) |
 | オフライン動作・追加ランタイム不要 | 場合による | ✕ | セットアップが重い | **○** (単一バイナリ) |
@@ -100,6 +100,8 @@ ptuf init copilot       # <repo>/.github/hooks/ptuf.json
 ptuf init kiro          # .kiro/agents/*.json を一括パッチ
 ptuf init cline         # .clinerules/hooks/PreToolUse
 ptuf init cursor        # <repo>/.cursor/hooks.json
+ptuf init pi            # ~/.pi/agent/extensions/ptuf.ts
+ptuf init opencode      # $XDG_CONFIG_HOME/opencode/plugin/ptuf.ts
 ```
 
 引数なしの `ptuf init` は到達可能なホストを自動検出して全てに導入します。

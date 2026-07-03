@@ -324,12 +324,20 @@ ptuf は OpenCode permission の代替ではなく上位の fail-closed guardrai
 ```
 
 verify(`src/init/verify.rs`、Pi M6 前例)は OpenCode process を起動せず
-ptuf 単体で行う:
+ptuf 単体で行う。既存 7 アダプタと同一の agent 非依存チェックをそのまま
+流用し、opencode 固有の追加チェックは設けない:
 
-- 生成ファイルの managed marker と binary path 埋め込みを確認
-- `ptuf hook opencode` に synthetic deny(`bash: rm -rf /` →
-  `core.filesystem.destructive-rm`)と synthetic allow(`ls`)を流して確認
-- fail-closed 経路(`core.engine.policy-load-failed`)の確認は既存 verify を流用
+- synthetic deny check: builtin rules のみで構築した Engine に
+  `Bash: rm -rf /` を in-process で流し、`core.filesystem.destructive-rm`
+  で deny されることを確認
+- fail-closed check: Engine 構築失敗時に `core.engine.policy-load-failed`
+  で fail-closed する経路を確認
+
+生成ファイルの managed marker / binary 埋め込みは install 時の冪等判定
+(marker 一致 → AlreadyPresent / 不一致 → HookFileConflict)と
+`src/init/opencode.rs` の unit テストで担保する。adapter 正規化
+(`ptuf hook opencode` 経由の synthetic deny/allow)は verify ではなく
+unit / PBT / `tests/e2e_heavy.rs` の 8-adapter parity で担保する。
 
 `--json` 出力は既存 `render_install_json` / `verify::render_json` に従う
 (初版仕様の独自 JSON 形状は採用しない)。
@@ -375,9 +383,13 @@ MVP では既存 `AuditRecord`(schema v1)のまま、`HookAgent::audit_name()` �
   binary 埋め込み検証(Pi M4 前例)。
 - **proptest**: `opencode_input::parse` never panics / 半端な `HookInput` を
   返さない(Copilot/Cursor 前例)。`make pbt-quick` を正規化 M の完了条件に含む。
-- **bypass corpus**(`tests/bypass/corpus.jsonl`): `bash rm -rf /`、
-  curl|sh、`read {filePath: ".env"}`、patch で `.env` 更新、
-  未知 tool `{path: ".opencode/plugin/ptuf.ts"}`、self-protection 一式。
+- **bypass corpus**(`tests/bypass/corpus.jsonl`): corpus ハーネスは
+  `HookInput` を直接 Engine に渡す(adapter 正規化は通らない)ため、
+  エントリは正規化後 shape の engine 回帰として追加する: `Bash rm -rf /`、
+  curl|sh、`Read {file_path: ".env"}`、`apply_patch` で `.env` 更新。
+  正規化そのもの(raw OpenCode payload → 正規語彙)は unit / PBT / fuzz で、
+  self-protection は環境依存(`ProtectedPaths`)のため corpus 化せず
+  unit テストで担保する。
 - **e2e**(`tests/e2e_heavy.rs`): adapter parity を 7 → 8 に拡張。
 - **fuzz**(`fuzz/`): `opencode_parse` target を追加(copilot parse 前例)。
 - **mutants**: `.cargo/mutants.toml` のスコープは decision コア中心で adapter

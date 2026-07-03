@@ -7,7 +7,6 @@
 
 use serde_json::{Map, Value};
 
-use super::input_helpers::take_first_string;
 use crate::hook_input::HookInput;
 
 /// Normalise an OpenCode stdin body into a [`HookInput`].
@@ -69,7 +68,11 @@ impl std::fmt::Display for OpencodeInputError {
 }
 
 fn normalize(raw_name: &str, mut args: Map<String, Value>) -> (String, Value) {
-    match raw_name.to_ascii_lowercase().as_str() {
+    // Only the native-vocabulary match is case-insensitive; passthrough
+    // and sanitize keep the caller's original casing so MCP tool names
+    // stay byte-identical for user plugin DSL matching and audit logs.
+    let lowered = raw_name.to_ascii_lowercase();
+    match lowered.as_str() {
         "bash" => ("Bash".into(), Value::Object(args)),
         "read" => ("Read".into(), reshape_path(&mut args)),
         "write" => ("Write".into(), reshape_path(&mut args)),
@@ -80,12 +83,11 @@ fn normalize(raw_name: &str, mut args: Map<String, Value>) -> (String, Value) {
         "glob" => ("mcp__opencode__glob".into(), Value::Object(args)),
         "list" => ("mcp__opencode__list".into(), Value::Object(args)),
         "todowrite" | "todoread" | "task" => {
-            let canonical = raw_name.to_ascii_lowercase();
-            (format!("mcp__opencode__{canonical}"), Value::Object(args))
+            (format!("mcp__opencode__{lowered}"), Value::Object(args))
         },
-        other if other.starts_with("mcp__") => (other.to_string(), Value::Object(args)),
-        other => {
-            let sanitized = sanitize_tool_name(other);
+        _ if raw_name.starts_with("mcp__") => (raw_name.to_string(), Value::Object(args)),
+        _ => {
+            let sanitized = sanitize_tool_name(raw_name);
             (format!("mcp__opencode__{sanitized}"), Value::Object(args))
         },
     }
@@ -116,29 +118,39 @@ fn decode_tool_input(raw: Value) -> Result<Map<String, Value>, OpencodeInputErro
     }
 }
 
+/// First usable string among `keys` in priority order, without consuming
+/// any original key (§7: duplicate into canonical keys, keep originals).
+fn first_string(args: &Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|k| args.get(*k).and_then(Value::as_str).map(str::to_owned))
+}
+
+/// Insert `value` under `key` unless a string already occupies it —
+/// non-string occupants are overwritten so the canonical key the engine
+/// reads always holds the normalised string.
+fn upsert_string(args: &mut Map<String, Value>, key: &str, value: &str) {
+    if !args.get(key).is_some_and(Value::is_string) {
+        args.insert(key.to_string(), Value::String(value.to_owned()));
+    }
+}
+
 fn reshape_path(args: &mut Map<String, Value>) -> Value {
-    if let Some(path) = take_first_string(args, &["file_path", "filePath", "path"]) {
-        args.entry("file_path".to_string())
-            .or_insert_with(|| Value::String(path.clone()));
-        args.entry("filePath".to_string())
-            .or_insert_with(|| Value::String(path));
+    if let Some(path) = first_string(args, &["file_path", "filePath", "path"]) {
+        upsert_string(args, "file_path", &path);
+        upsert_string(args, "filePath", &path);
     }
     Value::Object(args.clone())
 }
 
 fn reshape_edit(args: &mut Map<String, Value>) -> Value {
     reshape_path(args);
-    if let Some(old) = take_first_string(args, &["old_string", "oldString", "old"]) {
-        args.entry("old_string".to_string())
-            .or_insert_with(|| Value::String(old.clone()));
-        args.entry("oldString".to_string())
-            .or_insert_with(|| Value::String(old));
+    if let Some(old) = first_string(args, &["old_string", "oldString", "old"]) {
+        upsert_string(args, "old_string", &old);
+        upsert_string(args, "oldString", &old);
     }
-    if let Some(new) = take_first_string(args, &["new_string", "newString", "new"]) {
-        args.entry("new_string".to_string())
-            .or_insert_with(|| Value::String(new.clone()));
-        args.entry("newString".to_string())
-            .or_insert_with(|| Value::String(new));
+    if let Some(new) = first_string(args, &["new_string", "newString", "new"]) {
+        upsert_string(args, "new_string", &new);
+        upsert_string(args, "newString", &new);
     }
     if let Some(replace_all) = args.get("replaceAll").and_then(Value::as_bool) {
         args.entry("replace_all".to_string())
@@ -148,9 +160,8 @@ fn reshape_edit(args: &mut Map<String, Value>) -> Value {
 }
 
 fn reshape_patch(args: &mut Map<String, Value>) -> Value {
-    if let Some(body) = take_first_string(args, &["command", "patchText", "patch", "content"]) {
-        args.entry("command".to_string())
-            .or_insert_with(|| Value::String(body));
+    if let Some(body) = first_string(args, &["command", "patchText", "patch", "content"]) {
+        upsert_string(args, "command", &body);
     }
     Value::Object(args.clone())
 }
@@ -298,6 +309,23 @@ mod tests {
     }
 
     #[test]
+    fn opencode_mcp_passthrough_and_sanitize_preserve_original_case() {
+        // Passthrough keeps the server/tool segments byte-identical so a
+        // user plugin DSL match on the exact MCP name cannot silently miss.
+        let input = parse(r#"{"tool_name":"mcp__My_Server__Tool","tool_input":{}}"#).unwrap();
+        assert_eq!(input.tool_name, "mcp__My_Server__Tool");
+
+        // Unknown tools keep their casing inside the sanitized suffix.
+        let input = parse(r#"{"tool_name":"MyTool","tool_input":{}}"#).unwrap();
+        assert_eq!(input.tool_name, "mcp__opencode__MyTool");
+
+        // The passthrough prefix check itself is case-sensitive: an
+        // uppercase MCP__ name is treated as an unknown tool.
+        let input = parse(r#"{"tool_name":"MCP__x__y","tool_input":{}}"#).unwrap();
+        assert_eq!(input.tool_name, "mcp__opencode__MCP__x__y");
+    }
+
+    #[test]
     fn opencode_sanitize_empty_tool_name_becomes_unknown() {
         let input = parse(r#"{"tool_name":"---","tool_input":{}}"#).unwrap();
         assert_eq!(input.tool_name, "mcp__opencode__unknown");
@@ -311,6 +339,13 @@ mod tests {
     }
 
     #[test]
+    fn opencode_missing_tool_input_key_defaults_to_empty_object() {
+        let input = parse(r#"{"tool_name":"bash"}"#).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.tool_input, serde_json::json!({}));
+    }
+
+    #[test]
     fn opencode_patch_accepts_content_field() {
         let patch = "*** Begin Patch\n*** End Patch\n";
         let body = format!(
@@ -320,6 +355,39 @@ mod tests {
         let input = parse(&body).unwrap();
         assert_eq!(input.tool_name, "apply_patch");
         assert_eq!(input.tool_input["command"], patch);
+    }
+
+    #[test]
+    fn opencode_reshape_duplicates_into_canonical_keys_and_keeps_originals() {
+        // §7: aliases are duplicated into the canonical keys the engine
+        // reads, while the caller's original keys stay in place.
+        let read = parse(r#"{"tool_name":"read","tool_input":{"path":".env"}}"#).unwrap();
+        assert_eq!(read.tool_input["file_path"], ".env");
+        assert_eq!(read.tool_input["filePath"], ".env");
+        assert_eq!(read.tool_input["path"], ".env");
+
+        let edit =
+            parse(r#"{"tool_name":"edit","tool_input":{"path":"a.rs","old":"x","new":"y"}}"#)
+                .unwrap();
+        assert_eq!(edit.tool_input["old_string"], "x");
+        assert_eq!(edit.tool_input["old"], "x");
+        assert_eq!(edit.tool_input["new_string"], "y");
+        assert_eq!(edit.tool_input["new"], "y");
+        assert_eq!(edit.tool_input["path"], "a.rs");
+
+        let patch = parse(r#"{"tool_name":"patch","tool_input":{"patchText":"P"}}"#).unwrap();
+        assert_eq!(patch.tool_input["command"], "P");
+        assert_eq!(patch.tool_input["patchText"], "P");
+    }
+
+    #[test]
+    fn opencode_reshape_overwrites_non_string_canonical_key() {
+        // Adversarial shadowing: a non-string occupant of the canonical key
+        // must not mask the alias value the engine needs to inspect.
+        let read =
+            parse(r#"{"tool_name":"read","tool_input":{"file_path":123,"path":".env"}}"#).unwrap();
+        assert_eq!(read.tool_input["file_path"], ".env");
+        assert_eq!(read.tool_input["path"], ".env");
     }
 
     #[test]

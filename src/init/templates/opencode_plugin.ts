@@ -77,7 +77,14 @@ async function runPtufHook(payload: Record<string, unknown>): Promise<PtufDecisi
     if (!line) {
       throw new Error("ptuf hook opencode returned empty stdout");
     }
-    return JSON.parse(line) as PtufDecision;
+    const decision = JSON.parse(line) as PtufDecision;
+    const permitted = decision.decision === "allow" || decision.decision === "monitor";
+    if (permitted !== (exitCode === 0)) {
+      throw new Error(
+        `ptuf hook opencode decision ${decision.decision} is inconsistent with exit ${exitCode}`,
+      );
+    }
+    return decision;
   } finally {
     clearTimeout(timer);
     if (killTimer !== undefined) {
