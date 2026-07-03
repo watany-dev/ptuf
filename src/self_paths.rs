@@ -612,6 +612,8 @@ mod tests {
             ProtectedKind::HookScript,
             ProtectedKind::CopilotSettings,
             ProtectedKind::KiroSettings,
+            ProtectedKind::PiSettings,
+            ProtectedKind::OpencodeSettings,
         ] {
             assert!(!k.as_str().is_empty());
         }

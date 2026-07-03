@@ -280,6 +280,63 @@ mod tests {
         assert_eq!(edit.tool_input["replace_all"], true);
     }
 
+    #[test]
+    fn opencode_todoread_and_task_map_to_mcp() {
+        for raw in ["todoread", "task"] {
+            let body = format!(r#"{{"tool_name":"{raw}","tool_input":{{}}}}"#);
+            assert_eq!(
+                parse(&body).unwrap().tool_name,
+                format!("mcp__opencode__{raw}"),
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_existing_mcp_prefix_passthrough() {
+        let input = parse(r#"{"tool_name":"mcp__custom__tool","tool_input":{}}"#).unwrap();
+        assert_eq!(input.tool_name, "mcp__custom__tool");
+    }
+
+    #[test]
+    fn opencode_sanitize_empty_tool_name_becomes_unknown() {
+        let input = parse(r#"{"tool_name":"---","tool_input":{}}"#).unwrap();
+        assert_eq!(input.tool_name, "mcp__opencode__unknown");
+    }
+
+    #[test]
+    fn opencode_accepts_tool_name_aliases_and_tool_input_object() {
+        let input = parse(r#"{"toolName":"bash","toolInput":{"command":"ls"}}"#).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.bash_command(), Some("ls"));
+    }
+
+    #[test]
+    fn opencode_patch_accepts_content_field() {
+        let patch = "*** Begin Patch\n*** End Patch\n";
+        let body = format!(
+            r#"{{"tool_name":"patch","tool_input":{{"content":{patch_json}}}}}"#,
+            patch_json = serde_json::to_string(patch).unwrap()
+        );
+        let input = parse(&body).unwrap();
+        assert_eq!(input.tool_name, "apply_patch");
+        assert_eq!(input.tool_input["command"], patch);
+    }
+
+    #[test]
+    fn opencode_input_error_display_covers_variants() {
+        let cases: Vec<OpencodeInputError> = vec![
+            OpencodeInputError::Empty,
+            OpencodeInputError::NotAnObject,
+            OpencodeInputError::MissingToolName,
+            OpencodeInputError::EmptyToolName,
+            OpencodeInputError::ToolInputNotObject,
+            OpencodeInputError::Json(serde_json::from_str::<serde_json::Value>("{").unwrap_err()),
+        ];
+        for err in cases {
+            assert!(!err.to_string().is_empty());
+        }
+    }
+
     use crate::testing::proptest::arbitrary_utf8_bytes;
     use proptest::prelude::*;
 

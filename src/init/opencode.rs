@@ -315,6 +315,85 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn install_already_present_when_desired_matches() {
+        let dir = workdir("already");
+        let plugin = dir.join("ptuf.ts");
+        let targets = TargetPaths {
+            root: dir.clone(),
+            plugin_path: plugin.clone(),
+        };
+        let desired = render_plugin("/bin/ptuf", env!("CARGO_PKG_VERSION"));
+        fs::write(&plugin, &desired).unwrap();
+        let outcome = install(&targets, "/bin/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::AlreadyPresent);
+        assert_eq!(outcome.agent, "opencode");
+        assert_eq!(outcome.matcher, DEFAULT_MATCHER);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_updates_managed_plugin_when_binary_changes() {
+        let dir = workdir("update");
+        let plugin = dir.join("ptuf.ts");
+        let targets = TargetPaths {
+            root: dir.clone(),
+            plugin_path: plugin.clone(),
+        };
+        fs::write(&plugin, render_plugin("/old/ptuf", "0.0.0")).unwrap();
+        let outcome = install(&targets, "/new/ptuf", false).unwrap();
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        let body = fs::read_to_string(&plugin).unwrap();
+        assert!(body.contains("/new/ptuf"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn is_ptuf_managed_requires_all_markers() {
+        assert!(!is_ptuf_managed(b"// random file\n"));
+        assert!(is_ptuf_managed(&render_plugin("/bin/ptuf", "1.0.0")));
+    }
+
+    #[test]
+    fn detect_binary_returns_non_empty_string() {
+        assert!(!detect_binary().is_empty());
+    }
+
+    #[test]
+    fn resolve_paths_delegates_to_resolve_paths_with() {
+        let options = OpencodeInitOptions::default();
+        let targets = resolve_paths(None, &options).expect("HOME is set in test env");
+        assert!(targets.plugin_path.ends_with("plugin/ptuf.ts"));
+    }
+
+    #[test]
+    fn resolve_paths_local_errors_outside_repo() {
+        let dir = workdir("no-repo");
+        let options = OpencodeInitOptions {
+            scope: OpencodeScope::Local,
+            root: None,
+        };
+        let err = resolve_paths_with(Some(dir.as_path()), &MapEnv::new(&[]), &options)
+            .expect_err("no repo");
+        assert!(matches!(err, InitError::RepoRootNotFound));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_paths_local_honours_explicit_root() {
+        let dir = workdir("explicit-root");
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        let nested = dir.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let options = OpencodeInitOptions {
+            scope: OpencodeScope::Local,
+            root: Some(nested.clone()),
+        };
+        let targets = resolve_paths_with(None, &MapEnv::new(&[]), &options).unwrap();
+        assert_eq!(targets.plugin_path, dir.join(".opencode/plugin/ptuf.ts"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[cfg(unix)]
     #[test]
     fn install_marks_plugin_mode_0600() {
