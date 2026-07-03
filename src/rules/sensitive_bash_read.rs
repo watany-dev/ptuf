@@ -114,7 +114,7 @@ fn argv_reads_sensitive(argv: &Argv) -> bool {
     if invokes_reader(argv) && argv_has_sensitive_positional(argv) {
         return true;
     }
-    if let Some(inner) = crate::facts::shell::unwrap_privilege_wrapper(argv)
+    if let Some(inner) = crate::facts::shell::unwrap_prefix_wrapper(argv)
         && invokes_reader(&inner)
         && argv_has_sensitive_positional(&inner)
     {

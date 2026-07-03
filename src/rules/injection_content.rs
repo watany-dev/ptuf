@@ -166,7 +166,7 @@ fn collect_reader_args(argv: &Argv, out: &mut Vec<PathBuf>) {
         out.extend(argv.positional().map(resolve_candidate));
         return;
     }
-    if let Some(inner) = crate::facts::shell::unwrap_privilege_wrapper(argv)
+    if let Some(inner) = crate::facts::shell::unwrap_prefix_wrapper(argv)
         && is_content_reader(&inner.head)
     {
         out.extend(inner.positional().map(resolve_candidate));

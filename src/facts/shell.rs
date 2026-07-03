@@ -280,7 +280,7 @@ const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
 ///
 /// `su` is handled elsewhere: its payload is shell code in `-c`, surfaced
 /// through `augment_inner_commands` as `inner_argv`.
-pub(crate) fn unwrap_privilege_wrapper(argv: &Argv) -> Option<Argv> {
+pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
     let wrapper = PREFIX_WRAPPERS
         .iter()
         .find(|w| w.name == head_basename(&argv.head))?;
@@ -1598,16 +1598,16 @@ mod tests {
     }
 
     #[test]
-    fn unwrap_privilege_wrapper_strips_prefix_wrappers() {
+    fn unwrap_prefix_wrapper_strips_prefix_wrappers() {
         for wrapper in ["sudo", "doas", "pkexec", "run0"] {
-            let inner = unwrap_privilege_wrapper(&argv(wrapper, &["rm", "-rf", "/"]))
+            let inner = unwrap_prefix_wrapper(&argv(wrapper, &["rm", "-rf", "/"]))
                 .unwrap_or_else(|| panic!("{wrapper} should unwrap"));
             assert_eq!(inner, argv("rm", &["-rf", "/"]));
         }
     }
 
     #[test]
-    fn unwrap_privilege_wrapper_skips_value_flags() {
+    fn unwrap_prefix_wrapper_skips_value_flags() {
         // Each wrapper hides the inner `rm` head behind a value-taking
         // flag (short, long, and inline-`=` spellings).
         let cases: &[(&str, &[&str])] = &[
@@ -1625,42 +1625,39 @@ mod tests {
             ("run0", &["--user=root", "rm", "-rf", "/"]),
         ];
         for &(wrapper, args) in cases {
-            let inner = unwrap_privilege_wrapper(&argv(wrapper, args))
+            let inner = unwrap_prefix_wrapper(&argv(wrapper, args))
                 .unwrap_or_else(|| panic!("{wrapper} {args:?} should unwrap"));
             assert_eq!(inner, argv("rm", &["-rf", "/"]), "{wrapper} {args:?}");
         }
     }
 
     #[test]
-    fn unwrap_privilege_wrapper_matches_full_path_head() {
-        let inner = unwrap_privilege_wrapper(&argv("/usr/bin/sudo", &["rm", "-rf", "/"]))
+    fn unwrap_prefix_wrapper_matches_full_path_head() {
+        let inner = unwrap_prefix_wrapper(&argv("/usr/bin/sudo", &["rm", "-rf", "/"]))
             .expect("full-path sudo unwraps");
         assert_eq!(inner, argv("rm", &["-rf", "/"]));
     }
 
     #[test]
-    fn unwrap_privilege_wrapper_honours_double_dash() {
-        let inner = unwrap_privilege_wrapper(&argv("sudo", &["--", "rm", "-rf", "/"]))
+    fn unwrap_prefix_wrapper_honours_double_dash() {
+        let inner = unwrap_prefix_wrapper(&argv("sudo", &["--", "rm", "-rf", "/"]))
             .expect("-- separator unwraps");
         assert_eq!(inner, argv("rm", &["-rf", "/"]));
     }
 
     #[test]
-    fn unwrap_privilege_wrapper_returns_none_for_non_wrapper() {
-        assert_eq!(unwrap_privilege_wrapper(&argv("rm", &["-rf", "/"])), None);
+    fn unwrap_prefix_wrapper_returns_none_for_non_wrapper() {
+        assert_eq!(unwrap_prefix_wrapper(&argv("rm", &["-rf", "/"])), None);
         // `su` is not a prefix wrapper — its payload is handled via `-c`.
         assert_eq!(
-            unwrap_privilege_wrapper(&argv("su", &["-c", "rm -rf /"])),
+            unwrap_prefix_wrapper(&argv("su", &["-c", "rm -rf /"])),
             None
         );
     }
 
     #[test]
-    fn unwrap_privilege_wrapper_returns_none_when_only_flags() {
-        assert_eq!(
-            unwrap_privilege_wrapper(&argv("sudo", &["-u", "root"])),
-            None
-        );
+    fn unwrap_prefix_wrapper_returns_none_when_only_flags() {
+        assert_eq!(unwrap_prefix_wrapper(&argv("sudo", &["-u", "root"])), None);
     }
 
     #[test]
@@ -1710,9 +1707,9 @@ mod tests {
     fn unwraps_multi_level_prefix_wrappers() {
         let b = parse("sudo doas rm -rf /");
         let outer = &b.segments[0].commands[0];
-        let layer1 = unwrap_privilege_wrapper(outer).expect("sudo unwraps");
+        let layer1 = unwrap_prefix_wrapper(outer).expect("sudo unwraps");
         assert_eq!(layer1.head, "doas");
-        let layer2 = unwrap_privilege_wrapper(&layer1).expect("doas unwraps");
+        let layer2 = unwrap_prefix_wrapper(&layer1).expect("doas unwraps");
         assert_eq!(layer2, argv("rm", &["-rf", "/"]));
     }
 

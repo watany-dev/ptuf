@@ -1,6 +1,6 @@
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, Bash, Pipeline, Redirect, RedirectOp, unwrap_privilege_wrapper};
+use crate::facts::shell::{Argv, Bash, Pipeline, Redirect, RedirectOp, unwrap_prefix_wrapper};
 use crate::hook_input::HookInput;
 use crate::reason;
 use regex::Regex;
@@ -120,7 +120,7 @@ fn invokes_network_sink(argv: &Argv) -> bool {
     if NETWORK_SINK_HEADS.contains(&argv.head.as_str()) {
         return true;
     }
-    if let Some(inner) = unwrap_privilege_wrapper(argv) {
+    if let Some(inner) = unwrap_prefix_wrapper(argv) {
         return NETWORK_SINK_HEADS.contains(&inner.head.as_str());
     }
     false
