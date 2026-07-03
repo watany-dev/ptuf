@@ -181,6 +181,18 @@ mod tests {
     }
 
     #[test]
+    fn metadata_matches_design() {
+        // 他の rule ファイル (sensitive_bash_read.rs 等) と同様、`ConfigRule`
+        // の各メタデータ実装を直接叩いて固定する。concrete 型経由の呼び出しは
+        // `rules::iter()` 越しの dyn dispatch とは別のコードパスを踏む。
+        assert!(!DynamicEval.hard_deny());
+        assert!(DynamicEval.overridable());
+        assert_eq!(DynamicEval.severity(), Severity::Medium);
+        assert_eq!(DynamicEval.default_decision(), DecisionKind::Ask);
+        assert_eq!(DynamicEval.id(), RULE_ID);
+    }
+
+    #[test]
     fn asks_on_bash_dash_c() {
         assert_ask("bash -c 'echo hi'");
     }
