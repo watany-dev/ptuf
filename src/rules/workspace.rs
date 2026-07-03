@@ -195,6 +195,24 @@ mod tests {
     }
 
     #[test]
+    fn denies_numeric_fd_redirect_outside_workspace() {
+        // Regression: `1>` (and other numeric fd forms) must tokenize as a
+        // redirect so its target is subject to the workspace boundary. If
+        // the fd redirect were dropped by the lexer, the write would slip
+        // past this guard.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let input = HookInput {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({ "command": "echo x 1> /etc/ptuf-redirect-x" }),
+        };
+        let f = facts_with_workspaces(&input, vec![dir.path().to_path_buf()]);
+        assert!(matches!(
+            OUTSIDE_ACCESS_RULE.evaluate(&f, &input),
+            Some(Decision::Deny { .. })
+        ));
+    }
+
+    #[test]
     fn lookalike_prefix_does_not_satisfy_boundary() {
         // workspace ≠ workspace-evil as a path component prefix, even
         // though `<ws>-evil/x` byte-prefix-matches `<ws>`. Both dirs

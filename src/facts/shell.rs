@@ -68,9 +68,14 @@ pub struct Redirect {
     pub target: String,
 }
 
-/// Variant of a redirect operator. We collapse less common forms
-/// (e.g. `1>`, `n>&m`) into the closest common shape; rules only need
-/// to know the rough direction.
+/// Variant of a redirect operator. We collapse numeric fd forms into the
+/// closest common shape — `1>`/`n>` → [`Stdout`](RedirectOp::Stdout),
+/// `1>>`/`n>>` → [`StdoutAppend`](RedirectOp::StdoutAppend), `2>`/`2>>` →
+/// [`Stderr`](RedirectOp::Stderr), `0<`/`n<` → [`Stdin`](RedirectOp::Stdin)
+/// — since rules only need the rough direction, not the fd number. The fd
+/// duplication form (`n>&m`, e.g. `2>&1`) is not yet modelled: its target
+/// is an fd rather than a path, so it carries no path fact worth
+/// surfacing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RedirectOp {
     /// `>` — overwrite stdout to a file.
@@ -496,19 +501,45 @@ fn tokenize(s: &str) -> TokenizeOutput {
             }
             continue;
         }
-        // `2>` / `2>>` only when it appears at the start of a word
-        // position (the whitespace skip above guarantees that).
-        if c == b'2' && i + 1 < bytes.len() && bytes[i + 1] == b'>' {
-            // Collapse `2>>` into Stderr (we only model rough direction).
-            let advance = if i + 2 < bytes.len() && bytes[i + 2] == b'>' {
-                3
-            } else {
-                2
-            };
-            out.push(Token::Redirect(RedirectOp::Stderr));
-            saw_redirect = true;
-            i += advance;
-            continue;
+        // Numeric fd redirect: a run of ASCII digits (the fd number) at a
+        // word-start position, immediately followed by `>` or `<` — e.g.
+        // `1>`, `1>>`, `0<`, `3>`, `10>`, `2>`, `2>>`. The whitespace skip
+        // above guarantees we are at a word start. We only model rough
+        // direction, so the fd number is discarded and the op collapses to
+        // the closest common shape. A digit run *not* followed by a
+        // redirect operator (e.g. `123`, `2foo`) falls through to
+        // `read_word` and stays a plain word.
+        if c.is_ascii_digit() {
+            let mut d = i;
+            while d < bytes.len() && bytes[d].is_ascii_digit() {
+                d += 1;
+            }
+            // fd 2 collapses to Stderr; all other fds map by operator.
+            let is_stderr = d - i == 1 && bytes[i] == b'2';
+            if d < bytes.len() && bytes[d] == b'>' {
+                let append = d + 1 < bytes.len() && bytes[d + 1] == b'>';
+                let op = if is_stderr {
+                    RedirectOp::Stderr
+                } else if append {
+                    RedirectOp::StdoutAppend
+                } else {
+                    RedirectOp::Stdout
+                };
+                out.push(Token::Redirect(op));
+                saw_redirect = true;
+                i = d + if append { 2 } else { 1 };
+                continue;
+            }
+            // `n<` — single stdin redirect. Leave `n<<` (numeric-fd
+            // heredoc, exceedingly rare) to fall through so we never
+            // misparse a heredoc opener.
+            let is_heredoc = d + 1 < bytes.len() && bytes[d + 1] == b'<';
+            if d < bytes.len() && bytes[d] == b'<' && !is_heredoc {
+                out.push(Token::Redirect(RedirectOp::Stdin));
+                saw_redirect = true;
+                i = d + 1;
+                continue;
+            }
         }
         // Otherwise: read a word, honouring quotes.
         let (word, advanced, word_subst) = read_word(&bytes[i..]);
@@ -1399,6 +1430,20 @@ mod tests {
             ("sh < script.sh", RedirectOp::Stdin, "script.sh"),
             ("cmd 2> err.log", RedirectOp::Stderr, "err.log"),
             ("cmd &> all.log", RedirectOp::Merge, "all.log"),
+            // Numeric fd forms collapse to the closest common shape.
+            ("echo hi 1> /etc/passwd", RedirectOp::Stdout, "/etc/passwd"),
+            (
+                "echo hi 1>> /var/log/x",
+                RedirectOp::StdoutAppend,
+                "/var/log/x",
+            ),
+            ("sh 0< script.sh", RedirectOp::Stdin, "script.sh"),
+            ("cmd 3> out.log", RedirectOp::Stdout, "out.log"),
+            // fd 2 collapses to Stderr for both `2>` and `2>>`.
+            ("cmd 2>> err.log", RedirectOp::Stderr, "err.log"),
+            // Multi-digit fd and the no-space form both tokenize.
+            ("cmd 10> out.log", RedirectOp::Stdout, "out.log"),
+            ("echo hi 1>out.log", RedirectOp::Stdout, "out.log"),
         ];
         for (cmd, expect_op, expect_target) in cases {
             let b = parse(cmd);
@@ -1408,6 +1453,22 @@ mod tests {
             assert_eq!(
                 b.segments[0].redirects[0].target, expect_target,
                 "cmd={cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn digit_prefixed_words_are_not_redirects() {
+        // A digit run only becomes an fd redirect when immediately
+        // followed by `>` or `<`. Bare numbers and digit-prefixed words
+        // must fall through to `read_word` and remain plain arguments.
+        for (cmd, arg) in [("echo 123", "123"), ("echo 2foo", "2foo")] {
+            let b = parse(cmd);
+            assert_eq!(b.segments[0].redirects.len(), 0, "cmd={cmd:?}");
+            assert!(
+                b.segments[0].commands[0].args.contains(&arg.to_string()),
+                "cmd={cmd:?} args={:?}",
+                b.segments[0].commands[0].args
             );
         }
     }
