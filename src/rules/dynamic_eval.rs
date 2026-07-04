@@ -4,7 +4,7 @@
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, unwrap_privilege_wrapper};
+use crate::facts::shell::{Argv, unwrap_prefix_wrapper};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -88,7 +88,7 @@ fn invokes_dynamic_eval(argv: &Argv) -> bool {
     if matches_dynamic_eval(argv) {
         return true;
     }
-    if let Some(unwrapped) = unwrap_privilege_wrapper(argv) {
+    if let Some(unwrapped) = unwrap_prefix_wrapper(argv) {
         return matches_dynamic_eval(&unwrapped);
     }
     false
@@ -178,6 +178,18 @@ mod tests {
             result.is_none(),
             "expected allow for {cmd:?}, got {result:?}"
         );
+    }
+
+    #[test]
+    fn metadata_matches_design() {
+        // 他の rule ファイル (sensitive_bash_read.rs 等) と同様、`ConfigRule`
+        // の各メタデータ実装を直接叩いて固定する。concrete 型経由の呼び出しは
+        // `rules::iter()` 越しの dyn dispatch とは別のコードパスを踏む。
+        assert!(!DynamicEval.hard_deny());
+        assert!(DynamicEval.overridable());
+        assert_eq!(DynamicEval.severity(), Severity::Medium);
+        assert_eq!(DynamicEval.default_decision(), DecisionKind::Ask);
+        assert_eq!(DynamicEval.id(), RULE_ID);
     }
 
     #[test]
@@ -275,6 +287,14 @@ mod tests {
     #[test]
     fn fires_after_separator() {
         assert_ask("echo hi; bash -c 'rm tmp'");
+    }
+
+    #[test]
+    fn has_flag_with_value_ignores_multi_char_flag() {
+        // 実際の呼び出し元は常に "-c"/"-e" のような 1 文字フラグしか渡さない
+        // ため、この 1 文字以外の形の flag を渡すガード節は本番コードからは
+        // 到達不能。ここで直接叩いて分岐を踏む。
+        assert!(!has_flag_with_value(&["-c".to_string()], "--long"));
     }
 
     use crate::testing::proptest::{arbitrary_command, bash_command, non_bash_hook_input};

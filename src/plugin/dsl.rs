@@ -11,7 +11,7 @@ use serde_yaml_ng::Value;
 
 use crate::HookInput;
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, unwrap_privilege_wrapper};
+use crate::facts::shell::{Argv, unwrap_prefix_wrapper};
 
 /// Compiled boolean expression. The combinators (`All`, `Any`, `Not`)
 /// match the YAML keys; the leaves match the supported facts.
@@ -247,7 +247,7 @@ fn walk_argv_for_pipeline_from_to(
     } else if to.contains(&argv.head) {
         return true;
     }
-    if let Some(inner) = unwrap_privilege_wrapper(argv) {
+    if let Some(inner) = unwrap_prefix_wrapper(argv) {
         if *seen_from && to.contains(&inner.head) {
             return true;
         }

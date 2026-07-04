@@ -13,7 +13,7 @@ Accepted (2026-07-02).
 (`full_path_command_keeps_head_intact` が生値契約を保証) のため、
 正規化はルール側の責務だが、その実施状況が非対称だった:
 
-- **basename 一致済み**: `unwrap_privilege_wrapper` / `su` / `eval` /
+- **basename 一致済み**: `unwrap_prefix_wrapper` / `su` / `eval` /
   `xargs` / `find` 検出 (`src/facts/shell.rs`)、`dynamic-eval`
   (private な `head_basename` の重複コピーを保有)、`self_paths`
   (`Path::file_name`)
@@ -38,7 +38,7 @@ Accepted (2026-07-02).
 `src/facts/shell.rs` の `head_basename` (`head.rsplit('/').next()`) を
 `pub(crate)` に共有化し、`Argv::head_basename()` 委譲メソッドを追加。
 生比較だった全ルールの head 判定を「basename 化してから定数配列と比較」に
-統一する。outer head だけでなく `unwrap_privilege_wrapper` で剥がした
+統一する。outer head だけでなく `unwrap_prefix_wrapper` で剥がした
 inner head も同様に basename 照合する。
 
 - `Argv.head` 自体は生のまま維持する。`matches_sensitive_path(&argv.head)`
@@ -70,8 +70,8 @@ inner head も同様に basename 照合する。
 
 ### Known limitations (本イテレーション外 / 継続)
 
-- `env curl …` / `command curl …` — head が `env` / `command` になる
-  ラッパー経由は未対応 (別穴として認識済み)。
+- `env curl …` / `command curl …` — 本 ADR 執筆時点では未対応だったが、
+  `unwrap_prefix_wrapper` の `env` / `command` 対応 (同時期の別 PR) で解消済み。
 - Windows パス区切り (`C:\...\curl.exe`) — `head_basename` は `/` のみ
   分割する。ptuf の主対象は POSIX shell のため据え置き。
 - `src/plugin/dsl.rs` のプラグイン DSL の head 照合は生のまま。ユーザ定義

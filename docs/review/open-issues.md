@@ -30,8 +30,9 @@ opaque な flag surface として扱う点に限定される。
 ## 1. Concrete bugs (P0)
 
 (該当なし — 2026-05-17 監査の権限昇格ラッパー網羅問題は解消済み。
-`unwrap_sudo` を `unwrap_privilege_wrapper` (`src/facts/shell.rs`) に一般化し、
-`sudo` / `doas` / `pkexec` / `run0` を data-driven な prefix ラッパー表で剥がす。
+`unwrap_sudo` を `unwrap_prefix_wrapper` (`src/facts/shell.rs`) に一般化し、
+`sudo` / `doas` / `pkexec` / `run0`、および POSIX コマンドラッパー
+`env` / `command` を data-driven な prefix ラッパー表で剥がす。
 値フラグ表は `(short, long)` ペアの単一 source-of-truth にして非対称バグを
 構造的に排除した。フルパス head (`/usr/bin/sudo`) は basename 一致、多段ネスト
 (`sudo doas ...`) は 1 段ずつ剥がす。`su -c '...'` は `augment_inner_commands`

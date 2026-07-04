@@ -547,7 +547,7 @@ fn candidate_targets<'a>(
         for outer in bash.commands() {
             // Peel a privilege-escalation wrapper (`sudo rm ...`) so the
             // writer head and its destinations are the inner command's.
-            let unwrapped = crate::facts::shell::unwrap_privilege_wrapper(outer);
+            let unwrapped = crate::facts::shell::unwrap_prefix_wrapper(outer);
             let argv = unwrapped.as_ref().unwrap_or(outer);
             let head = argv.head.as_str();
             if !writer_heads.contains(&argv.head_basename()) {

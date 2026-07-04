@@ -1,6 +1,6 @@
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, unwrap_privilege_wrapper};
+use crate::facts::shell::{Argv, unwrap_prefix_wrapper};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -63,7 +63,7 @@ impl ConfigRule for DestructiveRm {
 }
 
 fn is_destructive_rm_invocation(argv: &Argv) -> bool {
-    if let Some(inner) = unwrap_privilege_wrapper(argv) {
+    if let Some(inner) = unwrap_prefix_wrapper(argv) {
         return is_destructive_rm_invocation(&inner);
     }
     is_rm_head(argv.head_basename())
