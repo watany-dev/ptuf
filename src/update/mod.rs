@@ -752,6 +752,13 @@ mod tests {
     use super::spawn::testing::{RecordingSpawner, ok, ok_with_stderr};
     use super::*;
 
+    /// Pinned target tag for tests that exercise the updater pipeline.
+    /// Must stay strictly newer than `CARGO_PKG_VERSION`: an equal tag
+    /// short-circuits with "already up to date" and an older one trips
+    /// the downgrade guard, so either would silently skip the spawns
+    /// these tests assert on.
+    const PINNED_TAG: &str = "v99.0.0";
+
     fn cargo_locator(cargo_home: PathBuf) -> FakeExeLocator {
         FakeExeLocator {
             exe: cargo_home.join("bin").join("ptuf"),

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+- `PluginError` に `ReservedRuleId` / `DuplicateRuleId` variant を追加。
+
+### Changed
+- builtin rule の DSL 統合スライス 1 (ADR 0004): `core.network.remote-script-pipe`
+  を `src/rules/builtins.yaml` (plugin DSL) から提供するように変更。reason /
+  remediation / rule id / hardDeny / severity は旧 Rust 実装と wire 互換。旧
+  実装 (`rules::remote_pipe::RemoteScriptPipe`) はパリティ oracle として残置。
+
+### Added
+- 外部 plugin の rule id 検証: `core.` prefix の予約 (`ReservedRuleId`) と
+  同一 plugin 内の id 重複 (`DuplicateRuleId`) を load 時に reject。
+- `builtins.yaml` のコンパイル失敗 (構造的に到達不能、テストで pin) 時は
+  deny-everything の fail-closed sentinel (`core.engine.builtin-load-failed`)
+  に縮退。
+
+### Security
+- DSL 版 remote-script-pipe は fetch 側でも権限 wrapper の unwrap と
+  `inner_argv` 再帰を行うため、旧実装が見逃していた
+  `sudo curl … | sh` / `bash -c 'curl …' | sh` を新たに deny
+  (`tests/bypass/corpus.jsonl` に must_catch として追加)。
+
 ## [0.5.0] - 2026-07-03
 
 ### Changed (BREAKING)

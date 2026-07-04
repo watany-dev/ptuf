@@ -709,6 +709,16 @@ fn fail_closed_true_matches_cli_policy_load_failed() {
     assert!(stderr.contains("could not load policy"), "stderr: {stderr}");
 }
 
+/// Return an audit path whose sink can never be opened: the parent is
+/// a regular file, so `create_dir_all` fails with `NotADirectory`.
+/// Unlike an absolute path such as `/nonexistent/...`, this stays
+/// unopenable even when the suite runs as root (e.g. in containers).
+fn unopenable_audit_path(dir: &Path) -> PathBuf {
+    let blocker = dir.join("audit-blocker");
+    std::fs::write(&blocker, "not a directory").expect("write blocker");
+    blocker.join("audit.jsonl")
+}
+
 fn audit_open_failure_yaml(audit_path: &Path) -> String {
     format!(
         "audit:\n  path: {}\n  includeDenied: true\n  includeAllowed: true\n",
@@ -719,7 +729,7 @@ fn audit_open_failure_yaml(audit_path: &Path) -> String {
 #[test]
 fn hook_surfaces_audit_open_failure_on_stderr() {
     let dir = repo();
-    let audit_path = PathBuf::from("/nonexistent/nope/audit.jsonl");
+    let audit_path = unopenable_audit_path(dir.path());
     std::fs::write(
         dir.path().join(".ptuf.yaml"),
         audit_open_failure_yaml(&audit_path),
@@ -737,7 +747,7 @@ fn hook_surfaces_audit_open_failure_on_stderr() {
 #[test]
 fn check_drains_audit_write_warnings() {
     let dir = repo();
-    let audit_path = PathBuf::from("/nonexistent/nope/audit.jsonl");
+    let audit_path = unopenable_audit_path(dir.path());
     std::fs::write(
         dir.path().join(".ptuf.yaml"),
         audit_open_failure_yaml(&audit_path),
@@ -754,7 +764,7 @@ fn check_drains_audit_write_warnings() {
 #[test]
 fn hook_still_denies_when_audit_sink_fails() {
     let dir = repo();
-    let audit_path = PathBuf::from("/nonexistent/nope/audit.jsonl");
+    let audit_path = unopenable_audit_path(dir.path());
     std::fs::write(
         dir.path().join(".ptuf.yaml"),
         audit_open_failure_yaml(&audit_path),

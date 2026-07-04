@@ -3,8 +3,11 @@
 //! (`docs/design/audit.md`, `docs/design/decision-model.md`).
 //!
 //! The order here mirrors the static `RULES` slice in
-//! `src/rules/mod.rs`. Any rule reordering — including refactors that
-//! split files — must update this fixture consciously, not accidentally.
+//! `src/rules/mod.rs` followed by the DSL-compiled builtins from
+//! `src/rules/builtins.yaml` (chained by `rules::iter()`). Any rule
+//! reordering — including refactors that split files or move a rule
+//! into the YAML — must update this fixture consciously, not
+//! accidentally.
 
 #[test]
 fn rules_iter_order_matches_fixture() {
@@ -13,7 +16,6 @@ fn rules_iter_order_matches_fixture() {
         .collect();
     let expected: &[&str] = &[
         "core.filesystem.destructive-rm",
-        "core.network.remote-script-pipe",
         "core.secrets.sensitive-path-to-network",
         "core.secrets.sensitive-bash-read",
         "core.engine.dynamic-eval",
@@ -52,6 +54,9 @@ fn rules_iter_order_matches_fixture() {
         "core.project_hygiene.lock-mismatch-uv",
         "core.project_hygiene.protected-branch-destructive-git",
         "core.workspace.outside-access",
+        // DSL builtins (src/rules/builtins.yaml) chain after the
+        // static slice.
+        "core.network.remote-script-pipe",
     ];
     assert_eq!(actual, expected);
 }

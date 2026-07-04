@@ -114,6 +114,22 @@
   (NUL バイト / denylist 拡張子)・非 UTF-8 はすべて素通り、scan は
   先頭 1 MiB のみ
 
+### M10 — builtin rule の DSL 一本化・スライス 1 (実装済み, `v0.5.0` / breaking)
+
+- ADR 0004。`core.network.remote-script-pipe` を
+  `src/rules/builtins.yaml` (plugin DSL、`include_str!` 埋め込み) から
+  提供。`rules::iter()` が静的 Rust rule の後ろへ DSL builtin を chain
+  するため engine 側は無変更
+- DSL の pipeline walk は fetch 側でも privilege wrapper unwrap と
+  `inner_argv` 再帰を行うため、旧実装が見逃した `sudo curl … | sh` /
+  `bash -c 'curl …' | sh` を新たに deny (bypass corpus に must_catch 追加)
+- 外部 plugin の `core.*` id を `ReservedRuleId`、同一 plugin 内の id
+  重複を `DuplicateRuleId` で reject (`PluginError` variant 追加 =
+  breaking、0.5.0)
+- 埋め込み YAML のコンパイル失敗時は deny-everything の fail-closed
+  sentinel に縮退。旧 Rust 実装はパリティ oracle として残置し、片方向
+  包含を PBT で恒久検証
+
 ### M7 — CLI ゼロベース簡素化 (実装済み, `v0.1.0` 予定 / breaking)
 
 - `ptuf init` を引数なしで auto-detect (cwd の repo root と `$HOME` から
@@ -145,7 +161,9 @@
 - optional WASM plugin runtime
 - CLI parser の分割または `clap` derive 等への移行
 - `engine/{evaluator,allowlist,audit}.rs` などへの Engine 分割
-- builtin rule と plugin DSL の統合 (`builtins.yaml` + DSL compiler など)
+- builtin rule と plugin DSL の統合の続き — スライス 1 (M10 / ADR 0004)
+  で `builtins.yaml` 経路は確立済み。DSL で表現できる残り rule の順次移行
+  と、regex / FS 参照系 rule のための DSL 拡張判断
 - daemon 化時の plugin loader cache (`Arc<LoadedPlugin>` など)
 - `parse<'a>(&'a str) -> Bash<'a>` 形式の borrowed shell AST
 

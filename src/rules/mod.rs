@@ -2,6 +2,7 @@ use crate::decision::{DecisionKind, Severity};
 use crate::facts::Facts;
 use crate::{Decision, HookInput};
 
+pub(crate) mod builtin_dsl;
 pub mod destructive_rm;
 pub mod dynamic_eval;
 pub mod git;
@@ -47,7 +48,6 @@ pub trait ConfigRule: Sync + Send {
 
 static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &destructive_rm::DestructiveRm,
-    &remote_pipe::RemoteScriptPipe,
     &sensitive_net::SensitivePathToNetwork,
     &sensitive_bash_read::SensitiveBashRead,
     &dynamic_eval::DynamicEval,
@@ -91,17 +91,19 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
 /// Run every built-in rule against `facts` + `input` and collect
 /// decisions from the rules that fired.
 pub fn evaluate_all(facts: &Facts, input: &HookInput) -> Vec<Decision> {
-    RULES
-        .iter()
-        .filter_map(|r| r.evaluate(facts, input))
-        .collect()
+    iter().filter_map(|r| r.evaluate(facts, input)).collect()
 }
 
-/// Iterate over the static slice of built-in rules. Used by the
-/// engine layer to apply per-pack disables before evaluating each
-/// rule.
+/// Iterate over every built-in rule: the static Rust rules followed by
+/// the DSL-compiled rules from `builtins.yaml`
+/// (`builtin_dsl::iter`). Used by the engine layer to apply per-pack
+/// disables before evaluating each rule; both kinds flow through the
+/// same override / allowlist / `hardDeny` machinery.
 pub fn iter() -> impl Iterator<Item = &'static (dyn ConfigRule + Sync)> {
-    RULES.iter().copied()
+    RULES
+        .iter()
+        .copied()
+        .chain(builtin_dsl::iter().map(|r| r as &'static (dyn ConfigRule + Sync)))
 }
 
 /// Return whether `rule_id` belongs to a built-in or plugin rule marked
@@ -151,7 +153,7 @@ mod tests {
 
     #[test]
     fn rule_ids_are_stable_strings() {
-        let ids: Vec<&str> = RULES.iter().map(|r| r.id()).collect();
+        let ids: Vec<&str> = iter().map(|r| r.id()).collect();
         assert!(ids.contains(&"core.filesystem.destructive-rm"));
         assert!(ids.contains(&"core.network.remote-script-pipe"));
         assert!(ids.contains(&"core.secrets.sensitive-path-to-network"));
@@ -208,7 +210,7 @@ mod tests {
 
     #[test]
     fn builtin_rules_keep_overridable_true() {
-        for rule in RULES {
+        for rule in iter() {
             assert!(
                 rule.overridable(),
                 "builtin rule {} keeps overridable=true (hard_deny is the lock)",
@@ -224,10 +226,15 @@ mod tests {
             "core.network.remote-script-pipe",
             "core.secrets.sensitive-path-to-network",
         ];
-        for rule in RULES
-            .iter()
+        let legacy: Vec<_> = iter()
             .filter(|r| LEGACY_HARD_DENY_IDS.contains(&r.id()))
-        {
+            .collect();
+        assert_eq!(
+            legacy.len(),
+            LEGACY_HARD_DENY_IDS.len(),
+            "every legacy hard-deny rule must still be served by iter()"
+        );
+        for rule in legacy {
             assert!(
                 rule.hard_deny(),
                 "legacy rule {} must remain hard_deny",
@@ -350,7 +357,7 @@ mod tests {
         #[test]
         fn pbt_bash_only_rules_silent_on_non_bash(input in non_bash_hook_input()) {
             let facts = crate::facts::extract(&input);
-            for rule in RULES {
+            for rule in iter() {
                 if BASH_ONLY_RULE_IDS.contains(&rule.id()) {
                     prop_assert!(
                         rule.evaluate(&facts, &input).is_none(),
@@ -369,7 +376,7 @@ mod tests {
         fn pbt_decision_rule_ids_are_known(input in richer_hook_input()) {
             use crate::decision::DecisionKind;
             let facts = crate::facts::extract(&input);
-            let known: Vec<&str> = RULES.iter().map(|r| r.id()).collect();
+            let known: Vec<&str> = iter().map(|r| r.id()).collect();
             for d in evaluate_all(&facts, &input) {
                 let id = d.rule_id().expect("non-Allow decision carries a rule_id");
                 prop_assert!(
@@ -383,23 +390,28 @@ mod tests {
             }
         }
 
-        // Every rule's id is unique across the static slice.
+        // Every rule's id is unique across the full built-in set
+        // (static slice + DSL builtins).
         #[test]
         fn pbt_rule_ids_are_unique(_dummy in 0u8..=0u8) {
-            let mut ids: Vec<&str> = RULES.iter().map(|r| r.id()).collect();
+            let mut ids: Vec<&str> = iter().map(|r| r.id()).collect();
             ids.sort();
             let len_before = ids.len();
             ids.dedup();
             prop_assert_eq!(ids.len(), len_before);
         }
 
-        // iter() returns the same rules as the static slice (same count
-        // and same ids in the same order).
+        // iter() serves exactly the static slice followed by the DSL
+        // builtins — same ids, same order, nothing dropped or added.
         #[test]
         fn pbt_iter_matches_rules_slice(_dummy in 0u8..=0u8) {
             let from_iter: Vec<&str> = iter().map(|r| r.id()).collect();
-            let from_slice: Vec<&str> = RULES.iter().map(|r| r.id()).collect();
-            prop_assert_eq!(from_iter, from_slice);
+            let expected: Vec<&str> = RULES
+                .iter()
+                .map(|r| r.id())
+                .chain(builtin_dsl::iter().map(|r| r.id()))
+                .collect();
+            prop_assert_eq!(from_iter, expected);
         }
 
         // Per-rule (not aggregate): when any built-in rule fires on any
@@ -413,7 +425,7 @@ mod tests {
             input in richer_hook_input(),
         ) {
             let facts = crate::facts::extract(&input);
-            for rule in RULES {
+            for rule in iter() {
                 if let Some(d) = rule.evaluate(&facts, &input) {
                     prop_assert_eq!(
                         d.rule_id(),
@@ -436,7 +448,7 @@ mod tests {
             input in richer_hook_input(),
         ) {
             let facts = crate::facts::extract(&input);
-            for rule in RULES {
+            for rule in iter() {
                 if let Some(d) = rule.evaluate(&facts, &input) {
                     prop_assert_eq!(
                         d.kind(),

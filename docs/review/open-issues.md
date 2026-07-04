@@ -98,11 +98,14 @@ inspect できるようになった。adapter 層は `RawHookInput` と normaliz
 
 ## 5. Engine 構造 / 安全性
 
-- **§1.1** deferred。builtin rule (`src/rules/`) と plugin DSL
-  (`src/plugin/dsl.rs`) の二重実装。builtin を YAML 1 本
-  (`include_str!("builtins.yaml")`) で配布し、起動時に DSL コンパイラを
-  通す案。Rust 専用にすべきは self_protection の `ProtectedPaths` 突合
-  のように DSL では書けないものだけ。優先度: P2 (大改修)
+- **§1.1** 着手 (ADR 0004, 2026-07)。builtin rule (`src/rules/`) と
+  plugin DSL (`src/plugin/dsl.rs`) の二重実装を、
+  `src/rules/builtins.yaml` (`include_str!` 埋め込み) + `rules::iter()`
+  chain で段階的に解消する。スライス 1 で
+  `core.network.remote-script-pipe` を DSL 化 (wire 互換 + 片方向パリティ
+  PBT、旧実装は oracle として残置)。残り: DSL で表現できる rule の順次
+  移行。regex 分類器依存 / FS 参照 / 動的 reason の rule は DSL 拡張の
+  設計が先 (ADR 0004 の「移行できないもの」参照)。優先度: P2
 - **§1.2** deferred。`dyn ConfigRule` static slice + `pub static` 19 個
   (`src/rules/git/` 等)。`enum Rule { Filesystem(...), Git(GitRuleId),
   SelfProtection(ProtectedKind), Plugin(PluginRule), … }` で動的
