@@ -26,6 +26,7 @@ pub enum ProtectedKind {
     CopilotSettings,
     KiroSettings,
     PiSettings,
+    OpencodeSettings,
 }
 
 impl ProtectedKind {
@@ -40,13 +41,14 @@ impl ProtectedKind {
             Self::CopilotSettings => "copilot_settings",
             Self::KiroSettings => "kiro_settings",
             Self::PiSettings => "pi_settings",
+            Self::OpencodeSettings => "opencode_settings",
         }
     }
 }
 
 /// Small, allocation-free set of protected target labels.
 ///
-/// There are only nine [`ProtectedKind`] variants, so a fixed buffer is
+/// There are only ten [`ProtectedKind`] variants, so a fixed buffer is
 /// simpler than pulling in a small-vector dependency for the hook hot path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProtectedKinds {
@@ -55,7 +57,7 @@ pub struct ProtectedKinds {
 }
 
 impl ProtectedKinds {
-    const CAPACITY: usize = 9;
+    const CAPACITY: usize = 10;
 
     pub fn new() -> Self {
         Self::default()
@@ -121,6 +123,7 @@ pub struct ProtectedPaths {
     pub copilot_settings: Vec<PathBuf>,
     pub kiro_settings: Vec<PathBuf>,
     pub pi_settings: Vec<PathBuf>,
+    pub opencode_settings: Vec<PathBuf>,
 }
 
 impl ProtectedPaths {
@@ -254,6 +257,7 @@ impl ProtectedPaths {
         let home_path = env.var_os("HOME").map(PathBuf::from);
         let kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
         let pi_settings = collect_pi_paths(repo_root, home_path.as_deref());
+        let opencode_settings = collect_opencode_paths(repo_root, home_path.as_deref(), env);
 
         for agent_path in &kiro_settings {
             // `collect_kiro_agent_jsons` enumerates via `read_dir`, so
@@ -298,6 +302,7 @@ impl ProtectedPaths {
         let copilot_settings = canonicalize_each(copilot_settings);
         let kiro_settings = canonicalize_each(kiro_settings);
         let pi_settings = canonicalize_each(pi_settings);
+        let opencode_settings = canonicalize_each(opencode_settings);
 
         Self {
             repo_root: repo_root.map(Path::to_path_buf),
@@ -310,6 +315,7 @@ impl ProtectedPaths {
             copilot_settings,
             kiro_settings,
             pi_settings,
+            opencode_settings,
         }
     }
 
@@ -398,6 +404,13 @@ impl ProtectedPaths {
         if self.pi_settings.iter().any(|p| path_matches(candidate, p)) {
             return Some(ProtectedKind::PiSettings);
         }
+        if self
+            .opencode_settings
+            .iter()
+            .any(|p| path_matches(candidate, p))
+        {
+            return Some(ProtectedKind::OpencodeSettings);
+        }
         if self.hook_scripts.iter().any(|p| path_matches(candidate, p)) {
             return Some(ProtectedKind::HookScript);
         }
@@ -453,6 +466,25 @@ fn collect_pi_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBu
         paths.push(pi.join("settings.json"));
         paths.push(pi.join("extensions/ptuf.ts"));
         paths.push(pi.join("extensions/ptuf/index.ts"));
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn collect_opencode_paths(
+    repo_root: Option<&Path>,
+    home: Option<&Path>,
+    env: &dyn EnvLookup,
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(xdg) = env.var_os("XDG_CONFIG_HOME") {
+        paths.push(PathBuf::from(xdg).join("opencode/plugin/ptuf.ts"));
+    } else if let Some(home) = home {
+        paths.push(home.join(".config/opencode/plugin/ptuf.ts"));
+    }
+    if let Some(root) = repo_root {
+        paths.push(root.join(".opencode/plugin/ptuf.ts"));
     }
     paths.sort();
     paths.dedup();
@@ -518,11 +550,7 @@ fn candidate_targets<'a>(
             let unwrapped = crate::facts::shell::unwrap_privilege_wrapper(outer);
             let argv = unwrapped.as_ref().unwrap_or(outer);
             let head = argv.head.as_str();
-            let head_base = std::path::Path::new(head)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or(head);
-            if !writer_heads.contains(&head_base) {
+            if !writer_heads.contains(&argv.head_basename()) {
                 continue;
             }
             for a in argv.positional() {
@@ -584,6 +612,8 @@ mod tests {
             ProtectedKind::HookScript,
             ProtectedKind::CopilotSettings,
             ProtectedKind::KiroSettings,
+            ProtectedKind::PiSettings,
+            ProtectedKind::OpencodeSettings,
         ] {
             assert!(!k.as_str().is_empty());
         }
@@ -1151,6 +1181,73 @@ mod tests {
     }
 
     #[test]
+    fn collect_includes_opencode_settings_paths() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-self-oc-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        std::fs::create_dir_all(dir.join(".opencode/plugin")).expect("mkdir opencode");
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join(".config/opencode/plugin")).expect("mkdir config");
+        let home_string = home.to_string_lossy().into_owned();
+        let env = MapEnv::with(&[
+            ("HOME", home_string.as_str()),
+            ("XDG_CONFIG_HOME", "/xdg/opencode-config"),
+        ]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
+        assert!(
+            p.opencode_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/xdg/opencode-config/opencode/plugin/ptuf.ts"))
+        );
+        assert!(
+            p.opencode_settings
+                .iter()
+                .any(|q| q == &dir.join(".opencode/plugin/ptuf.ts"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_opencode_settings_falls_back_to_home_dot_config_without_xdg() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-oc-fallback-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join(".config/opencode/plugin")).expect("mkdir config");
+        let home_string = home.to_string_lossy().into_owned();
+        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
+        assert!(
+            p.opencode_settings
+                .iter()
+                .any(|q| q == &home.join(".config/opencode/plugin/ptuf.ts"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn classify_matches_edit_of_opencode_settings() {
+        let p = ProtectedPaths {
+            opencode_settings: vec![PathBuf::from("/repo/.opencode/plugin/ptuf.ts")],
+            ..ProtectedPaths::default()
+        };
+        let input = HookInput {
+            tool_name: "Write".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/.opencode/plugin/ptuf.ts"
+            }),
+        };
+        let labels = p.classify_input(&input);
+        assert!(labels.contains(&ProtectedKind::OpencodeSettings));
+    }
+
+    #[test]
     fn match_path_detects_pi_settings_targets() {
         let p = ProtectedPaths {
             pi_settings: vec![
@@ -1166,6 +1263,33 @@ mod tests {
         assert_eq!(
             p.match_path(Path::new("/home/user/.pi/agent/extensions/ptuf/index.ts")),
             Some(ProtectedKind::PiSettings)
+        );
+    }
+
+    #[test]
+    fn protected_kind_opencode_settings_as_str() {
+        assert_eq!(
+            ProtectedKind::OpencodeSettings.as_str(),
+            "opencode_settings"
+        );
+    }
+
+    #[test]
+    fn match_path_detects_opencode_settings_targets() {
+        let p = ProtectedPaths {
+            opencode_settings: vec![
+                PathBuf::from("/xdg/opencode/plugin/ptuf.ts"),
+                PathBuf::from("/repo/.opencode/plugin/ptuf.ts"),
+            ],
+            ..ProtectedPaths::default()
+        };
+        assert_eq!(
+            p.match_path(Path::new("/xdg/opencode/plugin/ptuf.ts")),
+            Some(ProtectedKind::OpencodeSettings)
+        );
+        assert_eq!(
+            p.match_path(Path::new("/repo/.opencode/plugin/ptuf.ts")),
+            Some(ProtectedKind::OpencodeSettings)
         );
     }
 
@@ -1188,7 +1312,7 @@ mod tests {
         // `echo` is not in the writer_heads allowlist, so its positional
         // arguments — even when they look like protected targets — must
         // not be added to the candidate set. This pins the
-        // `!writer_heads.contains(&head_base)` skip branch.
+        // `!writer_heads.contains(&argv.head_basename())` skip branch.
         let env = MapEnv::with(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);

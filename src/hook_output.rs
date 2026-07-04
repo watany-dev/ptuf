@@ -255,6 +255,26 @@ pub mod pi {
     }
 }
 
+pub mod opencode {
+    use super::append_demote_note;
+    use super::pi::{self, PiHookResponse};
+    use crate::Decision;
+
+    const ASK_UNAVAILABLE_NOTE: &str = "OpenCode has a permission.ask plugin hook, but it is \
+         known to fail silently in some builds, and tool.execute.before cannot start an \
+         interactive confirmation; ptuf is blocking this request instead.";
+
+    pub type OpencodeHookResponse = PiHookResponse;
+
+    pub fn from_decision(decision: &Decision) -> PiHookResponse {
+        pi::from_decision(decision)
+    }
+
+    pub fn deny_reason_for_ask(reason: &str) -> String {
+        append_demote_note(reason, ASK_UNAVAILABLE_NOTE)
+    }
+}
+
 pub mod cursor {
     use serde::Serialize;
 

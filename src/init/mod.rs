@@ -6,6 +6,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::cli::HookAgent;
+use crate::config::scope::{EnvLookup, SystemEnv};
 
 pub mod claude_code;
 pub mod cline;
@@ -13,6 +14,7 @@ pub mod codex;
 pub mod copilot;
 pub mod cursor;
 pub mod kiro;
+pub mod opencode;
 pub mod pi;
 pub mod verify;
 
@@ -33,11 +35,24 @@ pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
 ///   `<home>/Documents/Cline/` or `<home>/.cline/`.
 /// - `Cursor`: `<repo>/.cursor/` or `<home>/.cursor/`.
 /// - `Pi`: `<home>/.pi/agent/` or `<repo>/.pi/`.
+/// - `Opencode`: `<repo>/.opencode/` or `<repo>/opencode.json`, or
+///   `$XDG_CONFIG_HOME/opencode/` (fallback `~/.config/opencode/`).
 ///
 /// Returns agents in a stable order so callers can install / report
 /// deterministically. Production callers pass `std::env::var_os("HOME")`
 /// for `home`; tests inject deterministic paths.
 pub fn detect_agents(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> {
+    detect_agents_with_env(cwd, home, &SystemEnv)
+}
+
+/// Hermetic variant of [`detect_agents`]; `env` supplies
+/// `XDG_CONFIG_HOME` for the OpenCode probe so tests never observe the
+/// real process environment.
+pub fn detect_agents_with_env(
+    cwd: Option<&Path>,
+    home: Option<&Path>,
+    env: &dyn EnvLookup,
+) -> Vec<HookAgent> {
     let repo = cwd.and_then(crate::config::repo::discover);
     let mut found = Vec::new();
     if home.is_some_and(|h| h.join(".claude").is_dir()) {
@@ -73,7 +88,25 @@ pub fn detect_agents(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> 
     {
         found.push(HookAgent::Pi);
     }
+    if home.is_some_and(|h| h.join(".config/opencode").is_dir())
+        || env_opencode_config_dir(home, env).is_some_and(|p| p.is_dir())
+        || repo
+            .as_deref()
+            .is_some_and(|r| r.join(".opencode").is_dir())
+        || repo
+            .as_deref()
+            .is_some_and(|r| r.join("opencode.json").is_file())
+    {
+        found.push(HookAgent::Opencode);
+    }
     found
+}
+
+fn env_opencode_config_dir(home: Option<&Path>, env: &dyn EnvLookup) -> Option<PathBuf> {
+    env.var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .map(|p| p.join("opencode"))
+        .or_else(|| home.map(|h| h.join(".config/opencode")))
 }
 
 /// Errors surfaced by every `init` adapter.
@@ -784,17 +817,40 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Hermetic wrapper for detect tests: an empty env so results never
+    /// depend on the host's real `XDG_CONFIG_HOME`.
+    fn detect_hermetic(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> {
+        struct EmptyEnv;
+        impl EnvLookup for EmptyEnv {
+            fn var_os(&self, _key: &str) -> Option<std::ffi::OsString> {
+                None
+            }
+        }
+        detect_agents_with_env(cwd, home, &EmptyEnv)
+    }
+
     #[test]
     fn detect_agents_returns_empty_when_no_paths_exist() {
         let dir = workdir("detect-empty");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
         // cwd has no .git → repo discover returns None.
-        assert!(detect_agents(Some(dir.as_path()), Some(home.as_path())).is_empty());
+        assert!(detect_hermetic(Some(dir.as_path()), Some(home.as_path())).is_empty());
         // Also covers the home=None branch.
-        assert!(detect_agents(Some(dir.as_path()), None).is_empty());
+        assert!(detect_hermetic(Some(dir.as_path()), None).is_empty());
         // And cwd=None.
-        assert!(detect_agents(None, Some(home.as_path())).is_empty());
+        assert!(detect_hermetic(None, Some(home.as_path())).is_empty());
+    }
+
+    #[test]
+    fn detect_agents_production_wrapper_smokes_with_system_env() {
+        // The SystemEnv wrapper's result depends on the host, so only
+        // pin that it delegates without panicking.
+        let dir = workdir("detect-system-env");
+        let home = dir.join("home");
+        fs::create_dir_all(&home).expect("mkdir home");
+        let _ = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -802,7 +858,7 @@ mod tests {
         let dir = workdir("detect-claude");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".claude")).expect("mkdir home/.claude");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::ClaudeCode]);
     }
 
@@ -813,7 +869,7 @@ mod tests {
         fs::create_dir_all(dir.join(".codex")).expect("mkdir .codex");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Codex]);
     }
 
@@ -823,7 +879,7 @@ mod tests {
         let home = dir.join("home");
         fs::create_dir_all(home.join(".codex")).expect("mkdir home/.codex");
         // cwd has no .git, no .codex.
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Codex]);
     }
 
@@ -834,7 +890,7 @@ mod tests {
         fs::create_dir_all(dir.join(".github")).expect("mkdir .github");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Copilot]);
     }
 
@@ -845,7 +901,7 @@ mod tests {
         fs::create_dir_all(dir.join(".kiro")).expect("mkdir .kiro");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Kiro]);
     }
 
@@ -854,7 +910,7 @@ mod tests {
         let dir = workdir("detect-kiro-home");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".kiro")).expect("mkdir home/.kiro");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Kiro]);
     }
 
@@ -865,7 +921,7 @@ mod tests {
         fs::create_dir_all(dir.join(".clinerules")).expect("mkdir .clinerules");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Cline]);
     }
 
@@ -874,7 +930,7 @@ mod tests {
         let dir = workdir("detect-cline-home");
         let home = dir.join("home");
         fs::create_dir_all(home.join("Documents/Cline")).expect("mkdir home/Documents/Cline");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Cline]);
     }
 
@@ -885,7 +941,7 @@ mod tests {
         fs::create_dir_all(dir.join(".cursor")).expect("mkdir .cursor");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Cursor]);
     }
 
@@ -894,12 +950,12 @@ mod tests {
         let dir = workdir("detect-cursor-home");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".cursor")).expect("mkdir home/.cursor");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Cursor]);
     }
 
     #[test]
-    fn detect_agents_returns_all_seven_in_stable_order() {
+    fn detect_agents_returns_all_eight_in_stable_order() {
         let dir = workdir("detect-all");
         fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         fs::create_dir_all(dir.join(".codex")).expect("mkdir .codex");
@@ -908,9 +964,10 @@ mod tests {
         fs::create_dir_all(dir.join(".clinerules")).expect("mkdir .clinerules");
         fs::create_dir_all(dir.join(".cursor")).expect("mkdir .cursor");
         fs::create_dir_all(dir.join(".pi")).expect("mkdir .pi");
+        fs::create_dir_all(dir.join(".opencode")).expect("mkdir .opencode");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".claude")).expect("mkdir home/.claude");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(
             found,
             vec![
@@ -921,6 +978,7 @@ mod tests {
                 HookAgent::Cline,
                 HookAgent::Cursor,
                 HookAgent::Pi,
+                HookAgent::Opencode,
             ],
         );
     }
@@ -930,7 +988,7 @@ mod tests {
         let dir = workdir("detect-pi-home");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".pi/agent")).expect("mkdir home/.pi/agent");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Pi]);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -942,8 +1000,63 @@ mod tests {
         fs::create_dir_all(dir.join(".pi")).expect("mkdir .pi");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
-        let found = detect_agents(Some(dir.as_path()), Some(home.as_path()));
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Pi]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_agents_finds_opencode_via_repo_dot_opencode() {
+        let dir = workdir("detect-opencode-repo");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
+        fs::create_dir_all(dir.join(".opencode")).expect("mkdir .opencode");
+        let home = dir.join("home");
+        fs::create_dir_all(&home).expect("mkdir home");
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Opencode]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_agents_finds_opencode_via_home_xdg_config() {
+        let dir = workdir("detect-opencode-home");
+        let home = dir.join("home");
+        fs::create_dir_all(home.join(".config/opencode")).expect("mkdir config/opencode");
+        let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
+        assert_eq!(found, vec![HookAgent::Opencode]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_agents_finds_opencode_via_injected_xdg_config_home() {
+        struct XdgEnv(PathBuf);
+        impl EnvLookup for XdgEnv {
+            fn var_os(&self, key: &str) -> Option<std::ffi::OsString> {
+                (key == "XDG_CONFIG_HOME").then(|| self.0.clone().into_os_string())
+            }
+        }
+
+        let dir = workdir("detect-opencode-xdg");
+        let xdg = dir.join("xdg");
+        fs::create_dir_all(xdg.join("opencode")).expect("mkdir xdg/opencode");
+        let home = dir.join("home");
+        fs::create_dir_all(&home).expect("mkdir home");
+        let found = detect_agents_with_env(
+            Some(dir.as_path()),
+            Some(home.as_path()),
+            &XdgEnv(xdg.clone()),
+        );
+        assert_eq!(found, vec![HookAgent::Opencode]);
+
+        // Same env but the XDG dir has no opencode/ → not detected.
+        let empty_xdg = dir.join("xdg-empty");
+        fs::create_dir_all(&empty_xdg).expect("mkdir xdg-empty");
+        let found = detect_agents_with_env(
+            Some(dir.as_path()),
+            Some(home.as_path()),
+            &XdgEnv(empty_xdg),
+        );
+        assert!(found.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 }

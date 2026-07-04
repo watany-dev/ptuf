@@ -60,6 +60,10 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - `bash -lc`, `sh -ec` のような combined short option でも `-c` / `-e` を認識する
 - `Argv.inner_argv` / `inner_redirects` は wrapper (`bash -c`, `eval`, `xargs`,
   `find -exec`) の内側 command / redirect を bounded depth で surface する
+- `Argv.head` は最初のトークンを正規化せず保持する (生値契約;
+  `full_path_command_keeps_head_intact` が保証)。`Argv::head_basename()` は
+  `head.rsplit('/').next()` で比較用の basename を導出する委譲メソッドで、
+  ルール側の head 判定はこれ経由に統一されている (ADR 0004)
 - tokenizer は 1 byte 以上前進する (forward-progress;
   `debug_assert!(advanced > 0)`)
 
@@ -147,8 +151,8 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   10 worker × 100 並列 hook + 単一 audit JSONL の flock 整合性、
   `/etc/ptuf` から project local まで 4 層 + plugin + audit を tempdir に
   組み上げた end-to-end。後半 4 軸はクラッシュ / ハング / 遅延を回帰検出
-  する: 6 adapter (claude-code / codex / copilot / kiro / cline / cursor) の出力契約
-  parity、病的入力 (非 UTF-8 / NUL / 深いネスト JSON・bash / 打ち切り
+  する: 8 adapter (claude-code / codex / copilot / kiro / cline / cursor / pi /
+  opencode) の出力契約 parity、病的入力 (非 UTF-8 / NUL / 深いネスト JSON・bash /
   envelope / 巨大 secret 列) を fail-closed で弾くか、per-call latency 予算、
   `check` / `plugin check` / `init` / `update` subcommand の連続 / 敵対的
   実行。spawn ハーネスはタイムアウト付きで、`Child::try_wait()` ポーリング
@@ -157,10 +161,12 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   が両者をまとめてアサートする。`make check` には含めず、nightly /
   リリース直前に手動実行する。
 - **Fuzzing (nightly / on demand)**: `make fuzz` は `cargo-fuzz`
-  (coverage-guided, nightly toolchain 必須) で 4 つの信頼境界を打つ
+  (coverage-guided, nightly toolchain 必須) で 6 つの信頼境界を打つ
   — `fuzz_shell_parse` (shell tokenizer), `fuzz_hook_pipeline`
   (hook stdin JSON → `decide`), `fuzz_config_merge` (4 層 YAML config
-  パース + merge), `fuzz_plugin_dsl` (plugin DSL コンパイラ)。
+  パース + merge), `fuzz_plugin_dsl` (plugin DSL コンパイラ),
+  `fuzz_copilot_parse` (Copilot stdin normaliser),
+  `fuzz_opencode_parse` (OpenCode stdin normaliser)。
   `fuzz/` は独立 workspace のため `make check` / `cargo clippy
   --all-targets` / `cargo-deny` / crates.io パッケージに干渉しない。
   PBT が proptest 戦略から「構造化された」入力を生成するのに対し、
@@ -185,7 +191,7 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   は版管理された敵対的入力の負テストスイートで、`tests/bypass_corpus.rs`
   が通常の `cargo test` (= `make check` の `test` step) で実行する。
   各ケースは `must_catch` (指定 rank 以上で必ず捕捉) か `known_gap`
-  (ADR (0001, 0003 等) に記録した既知限界 — 現状の振る舞いを固定し、
+  (ADR (0001, 0004 等) に記録した既知限界 — 現状の振る舞いを固定し、
   改善・退行の双方を test 失敗として可視化) の期待値を持つ。fuzzing や
   監査で新規バイパスを発見するたび corpus に追記する。
 - **新ツールの tier**: `cargo-fuzz` / `cargo-mutants` /

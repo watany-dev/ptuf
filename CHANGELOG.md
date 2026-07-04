@@ -29,6 +29,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sudo curl … | sh` / `bash -c 'curl …' | sh` を新たに deny
   (`tests/bypass/corpus.jsonl` に must_catch として追加)。
 
+## [0.5.0] - 2026-07-03
+
+### Changed (BREAKING)
+- `HookAgent` に `Opencode` variant を追加。
+- `InitOptions` に `opencode: OpencodeInitOptions` field を追加。
+- `ProtectedKind` に `OpencodeSettings` variant を追加。
+- `ProtectedPaths` に `opencode_settings` field を追加。
+
+### Added
+- **OpenCode adapter** — `ptuf hook opencode` and `ptuf init opencode` install a
+  managed TypeScript plugin under `plugin/ptuf.ts` (global XDG config or local
+  `.opencode/`). Native tool names are normalised in `src/cli/opencode_input.rs`;
+  Ask decisions demote to Deny because OpenCode cannot reliably prompt from
+  `tool.execute.before`.
+
 ## [0.4.1] - 2026-06-29
 
 ### Fixed
@@ -377,7 +392,8 @@ Initial public release.
 - `curl | sh` and PowerShell installers via cargo-dist
 - crates.io publication
 
-[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/watany-dev/ptuf/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/watany-dev/ptuf/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/watany-dev/ptuf/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/watany-dev/ptuf/compare/v0.2.0...v0.3.0

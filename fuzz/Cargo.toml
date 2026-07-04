@@ -64,3 +64,10 @@ path = "fuzz_targets/fuzz_copilot_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_opencode_parse"
+path = "fuzz_targets/fuzz_opencode_parse.rs"
+test = false
+doc = false
+bench = false
