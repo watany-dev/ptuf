@@ -955,7 +955,7 @@ rules:
         let dir = workdir("init-opencode-real");
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
-        let plugin_path = dir.join(".opencode/plugin/ptuf.ts");
+        let plugin_path = dir.join(".opencode/plugins/ptuf.ts");
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
@@ -977,7 +977,7 @@ rules:
         let dir = workdir("init-opencode-dry");
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
-        let plugin_path = dir.join(".opencode/plugin/ptuf.ts");
+        let plugin_path = dir.join(".opencode/plugins/ptuf.ts");
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = run(
@@ -1005,7 +1005,7 @@ rules:
         let mut err = Vec::new();
         let code = run(
             GlobalFlags::default(),
-            cmd_init(None, false, false),
+            cmd_init(None, false, true),
             b"" as &[u8],
             &mut out,
             &mut err,
@@ -1013,7 +1013,11 @@ rules:
         assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
         let stdout = String::from_utf8_lossy(&out);
         assert!(stdout.contains("cursor"), "stdout: {stdout}");
-        assert!(hooks_path.exists());
+        assert!(
+            stdout.contains("would register hook") || stdout.contains("already contains"),
+            "stdout: {stdout}"
+        );
+        assert!(!hooks_path.exists());
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }

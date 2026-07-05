@@ -17,6 +17,8 @@ pub const VERSION_PLACEHOLDER: &str = "__PTUF_VERSION__";
 
 pub const DEFAULT_PLUGIN_NAME: &str = "ptuf.ts";
 pub const DEFAULT_MATCHER: &str = "OpenCode tool.execute.before plugin";
+const PLUGIN_DIR: &str = "plugins";
+const LEGACY_PLUGIN_DIR: &str = "plugin";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum OpencodeScope {
@@ -35,6 +37,7 @@ pub struct OpencodeInitOptions {
 pub struct TargetPaths {
     pub root: PathBuf,
     pub plugin_path: PathBuf,
+    pub legacy_plugin_path: PathBuf,
 }
 
 pub fn detect_binary() -> String {
@@ -56,10 +59,14 @@ pub fn resolve_paths_with(
     match options.scope {
         OpencodeScope::Global => {
             let config_root = opencode_config_dir(env)?;
-            let plugin_path = config_root.join("plugin").join(DEFAULT_PLUGIN_NAME);
+            let plugin_path = config_root.join(PLUGIN_DIR).join(DEFAULT_PLUGIN_NAME);
+            let legacy_plugin_path = config_root
+                .join(LEGACY_PLUGIN_DIR)
+                .join(DEFAULT_PLUGIN_NAME);
             Ok(TargetPaths {
                 root: config_root,
                 plugin_path,
+                legacy_plugin_path,
             })
         },
         OpencodeScope::Local => {
@@ -68,8 +75,13 @@ pub fn resolve_paths_with(
                 .and_then(crate::config::repo::discover)
                 .ok_or(InitError::RepoRootNotFound)?;
             let root = repo.join(".opencode");
-            let plugin_path = root.join("plugin").join(DEFAULT_PLUGIN_NAME);
-            Ok(TargetPaths { root, plugin_path })
+            let plugin_path = root.join(PLUGIN_DIR).join(DEFAULT_PLUGIN_NAME);
+            let legacy_plugin_path = root.join(LEGACY_PLUGIN_DIR).join(DEFAULT_PLUGIN_NAME);
+            Ok(TargetPaths {
+                root,
+                plugin_path,
+                legacy_plugin_path,
+            })
         },
     }
 }
@@ -108,6 +120,7 @@ pub fn install(
             });
         },
     };
+    remove_legacy_managed_plugin(targets, dry_run)?;
 
     Ok(InstallOutcome {
         status,
@@ -118,6 +131,29 @@ pub fn install(
         }],
         matcher: DEFAULT_MATCHER.to_string(),
         command,
+    })
+}
+
+fn remove_legacy_managed_plugin(targets: &TargetPaths, dry_run: bool) -> Result<(), InitError> {
+    if targets.legacy_plugin_path == targets.plugin_path {
+        return Ok(());
+    }
+    let existing = match fs::read(&targets.legacy_plugin_path) {
+        Ok(existing) => existing,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(InitError::Io {
+                path: targets.legacy_plugin_path.clone(),
+                source: e,
+            });
+        },
+    };
+    if !is_ptuf_managed(&existing) || dry_run {
+        return Ok(());
+    }
+    fs::remove_file(&targets.legacy_plugin_path).map_err(|e| InitError::Io {
+        path: targets.legacy_plugin_path.clone(),
+        source: e,
     })
 }
 
@@ -204,6 +240,14 @@ mod tests {
         dir
     }
 
+    fn test_targets(root: &Path, plugin_path: PathBuf) -> TargetPaths {
+        TargetPaths {
+            root: root.to_path_buf(),
+            legacy_plugin_path: root.join("legacy-plugin").join(DEFAULT_PLUGIN_NAME),
+            plugin_path,
+        }
+    }
+
     #[test]
     fn template_contains_managed_marker_and_required_snippets() {
         assert!(TEMPLATE.contains(MANAGED_MARKER));
@@ -237,6 +281,10 @@ mod tests {
         let targets = resolve_paths_with(None, &env, &options).unwrap();
         assert_eq!(
             targets.plugin_path,
+            PathBuf::from("/xdg/opencode/plugins/ptuf.ts")
+        );
+        assert_eq!(
+            targets.legacy_plugin_path,
             PathBuf::from("/xdg/opencode/plugin/ptuf.ts")
         );
     }
@@ -249,6 +297,10 @@ mod tests {
         let targets = resolve_paths_with(None, &env, &options).unwrap();
         assert_eq!(
             targets.plugin_path,
+            home.join(".config/opencode/plugins/ptuf.ts")
+        );
+        assert_eq!(
+            targets.legacy_plugin_path,
             home.join(".config/opencode/plugin/ptuf.ts")
         );
         let _ = fs::remove_dir_all(&home);
@@ -263,7 +315,11 @@ mod tests {
             root: None,
         };
         let targets = resolve_paths_with(Some(dir.as_path()), &MapEnv::new(&[]), &options).unwrap();
-        assert_eq!(targets.plugin_path, dir.join(".opencode/plugin/ptuf.ts"));
+        assert_eq!(targets.plugin_path, dir.join(".opencode/plugins/ptuf.ts"));
+        assert_eq!(
+            targets.legacy_plugin_path,
+            dir.join(".opencode/plugin/ptuf.ts")
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -278,10 +334,7 @@ mod tests {
     fn install_dry_run_does_not_write_plugin() {
         let dir = workdir("dry-run");
         let plugin = dir.join("ptuf.ts");
-        let targets = TargetPaths {
-            root: dir.clone(),
-            plugin_path: plugin.clone(),
-        };
+        let targets = test_targets(&dir, plugin.clone());
         let outcome = install(&targets, "/bin/ptuf", true).unwrap();
         assert_eq!(outcome.status, InstallStatus::WouldInstall);
         assert!(!plugin.exists());
@@ -292,10 +345,7 @@ mod tests {
     fn install_writes_managed_marker_and_binary_path() {
         let dir = workdir("install");
         let plugin = dir.join("ptuf.ts");
-        let targets = TargetPaths {
-            root: dir.clone(),
-            plugin_path: plugin.clone(),
-        };
+        let targets = test_targets(&dir, plugin.clone());
         let outcome = install(&targets, "/bin/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::Installed);
         let body = fs::read_to_string(&plugin).unwrap();
@@ -309,10 +359,7 @@ mod tests {
         let dir = workdir("conflict");
         let plugin = dir.join("ptuf.ts");
         fs::write(&plugin, "// user plugin\n").unwrap();
-        let targets = TargetPaths {
-            root: dir.clone(),
-            plugin_path: plugin.clone(),
-        };
+        let targets = test_targets(&dir, plugin.clone());
         let err = install(&targets, "/bin/ptuf", false).expect_err("must conflict");
         assert!(matches!(err, InitError::HookFileConflict { .. }));
         let _ = fs::remove_dir_all(&dir);
@@ -322,10 +369,7 @@ mod tests {
     fn install_already_present_when_desired_matches() {
         let dir = workdir("already");
         let plugin = dir.join("ptuf.ts");
-        let targets = TargetPaths {
-            root: dir.clone(),
-            plugin_path: plugin.clone(),
-        };
+        let targets = test_targets(&dir, plugin.clone());
         let desired = render_plugin("/bin/ptuf", env!("CARGO_PKG_VERSION"));
         fs::write(&plugin, &desired).unwrap();
         let outcome = install(&targets, "/bin/ptuf", false).unwrap();
@@ -339,15 +383,81 @@ mod tests {
     fn install_updates_managed_plugin_when_binary_changes() {
         let dir = workdir("update");
         let plugin = dir.join("ptuf.ts");
-        let targets = TargetPaths {
-            root: dir.clone(),
-            plugin_path: plugin.clone(),
-        };
+        let targets = test_targets(&dir, plugin.clone());
         fs::write(&plugin, render_plugin("/old/ptuf", "0.0.0")).unwrap();
         let outcome = install(&targets, "/new/ptuf", false).unwrap();
         assert_eq!(outcome.status, InstallStatus::Installed);
         let body = fs::read_to_string(&plugin).unwrap();
         assert!(body.contains("/new/ptuf"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_removes_legacy_managed_plugin_to_avoid_double_loading() {
+        let dir = workdir("migrate-legacy");
+        let plugin = dir.join("plugins").join("ptuf.ts");
+        let legacy = dir.join("plugin").join("ptuf.ts");
+        let targets = TargetPaths {
+            root: dir.clone(),
+            plugin_path: plugin.clone(),
+            legacy_plugin_path: legacy.clone(),
+        };
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, render_plugin("/old/ptuf", "0.0.0")).unwrap();
+
+        let outcome = install(&targets, "/new/ptuf", false).unwrap();
+
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        assert!(plugin.exists(), "new plural plugin path must be written");
+        assert!(
+            !legacy.exists(),
+            "old managed singular plugin must be removed"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_keeps_unmanaged_legacy_plugin() {
+        let dir = workdir("keep-legacy-user");
+        let plugin = dir.join("plugins").join("ptuf.ts");
+        let legacy = dir.join("plugin").join("ptuf.ts");
+        let targets = TargetPaths {
+            root: dir.clone(),
+            plugin_path: plugin.clone(),
+            legacy_plugin_path: legacy.clone(),
+        };
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, "// user-owned plugin\n").unwrap();
+
+        let outcome = install(&targets, "/new/ptuf", false).unwrap();
+
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        assert!(plugin.exists(), "new plural plugin path must be written");
+        assert!(
+            legacy.exists(),
+            "user-owned legacy plugin must be left alone"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_dry_run_keeps_legacy_managed_plugin() {
+        let dir = workdir("dry-run-legacy");
+        let plugin = dir.join("plugins").join("ptuf.ts");
+        let legacy = dir.join("plugin").join("ptuf.ts");
+        let targets = TargetPaths {
+            root: dir.clone(),
+            plugin_path: plugin.clone(),
+            legacy_plugin_path: legacy.clone(),
+        };
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, render_plugin("/old/ptuf", "0.0.0")).unwrap();
+
+        let outcome = install(&targets, "/new/ptuf", true).unwrap();
+
+        assert_eq!(outcome.status, InstallStatus::WouldInstall);
+        assert!(!plugin.exists(), "dry-run must not write plural plugin");
+        assert!(legacy.exists(), "dry-run must not remove legacy plugin");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -366,12 +476,12 @@ mod tests {
     fn resolve_paths_delegates_to_resolve_paths_with() {
         let options = OpencodeInitOptions::default();
         let targets = resolve_paths(None, &options).expect("HOME is set in test env");
-        assert!(targets.plugin_path.ends_with("plugin/ptuf.ts"));
+        assert!(targets.plugin_path.ends_with("plugins/ptuf.ts"));
     }
 
     #[test]
     fn resolve_paths_local_errors_outside_repo() {
-        let dir = workdir("no-repo");
+        let dir = PathBuf::from("/definitely-no-such-ptuf-opencode-repo");
         let options = OpencodeInitOptions {
             scope: OpencodeScope::Local,
             root: None,
@@ -379,7 +489,6 @@ mod tests {
         let err = resolve_paths_with(Some(dir.as_path()), &MapEnv::new(&[]), &options)
             .expect_err("no repo");
         assert!(matches!(err, InitError::RepoRootNotFound));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -393,7 +502,7 @@ mod tests {
             root: Some(nested.clone()),
         };
         let targets = resolve_paths_with(None, &MapEnv::new(&[]), &options).unwrap();
-        assert_eq!(targets.plugin_path, dir.join(".opencode/plugin/ptuf.ts"));
+        assert_eq!(targets.plugin_path, dir.join(".opencode/plugins/ptuf.ts"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -403,10 +512,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = workdir("mode");
         let plugin = dir.join("ptuf.ts");
-        let targets = TargetPaths {
-            root: dir.clone(),
-            plugin_path: plugin.clone(),
-        };
+        let targets = test_targets(&dir, plugin.clone());
         install(&targets, "/bin/ptuf", false).unwrap();
         let mode = fs::metadata(&plugin).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
@@ -450,10 +556,7 @@ mod tests {
         let dir = workdir("install-read-fail");
         let plugin = dir.join("ptuf.ts");
         fs::create_dir_all(&plugin).unwrap();
-        let targets = TargetPaths {
-            root: dir.clone(),
-            plugin_path: plugin.clone(),
-        };
+        let targets = test_targets(&dir, plugin.clone());
         let err = install(&targets, "/bin/ptuf", false).expect_err("read on dir must fail");
         assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
         let _ = fs::remove_dir_all(&dir);
