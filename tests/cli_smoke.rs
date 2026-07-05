@@ -336,8 +336,8 @@ fn init_no_verify_skips_verify_block() {
 fn init_auto_detect_with_no_agents_returns_error() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let home = dir.path();
-    // Empty home and tempdir cwd → no .claude/.codex/.github/.kiro present.
-    let (code, stdout, stderr) = run_in(&["init"], home, Some(home), "");
+    // Empty home and non-repo cwd → no .claude/.codex/.github/.kiro present.
+    let (code, stdout, stderr) = run_in(&["init"], Path::new("/proc"), Some(home), "");
     assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
     assert!(stderr.contains("no agent detected"), "stderr: {stderr}");
 }
@@ -407,13 +407,12 @@ fn init_auto_detect_aggregates_multiple_agents_into_json_array() {
 #[test]
 fn init_explicit_copilot_outside_repo_renders_text_error() {
     // Copilot resolve_paths requires a repo root and never falls back
-    // to $HOME, so a tempdir without .git triggers RepoRootNotFound.
+    // to $HOME, so a non-repo cwd triggers RepoRootNotFound.
     let dir = tempfile::TempDir::new().expect("tempdir");
-    let cwd = dir.path();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).expect("mkdir home");
 
-    let (code, stdout, stderr) = run_in(&["init", "copilot"], cwd, Some(&home), "");
+    let (code, stdout, stderr) = run_in(&["init", "copilot"], Path::new("/proc"), Some(&home), "");
     assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
     assert!(stderr.contains("ptuf init copilot:"), "stderr: {stderr}");
 }
@@ -421,11 +420,15 @@ fn init_explicit_copilot_outside_repo_renders_text_error() {
 #[test]
 fn init_explicit_copilot_outside_repo_renders_json_error() {
     let dir = tempfile::TempDir::new().expect("tempdir");
-    let cwd = dir.path();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).expect("mkdir home");
 
-    let (code, stdout, stderr) = run_in(&["--json", "init", "copilot"], cwd, Some(&home), "");
+    let (code, stdout, stderr) = run_in(
+        &["--json", "init", "copilot"],
+        Path::new("/proc"),
+        Some(&home),
+        "",
+    );
     assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
     let value: serde_json::Value =
         serde_json::from_str(&stdout).expect("JSON Err arm must emit valid JSON");
@@ -458,8 +461,8 @@ fn init_auto_detect_finds_codex_via_home_only() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let cwd = dir.path();
     let home = dir.path().join("home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
     std::fs::create_dir_all(home.join(".codex")).expect("mkdir home/.codex");
-    // No .git in cwd — codex must still be detected through HOME.
 
     let (code, stdout, stderr) = run_in(&["init", "--dry-run"], cwd, Some(&home), "");
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
@@ -474,6 +477,7 @@ fn init_auto_detect_finds_kiro_via_home_only() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let cwd = dir.path();
     let home = dir.path().join("home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
     std::fs::create_dir_all(home.join(".kiro")).expect("mkdir home/.kiro");
 
     let (code, stdout, stderr) = run_in(&["init", "--dry-run"], cwd, Some(&home), "");

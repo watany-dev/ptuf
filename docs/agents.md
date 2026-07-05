@@ -26,7 +26,7 @@ codes per agent, and the full payload contract, see the design notes:
 | Cline       | `<repo>/.clinerules/`, `<repo>/.cline/`, `$HOME/Documents/Cline/`, or `$HOME/.cline/` | `<repo>/.clinerules/hooks/PreToolUse` |
 | Cursor      | `<repo>/.cursor/` or `$HOME/.cursor/`            | `<repo>/.cursor/hooks.json` (`--scope global` → `$HOME/.cursor/hooks.json`) |
 | Pi          | `<repo>/.pi/` or `$HOME/.pi/agent/`              | `$HOME/.pi/agent/extensions/ptuf.ts` (default global) or `<repo>/.pi/extensions/ptuf.ts` |
-| OpenCode    | `<repo>/.opencode/` or `<repo>/opencode.json`     | `$XDG_CONFIG_HOME/opencode/plugin/ptuf.ts` (default global) or `<repo>/.opencode/plugin/ptuf.ts` |
+| OpenCode    | `<repo>/.opencode/` or `<repo>/opencode.json`     | `$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` (default global) or `<repo>/.opencode/plugins/ptuf.ts` |
 
 Pin to a single adapter with `ptuf init <agent>` (`claude-code` / `codex`
 / `copilot` / `kiro` / `cline` / `cursor` / `pi`).
@@ -238,10 +238,13 @@ would only surface a non-blocking warning and let the call through.
 ## OpenCode
 
 `ptuf init opencode` installs a managed TypeScript plugin that OpenCode
-loads from the singular `plugin/` directory (not `plugins/`). The plugin
+loads from the standard `plugins/` directory. The plugin
 registers `tool.execute.before`, builds a minimal JSON payload
 (`tool_name`, `tool_input`, optional `opencode` metadata), and spawns
 `ptuf hook opencode` with an absolute binary path embedded at init time.
+Older ptuf releases wrote `plugin/ptuf.ts`; rerunning init migrates the
+managed file to `plugins/ptuf.ts`, while self-protection still guards
+both paths.
 
 OpenCode native tool names (`bash`, `read`, `patch`, `grep`, …) are
 normalised in Rust (`src/cli/opencode_input.rs`) to the same canonical
@@ -260,4 +263,3 @@ Copilot / Kiro / Cline.
 **Limitations (MVP):** MCP / custom tools use generic `mcp__opencode__*`
 identity; `opencode.json` permissions are not modified; audit metadata
 (`sessionId`, `callId`, …) is not yet copied into audit records.
-

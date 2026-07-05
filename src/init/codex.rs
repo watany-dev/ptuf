@@ -324,20 +324,18 @@ mod tests {
     #[test]
     fn resolve_paths_falls_back_to_home_when_no_repo_root() {
         let home = workdir("resolve-home");
-        let outside = workdir("resolve-outside");
+        let outside = PathBuf::from("/definitely-no-such-ptuf-codex-repo");
         let paths = resolve_paths_with(Some(outside.as_path()), Some(home.as_path())).unwrap();
         assert_eq!(paths.hooks_path, home.join(".codex/hooks.json"));
         assert_eq!(paths.config_path, home.join(".codex/config.toml"));
         let _ = fs::remove_dir_all(&home);
-        let _ = fs::remove_dir_all(&outside);
     }
 
     #[test]
     fn resolve_paths_errors_when_no_repo_and_home_unset() {
-        let outside = workdir("resolve-no-home");
+        let outside = PathBuf::from("/definitely-no-such-ptuf-codex-repo");
         let err = resolve_paths_with(Some(outside.as_path()), None).unwrap_err();
         assert!(matches!(err, InitError::RepoRootNotFound));
-        let _ = fs::remove_dir_all(&outside);
     }
 
     #[test]
