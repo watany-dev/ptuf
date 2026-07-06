@@ -110,6 +110,7 @@ verify も行わない。
 | [`cli-and-hooks.md`](cli-and-hooks.md) | `init` / `hook` / `check` と agent 統合 |
 | [`kiro-cli.md`](kiro-cli.md) | Kiro CLI adapter の正規化・fail-closed |
 | [`audit.md`](audit.md) | audit JSONL schema と redaction |
+| [`npm-distribution.md`](npm-distribution.md) | npm 配布 (platform-package 方式) の設計 — 未実装 |
 | [`testing.md`](testing.md) | example-based test と PBT の役割分担 |
 | [`roadmap.md`](roadmap.md) | 各マイルストーンの到達点と今後の候補 |
 
