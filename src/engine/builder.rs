@@ -115,6 +115,7 @@ mod tests {
 
     use super::super::Engine;
     use super::super::test_support::{SharedMemorySink, bash};
+    use crate::rules::ConfigRule;
 
     #[test]
     fn engine_builder_with_default_config_populates_self_protection_binary() {
@@ -141,6 +142,37 @@ mod tests {
             engine.protected_paths().repo_root.as_deref(),
             Some(std::path::Path::new("/tmp/ptuf-builder-root")),
         );
+    }
+
+
+    #[test]
+    fn engine_plugins_reflects_injected_rules() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = crate::plugin::load_str(std::path::Path::new("demo.yaml"), yaml)
+            .expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let engine = Engine::builder()
+            .plugins(set)
+            .build()
+            .expect("builder with plugins");
+        assert_eq!(engine.plugins().rules().count(), 1);
+        assert!(engine
+            .plugins()
+            .rules()
+            .any(|r| r.id() == "pack.demo.no-curl"));
     }
 
     #[test]
