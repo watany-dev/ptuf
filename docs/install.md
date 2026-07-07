@@ -297,6 +297,9 @@ the install path and dispatches to the matching updater:
   is on PATH, it runs `cargo install ptuf --locked --force` (the
   `--locked` flag pins transitive deps to the published `Cargo.lock` so
   the installed binary matches the audited release tree);
+- if `ptuf` lives under `node_modules`, it refuses to mutate the binary
+  and prints `npm update -g ptuf` (or `npm update ptuf` for project-local
+  installs);
 - otherwise it downloads the cargo-dist installer
   (`ptuf-installer.sh` on Unix, `ptuf-installer.ps1` on Windows) to a
   process-scoped tmp file, verifies its GitHub artifact attestation with

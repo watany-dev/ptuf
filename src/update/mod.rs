@@ -45,6 +45,12 @@ pub struct UpdateOptions {
 pub enum Strategy {
     CargoInstall,
     PrebuiltInstaller,
+    ExternallyManaged(PackageManager),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackageManager {
+    Npm,
 }
 
 impl Strategy {
@@ -52,6 +58,21 @@ impl Strategy {
         match self {
             Self::CargoInstall => "cargo install",
             Self::PrebuiltInstaller => "prebuilt installer",
+            Self::ExternallyManaged(manager) => manager.label(),
+        }
+    }
+}
+
+impl PackageManager {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+        }
+    }
+
+    pub const fn update_hint(self) -> &'static str {
+        match self {
+            Self::Npm => "npm update -g ptuf (or `npm update ptuf` for a project-local install)",
         }
     }
 }
@@ -194,6 +215,16 @@ where
         Ok(p) => p,
         Err(_) => return (Strategy::PrebuiltInstaller, None),
     };
+    if is_under_node_modules(&exe) {
+        return (
+            Strategy::ExternallyManaged(PackageManager::Npm),
+            Some(format!(
+                "ptuf update: detected npm-managed binary at {}; use {}",
+                exe.display(),
+                PackageManager::Npm.update_hint(),
+            )),
+        );
+    }
     let cargo_home = match locator.cargo_home() {
         Some(p) => p,
         None => return (Strategy::PrebuiltInstaller, None),
@@ -212,6 +243,13 @@ where
             )),
         )
     }
+}
+
+fn is_under_node_modules(exe: &Path) -> bool {
+    let canonical_exe = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    canonical_exe
+        .components()
+        .any(|component| component.as_os_str() == std::ffi::OsStr::new("node_modules"))
 }
 
 fn is_under_cargo_bin(exe: &Path, cargo_home: &Path) -> bool {
@@ -373,6 +411,10 @@ pub fn build_installer_command(
             let plan = build_prebuilt_plan(tag, platform, std::path::Path::new(""), true);
             plan.execute
         },
+        Strategy::ExternallyManaged(_) => InstallerCommand {
+            program: String::new(),
+            args: Vec::new(),
+        },
     }
 }
 
@@ -522,6 +564,20 @@ where
     W2: Write,
 {
     let current = env!("CARGO_PKG_VERSION");
+    let selected_strategy = (!opts.check).then(|| select_strategy(spawner, locator));
+    if let Some((Strategy::ExternallyManaged(manager), warning)) = &selected_strategy {
+        if let Some(msg) = warning {
+            let _ = writeln!(stderr, "{msg}");
+        } else {
+            let _ = writeln!(
+                stderr,
+                "ptuf update: detected {}-managed binary; use {}",
+                manager.label(),
+                manager.update_hint(),
+            );
+        }
+        return 1;
+    }
 
     let pinned = opts.version.is_some();
     let tag = match opts.version {
@@ -577,7 +633,8 @@ where
         }
     }
 
-    let (strategy, warning) = select_strategy(spawner, locator);
+    let (strategy, warning) =
+        selected_strategy.unwrap_or_else(|| select_strategy(spawner, locator));
     if let Some(msg) = warning {
         let _ = writeln!(stderr, "{msg}");
     }
@@ -598,6 +655,7 @@ where
             let plan = build_prebuilt_plan(&tag, platform, &tmp_path, opts.skip_attestation);
             run_prebuilt_plan(spawner, &plan, &tag, stderr)
         },
+        Strategy::ExternallyManaged(_) => 1,
     }
 }
 
@@ -874,6 +932,54 @@ mod tests {
         let locator = cargo_locator(PathBuf::from("/ptuf-test/cargohome/.cargo"));
         let (strategy, _warning) = select_strategy(&spawner, &locator);
         assert_eq!(strategy, Strategy::PrebuiltInstaller);
+    }
+
+    #[test]
+    fn select_strategy_detects_npm_managed_binary() {
+        let spawner = RecordingSpawner::new(vec![]);
+        let locator = FakeExeLocator {
+            exe: PathBuf::from(
+                "/ptuf-test/project/node_modules/@ptuf/cli-linux-x64-gnu/bin/ptuf",
+            ),
+            cargo_home: None,
+        };
+        let (strategy, warning) = select_strategy(&spawner, &locator);
+        assert_eq!(strategy, Strategy::ExternallyManaged(PackageManager::Npm));
+        let warning = warning.expect("npm-managed binary must explain the updater");
+        assert!(warning.contains("npm update"), "warning: {warning}");
+        assert!(
+            spawner.calls().is_empty(),
+            "npm detection must not probe cargo"
+        );
+    }
+
+    #[test]
+    fn run_refuses_npm_managed_update_before_fetching_latest() {
+        let spawner = RecordingSpawner::new(vec![]);
+        let locator = FakeExeLocator {
+            exe: PathBuf::from(
+                "/ptuf-test/project/node_modules/@ptuf/cli-linux-x64-gnu/bin/ptuf",
+            ),
+            cargo_home: None,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_with_platform(
+            UpdateOptions::default(),
+            &spawner,
+            &locator,
+            Platform::Unix,
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 1);
+        assert!(out.is_empty());
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(err_s.contains("npm update"), "stderr: {err_s}");
+        assert!(
+            spawner.calls().is_empty(),
+            "npm-managed update must not fetch latest or run installers"
+        );
     }
 
     #[test]
@@ -1185,6 +1291,10 @@ mod tests {
     fn strategy_label_distinguishes_variants() {
         assert_eq!(Strategy::CargoInstall.label(), "cargo install");
         assert_eq!(Strategy::PrebuiltInstaller.label(), "prebuilt installer");
+        assert_eq!(
+            Strategy::ExternallyManaged(PackageManager::Npm).label(),
+            "npm"
+        );
     }
 
     #[test]

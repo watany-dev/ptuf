@@ -153,8 +153,9 @@ release archives — no extra packaging is required.
 Once installed via `cargo install` or the prebuilt installer, `ptuf update`
 upgrades the binary in place — it auto-detects which of those two paths
 was used and shells out to the matching updater (no `--cargo` / `--prebuilt`
-flag to remember). Homebrew / mise / aqua installs are managed by their
-own update commands.
+flag to remember). npm-managed installs are detected and refused with an
+`npm update -g ptuf` hint. Homebrew / mise / aqua installs are managed by
+their own update commands.
 
 Running in an ephemeral cloud agent (Claude Code on the web, Cursor cloud
 agents, CI)? Bootstrap ptuf in the setup / SessionStart phase, not from
