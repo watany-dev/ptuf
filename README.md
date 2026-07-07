@@ -127,6 +127,17 @@ for pinned deployments), see [`docs/install.md`](docs/install.md).
 Rust users can alternatively run `cargo binstall ptuf` (prebuilt) or
 `cargo install ptuf` (build from source, Rust 1.93+).
 
+### npm (Node.js)
+
+```bash
+npm install -g ptuf
+```
+
+The npm package uses platform-specific optional dependencies and does not
+run install scripts. Use `npm update -g ptuf` to update npm-managed
+installs; `ptuf update` will detect them and refuse to overwrite the
+package manager's copy.
+
 ### Homebrew (macOS / Linux)
 
 ```bash

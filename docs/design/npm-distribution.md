@@ -4,7 +4,10 @@
 `src/` 配下の実装と `.github/workflows/release.yml` / `dist-workspace.toml`
 であり、本書はその上に載せる配布層の契約と意図を整理する。
 
-ステータス: **設計のみ (未実装)**。実装マイルストーンは末尾に示す。
+ステータス: **実装中 (v0.5.0 npm publish 準備)**。`npm/` テンプレート、
+shim、stamp/smoke scripts、CI smoke、release publish job は実装済み。
+残りは npm 側の package/org 予約、初回 bootstrap publish、Trusted
+Publishing 設定、実 release/PR 上の cargo-dist plan 検証である。
 
 ## 目的
 
@@ -304,15 +307,15 @@ publish と同じ `stamp.mjs` でパッケージを組み立てて検証する
 
 ## ドキュメント更新
 
-- `README.md` / `README.ja.md` — Install に npm 経路を追加
+- `README.md` / `README.ja.md` — Install に npm 経路を追加済み
   (`npm install -g ptuf`)。`ptuf update` が npm 管理を扱わないことを
-  Homebrew と同じ粒度で注記
-- `docs/install.md` — npm セクション追加: provenance 検証手順
+  Homebrew と同じ粒度で注記済み。
+- `docs/install.md` — npm セクション追加済み: provenance 検証手順
   (`npm audit signatures`)、ローカル install 時の hook パスの寿命、
-  オフライン環境での利点
-- `CONTRIBUTING.md` — リリースランブックに npm publish の部分失敗
+  オフライン環境での利点。
+- `docs/RELEASING.md` — release runbook に npm publish の部分失敗
   リカバリ手順 (re-run 冪等性、published 済み skip の挙動) と
-  初回 bootstrap 手順を追記
+  初回 bootstrap 手順を追記済み。
 
 ## 実装マイルストーン
 

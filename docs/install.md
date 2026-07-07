@@ -51,6 +51,33 @@ artifact attestation. For pinned or shared-environment deployments,
 use the [Verified install](#verified-install-recommended-for-pinned-deployments)
 path below instead.
 
+## npm (Node.js)
+
+```bash
+npm install -g ptuf
+```
+
+The npm package is a JavaScript launcher plus one platform-specific
+optional dependency containing the native `ptuf` binary. It does not run
+install scripts, so `npm install --ignore-scripts -g ptuf` still works.
+
+Updates are managed by npm:
+
+```bash
+npm update -g ptuf
+```
+
+For project-local installs (`npm install --save-dev ptuf`), `ptuf init`
+records the native binary path under that project's `node_modules`.
+Deleting `node_modules` breaks that hook until dependencies are restored;
+the host should fail closed rather than silently bypassing ptuf.
+
+For npm provenance metadata, run:
+
+```bash
+npm audit signatures
+```
+
 ## Homebrew (macOS / Linux)
 
 ```bash

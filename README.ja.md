@@ -83,6 +83,11 @@ curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/p
 brew install watany-dev/tap/ptuf
 ```
 
+```bash
+# npm (Node.js)
+npm install -g ptuf
+```
+
 Windows (PowerShell) / `cargo binstall` / `cargo install` / mise / aqua、
 およびチェックサム + GitHub Attestation による検証手順は
 [English README](README.md#install) と [`docs/install.md`](docs/install.md)
