@@ -428,12 +428,7 @@ fn init_explicit_copilot_outside_repo_renders_text_error() {
 fn init_explicit_copilot_outside_repo_renders_json_error() {
     let (_dir, home, cwd) = empty_non_repo_cwd();
 
-    let (code, stdout, stderr) = run_in(
-        &["--json", "init", "copilot"],
-        &cwd,
-        Some(&home),
-        "",
-    );
+    let (code, stdout, stderr) = run_in(&["--json", "init", "copilot"], &cwd, Some(&home), "");
     assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
     let value: serde_json::Value =
         serde_json::from_str(&stdout).expect("JSON Err arm must emit valid JSON");

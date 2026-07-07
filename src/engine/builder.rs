@@ -144,7 +144,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn engine_plugins_reflects_injected_rules() {
         let yaml = r#"
@@ -160,8 +159,8 @@ rules:
       tool: Bash
     reason: nope
 "#;
-        let plugin = crate::plugin::load_str(std::path::Path::new("demo.yaml"), yaml)
-            .expect("load plugin");
+        let plugin =
+            crate::plugin::load_str(std::path::Path::new("demo.yaml"), yaml).expect("load plugin");
         let mut set = PluginSet::new();
         set.push(plugin);
         let engine = Engine::builder()
@@ -169,10 +168,12 @@ rules:
             .build()
             .expect("builder with plugins");
         assert_eq!(engine.plugins().rules().count(), 1);
-        assert!(engine
-            .plugins()
-            .rules()
-            .any(|r| r.id() == "pack.demo.no-curl"));
+        assert!(
+            engine
+                .plugins()
+                .rules()
+                .any(|r| r.id() == "pack.demo.no-curl")
+        );
     }
 
     #[test]

@@ -304,7 +304,6 @@ rules:
         assert!(!is_pack_disabled(&FakeRule("core.network.x"), &cfg));
     }
 
-
     #[test]
     fn allowlist_at_exact_expiry_second_is_inactive() {
         use std::time::{Duration, SystemTime};

@@ -265,7 +265,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn is_hard_deny_rule_id_classifies_builtins_plugins_and_unknown() {
         use crate::plugin::{PluginSet, load_str};
