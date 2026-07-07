@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,4 +140,25 @@ if (
 const initDryRun = run(bin, ["init", "--dry-run", "--json"], { cwd: work });
 if (initDryRun.stdout.includes("ptuf.js")) {
   throw new Error("init dry-run wrote the JavaScript shim path");
+}
+
+const signalBinary = join(work, "signal-binary.js");
+writeFileSync(
+  signalBinary,
+  [
+    "#!/usr/bin/env node",
+    "setTimeout(() => process.kill(process.pid, 'SIGTERM'), 100);",
+    "setInterval(() => {}, 1000);",
+    ""
+  ].join("\n")
+);
+chmodSync(signalBinary, 0o755);
+const signalChild = spawn(bin, [], {
+  cwd: work,
+  env: { ...process.env, PTUF_BINARY_PATH: signalBinary },
+  stdio: "ignore"
+});
+const [signalCode, signalName] = await once(signalChild, "exit");
+if (signalCode !== null || signalName !== "SIGTERM") {
+  throw new Error(`shim did not forward SIGTERM: code=${signalCode} signal=${signalName}`);
 }
