@@ -243,7 +243,7 @@ publish-npm:
    `NPM_TOKEN` を GitHub Secrets に置かない。ただし Trusted Publisher の
    紐付けはパッケージ登録後にしか設定できないため、**初回 publish のみ**
    短命の granular token で手動 bootstrap し、直後に token を revoke して
-   OIDC 設定に切替える (運用手順として CONTRIBUTING.md のリリース
+   OIDC 設定に切替える (運用手順として `docs/RELEASING.md` のリリース
    ランブックに記載する)。
 
 ### SHA256SUMS の対象拡張 (前提変更)
@@ -290,17 +290,20 @@ npm 層も「契約を版管理されたテストで固定する」:
 
 npm smoke (`npm/scripts/smoke.mjs`) の検証項目:
 
-1. `ptuf --version` が tag バージョンを返す
+1. `ptuf --version` が tag バージョンを返す — 実装済み
 2. hook decision 往復 — deny 入力で exit code / stdout JSON が
    ネイティブ直叩きと**バイト一致**する (shim の透過性)
-3. 8 MiB stdin 境界の通過
+   — 実装済み
+3. 8 MiB stdin 境界の通過 — 未実装 (smoke 拡張候補)
 4. signal 転送 (SIGTERM でバイナリが死んだとき shim が同 signal 終了)
+   — 未実装 (smoke 拡張候補)
 5. `init --dry-run --json` の hook command がバイナリ実体を指す
+   — smoke と `tests/contracts.rs` で実装済み
 
-CI マトリクス: `ubuntu-latest` (glibc) / `alpine` コンテナ (musl 判定) /
-`macos-latest` / `windows-latest`。ホスト向けバイナリを release ビルドし、
-publish と同じ `stamp.mjs` でパッケージを組み立てて検証する
-(publish 経路とテスト経路のコードパスを一本化する)。
+CI は初期実装として `ubuntu-24.04` (glibc) で host 向けバイナリを
+release ビルドし、publish と同じ `stamp.mjs` でパッケージを組み立てて
+検証する。`alpine` コンテナ (musl 判定) / `macos-latest` /
+`windows-latest` は smoke 安定後に追加する。
 
 `make e2e` への npm axis 追加は初期スコープ外とし、smoke の安定稼働後に
 検討する (roadmap 候補)。
@@ -319,13 +322,13 @@ publish と同じ `stamp.mjs` でパッケージを組み立てて検証する
 
 ## 実装マイルストーン
 
-| # | 内容 | 依存 |
-| --- | --- | --- |
-| M-NPM1 | `SHA256SUMS` / attestation の全ターゲット拡張 | なし (独立先行) |
-| M-NPM2 | `aarch64-unknown-linux-musl` ターゲット追加 + PR plan 検証 | なし |
-| M-NPM3 | `npm/` テンプレート + shim + `stamp.mjs` + smoke CI ジョブ | M-NPM2 |
-| M-NPM4 | `ptuf update` の npm ガード + contract test | なし |
-| M-NPM5 | `publish-npm` ジョブ + 初回 bootstrap + OIDC 切替 + docs | M-NPM1〜4 |
+| # | 内容 | 状態 | 依存 |
+| --- | --- | --- | --- |
+| M-NPM1 | `SHA256SUMS` / attestation の全ターゲット拡張 | 実装済み | なし (独立先行) |
+| M-NPM2 | `aarch64-unknown-linux-musl` ターゲット追加 + PR plan 検証 | 実装済み、PR/CI plan 検証待ち | なし |
+| M-NPM3 | `npm/` テンプレート + shim + `stamp.mjs` + smoke CI ジョブ | 初期実装済み | M-NPM2 |
+| M-NPM4 | `ptuf update` の npm ガード + contract test | 実装済み | なし |
+| M-NPM5 | `publish-npm` ジョブ + 初回 bootstrap + OIDC 切替 + docs | workflow/docs 実装済み、npm 側 bootstrap/OIDC 設定待ち | M-NPM1〜4 |
 
 ## 未決事項
 
