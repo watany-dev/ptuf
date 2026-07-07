@@ -95,12 +95,16 @@ ptuf (メインパッケージ)
 `version` はリポジトリ内テンプレートでは `0.0.0-dev` の placeholder とし、
 publish ジョブが tag から stamp する (後述の三重整合検証)。
 
-### 命名とスコープ (要事前確認)
+### 命名とスコープ
 
-- メインパッケージ名 `ptuf` の npm 上の空き状況を実装前に確認する。
-  取得不能な場合は全体を `@watany/ptuf` + `@watany/ptuf-cli-*` に切替える。
+- メインパッケージ名 `ptuf` は 2026-07-07 時点で npm registry 上に
+  未公開 (`npm view ptuf name version --json` が E404)。v0.5.0 の
+  npm 実装前に予約 publish する。取得不能になった場合は全体を
+  `@watany/ptuf` + `@watany/ptuf-cli-*` に切替える。
 - プラットフォームパッケージ用に npm org `ptuf` (スコープ `@ptuf`) を
-  取得する。org には 2FA を必須設定する。
+  取得する。代表パッケージ `@ptuf/cli-linux-x64-musl` も 2026-07-07
+  時点で未公開 (`npm view @ptuf/cli-linux-x64-musl name version --json`
+  が E404)。org には 2FA を必須設定する。
 
 ## JS ランチャー (shim) の契約
 
@@ -322,8 +326,10 @@ publish と同じ `stamp.mjs` でパッケージを組み立てて検証する
 
 ## 未決事項
 
-- npm 上の `ptuf` パッケージ名と `@ptuf` org の取得可否 (取得不能時は
-  `@watany` スコープへの切替で本設計はそのまま成立する)
+- npm 上の `ptuf` パッケージ名と代表 platform package は未公開確認済み。
+  残りは npm アカウントで `ptuf` package と `@ptuf` org を実際に予約し、
+  Trusted Publishing を設定できる状態にすること。取得不能時は
+  `@watany` スコープへの切替で本設計はそのまま成立する。
 - aarch64-musl のクロスビルドが現行 runner 構成で通るか (M-NPM2 の
   PR 検証で確定させる)
 - npm smoke を `make check` 対象に含めるか (Node 依存が増えるため、
