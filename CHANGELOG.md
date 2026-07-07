@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **OpenCode adapter** — `ptuf hook opencode` and `ptuf init opencode` install a
-  managed TypeScript plugin under `plugin/ptuf.ts` (global XDG config or local
+  managed TypeScript plugin under `plugins/ptuf.ts` (global XDG config or local
   `.opencode/`). Native tool names are normalised in `src/cli/opencode_input.rs`;
   Ask decisions demote to Deny because OpenCode cannot reliably prompt from
   `tool.execute.before`.

@@ -832,9 +832,9 @@ mod tests {
     #[test]
     fn detect_agents_returns_empty_when_no_paths_exist() {
         let dir = workdir("detect-empty");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
-        // cwd has no .git → repo discover returns None.
         assert!(detect_hermetic(Some(dir.as_path()), Some(home.as_path())).is_empty());
         // Also covers the home=None branch.
         assert!(detect_hermetic(Some(dir.as_path()), None).is_empty());
@@ -856,6 +856,7 @@ mod tests {
     #[test]
     fn detect_agents_finds_claude_when_only_home_dotclaude_exists() {
         let dir = workdir("detect-claude");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".claude")).expect("mkdir home/.claude");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
@@ -876,9 +877,9 @@ mod tests {
     #[test]
     fn detect_agents_finds_codex_via_home_only() {
         let dir = workdir("detect-codex-home");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".codex")).expect("mkdir home/.codex");
-        // cwd has no .git, no .codex.
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
         assert_eq!(found, vec![HookAgent::Codex]);
     }
@@ -908,6 +909,7 @@ mod tests {
     #[test]
     fn detect_agents_finds_kiro_via_home_only() {
         let dir = workdir("detect-kiro-home");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".kiro")).expect("mkdir home/.kiro");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
@@ -928,6 +930,7 @@ mod tests {
     #[test]
     fn detect_agents_finds_cline_via_home_documents_cline() {
         let dir = workdir("detect-cline-home");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         let home = dir.join("home");
         fs::create_dir_all(home.join("Documents/Cline")).expect("mkdir home/Documents/Cline");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
@@ -948,6 +951,7 @@ mod tests {
     #[test]
     fn detect_agents_finds_cursor_via_home_only() {
         let dir = workdir("detect-cursor-home");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".cursor")).expect("mkdir home/.cursor");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
@@ -986,6 +990,7 @@ mod tests {
     #[test]
     fn detect_agents_finds_pi_via_home_dot_pi_agent() {
         let dir = workdir("detect-pi-home");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".pi/agent")).expect("mkdir home/.pi/agent");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
@@ -1020,6 +1025,7 @@ mod tests {
     #[test]
     fn detect_agents_finds_opencode_via_home_xdg_config() {
         let dir = workdir("detect-opencode-home");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         let home = dir.join("home");
         fs::create_dir_all(home.join(".config/opencode")).expect("mkdir config/opencode");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
@@ -1037,6 +1043,7 @@ mod tests {
         }
 
         let dir = workdir("detect-opencode-xdg");
+        fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         let xdg = dir.join("xdg");
         fs::create_dir_all(xdg.join("opencode")).expect("mkdir xdg/opencode");
         let home = dir.join("home");

@@ -237,8 +237,8 @@ never demoted to a hard deny:
 
 
 **OpenCode** — writes a TypeScript plugin to
-`$XDG_CONFIG_HOME/opencode/plugin/ptuf.ts` (default global) or
-`<repo>/.opencode/plugin/ptuf.ts` (local). The plugin hooks
+`$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` (default global) or
+`<repo>/.opencode/plugins/ptuf.ts` (local). The plugin hooks
 `tool.execute.before` and spawns `ptuf hook opencode` before every tool
 call. ptuf Ask decisions are demoted to Deny because OpenCode cannot
 reliably surface interactive confirmation from this hook.

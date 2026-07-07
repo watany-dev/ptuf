@@ -48,7 +48,7 @@ ptuf update [--check] [--version <TAG>] [--force]
 | Cline | `<repo>/.clinerules/` `.cline/`、または `$HOME/Documents/Cline/` `.cline/` | repo 配下 `.clinerules/hooks/PreToolUse` または `$HOME/Documents/Cline/Hooks/PreToolUse` |
 | Cursor | `<repo>/.cursor/` または `$HOME/.cursor/` | `<repo>/.cursor/hooks.json` (`--scope global` で `$HOME/.cursor/hooks.json`) |
 | Pi | `<repo>/.pi/` または `$HOME/.pi/agent/` | `$HOME/.pi/agent/extensions/ptuf.ts` (default global) または `<repo>/.pi/extensions/ptuf.ts` (local) |
-| OpenCode | `<repo>/.opencode/` または `<repo>/opencode.json` | `$XDG_CONFIG_HOME/opencode/plugin/ptuf.ts` (default global) または `<repo>/.opencode/plugin/ptuf.ts` (local) |
+| OpenCode | `<repo>/.opencode/` または `<repo>/opencode.json` | `$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` (default global) または `<repo>/.opencode/plugins/ptuf.ts` (local) |
 
 検出 0 件 → exit `1` + `no agent detected` を stderr に出す。1 件以上
 → 全部 install + verify。verify がいずれかで失敗すれば exit `1`。

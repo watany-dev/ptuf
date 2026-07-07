@@ -276,8 +276,8 @@ USAGE:
                             Write this exact extension file instead.
         OpenCode-only flags:
           --scope <local|global>
-                            global (default) writes $XDG_CONFIG_HOME/opencode/plugin/ptuf.ts;
-                            local writes <repo>/.opencode/plugin/ptuf.ts.
+                            global (default) writes $XDG_CONFIG_HOME/opencode/plugins/ptuf.ts;
+                            local writes <repo>/.opencode/plugins/ptuf.ts.
           --root <PATH>     Override the repo-discovery start directory.
     ptuf hook <AGENT>
         (run as the agent's PreToolUse hook over stdin/stdout)

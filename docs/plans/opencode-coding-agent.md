@@ -18,8 +18,8 @@ adapter / init / self-protection / 正規化に閉じる。
 本書は初版仕様案のレビュー(OpenCode 実仕様との突合 + ptuf 既存実装との突合)
 を反映した改訂版である。主な変更点:
 
-1. **プラグインディレクトリを単数形 `plugin/` に修正**(OpenCode の実仕様。
-   初版の `plugins/` では一切ロードされない)。
+1. **プラグインディレクトリを複数形 `plugins/` に修正**(OpenCode 現行仕様。
+   `plugin/` は後方互換として扱われる)。
 2. **ツール正規化表を OpenCode の実在ツールで再作成**(`patch` / `list` を追加、
    実在しない `shell` / `apply_patch` / `fetch` / `search` / `websearch` を削除)。
 3. **ask→deny 降格の理由付けを修正**。OpenCode には `permission.ask` hook が
@@ -89,13 +89,15 @@ ptuf init opencode [--scope global|local] [--dry-run] [--no-verify]
 ### 4.1 生成先
 
 ```text
-global: $XDG_CONFIG_HOME/opencode/plugin/ptuf.ts
-        (XDG_CONFIG_HOME 未設定時: ~/.config/opencode/plugin/ptuf.ts)
-local:  <repo>/.opencode/plugin/ptuf.ts
+global: $XDG_CONFIG_HOME/opencode/plugins/ptuf.ts
+        (XDG_CONFIG_HOME 未設定時: ~/.config/opencode/plugins/ptuf.ts)
+local:  <repo>/.opencode/plugins/ptuf.ts
 ```
 
-**ディレクトリ名は単数形 `plugin/`**。OpenCode は
-`.opencode/plugin/` と `~/.config/opencode/plugin/` からロードする。
+**ディレクトリ名は複数形 `plugins/`**。OpenCode は
+`.opencode/plugins/` と `~/.config/opencode/plugins/` からロードする。
+旧 ptuf が生成した `plugin/ptuf.ts` は init 再実行時に managed marker を確認して
+撤去し、二重ロードを防ぐ。
 
 既存 init adapter は `HOME` 直叩きで XDG 解決の前例が無いため、
 `src/config/scope.rs::user_config_path` の `EnvLookup` パターン
@@ -349,8 +351,8 @@ unit / PBT / `tests/e2e_heavy.rs` の 8-adapter parity で担保する。
 ガードレールを外す攻撃への防御:
 
 ```text
-<repo>/.opencode/plugin/ptuf.ts
-$XDG_CONFIG_HOME/opencode/plugin/ptuf.ts (未設定時 ~/.config/opencode/plugin/ptuf.ts)
+<repo>/.opencode/plugins/ptuf.ts
+$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts (未設定時 ~/.config/opencode/plugins/ptuf.ts)
 ```
 
 `ProtectedKind` に variant 追加、`ProtectedPaths::collect` / `match_path` に
@@ -428,8 +430,8 @@ failing test → 実装 → `make check` green → commit/push:
 
 ## 16. ドキュメント記載事項
 
-- OpenCode 対応は `ptuf init opencode` が `.opencode/plugin/ptuf.ts`
-  (global は `~/.config/opencode/plugin/ptuf.ts`)を生成して行う。
+- OpenCode 対応は `ptuf init opencode` が `.opencode/plugins/ptuf.ts`
+  (global は `~/.config/opencode/plugins/ptuf.ts`)を生成して行う。
 - ptuf の Ask 判定は Deny に降格される。理由: OpenCode の `permission.ask`
   hook は現状不発火の既知バグがあり、`tool.execute.before` から対話確認を
   開始する API も無いため(将来 Phase 3 で ask 保持を検討)。

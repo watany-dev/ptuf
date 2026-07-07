@@ -101,7 +101,7 @@ ptuf init kiro          # .kiro/agents/*.json を一括パッチ
 ptuf init cline         # .clinerules/hooks/PreToolUse
 ptuf init cursor        # <repo>/.cursor/hooks.json
 ptuf init pi            # ~/.pi/agent/extensions/ptuf.ts
-ptuf init opencode      # $XDG_CONFIG_HOME/opencode/plugin/ptuf.ts
+ptuf init opencode      # $XDG_CONFIG_HOME/opencode/plugins/ptuf.ts
 ```
 
 引数なしの `ptuf init` は到達可能なホストを自動検出して全てに導入します。

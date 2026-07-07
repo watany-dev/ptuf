@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn resolve_paths_local_errors_outside_repo() {
-        let dir = workdir("no-repo");
+        let dir = PathBuf::from("/definitely-no-such-ptuf-pi-repo");
         let options = PiInitOptions {
             scope: PiScope::Local,
             root: None,
@@ -340,7 +340,6 @@ mod tests {
         };
         let err = resolve_paths_with(Some(dir.as_path()), None, &options).expect_err("no repo");
         assert!(matches!(err, InitError::RepoRootNotFound));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
