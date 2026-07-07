@@ -27,6 +27,8 @@
 #     SHA256SUMS, and separate GitHub provenance/SBOM attestations
 #   - publish-crates-io job appended after `announce` for crates.io publish
 #     (requires `CRATES_IO_TOKEN` secret with publish-new + publish-update scopes)
+#   - publish-npm job appended after `announce` for npm publish
+#     (uses npm Trusted Publishing / GitHub OIDC, no long-lived token)
 #   - publish-homebrew-formula job inserted between `host` and `announce`
 #     (cargo-dist 0.31.0 native, pushes formula to watany-dev/homebrew-tap;
 #     requires `HOMEBREW_TAP_TOKEN` secret; SHA-pinned to match other jobs)
@@ -506,10 +508,11 @@ jobs:
       - plan
       - host
       - publish-homebrew-formula
+      - publish-npm
     # use "always() && ..." to allow us to wait for all publish jobs while
     # still allowing individual publish jobs to skip themselves (for prereleases).
     # "host" however must run to completion, no skipping allowed!
-    if: ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') }}
+    if: ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') && (needs.publish-npm.result == 'skipped' || needs.publish-npm.result == 'success') }}
     runs-on: "ubuntu-22.04"
     permissions:
       contents: read
@@ -557,3 +560,62 @@ jobs:
           sudo apt-get install -y lld
       - name: cargo publish
         run: cargo publish --locked
+
+  # Publish npm packages after the GitHub Release is public. The npm registry
+  # receives repacked, already-attested cargo-dist archives: every archive is
+  # checked against SHA256SUMS and verified with GitHub artifact attestations
+  # before `npm publish`.
+  publish-npm:
+    needs:
+      - plan
+      - host
+    if: ${{ always() && needs.host.result == 'success' && needs.plan.outputs.publishing == 'true' && !fromJson(needs.plan.outputs.val).announcement_is_prerelease }}
+    runs-on: "ubuntu-22.04"
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Download release assets
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir artifacts
+      - name: Verify release assets
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum -c SHA256SUMS
+          for archive in ptuf-*.tar.gz ptuf-*.zip; do
+            gh attestation verify "$archive" \
+              --repo "$GITHUB_REPOSITORY" \
+              --source-ref "refs/tags/$TAG"
+          done
+      - name: Stamp npm packages
+        run: node npm/scripts/stamp.mjs --version "$TAG" --artifacts artifacts
+      - name: Publish npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=(
+            npm/platform/cli-darwin-arm64
+            npm/platform/cli-darwin-x64
+            npm/platform/cli-linux-arm64-gnu
+            npm/platform/cli-linux-arm64-musl
+            npm/platform/cli-linux-x64-gnu
+            npm/platform/cli-linux-x64-musl
+            npm/platform/cli-win32-x64
+            npm/ptuf
+          )
+          for package_dir in "${packages[@]}"; do
+            name="$(node -p "require('./${package_dir}/package.json').name")"
+            version="$(node -p "require('./${package_dir}/package.json').version")"
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} already published; skipping"
+            else
+              npm publish "$package_dir" --provenance --access public
+            fi
+          done
