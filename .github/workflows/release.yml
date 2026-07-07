@@ -582,6 +582,11 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
       - name: Download release assets
         run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir artifacts
       - name: Verify release assets
