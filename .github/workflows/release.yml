@@ -395,6 +395,7 @@ jobs:
 
           canonical_tar_gz 'ptuf-*aarch64-apple-darwin.tar.*' 'ptuf-aarch64-apple-darwin.tar.gz'
           canonical_tar_gz 'ptuf-*aarch64-unknown-linux-gnu.tar.*' 'ptuf-aarch64-unknown-linux-gnu.tar.gz'
+          canonical_tar_gz 'ptuf-*aarch64-unknown-linux-musl.tar.*' 'ptuf-aarch64-unknown-linux-musl.tar.gz'
           canonical_tar_gz 'ptuf-*x86_64-apple-darwin.tar.*' 'ptuf-x86_64-apple-darwin.tar.gz'
           canonical_tar_gz 'ptuf-*x86_64-unknown-linux-gnu.tar.*' 'ptuf-x86_64-unknown-linux-gnu.tar.gz'
           canonical_tar_gz 'ptuf-*x86_64-unknown-linux-musl.tar.*' 'ptuf-x86_64-unknown-linux-musl.tar.gz'
@@ -417,6 +418,7 @@ jobs:
           sha256sum \
             ptuf-aarch64-apple-darwin.tar.gz \
             ptuf-aarch64-unknown-linux-gnu.tar.gz \
+            ptuf-aarch64-unknown-linux-musl.tar.gz \
             ptuf-x86_64-apple-darwin.tar.gz \
             ptuf-x86_64-unknown-linux-gnu.tar.gz \
             ptuf-x86_64-unknown-linux-musl.tar.gz \

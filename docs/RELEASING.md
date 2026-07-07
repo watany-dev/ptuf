@@ -58,10 +58,11 @@
    ```
 
 6. Watch GitHub Actions:
-   - `Release` workflow builds 6 targets, creates a GitHub Release, attaches
+   - `Release` workflow builds 7 targets, creates a GitHub Release, attaches
      cargo-dist archives/installers plus the canonical verified-install
      archives for every built target: `ptuf-aarch64-apple-darwin.tar.gz`,
      `ptuf-aarch64-unknown-linux-gnu.tar.gz`,
+     `ptuf-aarch64-unknown-linux-musl.tar.gz`,
      `ptuf-x86_64-apple-darwin.tar.gz`,
      `ptuf-x86_64-unknown-linux-gnu.tar.gz`,
      `ptuf-x86_64-unknown-linux-musl.tar.gz`, and
@@ -148,5 +149,4 @@ for fast local Linux builds. `dist-workspace.toml` mirrors that as
 `[dist.dependencies.apt] lld = "*"` so the GitHub Linux runners install it
 before invoking `cargo build`. The same dep is installed in
 `publish-crates.yml` for the `cargo publish` verify step. `musl-tools` is
-installed so the release workflow can build the canonical
-`x86_64-unknown-linux-musl` archive.
+installed so the release workflow can build canonical musl archives.

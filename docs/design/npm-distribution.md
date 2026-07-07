@@ -60,7 +60,7 @@ ptuf (メインパッケージ)
     ├── @ptuf/cli-linux-x64-gnu        # x86_64-unknown-linux-gnu
     ├── @ptuf/cli-linux-x64-musl       # x86_64-unknown-linux-musl
     ├── @ptuf/cli-linux-arm64-gnu      # aarch64-unknown-linux-gnu
-    ├── @ptuf/cli-linux-arm64-musl    # aarch64-unknown-linux-musl (要ターゲット追加)
+    ├── @ptuf/cli-linux-arm64-musl    # aarch64-unknown-linux-musl
     └── @ptuf/cli-win32-x64            # x86_64-pc-windows-msvc
 ```
 
@@ -186,7 +186,7 @@ npm ユーザは Alpine コンテナ (Apple Silicon 上の Docker、Graviton) �
 利用が多く、linux-arm64-musl の欠落は npm 経路では実質的な障害になる。
 
 - `dist-workspace.toml` の `targets` に `aarch64-unknown-linux-musl` を
-  追加する。ビルドマトリクスは `dist plan` が実行時に算出するため
+  追加済み。ビルドマトリクスは `dist plan` が実行時に算出するため
   `release.yml` の再生成は**不要**。
 - リスク: ARM musl のクロスツールチェーン。`[dist.dependencies.apt]` に
   必要パッケージ (`musl-tools` 相当の aarch64 版、または
