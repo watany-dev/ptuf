@@ -117,6 +117,25 @@ if (
   throw new Error("shim output differed from native binary");
 }
 
+const oversizedPayload = "A".repeat(8 * 1024 * 1024 + 1);
+const nativeBoundary = capture(native, ["hook", "claude-code"], {
+  cwd: work,
+  input: oversizedPayload,
+  maxBuffer: 16 * 1024 * 1024
+});
+const shimBoundary = capture(bin, ["hook", "claude-code"], {
+  cwd: work,
+  input: oversizedPayload,
+  maxBuffer: 16 * 1024 * 1024
+});
+if (
+  nativeBoundary.status !== shimBoundary.status ||
+  nativeBoundary.stdout !== shimBoundary.stdout ||
+  nativeBoundary.stderr !== shimBoundary.stderr
+) {
+  throw new Error("shim 8 MiB stdin boundary output differed from native binary");
+}
+
 const initDryRun = run(bin, ["init", "--dry-run", "--json"], { cwd: work });
 if (initDryRun.stdout.includes("ptuf.js")) {
   throw new Error("init dry-run wrote the JavaScript shim path");
