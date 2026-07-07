@@ -588,7 +588,9 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
       - name: Download release assets
-        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir artifacts
+        run: |
+          mkdir -p artifacts
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir artifacts
       - name: Verify release assets
         run: |
           set -euo pipefail
