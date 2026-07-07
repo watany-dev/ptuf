@@ -5,6 +5,8 @@
 
 use std::collections::BTreeSet;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -41,6 +43,53 @@ fn repo() -> tempfile::TempDir {
     let dir = tempfile::TempDir::new().expect("tempdir");
     std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir .git");
     dir
+}
+
+#[cfg(unix)]
+#[test]
+fn npm_layout_init_dry_run_uses_native_binary_path() {
+    let dir = repo();
+    let native = dir
+        .path()
+        .join("node_modules/@ptuf/cli-linux-x64-gnu/bin/ptuf");
+    std::fs::create_dir_all(native.parent().expect("native parent")).expect("mkdir native parent");
+    std::fs::copy(env!("CARGO_BIN_EXE_ptuf"), &native).expect("copy ptuf binary");
+    let mut perms = std::fs::metadata(&native).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&native, perms).expect("chmod native");
+
+    let mut child = Command::new(&native)
+        .args(["--json", "init", "codex", "--dry-run"])
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn npm-layout ptuf");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("wait");
+    let code = output.status.code().expect("exit code");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("JSON mode must emit valid JSON");
+    let command = value["command"].as_str().expect("command string");
+    let native_path = native.display().to_string();
+    assert!(
+        command.starts_with(&native_path),
+        "hook command must start with native npm binary path: {command}",
+    );
+    assert!(
+        command.ends_with(" hook codex"),
+        "hook command must target codex adapter: {command}",
+    );
+    assert!(
+        !command.contains("ptuf.js"),
+        "hook command must not point at the JavaScript shim: {command}",
+    );
 }
 
 #[test]
