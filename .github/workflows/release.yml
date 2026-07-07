@@ -393,8 +393,11 @@ jobs:
             fi
           }
 
-          canonical_tar_gz 'ptuf-*x86_64-unknown-linux-musl.tar.*' 'ptuf-x86_64-unknown-linux-musl.tar.gz'
           canonical_tar_gz 'ptuf-*aarch64-apple-darwin.tar.*' 'ptuf-aarch64-apple-darwin.tar.gz'
+          canonical_tar_gz 'ptuf-*aarch64-unknown-linux-gnu.tar.*' 'ptuf-aarch64-unknown-linux-gnu.tar.gz'
+          canonical_tar_gz 'ptuf-*x86_64-apple-darwin.tar.*' 'ptuf-x86_64-apple-darwin.tar.gz'
+          canonical_tar_gz 'ptuf-*x86_64-unknown-linux-gnu.tar.*' 'ptuf-x86_64-unknown-linux-gnu.tar.gz'
+          canonical_tar_gz 'ptuf-*x86_64-unknown-linux-musl.tar.*' 'ptuf-x86_64-unknown-linux-musl.tar.gz'
           copy_zip_if_different "$(find_one_artifact 'ptuf-*x86_64-pc-windows-msvc.zip')" 'ptuf-x86_64-pc-windows-msvc.zip'
       - name: Generate SPDX JSON SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
@@ -412,8 +415,11 @@ jobs:
           set -euo pipefail
           cd artifacts
           sha256sum \
-            ptuf-x86_64-unknown-linux-musl.tar.gz \
             ptuf-aarch64-apple-darwin.tar.gz \
+            ptuf-aarch64-unknown-linux-gnu.tar.gz \
+            ptuf-x86_64-apple-darwin.tar.gz \
+            ptuf-x86_64-unknown-linux-gnu.tar.gz \
+            ptuf-x86_64-unknown-linux-musl.tar.gz \
             ptuf-x86_64-pc-windows-msvc.zip \
             ptuf-installer.sh \
             ptuf-installer.ps1 \

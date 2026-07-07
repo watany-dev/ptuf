@@ -59,12 +59,14 @@
 
 6. Watch GitHub Actions:
    - `Release` workflow builds 6 targets, creates a GitHub Release, attaches
-     cargo-dist archives/installers plus the canonical verified-install assets:
-     `ptuf-x86_64-unknown-linux-musl.tar.gz`,
-     `ptuf-aarch64-apple-darwin.tar.gz`,
-     `ptuf-x86_64-pc-windows-msvc.zip`, `SHA256SUMS`, and
-     `ptuf-vX.Y.Z.spdx.json`.
-   - The release workflow generates `SHA256SUMS` for the canonical archives,
+     cargo-dist archives/installers plus the canonical verified-install
+     archives for every built target: `ptuf-aarch64-apple-darwin.tar.gz`,
+     `ptuf-aarch64-unknown-linux-gnu.tar.gz`,
+     `ptuf-x86_64-apple-darwin.tar.gz`,
+     `ptuf-x86_64-unknown-linux-gnu.tar.gz`,
+     `ptuf-x86_64-unknown-linux-musl.tar.gz`, and
+     `ptuf-x86_64-pc-windows-msvc.zip`.
+   - The release workflow generates `SHA256SUMS` for all canonical archives,
      installer scripts, and SBOM, then publishes separate GitHub artifact
      attestations for provenance and the SPDX JSON SBOM.
    - On `release: published`, `Publish to crates.io` runs `cargo publish`
