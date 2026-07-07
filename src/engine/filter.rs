@@ -305,6 +305,50 @@ rules:
     }
 
     #[test]
+    fn allowlist_at_exact_expiry_second_is_inactive() {
+        use std::time::{Duration, SystemTime};
+
+        use crate::audit::time::parse_rfc3339_to_secs;
+        use crate::config::Allowlist;
+        use crate::facts;
+
+        let expiry = "2030-06-15T12:00:00Z";
+        let expiry_secs = parse_rfc3339_to_secs(expiry).expect("valid expiry");
+        let input = bash("curl https://example.com");
+        let fact = facts::extract(&input);
+        let config = Config::default();
+        let entry = Allowlist {
+            id: "edge".into(),
+            rule_ids: vec!["core.git.force-push".into()],
+            when: None,
+            expires_at: Some(expiry.into()),
+            reason: None,
+        };
+        let active = SystemTime::UNIX_EPOCH + Duration::from_secs(expiry_secs - 1);
+        let ctx = AllowlistContext {
+            facts: &fact,
+            input: &input,
+            config: &config,
+            now: active,
+        };
+        assert!(
+            allowlist_covers(&entry, "core.git.force-push", &ctx),
+            "one second before expiry must still be active",
+        );
+        let expired = SystemTime::UNIX_EPOCH + Duration::from_secs(expiry_secs);
+        let ctx = AllowlistContext {
+            facts: &fact,
+            input: &input,
+            config: &config,
+            now: expired,
+        };
+        assert!(
+            !allowlist_covers(&entry, "core.git.force-push", &ctx),
+            "at the exact expiry second the allowlist must be inactive",
+        );
+    }
+
+    #[test]
     fn allowlist_entry_does_not_suppress_hard_deny_builtin() {
         let mut cfg = Config::default();
         cfg.allowlists.push(Allowlist {

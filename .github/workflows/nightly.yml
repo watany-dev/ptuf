@@ -34,6 +34,7 @@ jobs:
           - fuzz_config_merge
           - fuzz_plugin_dsl
           - fuzz_copilot_parse
+          - fuzz_opencode_parse
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -50,7 +51,13 @@ jobs:
       - uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
         with:
           tool: cargo-fuzz@0.13.1
+      # cargo-binstall ships musl binaries; ASAN fuzz builds need the gnu
+      # target so sanitizer flags are not paired with static libc.
+      - name: Install gnu target for sanitizer fuzz builds
+        run: rustup target add x86_64-unknown-linux-gnu
       - name: Fuzz ${{ matrix.target }}
+        env:
+          CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
         run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=300 -timeout=10
       # A crash leaves a reproducer under fuzz/artifacts/<target>/; keep
       # it so the failure can be triaged and added to the regression set.
@@ -66,7 +73,7 @@ jobs:
   mutants:
     name: cargo-mutants
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

@@ -36,6 +36,16 @@ fn run(args: &[&str], stdin: &str) -> (i32, String, String) {
     )
 }
 
+/// Empty `cwd` with no `.git` or agent marker dirs, separate from `home`.
+fn empty_non_repo_cwd() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let home = dir.path().join("home");
+    let cwd = dir.path().join("empty_cwd");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    std::fs::create_dir_all(&cwd).expect("mkdir cwd");
+    (dir, home, cwd)
+}
+
 fn run_in(args: &[&str], cwd: &Path, home: Option<&Path>, stdin: &str) -> (i32, String, String) {
     let mut cmd = binary();
     cmd.args(args)
@@ -334,10 +344,9 @@ fn init_no_verify_skips_verify_block() {
 
 #[test]
 fn init_auto_detect_with_no_agents_returns_error() {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let home = dir.path();
+    let (_dir, home, cwd) = empty_non_repo_cwd();
     // Empty home and non-repo cwd → no .claude/.codex/.github/.kiro present.
-    let (code, stdout, stderr) = run_in(&["init"], Path::new("/proc"), Some(home), "");
+    let (code, stdout, stderr) = run_in(&["init"], &cwd, Some(&home), "");
     assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
     assert!(stderr.contains("no agent detected"), "stderr: {stderr}");
 }
@@ -408,27 +417,18 @@ fn init_auto_detect_aggregates_multiple_agents_into_json_array() {
 fn init_explicit_copilot_outside_repo_renders_text_error() {
     // Copilot resolve_paths requires a repo root and never falls back
     // to $HOME, so a non-repo cwd triggers RepoRootNotFound.
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let home = dir.path().join("home");
-    std::fs::create_dir_all(&home).expect("mkdir home");
+    let (_dir, home, cwd) = empty_non_repo_cwd();
 
-    let (code, stdout, stderr) = run_in(&["init", "copilot"], Path::new("/proc"), Some(&home), "");
+    let (code, stdout, stderr) = run_in(&["init", "copilot"], &cwd, Some(&home), "");
     assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
     assert!(stderr.contains("ptuf init copilot:"), "stderr: {stderr}");
 }
 
 #[test]
 fn init_explicit_copilot_outside_repo_renders_json_error() {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let home = dir.path().join("home");
-    std::fs::create_dir_all(&home).expect("mkdir home");
+    let (_dir, home, cwd) = empty_non_repo_cwd();
 
-    let (code, stdout, stderr) = run_in(
-        &["--json", "init", "copilot"],
-        Path::new("/proc"),
-        Some(&home),
-        "",
-    );
+    let (code, stdout, stderr) = run_in(&["--json", "init", "copilot"], &cwd, Some(&home), "");
     assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
     let value: serde_json::Value =
         serde_json::from_str(&stdout).expect("JSON Err arm must emit valid JSON");

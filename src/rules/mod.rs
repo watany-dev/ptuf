@@ -266,6 +266,40 @@ mod tests {
     }
 
     #[test]
+    fn is_hard_deny_rule_id_classifies_builtins_plugins_and_unknown() {
+        use crate::plugin::{PluginSet, load_str};
+
+        assert!(is_hard_deny_rule_id(
+            "core.filesystem.destructive-rm",
+            &PluginSet::new(),
+        ));
+        assert!(!is_hard_deny_rule_id(
+            "core.engine.dynamic-eval",
+            &PluginSet::new(),
+        ));
+        assert!(!is_hard_deny_rule_id("no.such.rule", &PluginSet::new()));
+
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.locked
+    severity: critical
+    defaultDecision: deny
+    hardDeny: true
+    when:
+      tool: Bash
+    reason: locked
+"#;
+        let plugin = load_str(std::path::Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        assert!(is_hard_deny_rule_id("pack.demo.locked", &set));
+    }
+
+    #[test]
     fn config_rule_defaults_match_documented_baseline() {
         let r = MinimalRule;
         assert_eq!(r.severity(), Severity::Medium);

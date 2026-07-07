@@ -1722,6 +1722,23 @@ mod tests {
     }
 
     #[test]
+    fn unwrap_prefix_wrapper_non_env_does_not_skip_inline_assignments() {
+        // Only `env` may skip `KEY=VALUE` tokens; other wrappers treat
+        // them as the command head.
+        let inner = unwrap_prefix_wrapper(&argv("sudo", &["FOO=bar", "rm", "-rf", "/"]))
+            .expect("sudo keeps FOO=bar as the inner head");
+        assert_eq!(inner.head, "FOO=bar");
+        assert_eq!(inner.args, vec!["rm", "-rf", "/"]);
+    }
+
+    #[test]
+    fn unwrap_prefix_wrapper_unknown_long_flag_does_not_consume_next_token() {
+        let inner = unwrap_prefix_wrapper(&argv("sudo", &["--version", "rm", "-rf", "/"]))
+            .expect("unknown long flags must not eat the inner command");
+        assert_eq!(inner, argv("rm", &["-rf", "/"]));
+    }
+
+    #[test]
     fn unwrap_prefix_wrapper_skips_env_assignments() {
         // `env` interposes inline `KEY=VALUE` assignments (and its own
         // value-taking flags) before the command head.
