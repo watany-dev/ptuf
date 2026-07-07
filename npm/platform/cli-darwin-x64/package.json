@@ -1,0 +1,13 @@
+{
+  "name": "@ptuf/cli-darwin-x64",
+  "version": "0.0.0-dev",
+  "description": "ptuf binary for x86_64-apple-darwin",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/watany-dev/ptuf.git"
+  },
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "files": ["bin/ptuf"]
+}

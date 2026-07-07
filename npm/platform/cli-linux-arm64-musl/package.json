@@ -1,0 +1,14 @@
+{
+  "name": "@ptuf/cli-linux-arm64-musl",
+  "version": "0.0.0-dev",
+  "description": "ptuf binary for aarch64-unknown-linux-musl",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/watany-dev/ptuf.git"
+  },
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "libc": ["musl"],
+  "files": ["bin/ptuf"]
+}

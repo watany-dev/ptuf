@@ -1,0 +1,33 @@
+{
+  "name": "ptuf",
+  "version": "0.0.0-dev",
+  "description": "Deterministic guardrail CLI for coding agents",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/watany-dev/ptuf.git"
+  },
+  "homepage": "https://github.com/watany-dev/ptuf#readme",
+  "bugs": {
+    "url": "https://github.com/watany-dev/ptuf/issues"
+  },
+  "bin": {
+    "ptuf": "bin/ptuf.js"
+  },
+  "files": [
+    "bin/ptuf.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@ptuf/cli-darwin-arm64": "0.0.0-dev",
+    "@ptuf/cli-darwin-x64": "0.0.0-dev",
+    "@ptuf/cli-linux-arm64-gnu": "0.0.0-dev",
+    "@ptuf/cli-linux-arm64-musl": "0.0.0-dev",
+    "@ptuf/cli-linux-x64-gnu": "0.0.0-dev",
+    "@ptuf/cli-linux-x64-musl": "0.0.0-dev",
+    "@ptuf/cli-win32-x64": "0.0.0-dev"
+  }
+}
