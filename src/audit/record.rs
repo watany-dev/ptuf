@@ -66,11 +66,98 @@ fn is_false(b: &bool) -> bool {
 }
 
 impl AuditRecord {
-    /// Build an `AuditRecord` for the supplied decision/input pair.
+    /// Start building an audit record for the supplied decision/input pair.
+    ///
     /// The caller is responsible for redacting `command_redacted`
     /// before the record reaches the sink — keeping the redactor
-    /// outside this constructor lets tests inject untouched commands
+    /// outside the builder lets tests inject untouched commands
     /// and check the writer/sink in isolation.
+    pub fn builder<'a>(
+        decision: &'a Decision,
+        input: &'a HookInput,
+        command_redacted: String,
+    ) -> AuditRecordBuilder<'a> {
+        AuditRecordBuilder {
+            decision,
+            input,
+            command_redacted,
+            timestamp: None,
+            mode: None,
+            mode_demoted: false,
+            project_root: None,
+            severity: None,
+            allowlist_id: None,
+            agent: "unknown",
+            plugin_versions: Vec::new(),
+        }
+    }
+}
+
+/// Builder for [`AuditRecord`].
+pub struct AuditRecordBuilder<'a> {
+    decision: &'a Decision,
+    input: &'a HookInput,
+    command_redacted: String,
+    timestamp: Option<SystemTime>,
+    mode: Option<Mode>,
+    mode_demoted: bool,
+    project_root: Option<&'a Path>,
+    severity: Option<Severity>,
+    allowlist_id: Option<String>,
+    agent: &'static str,
+    plugin_versions: Vec<String>,
+}
+
+impl<'a> AuditRecordBuilder<'a> {
+    /// Set the record timestamp (required).
+    pub fn timestamp(mut self, timestamp: SystemTime) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
+    /// Set the policy mode (required).
+    pub fn mode(mut self, mode: Mode) -> Self {
+        self.mode = Some(mode);
+        self
+    }
+
+    /// Set whether the engine demoted a `Deny` to `Monitor`.
+    pub fn mode_demoted(mut self, mode_demoted: bool) -> Self {
+        self.mode_demoted = mode_demoted;
+        self
+    }
+
+    /// Set the project root path.
+    pub fn project_root(mut self, project_root: Option<&'a Path>) -> Self {
+        self.project_root = project_root;
+        self
+    }
+
+    /// Set the rule severity.
+    pub fn severity(mut self, severity: Option<Severity>) -> Self {
+        self.severity = severity;
+        self
+    }
+
+    /// Set the allowlist id for suppressed `Allow` outcomes.
+    pub fn allowlist_id(mut self, allowlist_id: Option<String>) -> Self {
+        self.allowlist_id = allowlist_id;
+        self
+    }
+
+    /// Set the adapter name (`claude-code` / `cli`).
+    pub fn agent(mut self, agent: &'static str) -> Self {
+        self.agent = agent;
+        self
+    }
+
+    /// Set loaded plugin versions as `name@version` strings.
+    pub fn plugin_versions(mut self, plugin_versions: Vec<String>) -> Self {
+        self.plugin_versions = plugin_versions;
+        self
+    }
+
+    /// Finalise the builder.
     ///
     /// `agent` should be a stable adapter name (`claude-code` / `cli`);
     /// use `"unknown"` for embedded library callers that have not
@@ -79,39 +166,30 @@ impl AuditRecord {
     /// `allowlist_id` should be `Some` only on `Allow` outcomes that
     /// were produced by a non-expired allowlist hit.
     #[expect(
-        clippy::too_many_arguments,
-        reason = "constructor mirrors the audit JSON schema; collapsing into a builder \
-                  struct is tracked separately"
+        clippy::expect_used,
+        reason = "timestamp and mode are required builder fields; callers always set both"
     )]
-    pub fn build(
-        timestamp: SystemTime,
-        decision: &Decision,
-        mode: Mode,
-        mode_demoted: bool,
-        input: &HookInput,
-        project_root: Option<&Path>,
-        severity: Option<Severity>,
-        command_redacted: String,
-        allowlist_id: Option<String>,
-        agent: &'static str,
-        plugin_versions: Vec<String>,
-    ) -> Self {
-        let rule_id = decision.rule_id().map(str::to_owned);
-        Self {
+    pub fn build(self) -> AuditRecord {
+        let timestamp = self.timestamp.expect("timestamp is required");
+        let mode = self.mode.expect("mode is required");
+        let rule_id = self.decision.rule_id().map(str::to_owned);
+        AuditRecord {
             schema_version: AUDIT_SCHEMA_VERSION,
             timestamp: audit_time::rfc3339_utc(timestamp),
             event: "PreToolUse",
-            tool: input.tool_name.clone(),
-            decision: decision_label(decision),
+            tool: self.input.tool_name.clone(),
+            decision: decision_label(self.decision),
             rule_id,
-            severity: severity.map(severity_label),
-            command_redacted,
-            project_root: project_root.and_then(|p| p.to_str().map(str::to_owned)),
+            severity: self.severity.map(severity_label),
+            command_redacted: self.command_redacted,
+            project_root: self
+                .project_root
+                .and_then(|p| p.to_str().map(str::to_owned)),
             mode: mode_label(mode),
-            mode_demoted,
-            allowlist_id,
-            agent,
-            plugin_versions,
+            mode_demoted: self.mode_demoted,
+            allowlist_id: self.allowlist_id,
+            agent: self.agent,
+            plugin_versions: self.plugin_versions,
         }
     }
 }
@@ -172,19 +250,14 @@ mod tests {
             rule_id: "r.x".into(),
             reason: "blocked".into(),
         };
-        let r = AuditRecord::build(
-            UNIX_EPOCH + Duration::from_secs(1_704_067_200),
-            &decision,
-            Mode::Enforce,
-            false,
-            &input("Bash", "ls"),
-            Some(&PathBuf::from("/repo")),
-            Some(Severity::Critical),
-            "ls".into(),
-            None,
-            "claude-code",
-            Vec::new(),
-        );
+        let inp = input("Bash", "ls");
+        let r = AuditRecord::builder(&decision, &inp, "ls".into())
+            .timestamp(UNIX_EPOCH + Duration::from_secs(1_704_067_200))
+            .mode(Mode::Enforce)
+            .project_root(Some(&PathBuf::from("/repo")))
+            .severity(Some(Severity::Critical))
+            .agent("claude-code")
+            .build();
         assert_eq!(r.schema_version, 1);
         assert_eq!(r.timestamp, "2024-01-01T00:00:00Z");
         assert_eq!(r.event, "PreToolUse");
@@ -203,19 +276,12 @@ mod tests {
 
     #[test]
     fn allow_record_omits_rule_id_and_severity() {
-        let r = AuditRecord::build(
-            UNIX_EPOCH,
-            &Decision::Allow,
-            Mode::Enforce,
-            false,
-            &input("Bash", "ls"),
-            None,
-            None,
-            "ls".into(),
-            None,
-            "cli",
-            Vec::new(),
-        );
+        let inp = input("Bash", "ls");
+        let r = AuditRecord::builder(&Decision::Allow, &inp, "ls".into())
+            .timestamp(UNIX_EPOCH)
+            .mode(Mode::Enforce)
+            .agent("cli")
+            .build();
         let json = serde_json::to_string(&r).unwrap();
         assert!(!json.contains("\"ruleId\""));
         assert!(!json.contains("\"severity\""));
@@ -230,21 +296,20 @@ mod tests {
 
     #[test]
     fn monitor_demote_flag_serialises_when_true() {
-        let r = AuditRecord::build(
-            UNIX_EPOCH,
+        let inp = input("Bash", "ls");
+        let r = AuditRecord::builder(
             &Decision::Monitor {
                 rule_id: "r".into(),
             },
-            Mode::Monitor,
-            true,
-            &input("Bash", "ls"),
-            None,
-            Some(Severity::High),
+            &inp,
             "ls".into(),
-            None,
-            "claude-code",
-            Vec::new(),
-        );
+        )
+        .timestamp(UNIX_EPOCH)
+        .mode(Mode::Monitor)
+        .mode_demoted(true)
+        .severity(Some(Severity::High))
+        .agent("claude-code")
+        .build();
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains("\"modeDemoted\":true"));
         assert!(json.contains("\"mode\":\"monitor\""));
@@ -252,79 +317,58 @@ mod tests {
 
     #[test]
     fn ask_decision_serialises_as_ask_label() {
-        let r = AuditRecord::build(
-            UNIX_EPOCH,
+        let inp = input("Bash", "ls");
+        let r = AuditRecord::builder(
             &Decision::Ask {
                 rule_id: "r".into(),
                 reason: "?".into(),
             },
-            Mode::Enforce,
-            false,
-            &input("Bash", "ls"),
-            None,
-            Some(Severity::Medium),
+            &inp,
             "ls".into(),
-            None,
-            "claude-code",
-            Vec::new(),
-        );
+        )
+        .timestamp(UNIX_EPOCH)
+        .mode(Mode::Enforce)
+        .severity(Some(Severity::Medium))
+        .agent("claude-code")
+        .build();
         assert_eq!(r.decision, "ask");
         assert_eq!(r.severity, Some("medium"));
     }
 
     #[test]
     fn allowlist_id_is_serialised_when_set() {
-        let r = AuditRecord::build(
-            UNIX_EPOCH,
-            &Decision::Allow,
-            Mode::Enforce,
-            false,
-            &input("Bash", "ls"),
-            None,
-            None,
-            "ls".into(),
-            Some("approved-hotfix".into()),
-            "claude-code",
-            Vec::new(),
-        );
+        let inp = input("Bash", "ls");
+        let r = AuditRecord::builder(&Decision::Allow, &inp, "ls".into())
+            .timestamp(UNIX_EPOCH)
+            .mode(Mode::Enforce)
+            .allowlist_id(Some("approved-hotfix".into()))
+            .agent("claude-code")
+            .build();
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains("\"allowlistId\":\"approved-hotfix\""));
     }
 
     #[test]
     fn plugin_versions_serialise_as_name_at_version_list() {
-        let r = AuditRecord::build(
-            UNIX_EPOCH,
-            &Decision::Allow,
-            Mode::Enforce,
-            false,
-            &input("Bash", "ls"),
-            None,
-            None,
-            "ls".into(),
-            None,
-            "cli",
-            vec!["acme.security@0.1.0".into(), "core.demo@1.2.3".into()],
-        );
+        let inp = input("Bash", "ls");
+        let r = AuditRecord::builder(&Decision::Allow, &inp, "ls".into())
+            .timestamp(UNIX_EPOCH)
+            .mode(Mode::Enforce)
+            .agent("cli")
+            .plugin_versions(vec!["acme.security@0.1.0".into(), "core.demo@1.2.3".into()])
+            .build();
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains("\"pluginVersions\":[\"acme.security@0.1.0\",\"core.demo@1.2.3\"]"));
     }
 
     #[test]
     fn agent_label_is_always_serialised() {
-        let r = AuditRecord::build(
-            UNIX_EPOCH,
-            &Decision::Allow,
-            Mode::Enforce,
-            false,
-            &input("Bash", "ls"),
-            None,
-            None,
-            "ls".into(),
-            None,
-            "claude-code",
-            Vec::new(),
-        );
+        let inp = input("Bash", "ls");
+        let r = AuditRecord::builder(&Decision::Allow, &inp, "ls".into())
+            .timestamp(UNIX_EPOCH)
+            .mode(Mode::Enforce)
+            .agent("claude-code")
+            .build();
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains("\"agent\":\"claude-code\""));
     }
@@ -354,19 +398,12 @@ mod tests {
             severity in option::of(severity()),
             cmd in "[ -~]{0,40}",
         ) {
-            let _ = AuditRecord::build(
-                UNIX_EPOCH,
-                &decision,
-                mode,
-                mode_demoted,
-                &input,
-                None,
-                severity,
-                cmd,
-                None,
-                "unknown",
-                Vec::new(),
-            );
+            let _ = AuditRecord::builder(&decision, &input, cmd)
+                .timestamp(UNIX_EPOCH)
+                .mode(mode)
+                .mode_demoted(mode_demoted)
+                .severity(severity)
+                .build();
         }
 
         // The decision-label string is exactly one of the four documented
@@ -414,19 +451,12 @@ mod tests {
             severity in option::of(severity()),
             cmd in "[ -~]{0,40}",
         ) {
-            let r = AuditRecord::build(
-                UNIX_EPOCH,
-                &decision,
-                mode,
-                mode_demoted,
-                &input,
-                None,
-                severity,
-                cmd.clone(),
-                None,
-                "unknown",
-                Vec::new(),
-            );
+            let r = AuditRecord::builder(&decision, &input, cmd.clone())
+                .timestamp(UNIX_EPOCH)
+                .mode(mode)
+                .mode_demoted(mode_demoted)
+                .severity(severity)
+                .build();
             prop_assert_eq!(r.decision, decision_label(&decision));
             prop_assert_eq!(r.mode, mode_label(mode));
             prop_assert_eq!(&r.tool, &input.tool_name);
@@ -451,19 +481,12 @@ mod tests {
             severity in option::of(severity()),
             cmd in "[ -~]{0,40}",
         ) {
-            let r = AuditRecord::build(
-                UNIX_EPOCH,
-                &decision,
-                mode,
-                mode_demoted,
-                &input,
-                None,
-                severity,
-                cmd,
-                None,
-                "unknown",
-                Vec::new(),
-            );
+            let r = AuditRecord::builder(&decision, &input, cmd)
+                .timestamp(UNIX_EPOCH)
+                .mode(mode)
+                .mode_demoted(mode_demoted)
+                .severity(severity)
+                .build();
             let v = serde_json::to_value(&r).expect("serialise");
             let obj = v.as_object().expect("top-level object");
             for k in ["timestamp", "event", "tool", "decision", "commandRedacted", "mode"] {

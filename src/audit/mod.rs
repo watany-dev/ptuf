@@ -171,25 +171,20 @@ mod tests {
     }
 
     fn rec_with_command(command: String) -> AuditRecord {
-        AuditRecord::build(
-            UNIX_EPOCH,
-            &Decision::Deny {
-                rule_id: "r".into(),
-                reason: "x".into(),
-            },
-            Mode::Enforce,
-            false,
-            &HookInput {
-                tool_name: "Bash".into(),
-                tool_input: json!({"command": "rm -rf /"}),
-            },
-            None,
-            Some(Severity::Critical),
-            command,
-            None,
-            "claude-code",
-            Vec::new(),
-        )
+        let input = HookInput {
+            tool_name: "Bash".into(),
+            tool_input: json!({"command": "rm -rf /"}),
+        };
+        let decision = Decision::Deny {
+            rule_id: "r".into(),
+            reason: "x".into(),
+        };
+        AuditRecord::builder(&decision, &input, command)
+            .timestamp(UNIX_EPOCH)
+            .mode(Mode::Enforce)
+            .severity(Some(Severity::Critical))
+            .agent("claude-code")
+            .build()
     }
 
     #[test]
