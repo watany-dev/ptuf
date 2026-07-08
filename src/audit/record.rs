@@ -91,6 +91,39 @@ impl AuditRecord {
             plugin_versions: Vec::new(),
         }
     }
+
+    /// Build an `AuditRecord` for the supplied decision/input pair.
+    ///
+    /// Prefer [`Self::builder`] for new code.
+    #[deprecated(since = "0.6.0", note = "use `AuditRecord::builder` instead")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "deprecated semver-compatible shim; delegates to builder"
+    )]
+    pub fn build(
+        timestamp: SystemTime,
+        decision: &Decision,
+        mode: Mode,
+        mode_demoted: bool,
+        input: &HookInput,
+        project_root: Option<&Path>,
+        severity: Option<Severity>,
+        command_redacted: String,
+        allowlist_id: Option<String>,
+        agent: &'static str,
+        plugin_versions: Vec<String>,
+    ) -> Self {
+        Self::builder(decision, input, command_redacted)
+            .timestamp(timestamp)
+            .mode(mode)
+            .mode_demoted(mode_demoted)
+            .project_root(project_root)
+            .severity(severity)
+            .allowlist_id(allowlist_id)
+            .agent(agent)
+            .plugin_versions(plugin_versions)
+            .build()
+    }
 }
 
 /// Builder for [`AuditRecord`].
