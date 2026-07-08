@@ -1,4 +1,4 @@
-# ADR 0004 — 絶対パス head によるルールバイパス (2026-07)
+# ADR 0005 — 絶対パス head によるルールバイパス (2026-07)
 
 ## Status
 
@@ -77,6 +77,10 @@ inner head も同様に basename 照合する。
 - `src/plugin/dsl.rs` のプラグイン DSL の head 照合は生のまま。ユーザ定義
   パターンはフルパス指定を意図し得るため、正規化の是非は DSL 仕様として
   別途判断する。
+  **Resolved (post-ADR):** `src/plugin/dsl.rs` は `Argv::head_basename()` で
+  照合するようになった (`243`, `252`, `283` 行)。テスト
+  `evaluate_shell_argv_head_any_matches_basename` /
+  `evaluate_shell_pipeline_matches_basename` で pin 済み。
 - ADR 0002 / 0003 の据え置き項目 (Unicode homoglyph / symlink /
   コマンド置換 / プロセス置換 / 変数 head) は継続。
 
