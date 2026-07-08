@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-08
+
 ### Changed (BREAKING)
 - `PluginError` に `ReservedRuleId` / `DuplicateRuleId` variant を追加。
+  `PluginError` は `#[non_exhaustive]` ではないため、この enum を網羅 `match`
+  している下流ライブラリ利用者にとっては厳密には破壊的変更（SemVer 上は
+  minor 相当）。CLI 利用者への実害はなく、機能追加＋セキュリティ強化が主目的
+  のため、オーナー判断でパッチ (0.5.1) として公開する。破壊性を隠さず本見出しに
+  明記する。
 
 ### Changed
 - builtin rule の DSL 統合スライス 1 (ADR 0004): `core.network.remote-script-pipe`
@@ -394,7 +401,8 @@ Initial public release.
 - `curl | sh` and PowerShell installers via cargo-dist
 - crates.io publication
 
-[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/watany-dev/ptuf/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/watany-dev/ptuf/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/watany-dev/ptuf/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/watany-dev/ptuf/compare/v0.3.0...v0.4.0
