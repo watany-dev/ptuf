@@ -938,9 +938,7 @@ mod tests {
     fn select_strategy_detects_npm_managed_binary() {
         let spawner = RecordingSpawner::new(vec![]);
         let locator = FakeExeLocator {
-            exe: PathBuf::from(
-                "/ptuf-test/project/node_modules/@ptuf/cli-linux-x64-gnu/bin/ptuf",
-            ),
+            exe: PathBuf::from("/ptuf-test/project/node_modules/@ptuf/cli-linux-x64-gnu/bin/ptuf"),
             cargo_home: None,
         };
         let (strategy, warning) = select_strategy(&spawner, &locator);
@@ -957,9 +955,7 @@ mod tests {
     fn run_refuses_npm_managed_update_before_fetching_latest() {
         let spawner = RecordingSpawner::new(vec![]);
         let locator = FakeExeLocator {
-            exe: PathBuf::from(
-                "/ptuf-test/project/node_modules/@ptuf/cli-linux-x64-gnu/bin/ptuf",
-            ),
+            exe: PathBuf::from("/ptuf-test/project/node_modules/@ptuf/cli-linux-x64-gnu/bin/ptuf"),
             cargo_home: None,
         };
         let mut out = Vec::new();
@@ -1198,8 +1194,8 @@ mod tests {
     fn run_cargo_strategy_invokes_cargo_install_force() {
         let cargo_home = PathBuf::from("/ptuf-test/cargohome/.cargo");
         let spawner = RecordingSpawner::new(vec![
-            ok(&redirect_headers("v9.9.9")),
             ok("cargo 1.93.0\n"),
+            ok(&redirect_headers("v9.9.9")),
             ok(""),
         ]);
         let locator = cargo_locator(cargo_home);
@@ -1363,8 +1359,8 @@ mod tests {
     fn run_falls_back_with_warning_when_cargo_bin_but_no_cargo() {
         let cargo_home = PathBuf::from("/ptuf-test/cargohome/.cargo");
         let spawner = RecordingSpawner::new(vec![
-            ok(&redirect_headers("v9.9.9")),
             Err(io::Error::from(io::ErrorKind::NotFound)),
+            ok(&redirect_headers("v9.9.9")),
             ok(""),
             ok(""),
         ]);
