@@ -242,18 +242,23 @@ mod tests {
     #[test]
     fn denies_first_segment_glob_on_absolute_paths() {
         assert_deny("rm -rf /e*");
+        assert_deny("rm -rf /e?");
         assert_deny("rm -rf //e*");
+        assert_deny("rm -rf /[a-z]*");
+    }
+
+    #[test]
+    fn first_segment_has_glob_unit_cases() {
+        assert!(first_segment_has_glob("/e*"));
+        assert!(first_segment_has_glob("/e?"));
+        assert!(!first_segment_has_glob("/tmp/*"));
+        assert!(!first_segment_has_glob("build/*"));
     }
 
     #[test]
     fn allows_second_segment_glob() {
         assert_allow("rm -rf /tmp/*");
         assert_allow("rm -rf *.txt");
-    }
-
-    #[test]
-    fn denies_first_segment_bracket_glob() {
-        assert_deny("rm -rf /[a-z]*");
     }
 
     #[test]
