@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.opencode/`). Native tool names are normalised in `src/cli/opencode_input.rs`;
   Ask decisions demote to Deny because OpenCode cannot reliably prompt from
   `tool.execute.before`.
+- **npm distribution** — `@watany-dev/ptuf` ships a zero-install-script JavaScript
+  shim plus optional native platform packages for npm / npx users.
 
 ## [0.4.1] - 2026-06-29
 
