@@ -137,7 +137,10 @@ if (
   throw new Error("shim 8 MiB stdin boundary output differed from native binary");
 }
 
-const initDryRun = run(bin, ["--json", "init", "--dry-run"], { cwd: work });
+// Pass an explicit agent: the temp cwd/$HOME hold no agent markers, so
+// auto-detect would exit 1. We only need init to run and confirm the
+// shim resolves the native binary path (not the .js shim) below.
+const initDryRun = run(bin, ["--json", "init", "claude-code", "--dry-run"], { cwd: work });
 if (initDryRun.stdout.includes("ptuf.js")) {
   throw new Error("init dry-run wrote the JavaScript shim path");
 }
