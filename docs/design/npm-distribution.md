@@ -294,9 +294,9 @@ npm smoke (`npm/scripts/smoke.mjs`) の検証項目:
 2. hook decision 往復 — deny 入力で exit code / stdout JSON が
    ネイティブ直叩きと**バイト一致**する (shim の透過性)
    — 実装済み
-3. 8 MiB stdin 境界の通過 — 未実装 (smoke 拡張候補)
+3. 8 MiB stdin 境界の通過 — 実装済み
 4. signal 転送 (SIGTERM でバイナリが死んだとき shim が同 signal 終了)
-   — 未実装 (smoke 拡張候補)
+   — 実装済み
 5. `init --dry-run --json` の hook command がバイナリ実体を指す
    — smoke と `tests/contracts.rs` で実装済み
 
