@@ -75,10 +75,13 @@ fn bash_co_locates_sink_and_sensitive(bash: &Bash) -> bool {
     if bash.has_command_substitution {
         let commands = bash.commands();
         let mut commands = commands.into_iter();
-        let has_sink =
-            commands.clone().any(invokes_network_sink) || bash_redirects_to_network(bash);
-        let has_sensitive = commands.any(argv_references_sensitive);
-        return has_sink && has_sensitive;
+        // Check the cheap head-name sink gate before the sensitive-path
+        // regex sweep: most commands have no network sink, and the sweep
+        // scans every argument byte.
+        if !commands.clone().any(invokes_network_sink) && !bash_redirects_to_network(bash) {
+            return false;
+        }
+        return commands.any(argv_references_sensitive);
     }
     bash.segments.iter().any(pipeline_co_locates)
 }
@@ -86,9 +89,11 @@ fn bash_co_locates_sink_and_sensitive(bash: &Bash) -> bool {
 fn pipeline_co_locates(pipe: &Pipeline) -> bool {
     let has_sink = pipe.commands.iter().any(invokes_network_sink)
         || pipe.redirects.iter().any(redirect_target_is_network);
-    let has_sensitive = pipe.commands.iter().any(argv_references_sensitive)
-        || pipe.redirects.iter().any(redirect_target_is_sensitive);
-    has_sink && has_sensitive
+    if !has_sink {
+        return false;
+    }
+    pipe.commands.iter().any(argv_references_sensitive)
+        || pipe.redirects.iter().any(redirect_target_is_sensitive)
 }
 
 fn bash_redirects_to_network(bash: &Bash) -> bool {

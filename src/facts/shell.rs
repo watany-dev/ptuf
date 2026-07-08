@@ -715,10 +715,16 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool) {
             i += 2;
             let mut depth: usize = 1;
             while i < bytes.len() && depth > 0 {
+                let run = i;
+                i += memchr::memchr2(b'(', b')', &bytes[i..]).unwrap_or(bytes.len() - i);
+                push_latin1(&mut buf, &bytes[run..i]);
+                if i >= bytes.len() {
+                    break;
+                }
                 let pc = bytes[i];
                 if pc == b'(' {
                     depth += 1;
-                } else if pc == b')' {
+                } else {
                     depth -= 1;
                     if depth == 0 {
                         buf.push(')');
@@ -755,18 +761,95 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool) {
                 {
                     saw_subst = true;
                 }
-                buf.push(bytes[i] as char);
+                // Copy the maximal quoted run in one span: everything up
+                // to the closing quote, or (inside `"`) the next escape /
+                // substitution byte that needs per-byte handling above.
+                let run = i;
                 i += 1;
+                let stop = if quote == b'"' {
+                    memchr::memchr3(quote, b'\\', b'$', &bytes[i..])
+                } else {
+                    memchr::memchr(quote, &bytes[i..])
+                };
+                i += stop.unwrap_or(bytes.len() - i);
+                push_latin1(&mut buf, &bytes[run..i]);
             }
             if i < bytes.len() {
                 i += 1; // closing quote
             }
             continue;
         }
-        buf.push(c as char);
+        // Plain run: extend to the next byte that needs special handling
+        // and copy the whole span instead of one byte at a time.
+        let run = i;
         i += 1;
+        i += plain_run_len(&bytes[i..]);
+        push_latin1(&mut buf, &bytes[run..i]);
     }
     (buf, i, saw_subst)
+}
+
+/// Length of the leading run of plain word bytes (see
+/// [`is_plain_word_byte`]). Typical tokens end within the bytewise
+/// prefix scan; pathological megabyte words fall through to `memchr`
+/// SIMD sweeps over the 15-byte special set (five triples).
+fn plain_run_len(bytes: &[u8]) -> usize {
+    let quick = bytes.len().min(64);
+    let mut i = 0;
+    while i < quick {
+        if !is_plain_word_byte(bytes[i]) {
+            return i;
+        }
+        i += 1;
+    }
+    if i >= bytes.len() {
+        return i;
+    }
+    let rest = &bytes[i..];
+    let mut end = rest.len();
+    for &(a, b, c) in &[
+        (b' ', b'\t', b'\n'),
+        (b'\r', 0x0c, b'|'),
+        (b'&', b';', b'\\'),
+        (b'<', b'>', b'$'),
+        (b'\'', b'"', b'`'),
+    ] {
+        if let Some(p) = memchr::memchr3(a, b, c, &rest[..end]) {
+            end = p;
+        }
+    }
+    i + end
+}
+
+/// True when the byte can only ever be folded into the current word
+/// verbatim — i.e. none of the `read_word` loop's special cases
+/// (terminators, escapes, quotes, substitution / redirection openers)
+/// can apply to it. Non-ASCII bytes are plain: they carry no shell
+/// syntax and decode via [`push_latin1`].
+const fn is_plain_word_byte(b: u8) -> bool {
+    !(b.is_ascii_whitespace()
+        || matches!(
+            b,
+            b'|' | b'&' | b';' | b'\\' | b'<' | b'>' | b'$' | b'\'' | b'"' | b'`'
+        ))
+}
+
+/// Append raw bytes to `buf`, preserving the historical `byte as char`
+/// decoding (each byte read as its Latin-1 code point): all-ASCII spans
+/// — the overwhelmingly common case — are copied as one `str`, anything
+/// containing a non-ASCII byte is widened one byte at a time. The
+/// `from_utf8` on an all-ASCII span is infallible; the `Ok` guard
+/// exists only to avoid `unwrap` under the workspace lint policy.
+fn push_latin1(buf: &mut String, bytes: &[u8]) {
+    if bytes.is_ascii() {
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            buf.push_str(s);
+        }
+        return;
+    }
+    for &b in bytes {
+        buf.push(b as char);
+    }
 }
 
 fn split_segments(tokens: Vec<Token>) -> Vec<Vec<Token>> {

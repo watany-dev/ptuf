@@ -345,6 +345,20 @@ impl ProtectedPaths {
         paths: &[crate::facts::path::FilePath],
         extra: &[crate::facts::path::FilePath],
     ) -> ProtectedKinds {
+        self.classify_input_prepared(input, paths, extra, None)
+    }
+
+    /// Variant that additionally reuses an already-parsed Bash command
+    /// (`facts.bash`), so the engine's hot path never parses the same
+    /// command line twice. Pass `None` to fall back to parsing the
+    /// payload's `command` string internally.
+    pub fn classify_input_prepared(
+        &self,
+        input: &HookInput,
+        paths: &[crate::facts::path::FilePath],
+        extra: &[crate::facts::path::FilePath],
+        bash: Option<&crate::facts::shell::Bash>,
+    ) -> ProtectedKinds {
         let mut out = ProtectedKinds::new();
         let cwd = if self.repo_root.is_none() {
             std::env::current_dir().ok()
@@ -352,7 +366,7 @@ impl ProtectedPaths {
             None
         };
         let base_dir = self.repo_root.as_deref().or(cwd.as_deref());
-        let candidates = candidate_targets(input, paths.iter().chain(extra.iter()), base_dir);
+        let candidates = candidate_targets(input, paths.iter().chain(extra.iter()), base_dir, bash);
         for cand in &candidates {
             if let Some(kind) = self.match_path(cand) {
                 out.push_unique(kind);
@@ -528,6 +542,7 @@ fn candidate_targets<'a>(
     input: &HookInput,
     paths: impl IntoIterator<Item = &'a crate::facts::path::FilePath>,
     base_dir: Option<&Path>,
+    bash: Option<&crate::facts::shell::Bash>,
 ) -> Vec<PathBuf> {
     let event = input.event();
     let mut out = Vec::new();
@@ -548,7 +563,16 @@ fn candidate_targets<'a>(
     // the command itself — false positives are cheap (we reject), but
     // missing a target can let an unsafe write through.
     if let Some(cmd) = event.command {
-        let bash = crate::facts::shell::parse(cmd);
+        // Reuse the caller's parsed pipeline when available; parsing
+        // here is the fallback for entry points that only hold the raw
+        // payload.
+        let parsed;
+        let bash = if let Some(b) = bash {
+            b
+        } else {
+            parsed = crate::facts::shell::parse(cmd);
+            &parsed
+        };
         let writer_heads = ["rm", "mv", "cp", "chmod", "chown", "tee", "ln", "sed"];
         for outer in bash.commands() {
             // Peel a privilege-escalation wrapper (`sudo rm ...`) so the
