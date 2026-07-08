@@ -59,6 +59,9 @@ testing = ["dep:proptest"]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
+# memchr is already in the tree as regex's prefilter; depending on it
+# directly (same feature set) adds no new crate to the build graph.
+memchr = { version = "2", default-features = false, features = ["std"] }
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl"] }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 toml_edit = "0.25"

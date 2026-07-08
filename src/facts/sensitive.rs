@@ -171,11 +171,19 @@ static SENSITIVE_REGEXES: [OnceLock<Regex>; PROBES.len()] =
 /// determinism.
 pub fn classify(token: &str) -> Vec<SensitivePath> {
     let mut out = Vec::new();
-    // The probe regexes only fold ASCII case (`(?i-u:…)`), so an ASCII
-    // lowercase of the token is enough for the needle gate.
-    let lower = token.to_ascii_lowercase();
-    for (idx, (kind, needle, pat)) in PROBES.iter().enumerate() {
-        if !lower.contains(needle) {
+    classify_into(token, &mut out);
+    out
+}
+
+/// [`classify`] variant that appends into a caller-owned buffer, so
+/// per-token sweeps over large payloads skip the intermediate `Vec`.
+pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
+    let mask = needle_mask(token.as_bytes());
+    if mask == 0 {
+        return;
+    }
+    for (idx, (kind, _, pat)) in PROBES.iter().enumerate() {
+        if mask & (1_u16 << idx) == 0 {
             continue;
         }
         let re = SENSITIVE_REGEXES[idx].get_or_init(|| build(pat));
@@ -186,7 +194,95 @@ pub fn classify(token: &str) -> Vec<SensitivePath> {
             });
         }
     }
-    out
+}
+
+/// Byte values that can open a probe needle, in either ASCII case.
+/// The `memchr` path splits them across two `memchr3` scans (its arity
+/// limit is three). Every `PROBES` needle must start with one of these
+/// bytes — pinned by the
+/// `needle_first_bytes_are_covered_by_mask_triggers` test.
+const MASK_TRIGGERS_A: (u8, u8, u8) = (b'.', b'-', b'g');
+const MASK_TRIGGERS_B: (u8, u8, u8) = (b'G', b'i', b'I');
+
+const fn is_mask_trigger(b: u8) -> bool {
+    matches!(b, b'.' | b'-' | b'g' | b'G' | b'i' | b'I')
+}
+
+/// Single-pass, allocation-free replacement for the former
+/// `token.to_ascii_lowercase()` + per-needle `contains` gate: bit `i`
+/// is set iff `PROBES[i]`'s needle occurs in `bytes` under ASCII case
+/// folding. Short tokens — the common case — take one bytewise pass;
+/// long payloads use `memchr` SIMD scans to jump between candidate
+/// start bytes, so a megabyte with no needle-opening byte costs two
+/// vector sweeps and nothing else.
+fn needle_mask(bytes: &[u8]) -> u16 {
+    const ALL: u16 = (1_u16 << PROBES.len()) - 1;
+    let mut mask = 0_u16;
+    if bytes.len() <= 64 {
+        for pos in 0..bytes.len() {
+            if is_mask_trigger(bytes[pos]) {
+                check_needles_at(bytes, pos, &mut mask);
+                if mask == ALL {
+                    break;
+                }
+            }
+        }
+        return mask;
+    }
+    let (a0, a1, a2) = MASK_TRIGGERS_A;
+    for pos in memchr::memchr3_iter(a0, a1, a2, bytes) {
+        check_needles_at(bytes, pos, &mut mask);
+        if mask == ALL {
+            return mask;
+        }
+    }
+    let (b0, b1, b2) = MASK_TRIGGERS_B;
+    for pos in memchr::memchr3_iter(b0, b1, b2, bytes) {
+        check_needles_at(bytes, pos, &mut mask);
+        if mask == ALL {
+            return mask;
+        }
+    }
+    mask
+}
+
+/// Test whether any needle starts at `bytes[pos]` and record it in
+/// `mask`. Dispatches on the first byte — and, for the eight
+/// dot-needles, the second byte, which is unique per needle — so each
+/// candidate position costs at most one slice comparison. The
+/// hard-coded `PROBES` indices are pinned by the
+/// `check_needles_at_detects_each_needle_at_its_index` test.
+fn check_needles_at(bytes: &[u8], pos: usize, mask: &mut u16) {
+    let idx = match bytes[pos].to_ascii_lowercase() {
+        b'.' => {
+            let Some(&second) = bytes.get(pos + 1) else {
+                return;
+            };
+            match second.to_ascii_lowercase() {
+                b's' => 0, // .ssh
+                b'a' => 1, // .aws
+                b'k' => 3, // .kube
+                b'd' => 4, // .docker
+                b'e' => 6, // .env
+                b'n' => 7, // .npmrc
+                b'p' => 8, // .pypirc
+                b't' => 9, // .tfstate
+                _ => return,
+            }
+        },
+        b'g' => 2,  // gcloud
+        b'i' => 5,  // id_
+        b'-' => 10, // -----begin
+        _ => return,
+    };
+    let bit = 1_u16 << idx;
+    if *mask & bit != 0 {
+        return;
+    }
+    let n = PROBES[idx].1.as_bytes();
+    if bytes.len() - pos >= n.len() && bytes[pos..pos + n.len()].eq_ignore_ascii_case(n) {
+        *mask |= bit;
+    }
 }
 
 #[cfg(test)]
@@ -333,6 +429,55 @@ mod tests {
     fn classify_returns_empty_for_safe_input() {
         assert!(classify("ls -la").is_empty());
         assert!(classify("https://example.com/data.json").is_empty());
+    }
+
+    #[test]
+    fn needle_first_bytes_are_covered_by_mask_triggers() {
+        // `needle_mask` only inspects positions found by the two
+        // `memchr3` trigger scans. A needle whose first byte (in either
+        // ASCII case) is missing from the trigger set would silently
+        // never gate its probe on.
+        let (a0, a1, a2) = MASK_TRIGGERS_A;
+        let (b0, b1, b2) = MASK_TRIGGERS_B;
+        let triggers = [a0, a1, a2, b0, b1, b2];
+        for (kind, needle, _) in PROBES {
+            let first = needle.as_bytes()[0];
+            for b in [first.to_ascii_lowercase(), first.to_ascii_uppercase()] {
+                assert!(
+                    triggers.contains(&b),
+                    "trigger set misses {b:?} for {kind:?} needle {needle:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn check_needles_at_detects_each_needle_at_its_index() {
+        // `check_needles_at` dispatches to hard-coded `PROBES` indices;
+        // reordering `PROBES` without updating the dispatch table would
+        // silently drop needles. Feed each needle (both ASCII cases) at
+        // position 0 and require its own bit to light up.
+        for (idx, (kind, needle, _)) in PROBES.iter().enumerate() {
+            for cased in [needle.to_ascii_lowercase(), needle.to_ascii_uppercase()] {
+                let mut mask = 0_u16;
+                check_needles_at(cased.as_bytes(), 0, &mut mask);
+                assert_eq!(
+                    mask,
+                    1_u16 << idx,
+                    "dispatch missed {kind:?} needle {cased:?} (idx {idx})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn classify_into_appends_without_clearing() {
+        let mut out = classify("~/.ssh/id_rsa");
+        let before = out.len();
+        assert!(before >= 2);
+        classify_into(".env", &mut out);
+        assert_eq!(out.len(), before + 1);
+        assert_eq!(out[before].kind, SensitiveKind::Dotenv);
     }
 
     #[test]

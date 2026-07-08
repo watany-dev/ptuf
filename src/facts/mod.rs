@@ -93,7 +93,7 @@ fn collect_sensitive(
     url: Option<&url::Url>,
 ) -> Vec<sensitive::SensitivePath> {
     let mut out: Vec<sensitive::SensitivePath> = Vec::new();
-    let mut push_all = |s: &str| out.extend(sensitive::classify(s));
+    let mut push_all = |s: &str| sensitive::classify_into(s, &mut out);
 
     if let Some(b) = bash {
         for cmd in b.commands() {

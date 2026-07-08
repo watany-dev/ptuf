@@ -319,10 +319,11 @@ impl Engine {
         // are anchored at the project root rather than the cwd default.
         facts.bash_redirects =
             facts::path::from_bash_redirects(facts.bash.as_ref(), self.repo_root.as_deref());
-        facts.protected = self.protected.classify_input_with_paths_pair(
+        facts.protected = self.protected.classify_input_prepared(
             input,
             &facts.paths,
             &facts.bash_redirects,
+            facts.bash.as_ref(),
         );
         facts.project = self.project_facts.clone();
         facts.workspaces.clone_from(&self.workspaces);
