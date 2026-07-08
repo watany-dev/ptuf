@@ -1,5 +1,5 @@
 {
-  "name": "@ptuf/cli-linux-arm64-musl",
+  "name": "@watany-dev/ptuf-cli-linux-arm64-musl",
   "version": "0.0.0-dev",
   "description": "ptuf binary for aarch64-unknown-linux-musl",
   "license": "Apache-2.0",

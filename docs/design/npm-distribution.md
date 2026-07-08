@@ -11,7 +11,7 @@ Publishing 設定、実 release/PR 上の cargo-dist plan 検証である。
 
 ## 目的
 
-- Node.js エコシステムのユーザが `npm install -g ptuf` / `npx ptuf` で
+- Node.js エコシステムのユーザが `npm install -g @watany-dev/ptuf` / `npx @watany-dev/ptuf` で
   導入できるようにする
 - 既存配布チャネル (shell/powershell installer, Homebrew, crates.io,
   cargo-binstall, mise/aqua) と同水準の検証可能性
@@ -58,13 +58,13 @@ npm での Rust CLI 配布には大別して 2 方式ある。
 ptuf (メインパッケージ)
 ├── bin/ptuf.js                        # 依存ゼロの JS ランチャー
 └── optionalDependencies (全て同一バージョンに厳密 pin):
-    ├── @ptuf/cli-darwin-arm64         # aarch64-apple-darwin
-    ├── @ptuf/cli-darwin-x64           # x86_64-apple-darwin
-    ├── @ptuf/cli-linux-x64-gnu        # x86_64-unknown-linux-gnu
-    ├── @ptuf/cli-linux-x64-musl       # x86_64-unknown-linux-musl
-    ├── @ptuf/cli-linux-arm64-gnu      # aarch64-unknown-linux-gnu
-    ├── @ptuf/cli-linux-arm64-musl    # aarch64-unknown-linux-musl
-    └── @ptuf/cli-win32-x64            # x86_64-pc-windows-msvc
+    ├── @watany-dev/ptuf-cli-darwin-arm64         # aarch64-apple-darwin
+    ├── @watany-dev/ptuf-cli-darwin-x64           # x86_64-apple-darwin
+    ├── @watany-dev/ptuf-cli-linux-x64-gnu        # x86_64-unknown-linux-gnu
+    ├── @watany-dev/ptuf-cli-linux-x64-musl       # x86_64-unknown-linux-musl
+    ├── @watany-dev/ptuf-cli-linux-arm64-gnu      # aarch64-unknown-linux-gnu
+    ├── @watany-dev/ptuf-cli-linux-arm64-musl    # aarch64-unknown-linux-musl
+    └── @watany-dev/ptuf-cli-win32-x64            # x86_64-pc-windows-msvc
 ```
 
 - 各プラットフォームパッケージは実バイナリ 1 個 (`bin/ptuf` または
@@ -83,7 +83,7 @@ ptuf (メインパッケージ)
 
 ```json
 {
-  "name": "@ptuf/cli-linux-x64-musl",
+  "name": "@watany-dev/ptuf-cli-linux-x64-musl",
   "version": "0.0.0-dev",
   "description": "ptuf binary for x86_64-unknown-linux-musl",
   "license": "Apache-2.0",
@@ -100,14 +100,11 @@ publish ジョブが tag から stamp する (後述の三重整合検証)。
 
 ### 命名とスコープ
 
-- メインパッケージ名 `ptuf` は 2026-07-07 時点で npm registry 上に
-  未公開 (`npm view ptuf name version --json` が E404)。v0.5.0 の
-  npm 実装前に予約 publish する。取得不能になった場合は全体を
-  `@watany/ptuf` + `@watany/ptuf-cli-*` に切替える。
-- プラットフォームパッケージ用に npm org `ptuf` (スコープ `@ptuf`) を
-  取得する。代表パッケージ `@ptuf/cli-linux-x64-musl` も 2026-07-07
-  時点で未公開 (`npm view @ptuf/cli-linux-x64-musl name version --json`
-  が E404)。org には 2FA を必須設定する。
+- npm distribution は `@watany-dev` user scope を使う。メインパッケージは
+  `@watany-dev/ptuf`、platform package は `@watany-dev/ptuf-cli-*` とする。
+  当初候補の unscoped `ptuf` は 2026-07-08 の bootstrap publish 時に
+  npm から既存 package 名に近すぎるとして拒否された。`@ptuf/*` は
+  separate org 作成が必要だったため採用しない。
 
 ## JS ランチャー (shim) の契約
 
@@ -126,7 +123,7 @@ shim は hook プロトコルの**忠実なプロキシ**でなければなら�
    `process.report.getReport().header.glibcVersionRuntime` の有無で
    自前判定する (Minimal Dependencies 原則)。
 4. **バイナリ解決順序**: ① 環境変数 `PTUF_BINARY_PATH` (テスト・退避用の
-   明示 override) → ② `require.resolve('@ptuf/cli-<platform>/bin/ptuf')`
+   明示 override) → ② `require.resolve('@watany-dev/ptuf-cli-<platform>/bin/ptuf')`
    → ③ 解決失敗時は stderr にサポート対象プラットフォーム一覧と
    代替インストール手段 (`docs/install.md`) を出して非 0 で終了する。
    hook 経路でこの失敗が起きても host 側は fail-closed 契約
@@ -144,7 +141,7 @@ latency_budget axis は per-call 2 秒 (warm) を張っており、Node 起動�
 (`src/init/mod.rs`、各 adapter の `src/init/*.rs`)。shim 経由で
 `ptuf init` を実行しても、**init を実際に実行するのはネイティブバイナリ**
 なので、hook 設定に書き込まれるのはプラットフォームパッケージ内の
-バイナリ絶対パス (`.../node_modules/@ptuf/cli-<platform>/bin/ptuf`)
+バイナリ絶対パス (`.../node_modules/@watany-dev/ptuf-cli-<platform>/bin/ptuf`)
 であり、以降の hook 呼び出しは Node を経由しない。
 
 この性質は暗黙の副産物ではなく**契約**に昇格させる:
@@ -176,7 +173,7 @@ fail-closed で deny に倒れるため安全側。この挙動も install.md �
   テスト駆動する)。
 - 判定: `current_exe()` の (canonicalize 後の) パス成分に
   `node_modules` を含む場合は npm 管理と判定し、update を実行せず
-  `npm update -g ptuf` (ローカル install なら `npm update ptuf`) を
+  `npm update -g @watany-dev/ptuf` (ローカル install なら `npm update ptuf`) を
   案内するメッセージを出して終了する。exit code は既存の
   「update 不能・案内あり」経路に合わせる。
 - Homebrew (`Cellar` / `linuxbrew` パス成分) の同型ガードは本設計の
@@ -311,7 +308,7 @@ release ビルドし、publish と同じ `stamp.mjs` でパッケージを組み
 ## ドキュメント更新
 
 - `README.md` / `README.ja.md` — Install に npm 経路を追加済み
-  (`npm install -g ptuf`)。`ptuf update` が npm 管理を扱わないことを
+  (`npm install -g @watany-dev/ptuf`)。`ptuf update` が npm 管理を扱わないことを
   Homebrew と同じ粒度で注記済み。
 - `docs/install.md` — npm セクション追加済み: provenance 検証手順
   (`npm audit signatures`)、ローカル install 時の hook パスの寿命、
@@ -332,10 +329,8 @@ release ビルドし、publish と同じ `stamp.mjs` でパッケージを組み
 
 ## 未決事項
 
-- npm 上の `ptuf` パッケージ名と代表 platform package は未公開確認済み。
-  残りは npm アカウントで `ptuf` package と `@ptuf` org を実際に予約し、
-  Trusted Publishing を設定できる状態にすること。取得不能時は
-  `@watany` スコープへの切替で本設計はそのまま成立する。
+- npm 上の `@watany-dev/ptuf` と代表 platform package を bootstrap
+  publish で予約し、Trusted Publishing を設定できる状態にすること。
 - aarch64-musl のクロスビルドが現行 runner 構成で通るか (M-NPM2 の
   PR 検証で確定させる)
 - npm smoke を `make check` 対象に含めるか (Node 依存が増えるため、

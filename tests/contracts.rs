@@ -51,7 +51,7 @@ fn npm_layout_init_dry_run_uses_native_binary_path() {
     let dir = repo();
     let native = dir
         .path()
-        .join("node_modules/@ptuf/cli-linux-x64-gnu/bin/ptuf");
+        .join("node_modules/@watany-dev/ptuf-cli-linux-x64-gnu/bin/ptuf");
     std::fs::create_dir_all(native.parent().expect("native parent")).expect("mkdir native parent");
     std::fs::copy(env!("CARGO_BIN_EXE_ptuf"), &native).expect("copy ptuf binary");
     let mut perms = std::fs::metadata(&native).expect("metadata").permissions();

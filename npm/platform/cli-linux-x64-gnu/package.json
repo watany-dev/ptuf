@@ -1,5 +1,5 @@
 {
-  "name": "@ptuf/cli-linux-x64-gnu",
+  "name": "@watany-dev/ptuf-cli-linux-x64-gnu",
   "version": "0.0.0-dev",
   "description": "ptuf binary for x86_64-unknown-linux-gnu",
   "license": "Apache-2.0",

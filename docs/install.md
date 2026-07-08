@@ -54,7 +54,7 @@ path below instead.
 ## npm (Node.js)
 
 ```bash
-npm install -g ptuf
+npm install -g @watany-dev/ptuf
 ```
 
 The npm package is a JavaScript launcher plus one platform-specific
@@ -64,7 +64,7 @@ install scripts, so `npm install --ignore-scripts -g ptuf` still works.
 Updates are managed by npm:
 
 ```bash
-npm update -g ptuf
+npm update -g @watany-dev/ptuf
 ```
 
 For project-local installs (`npm install --save-dev ptuf`), `ptuf init`
@@ -325,7 +325,7 @@ the install path and dispatches to the matching updater:
   `--locked` flag pins transitive deps to the published `Cargo.lock` so
   the installed binary matches the audited release tree);
 - if `ptuf` lives under `node_modules`, it refuses to mutate the binary
-  and prints `npm update -g ptuf` (or `npm update ptuf` for project-local
+  and prints `npm update -g @watany-dev/ptuf` (or `npm update ptuf` for project-local
   installs);
 - otherwise it downloads the cargo-dist installer
   (`ptuf-installer.sh` on Unix, `ptuf-installer.ps1` on Windows) to a

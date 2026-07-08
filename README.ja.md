@@ -85,7 +85,7 @@ brew install watany-dev/tap/ptuf
 
 ```bash
 # npm (Node.js)
-npm install -g ptuf
+npm install -g @watany-dev/ptuf
 ```
 
 Windows (PowerShell) / `cargo binstall` / `cargo install` / mise / aqua、

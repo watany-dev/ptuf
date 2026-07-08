@@ -25,11 +25,11 @@
      (GitHub artifacts, crates.io) succeeds and the homebrew job can be
      re-run after the secret is fixed.
 3. **npm package reservation for v0.5.0+** — before enabling npm publish,
-   reserve the public `ptuf` package and the `@ptuf` npm org. `npm view ptuf`
-   and `npm view @ptuf/cli-linux-x64-musl` returned E404 on 2026-07-07, so
-   the planned names were not published at that point. If either name cannot
-   be reserved, switch the npm distribution design to `@watany/ptuf` plus
-   `@watany/ptuf-cli-*` before adding the publish workflow.
+   reserve `@watany-dev/ptuf` and the `@watany-dev/ptuf-cli-*` platform
+   packages. The original unscoped `ptuf` name was rejected by npm on
+   2026-07-08 as too similar to existing package names, and `@ptuf/*`
+   required creating a separate org, so the npm distribution uses the
+   existing `@watany-dev` user scope.
 4. **npm Trusted Publishing for v0.5.0+** — after the first manual bootstrap
    publish, configure npm Trusted Publishing for the `Release` workflow in
    this repository. The `publish-npm` job uses GitHub OIDC

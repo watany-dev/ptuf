@@ -9,13 +9,13 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const packages = {
-  "darwin arm64": ["@ptuf/cli-darwin-arm64", "cli-darwin-arm64", "bin/ptuf"],
-  "darwin x64": ["@ptuf/cli-darwin-x64", "cli-darwin-x64", "bin/ptuf"],
-  "linux arm64 glibc": ["@ptuf/cli-linux-arm64-gnu", "cli-linux-arm64-gnu", "bin/ptuf"],
-  "linux arm64 musl": ["@ptuf/cli-linux-arm64-musl", "cli-linux-arm64-musl", "bin/ptuf"],
-  "linux x64 glibc": ["@ptuf/cli-linux-x64-gnu", "cli-linux-x64-gnu", "bin/ptuf"],
-  "linux x64 musl": ["@ptuf/cli-linux-x64-musl", "cli-linux-x64-musl", "bin/ptuf"],
-  "win32 x64": ["@ptuf/cli-win32-x64", "cli-win32-x64", "bin/ptuf.exe"]
+  "darwin arm64": ["@watany-dev/ptuf-cli-darwin-arm64", "cli-darwin-arm64", "bin/ptuf"],
+  "darwin x64": ["@watany-dev/ptuf-cli-darwin-x64", "cli-darwin-x64", "bin/ptuf"],
+  "linux arm64 glibc": ["@watany-dev/ptuf-cli-linux-arm64-gnu", "cli-linux-arm64-gnu", "bin/ptuf"],
+  "linux arm64 musl": ["@watany-dev/ptuf-cli-linux-arm64-musl", "cli-linux-arm64-musl", "bin/ptuf"],
+  "linux x64 glibc": ["@watany-dev/ptuf-cli-linux-x64-gnu", "cli-linux-x64-gnu", "bin/ptuf"],
+  "linux x64 musl": ["@watany-dev/ptuf-cli-linux-x64-musl", "cli-linux-x64-musl", "bin/ptuf"],
+  "win32 x64": ["@watany-dev/ptuf-cli-win32-x64", "cli-win32-x64", "bin/ptuf.exe"]
 };
 
 function libc() {
@@ -137,7 +137,7 @@ if (
   throw new Error("shim 8 MiB stdin boundary output differed from native binary");
 }
 
-const initDryRun = run(bin, ["init", "--dry-run", "--json"], { cwd: work });
+const initDryRun = run(bin, ["--json", "init", "--dry-run"], { cwd: work });
 if (initDryRun.stdout.includes("ptuf.js")) {
   throw new Error("init dry-run wrote the JavaScript shim path");
 }

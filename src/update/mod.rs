@@ -72,7 +72,9 @@ impl PackageManager {
 
     pub const fn update_hint(self) -> &'static str {
         match self {
-            Self::Npm => "npm update -g ptuf (or `npm update ptuf` for a project-local install)",
+            Self::Npm => {
+                "npm update -g @watany-dev/ptuf (or `npm update ptuf` for a project-local install)"
+            },
         }
     }
 }
@@ -938,7 +940,9 @@ mod tests {
     fn select_strategy_detects_npm_managed_binary() {
         let spawner = RecordingSpawner::new(vec![]);
         let locator = FakeExeLocator {
-            exe: PathBuf::from("/ptuf-test/project/node_modules/@ptuf/cli-linux-x64-gnu/bin/ptuf"),
+            exe: PathBuf::from(
+                "/ptuf-test/project/node_modules/@watany-dev/ptuf-cli-linux-x64-gnu/bin/ptuf",
+            ),
             cargo_home: None,
         };
         let (strategy, warning) = select_strategy(&spawner, &locator);
@@ -955,7 +959,9 @@ mod tests {
     fn run_refuses_npm_managed_update_before_fetching_latest() {
         let spawner = RecordingSpawner::new(vec![]);
         let locator = FakeExeLocator {
-            exe: PathBuf::from("/ptuf-test/project/node_modules/@ptuf/cli-linux-x64-gnu/bin/ptuf"),
+            exe: PathBuf::from(
+                "/ptuf-test/project/node_modules/@watany-dev/ptuf-cli-linux-x64-gnu/bin/ptuf",
+            ),
             cargo_home: None,
         };
         let mut out = Vec::new();
@@ -1007,6 +1013,18 @@ mod tests {
                 "0.3.1".to_string(),
             ],
         );
+    }
+
+    #[test]
+    fn build_installer_command_externally_managed_is_empty() {
+        let cmd = build_installer_command(
+            Strategy::ExternallyManaged(PackageManager::Npm),
+            "v0.3.1",
+            false,
+            Platform::Unix,
+        );
+        assert!(cmd.program.is_empty());
+        assert!(cmd.args.is_empty());
     }
 
     #[test]

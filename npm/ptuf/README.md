@@ -3,7 +3,7 @@
 Deterministic guardrail CLI for coding agents.
 
 ```bash
-npm install -g ptuf
+npm install -g @watany-dev/ptuf
 ptuf --version
 ```
 

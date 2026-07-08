@@ -9,13 +9,13 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const mainPackage = join(root, "npm/ptuf/package.json");
 
 const platforms = [
-  ["@ptuf/cli-darwin-arm64", "cli-darwin-arm64", "aarch64-apple-darwin", "ptuf"],
-  ["@ptuf/cli-darwin-x64", "cli-darwin-x64", "x86_64-apple-darwin", "ptuf"],
-  ["@ptuf/cli-linux-arm64-gnu", "cli-linux-arm64-gnu", "aarch64-unknown-linux-gnu", "ptuf"],
-  ["@ptuf/cli-linux-arm64-musl", "cli-linux-arm64-musl", "aarch64-unknown-linux-musl", "ptuf"],
-  ["@ptuf/cli-linux-x64-gnu", "cli-linux-x64-gnu", "x86_64-unknown-linux-gnu", "ptuf"],
-  ["@ptuf/cli-linux-x64-musl", "cli-linux-x64-musl", "x86_64-unknown-linux-musl", "ptuf"],
-  ["@ptuf/cli-win32-x64", "cli-win32-x64", "x86_64-pc-windows-msvc", "ptuf.exe"]
+  ["@watany-dev/ptuf-cli-darwin-arm64", "cli-darwin-arm64", "aarch64-apple-darwin", "ptuf"],
+  ["@watany-dev/ptuf-cli-darwin-x64", "cli-darwin-x64", "x86_64-apple-darwin", "ptuf"],
+  ["@watany-dev/ptuf-cli-linux-arm64-gnu", "cli-linux-arm64-gnu", "aarch64-unknown-linux-gnu", "ptuf"],
+  ["@watany-dev/ptuf-cli-linux-arm64-musl", "cli-linux-arm64-musl", "aarch64-unknown-linux-musl", "ptuf"],
+  ["@watany-dev/ptuf-cli-linux-x64-gnu", "cli-linux-x64-gnu", "x86_64-unknown-linux-gnu", "ptuf"],
+  ["@watany-dev/ptuf-cli-linux-x64-musl", "cli-linux-x64-musl", "x86_64-unknown-linux-musl", "ptuf"],
+  ["@watany-dev/ptuf-cli-win32-x64", "cli-win32-x64", "x86_64-pc-windows-msvc", "ptuf.exe"]
 ];
 
 function parseArgs(argv) {

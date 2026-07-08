@@ -108,7 +108,7 @@ stdout に書く。
         "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*",
         "hooks": [
           {
-            "name": "ptuf",
+            "name": "@watany-dev/ptuf",
             "type": "command",
             "command": "/usr/local/bin/ptuf hook claude-code"
           }

@@ -1,5 +1,5 @@
 {
-  "name": "@ptuf/cli-win32-x64",
+  "name": "@watany-dev/ptuf-cli-win32-x64",
   "version": "0.0.0-dev",
   "description": "ptuf binary for x86_64-pc-windows-msvc",
   "license": "Apache-2.0",

@@ -1,5 +1,5 @@
 {
-  "name": "@ptuf/cli-darwin-arm64",
+  "name": "@watany-dev/ptuf-cli-darwin-arm64",
   "version": "0.0.0-dev",
   "description": "ptuf binary for aarch64-apple-darwin",
   "license": "Apache-2.0",

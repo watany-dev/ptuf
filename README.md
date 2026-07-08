@@ -130,11 +130,11 @@ Rust users can alternatively run `cargo binstall ptuf` (prebuilt) or
 ### npm (Node.js)
 
 ```bash
-npm install -g ptuf
+npm install -g @watany-dev/ptuf
 ```
 
 The npm package uses platform-specific optional dependencies and does not
-run install scripts. Use `npm update -g ptuf` to update npm-managed
+run install scripts. Use `npm update -g @watany-dev/ptuf` to update npm-managed
 installs; `ptuf update` will detect them and refuse to overwrite the
 package manager's copy.
 
@@ -165,7 +165,7 @@ Once installed via `cargo install` or the prebuilt installer, `ptuf update`
 upgrades the binary in place — it auto-detects which of those two paths
 was used and shells out to the matching updater (no `--cargo` / `--prebuilt`
 flag to remember). npm-managed installs are detected and refused with an
-`npm update -g ptuf` hint. Homebrew / mise / aqua installs are managed by
+`npm update -g @watany-dev/ptuf` hint. Homebrew / mise / aqua installs are managed by
 their own update commands.
 
 Running in an ephemeral cloud agent (Claude Code on the web, Cursor cloud
