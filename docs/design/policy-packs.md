@@ -24,8 +24,11 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 現在は `rm -rf /`, `rm -rf ~`, repo root や親 directory への危険な再帰削除を
 主対象にする。比較前に rm ターゲット token を軽量正規化する — 先頭の連続
 スラッシュを畳み込み (`//etc` → `/etc`)、末尾 `/` を除去する。`..` を含む
-ターゲットは shell 展開前に解決先が読めないため悲観的に destructive 扱いとする
-(glob 展開前の `/e*` 形は本イテレーション範囲外)。`sudo rm -rf /` や
+ターゲットは shell 展開前に解決先が読めないため悲観的に destructive 扱いとする。
+絶対パスで第1パスセグメントに glob メタ (`*`, `?`, `[`) を含むターゲットも
+同様に悲観 deny する (`/e*` → `/etc` 展開しうる)。第2セグメント以降の glob
+(`/tmp/*` 等) は既存の system-root 前置判定に委ね allow を維持する。
+`sudo rm -rf /` や
 `doas -u root rm -rf /etc`、`env rm -rf /`、`command rm -rf /` のような
 プレフィックスラッパー (権限昇格系 `sudo` / `doas` / `pkexec` / `run0`、および
 POSIX コマンドラッパー `env` / `command`) 経由も `unwrap_prefix_wrapper` で
