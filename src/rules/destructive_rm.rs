@@ -109,12 +109,28 @@ fn is_destructive_target(arg: &str) -> bool {
         return true;
     }
     let normalized = normalize_rm_target(arg);
+    // Shell glob expansion cannot be resolved pre-execution; a glob in the
+    // first path segment can match `/`, system roots, or their children.
+    if first_segment_has_glob(&normalized) {
+        return true;
+    }
     normalized == "/"
         || normalized == "/*"
         || HOME_TARGETS.contains(&normalized.as_str())
         || SYSTEM_ROOTS
             .iter()
             .any(|root| normalized == *root || normalized.starts_with(&format!("{root}/")))
+}
+
+/// Returns true when `path` is absolute and its first segment contains shell
+/// glob metacharacters (`*`, `?`, `[`). Second-segment globs such as `/tmp/*`
+/// are excluded because they cannot expand to `/` or a system root prefix.
+fn first_segment_has_glob(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix('/') else {
+        return false;
+    };
+    let segment = rest.split('/').next().unwrap_or("");
+    segment.contains(['*', '?', '['])
 }
 
 /// Collapse POSIX duplicate slashes and trim a trailing `/` before
@@ -221,6 +237,28 @@ mod tests {
     #[test]
     fn denies_rm_rf_root_glob() {
         assert_deny("rm -rf /*");
+    }
+
+    #[test]
+    fn denies_first_segment_glob_on_absolute_paths() {
+        assert_deny("rm -rf /e*");
+        assert_deny("rm -rf /e?");
+        assert_deny("rm -rf //e*");
+        assert_deny("rm -rf /[a-z]*");
+    }
+
+    #[test]
+    fn first_segment_has_glob_unit_cases() {
+        assert!(first_segment_has_glob("/e*"));
+        assert!(first_segment_has_glob("/e?"));
+        assert!(!first_segment_has_glob("/tmp/*"));
+        assert!(!first_segment_has_glob("build/*"));
+    }
+
+    #[test]
+    fn allows_second_segment_glob() {
+        assert_allow("rm -rf /tmp/*");
+        assert_allow("rm -rf *.txt");
     }
 
     #[test]
@@ -466,6 +504,7 @@ mod tests {
                 Just("/usr/local-fake/junk"),
                 Just("/proc/sys"),
                 Just("/sbin"),
+                Just("/e*"),
             ],
             rec_first in any::<bool>(),
         ) {
