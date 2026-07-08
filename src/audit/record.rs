@@ -235,6 +235,16 @@ mod tests {
         }
     }
 
+    fn test_builder<'a>(
+        decision: &'a Decision,
+        input: &'a HookInput,
+        command_redacted: impl Into<String>,
+    ) -> AuditRecordBuilder<'a> {
+        AuditRecord::builder(decision, input, command_redacted.into())
+            .timestamp(UNIX_EPOCH)
+            .mode(Mode::Enforce)
+    }
+
     // `Duration::from_secs(1_704_067_200)` is a Unix timestamp (the
     // start of 2024 UTC), not a duration in hours; rewriting it as
     // `from_hours(473352)` would erase the calendar semantics that the
@@ -251,9 +261,8 @@ mod tests {
             reason: "blocked".into(),
         };
         let inp = input("Bash", "ls");
-        let r = AuditRecord::builder(&decision, &inp, "ls".into())
+        let r = test_builder(&decision, &inp, "ls")
             .timestamp(UNIX_EPOCH + Duration::from_secs(1_704_067_200))
-            .mode(Mode::Enforce)
             .project_root(Some(&PathBuf::from("/repo")))
             .severity(Some(Severity::Critical))
             .agent("claude-code")
@@ -277,9 +286,7 @@ mod tests {
     #[test]
     fn allow_record_omits_rule_id_and_severity() {
         let inp = input("Bash", "ls");
-        let r = AuditRecord::builder(&Decision::Allow, &inp, "ls".into())
-            .timestamp(UNIX_EPOCH)
-            .mode(Mode::Enforce)
+        let r = test_builder(&Decision::Allow, &inp, "ls")
             .agent("cli")
             .build();
         let json = serde_json::to_string(&r).unwrap();
@@ -297,14 +304,13 @@ mod tests {
     #[test]
     fn monitor_demote_flag_serialises_when_true() {
         let inp = input("Bash", "ls");
-        let r = AuditRecord::builder(
+        let r = test_builder(
             &Decision::Monitor {
                 rule_id: "r".into(),
             },
             &inp,
-            "ls".into(),
+            "ls",
         )
-        .timestamp(UNIX_EPOCH)
         .mode(Mode::Monitor)
         .mode_demoted(true)
         .severity(Some(Severity::High))
@@ -318,16 +324,14 @@ mod tests {
     #[test]
     fn ask_decision_serialises_as_ask_label() {
         let inp = input("Bash", "ls");
-        let r = AuditRecord::builder(
+        let r = test_builder(
             &Decision::Ask {
                 rule_id: "r".into(),
                 reason: "?".into(),
             },
             &inp,
-            "ls".into(),
+            "ls",
         )
-        .timestamp(UNIX_EPOCH)
-        .mode(Mode::Enforce)
         .severity(Some(Severity::Medium))
         .agent("claude-code")
         .build();
@@ -338,9 +342,7 @@ mod tests {
     #[test]
     fn allowlist_id_is_serialised_when_set() {
         let inp = input("Bash", "ls");
-        let r = AuditRecord::builder(&Decision::Allow, &inp, "ls".into())
-            .timestamp(UNIX_EPOCH)
-            .mode(Mode::Enforce)
+        let r = test_builder(&Decision::Allow, &inp, "ls")
             .allowlist_id(Some("approved-hotfix".into()))
             .agent("claude-code")
             .build();
@@ -351,9 +353,7 @@ mod tests {
     #[test]
     fn plugin_versions_serialise_as_name_at_version_list() {
         let inp = input("Bash", "ls");
-        let r = AuditRecord::builder(&Decision::Allow, &inp, "ls".into())
-            .timestamp(UNIX_EPOCH)
-            .mode(Mode::Enforce)
+        let r = test_builder(&Decision::Allow, &inp, "ls")
             .agent("cli")
             .plugin_versions(vec!["acme.security@0.1.0".into(), "core.demo@1.2.3".into()])
             .build();
@@ -364,9 +364,7 @@ mod tests {
     #[test]
     fn agent_label_is_always_serialised() {
         let inp = input("Bash", "ls");
-        let r = AuditRecord::builder(&Decision::Allow, &inp, "ls".into())
-            .timestamp(UNIX_EPOCH)
-            .mode(Mode::Enforce)
+        let r = test_builder(&Decision::Allow, &inp, "ls")
             .agent("claude-code")
             .build();
         let json = serde_json::to_string(&r).unwrap();
@@ -398,8 +396,7 @@ mod tests {
             severity in option::of(severity()),
             cmd in "[ -~]{0,40}",
         ) {
-            let _ = AuditRecord::builder(&decision, &input, cmd)
-                .timestamp(UNIX_EPOCH)
+            let _ = test_builder(&decision, &input, cmd)
                 .mode(mode)
                 .mode_demoted(mode_demoted)
                 .severity(severity)
@@ -451,8 +448,7 @@ mod tests {
             severity in option::of(severity()),
             cmd in "[ -~]{0,40}",
         ) {
-            let r = AuditRecord::builder(&decision, &input, cmd.clone())
-                .timestamp(UNIX_EPOCH)
+            let r = test_builder(&decision, &input, cmd.clone())
                 .mode(mode)
                 .mode_demoted(mode_demoted)
                 .severity(severity)
@@ -481,8 +477,7 @@ mod tests {
             severity in option::of(severity()),
             cmd in "[ -~]{0,40}",
         ) {
-            let r = AuditRecord::builder(&decision, &input, cmd)
-                .timestamp(UNIX_EPOCH)
+            let r = test_builder(&decision, &input, cmd)
                 .mode(mode)
                 .mode_demoted(mode_demoted)
                 .severity(severity)
