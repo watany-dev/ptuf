@@ -221,6 +221,26 @@ fn severity_label(severity: Severity) -> &'static str {
 }
 
 #[cfg(test)]
+pub(crate) fn test_deny_record(command: impl Into<String>) -> AuditRecord {
+    use serde_json::json;
+
+    let input = HookInput {
+        tool_name: "Bash".into(),
+        tool_input: json!({"command": "rm -rf /"}),
+    };
+    let decision = Decision::Deny {
+        rule_id: "r".into(),
+        reason: "x".into(),
+    };
+    AuditRecord::builder(&decision, &input, command.into())
+        .timestamp(std::time::UNIX_EPOCH)
+        .mode(Mode::Enforce)
+        .severity(Some(Severity::Critical))
+        .agent("claude-code")
+        .build()
+}
+
+#[cfg(test)]
 mod tests {
 
     use super::*;
