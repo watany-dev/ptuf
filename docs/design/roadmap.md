@@ -130,7 +130,7 @@
   sentinel に縮退。旧 Rust 実装はパリティ oracle として残置し、片方向
   包含を PBT で恒久検証
 
-### M7 — CLI ゼロベース簡素化 (実装済み, `v0.1.0` 予定 / breaking)
+### M11 — CLI ゼロベース簡素化 (実装済み, `v0.1.0` 予定 / breaking)
 
 - `ptuf init` を引数なしで auto-detect (cwd の repo root と `$HOME` から
   agent 候補を検出して全部 install)

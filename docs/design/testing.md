@@ -63,7 +63,7 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - `Argv.head` は最初のトークンを正規化せず保持する (生値契約;
   `full_path_command_keeps_head_intact` が保証)。`Argv::head_basename()` は
   `head.rsplit('/').next()` で比較用の basename を導出する委譲メソッドで、
-  ルール側の head 判定はこれ経由に統一されている (ADR 0004)
+  ルール側の head 判定はこれ経由に統一されている (ADR 0005)
 - tokenizer は 1 byte 以上前進する (forward-progress;
   `debug_assert!(advanced > 0)`)
 
@@ -191,7 +191,7 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   は版管理された敵対的入力の負テストスイートで、`tests/bypass_corpus.rs`
   が通常の `cargo test` (= `make check` の `test` step) で実行する。
   各ケースは `must_catch` (指定 rank 以上で必ず捕捉) か `known_gap`
-  (ADR (0001, 0004 等) に記録した既知限界 — 現状の振る舞いを固定し、
+  (ADR (0001, 0004, 0005 等) に記録した既知限界 — 現状の振る舞いを固定し、
   改善・退行の双方を test 失敗として可視化) の期待値を持つ。fuzzing や
   監査で新規バイパスを発見するたび corpus に追記する。
 - **新ツールの tier**: `cargo-fuzz` / `cargo-mutants` /
