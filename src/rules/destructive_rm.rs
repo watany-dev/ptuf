@@ -248,6 +248,12 @@ mod tests {
     #[test]
     fn allows_second_segment_glob() {
         assert_allow("rm -rf /tmp/*");
+        assert_allow("rm -rf *.txt");
+    }
+
+    #[test]
+    fn denies_first_segment_bracket_glob() {
+        assert_deny("rm -rf /[a-z]*");
     }
 
     #[test]
