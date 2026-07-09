@@ -141,8 +141,7 @@ fn argv_tree_has_fetcher(argv: &Argv) -> bool {
 /// Interpreter (or prefix-wrapped interpreter) whose own `subst_argv`
 /// tree contains a fetcher — `bash <(curl …)` / `bash -c "$(curl …)"`.
 fn argv_interpreter_fed_by_subst_fetcher(argv: &Argv) -> bool {
-    is_interpreter_invocation(argv)
-        && argv.subst_argv.iter().any(argv_tree_has_fetcher)
+    is_interpreter_invocation(argv) && argv.subst_argv.iter().any(argv_tree_has_fetcher)
 }
 
 fn argv_tree_interpreter_fed_by_subst_fetcher(argv: &Argv) -> bool {

