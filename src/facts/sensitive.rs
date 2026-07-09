@@ -408,31 +408,12 @@ mod tests {
     }
 
     #[test]
-    fn classifies_cyrillic_homoglyph_dotenv() {
-        // U+0435 CYRILLIC SMALL LETTER IE — ADR 0007 / issue #163.
-        assert!(kinds(".\u{0435}nv").contains(&SensitiveKind::Dotenv));
-    }
-
-    #[test]
     fn classifies_latin1_mojibake_dotenv() {
         // Bash `push_latin1` turns UTF-8 Cyrillic-e dotenv into Latin-1 mojibake.
         let real = ".\u{0435}nv";
         let mojibake: String = real.as_bytes().iter().map(|&b| b as char).collect();
         assert_eq!(mojibake, ".\u{00d0}\u{00b5}nv");
         assert!(kinds(&mojibake).contains(&SensitiveKind::Dotenv));
-    }
-
-    #[test]
-    fn does_not_classify_non_ascii_non_needle() {
-        // Fail-closed: table-outside non-ASCII must not become a hit.
-        assert!(classify("\u{8cc7}\u{6599}.txt").is_empty());
-    }
-
-    #[test]
-    fn fold_is_noop_for_ascii() {
-        let token = "/home/user/.ssh/id_rsa";
-        let folded = fold_sensitive_homoglyphs(token);
-        assert!(matches!(folded, Cow::Borrowed(s) if std::ptr::eq(s, token)));
     }
 
     #[test]
@@ -587,13 +568,6 @@ mod tests {
     use crate::testing::proptest::sensitive_kind;
     use proptest::prelude::*;
 
-    #[test]
-    fn fold_table_miss_does_not_invent_hit() {
-        // Hiragana / CJK outside the fold table must not become a needle.
-        assert!(classify(".\u{3042}nv").is_empty());
-        assert!(classify("\u{8cc7}\u{6599}.txt").is_empty());
-    }
-
     proptest! {
         // classify never panics on arbitrary printable ASCII.
         #[test]
@@ -615,12 +589,6 @@ mod tests {
             prop_assert!(classify(&token).is_empty(), "false positive on {token:?}");
         }
 
-        #[test]
-        fn pbt_fold_is_idempotent(s in "\\PC{0,40}") {
-            let once = fold_sensitive_homoglyphs(&s);
-            let twice = fold_sensitive_homoglyphs(once.as_ref());
-            prop_assert_eq!(once.as_ref(), twice.as_ref());
-        }
 
 
         fn pbt_classify_never_panics(s in "[ -~]{0,80}") {

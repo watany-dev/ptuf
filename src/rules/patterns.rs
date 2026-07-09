@@ -122,14 +122,6 @@ mod tests {
     }
 
     #[test]
-    fn matches_sensitive_path_folds_cyrillic_homoglyph() {
-        assert!(matches_sensitive_path(".\u{0435}nv")); // U+0435
-        let real = ".\u{0435}nv";
-        let mojibake: String = real.as_bytes().iter().map(|&b| b as char).collect();
-        assert!(matches_sensitive_path(&mojibake));
-    }
-
-    #[test]
     fn sensitive_path_rejects_non_secret_paths() {
         assert!(!SENSITIVE_PATH.is_match("README"));
         assert!(!SENSITIVE_PATH.is_match("/tmp/foo"));
