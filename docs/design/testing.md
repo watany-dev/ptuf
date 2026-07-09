@@ -56,16 +56,18 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - heredoc (`<<TAG` / `<<-TAG`) の body は terminator までを 1 word として
   `Redirect.target` に保持し、`Bash::has_heredoc` を true にする
 - process substitution (`<(...)` / `>(...)`) は paren-balance で 1 word として
-  吸収され `Bash::has_process_substitution` を true にする
+  吸収され `Bash::has_process_substitution` を true にし、本体は
+  `Argv.subst_argv` へ再 parse される (ADR 0003 C / 0008)
 - `bash -lc`, `sh -ec` のような combined short option でも `-c` / `-e` を認識する
 - `Argv.inner_argv` / `inner_redirects` は wrapper (`bash -c`, `eval`, `xargs`,
   `find -exec`) の内側 command / redirect を bounded depth で surface する
-- `` `…` `` / `$(…)` 本体は opaque word を保ったまま `Argv.subst_argv` へ
-  同じ `NESTING_BUDGET` で再 parse され、`commands()` は `inner_argv` と
-  `subst_argv` を flatten する (ADR 0008)。budget 超過・空 body では
-  capture を捨てるが `has_command_substitution` は true のまま。置換内
-  reader × 機密 (`echo $(cat .env)`) は `sensitive-bash-read` が Ask 以上
-  (PBT で固定)
+- `` `…` `` / `$(…)` / `<(…)` / `>(…)` 本体は opaque word を保ったまま
+  `Argv.subst_argv` へ同じ `NESTING_BUDGET` で再 parse され、`commands()` は
+  `inner_argv` と `subst_argv` を flatten する (ADR 0008)。budget 超過・空
+  body では capture を捨てるが flag は true のまま。置換内 reader × 機密
+  (`echo $(cat .env)`) は `sensitive-bash-read` が Ask 以上 (PBT で固定)。
+  interpreter × subst fetcher (`bash <(curl …)`) は remote-script-pipe が
+  Deny (subst 再帰は fresh `seen_from`)
 - `Argv.head` は最初のトークンを正規化せず保持する (生値契約;
   `full_path_command_keeps_head_intact` が保証)。`Argv::head_basename()` は
   `head.rsplit('/').next()` で比較用の basename を導出する委譲メソッドで、
@@ -219,7 +221,7 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
 
 `src/testing/proptest.rs` に共通戦略 (Decision / Severity / HookInput /
 bash_command / bash_with_quoting / bash_redirects / bash_heredoc /
-bash_process_subst / combined_short_opts / bash_wrapper_nested /
+bash_process_subst / bash_process_subst_remote_pipe / combined_short_opts / bash_wrapper_nested /
 mcp_nested_input / arbitrary_utf8_bytes / safe_command_string /
 safe_heads / pack_override / rule_override / allowlist_entry /
 config_with_filters) を集約し、

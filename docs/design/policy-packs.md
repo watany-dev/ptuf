@@ -46,13 +46,16 @@ inline `KEY=VALUE` 代入も跨ぐ)、`su -c '...'` の内側コードは再 par
 
 - `curl ... | bash`
 - `wget -qO- ... | sh`
+- `bash <(curl ...)` / `bash -c "$(curl ...)"` (process / command subst →
+  `subst_argv`; ADR 0003 C / 0008)
 
 `... | sudo bash` や `... | doas -u root bash`、`... | env bash`、
 `env curl ... | sh` のようなプレフィックスラッパー (`sudo` / `doas` / `pkexec` /
 `run0` / `env` / `command`) 経由の fetcher / interpreter も `unwrap_prefix_wrapper`
 で剥がして判定する (value-taking option も skip する)。fetcher / interpreter の
 head は `head_basename` で basename 化するため `/usr/bin/curl ... | /bin/bash` の
-ようなフルパス head も拾う。
+ようなフルパス head も拾う。subst 再帰は fresh `seen_from` なので
+`echo <(curl) | bash` は発火しない。
 
 ## `core.secrets`
 
