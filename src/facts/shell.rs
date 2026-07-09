@@ -731,71 +731,22 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
             continue;
         }
         // Process substitution `<(…)` / `>(…)`: absorb the entire
-        // parenthesised group as opaque text, balancing nested
-        // parens. Without this, an inner `|` would terminate the word
-        // mid-expression and corrupt the pipeline structure.
+        // parenthesised group as opaque text. Without this, an inner
+        // `|` would terminate the word mid-expression.
         if (c == b'<' || c == b'>') && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
             buf.push(c as char);
             buf.push('(');
             i += 2;
-            let mut depth: usize = 1;
-            while i < bytes.len() && depth > 0 {
-                let run = i;
-                i += memchr::memchr2(b'(', b')', &bytes[i..]).unwrap_or(bytes.len() - i);
-                push_latin1(&mut buf, &bytes[run..i]);
-                if i >= bytes.len() {
-                    break;
-                }
-                let pc = bytes[i];
-                if pc == b'(' {
-                    depth += 1;
-                } else {
-                    depth -= 1;
-                    if depth == 0 {
-                        buf.push(')');
-                        i += 1;
-                        break;
-                    }
-                }
-                buf.push(pc as char);
-                i += 1;
-            }
+            absorb_parens(bytes, &mut i, &mut buf, None);
             continue;
         }
-        // Unquoted `$(…)`: balance-absorb like process substitution and
-        // capture the body for subst_argv re-entry (ADR 0008).
+        // Unquoted `$(…)`: balance-absorb and capture body (ADR 0008).
         if c == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
             saw_subst = true;
             buf.push('$');
             buf.push('(');
             i += 2;
-            let body_start = i;
-            let mut depth: usize = 1;
-            while i < bytes.len() && depth > 0 {
-                let run = i;
-                i += memchr::memchr2(b'(', b')', &bytes[i..]).unwrap_or(bytes.len() - i);
-                push_latin1(&mut buf, &bytes[run..i]);
-                if i >= bytes.len() {
-                    break;
-                }
-                let pc = bytes[i];
-                if pc == b'(' {
-                    depth += 1;
-                } else {
-                    depth -= 1;
-                    if depth == 0 {
-                        let body = latin1_slice(&bytes[body_start..i]);
-                        if !body.is_empty() {
-                            bodies.push(body);
-                        }
-                        buf.push(')');
-                        i += 1;
-                        break;
-                    }
-                }
-                buf.push(pc as char);
-                i += 1;
-            }
+            absorb_parens(bytes, &mut i, &mut buf, Some(&mut bodies));
             continue;
         }
         if c == b'\'' || c == b'"' || c == b'`' {
@@ -839,33 +790,7 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
                     buf.push('$');
                     buf.push('(');
                     i += 2;
-                    let body_start = i;
-                    let mut depth: usize = 1;
-                    while i < bytes.len() && depth > 0 {
-                        let run = i;
-                        i += memchr::memchr2(b'(', b')', &bytes[i..]).unwrap_or(bytes.len() - i);
-                        push_latin1(&mut buf, &bytes[run..i]);
-                        if i >= bytes.len() {
-                            break;
-                        }
-                        let pc = bytes[i];
-                        if pc == b'(' {
-                            depth += 1;
-                        } else {
-                            depth -= 1;
-                            if depth == 0 {
-                                let body = latin1_slice(&bytes[body_start..i]);
-                                if !body.is_empty() {
-                                    bodies.push(body);
-                                }
-                                buf.push(')');
-                                i += 1;
-                                break;
-                            }
-                        }
-                        buf.push(pc as char);
-                        i += 1;
-                    }
+                    absorb_parens(bytes, &mut i, &mut buf, Some(&mut bodies));
                     continue;
                 }
                 // Copy the maximal quoted run in one span: everything up
@@ -956,6 +881,41 @@ fn push_latin1(buf: &mut String, bytes: &[u8]) {
     }
     for &b in bytes {
         buf.push(b as char);
+    }
+}
+
+/// Balance-absorb a parenthesised group. `*i` points at the first byte
+/// *after* the opening `(`. Appends through the matching `)` into `buf`.
+/// When `bodies` is `Some`, also pushes the inner slice for subst re-entry.
+fn absorb_parens(bytes: &[u8], i: &mut usize, buf: &mut String, bodies: Option<&mut Vec<String>>) {
+    let body_start = *i;
+    let mut depth: usize = 1;
+    while *i < bytes.len() && depth > 0 {
+        let run = *i;
+        *i += memchr::memchr2(b'(', b')', &bytes[*i..]).unwrap_or(bytes.len() - *i);
+        push_latin1(buf, &bytes[run..*i]);
+        if *i >= bytes.len() {
+            break;
+        }
+        let pc = bytes[*i];
+        if pc == b'(' {
+            depth += 1;
+        } else {
+            depth -= 1;
+            if depth == 0 {
+                if let Some(bodies) = bodies {
+                    let body = latin1_slice(&bytes[body_start..*i]);
+                    if !body.is_empty() {
+                        bodies.push(body);
+                    }
+                }
+                buf.push(')');
+                *i += 1;
+                break;
+            }
+        }
+        buf.push(pc as char);
+        *i += 1;
     }
 }
 
@@ -1086,8 +1046,8 @@ fn parse_argv(words: Vec<(String, Vec<String>)>, nesting_budget: usize) -> Argv 
         for body in subst_bodies {
             let inner = parse_inner_shell(&body, child_budget);
             argv.subst_argv.extend(inner.commands);
-            // Redirects inside substitution bodies are rare but cheap to
-            // keep on the outer argv for self-protection parity.
+            // ponytail: subst redirects reuse inner_redirects (no separate
+            // field); self-protection / sensitive-bash-read already walk it.
             argv.inner_redirects.extend(inner.redirects);
         }
     }
