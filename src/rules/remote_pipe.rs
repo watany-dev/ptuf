@@ -48,11 +48,12 @@ impl ConfigRule for RemoteScriptPipe {
             .iter()
             .flat_map(|pipe| pipe.commands.iter())
             .any(argv_inner_pipes_to_interpreter);
+        // ponytail: commands() already flattens inner/subst; each node keeps
+        // its own subst_argv, so no separate tree walker.
         let fed_by_subst = bash
-            .segments
-            .iter()
-            .flat_map(|pipe| pipe.commands.iter())
-            .any(argv_tree_interpreter_fed_by_subst_fetcher);
+            .commands()
+            .into_iter()
+            .any(argv_interpreter_fed_by_subst_fetcher);
         if !pipes_in_segment && !pipes_in_inner && !fed_by_subst {
             return None;
         }
@@ -142,19 +143,6 @@ fn argv_tree_has_fetcher(argv: &Argv) -> bool {
 /// tree contains a fetcher — `bash <(curl …)` / `bash -c "$(curl …)"`.
 fn argv_interpreter_fed_by_subst_fetcher(argv: &Argv) -> bool {
     is_interpreter_invocation(argv) && argv.subst_argv.iter().any(argv_tree_has_fetcher)
-}
-
-fn argv_tree_interpreter_fed_by_subst_fetcher(argv: &Argv) -> bool {
-    if argv_interpreter_fed_by_subst_fetcher(argv) {
-        return true;
-    }
-    argv.inner_argv
-        .iter()
-        .any(argv_tree_interpreter_fed_by_subst_fetcher)
-        || argv
-            .subst_argv
-            .iter()
-            .any(argv_tree_interpreter_fed_by_subst_fetcher)
 }
 
 #[cfg(test)]

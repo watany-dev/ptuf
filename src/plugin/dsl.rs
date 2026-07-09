@@ -254,20 +254,6 @@ fn subst_tree_has_from(argv: &Argv, from: &[String]) -> bool {
             .any(|subst| subst_tree_has_from(subst, from))
 }
 
-fn argv_matches_to(argv: &Argv, to: &[String]) -> bool {
-    let head = argv.head_basename();
-    if to.iter().any(|t| t == head) {
-        return true;
-    }
-    if let Some(inner) = unwrap_prefix_wrapper(argv) {
-        let inner_head = inner.head_basename();
-        if to.iter().any(|t| t == inner_head) {
-            return true;
-        }
-    }
-    false
-}
-
 /// Walk one argv node and any nested `inner_argv` payloads, tracking whether a
 /// `from` head was seen before a matching `to` head in pipeline order.
 ///
@@ -282,24 +268,28 @@ fn walk_argv_for_pipeline_from_to(
     seen_from: &mut bool,
 ) -> bool {
     let head = argv.head_basename();
+    let mut matches_to = to.iter().any(|t| t == head);
     if !*seen_from {
         if from.iter().any(|f| f == head) {
             *seen_from = true;
         }
-    } else if to.iter().any(|t| t == head) {
+    } else if matches_to {
         return true;
     }
     if let Some(inner) = unwrap_prefix_wrapper(argv) {
         let inner_head = inner.head_basename();
-        if *seen_from && to.iter().any(|t| t == inner_head) {
-            return true;
+        if to.iter().any(|t| t == inner_head) {
+            matches_to = true;
+            if *seen_from {
+                return true;
+            }
         }
         if !*seen_from && from.iter().any(|f| f == inner_head) {
             *seen_from = true;
         }
     }
     // Interpreter (or other `to`) fed by subst fetcher on the same argv.
-    if argv_matches_to(argv, to)
+    if matches_to
         && argv
             .subst_argv
             .iter()
