@@ -421,19 +421,16 @@ impl Engine {
             .decision
             .rule_id()
             .and_then(|id| self.severity_for(id));
-        let record = AuditRecord::build(
-            std::time::SystemTime::now(),
-            &outcome.decision,
-            outcome.mode,
-            outcome.mode_demoted,
-            input,
-            self.repo_root.as_deref(),
-            severity,
-            command_redacted,
-            outcome.allowlist_id.clone(),
-            self.agent,
-            self.plugin_versions.clone(),
-        );
+        let record = AuditRecord::builder(&outcome.decision, input, command_redacted)
+            .timestamp(std::time::SystemTime::now())
+            .mode(outcome.mode)
+            .mode_demoted(outcome.mode_demoted)
+            .project_root(self.repo_root.as_deref())
+            .severity(severity)
+            .allowlist_id(outcome.allowlist_id.clone())
+            .agent(self.agent)
+            .plugin_versions(self.plugin_versions.clone())
+            .build();
         if let Err(err) = self.audit_sink.record(&record)
             && let Ok(mut guard) = self.audit_write_warnings.lock()
         {

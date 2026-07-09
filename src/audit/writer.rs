@@ -67,33 +67,10 @@ pub fn append_record<W: Write>(dst: &mut W, record: &AuditRecord) -> Result<(), 
 mod tests {
 
     use super::*;
-    use crate::Decision;
-    use crate::config::Mode;
-    use crate::decision::Severity;
-    use crate::hook_input::HookInput;
-    use serde_json::json;
     use std::time::UNIX_EPOCH;
 
     fn rec() -> AuditRecord {
-        AuditRecord::build(
-            UNIX_EPOCH,
-            &Decision::Deny {
-                rule_id: "r".into(),
-                reason: "x".into(),
-            },
-            Mode::Enforce,
-            false,
-            &HookInput {
-                tool_name: "Bash".into(),
-                tool_input: json!({"command": "rm -rf /"}),
-            },
-            None,
-            Some(Severity::Critical),
-            "rm -rf /".into(),
-            None,
-            "claude-code",
-            Vec::new(),
-        )
+        crate::audit::record::test_deny_record("rm -rf /")
     }
 
     #[test]
@@ -229,19 +206,15 @@ mod tests {
         )
             .prop_map(
                 |(secs, decision, mode, demoted, input, severity, cmd, allow, plugins)| {
-                    AuditRecord::build(
-                        UNIX_EPOCH + std::time::Duration::from_secs(secs),
-                        &decision,
-                        mode,
-                        demoted,
-                        &input,
-                        None,
-                        severity,
-                        cmd,
-                        allow,
-                        "claude-code",
-                        plugins,
-                    )
+                    AuditRecord::builder(&decision, &input, cmd)
+                        .timestamp(UNIX_EPOCH + std::time::Duration::from_secs(secs))
+                        .mode(mode)
+                        .mode_demoted(demoted)
+                        .severity(severity)
+                        .allowlist_id(allow)
+                        .agent("claude-code")
+                        .plugin_versions(plugins)
+                        .build()
                 },
             )
     }

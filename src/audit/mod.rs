@@ -159,37 +159,13 @@ impl AuditSink for JsonlSink {
 mod tests {
 
     use super::*;
-    use crate::Decision;
-    use crate::config::Mode;
-    use crate::decision::Severity;
-    use crate::hook_input::HookInput;
-    use serde_json::json;
-    use std::time::UNIX_EPOCH;
 
     fn rec() -> AuditRecord {
         rec_with_command("rm -rf /".into())
     }
 
     fn rec_with_command(command: String) -> AuditRecord {
-        AuditRecord::build(
-            UNIX_EPOCH,
-            &Decision::Deny {
-                rule_id: "r".into(),
-                reason: "x".into(),
-            },
-            Mode::Enforce,
-            false,
-            &HookInput {
-                tool_name: "Bash".into(),
-                tool_input: json!({"command": "rm -rf /"}),
-            },
-            None,
-            Some(Severity::Critical),
-            command,
-            None,
-            "claude-code",
-            Vec::new(),
-        )
+        crate::audit::record::test_deny_record(command)
     }
 
     #[test]
