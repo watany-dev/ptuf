@@ -298,6 +298,27 @@ mod tests {
             .mode(Mode::Enforce)
     }
 
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_build_delegates_to_builder() {
+        let inp = input("Bash", "ls");
+        let r = AuditRecord::build(
+            UNIX_EPOCH,
+            &Decision::Allow,
+            Mode::Enforce,
+            false,
+            &inp,
+            None,
+            None,
+            "ls".into(),
+            None,
+            "cli",
+            Vec::new(),
+        );
+        assert_eq!(r.decision, "allow");
+        assert_eq!(r.agent, "cli");
+    }
+
     // `Duration::from_secs(1_704_067_200)` is a Unix timestamp (the
     // start of 2024 UTC), not a duration in hours; rewriting it as
     // `from_hours(473352)` would erase the calendar semantics that the
