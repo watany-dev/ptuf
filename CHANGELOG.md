@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-09
+
+### Changed (BREAKING)
+- `facts::shell::Argv` に公開フィールド `subst_argv: Vec<Argv>` を追加
+  (ADR 0008)。既存の `Argv { … }` 構造体リテラルは更新が必要。
+
+### Added
+- Command substitution (`$(…)` / backticks) 本体の bounded re-parse。
+  `echo $(cat .env)` を `sensitive-bash-read` が Ask する (issue #161)。
+  `Bash::commands()` は `subst_argv` も flatten する。悲観モードは
+  budget 超過時の backstop として維持。
+
 ## [0.5.1] - 2026-07-08
 
 ### Changed (BREAKING)
@@ -401,7 +413,8 @@ Initial public release.
 - `curl | sh` and PowerShell installers via cargo-dist
 - crates.io publication
 
-[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/watany-dev/ptuf/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/watany-dev/ptuf/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/watany-dev/ptuf/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/watany-dev/ptuf/compare/v0.4.0...v0.4.1
