@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Process substitution (`<(…)` / `>(…)`) 本体を `Argv.subst_argv` へ
+  re-parse (ADR 0003 C / issue #162)。`bash <(curl …)` と
+  `bash -c "$(curl …)"` を `remote-script-pipe` が Deny。subst 再帰は
+  fresh `seen_from` で `echo <(curl) | bash` の漏洩 FP を防ぐ。
+
 ## [0.6.0] - 2026-07-09
 
 ### Changed (BREAKING)

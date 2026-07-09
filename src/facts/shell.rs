@@ -158,8 +158,8 @@ impl Argv {
 
 impl Bash {
     /// All surfaced commands, including nested wrapper payloads such as
-    /// `bash -c`, `xargs`, `find -exec`, and command-substitution
-    /// bodies in [`Argv::subst_argv`].
+    /// `bash -c`, `xargs`, `find -exec`, and substitution bodies
+    /// (`$(…)` / backticks / `<(…)` / `>(…)`) in [`Argv::subst_argv`].
     pub fn commands(&self) -> Vec<&Argv> {
         let mut out = Vec::new();
         for pipe in &self.segments {
