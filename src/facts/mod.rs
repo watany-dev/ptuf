@@ -15,6 +15,7 @@
 
 use crate::HookInput;
 
+pub mod homoglyph;
 pub mod path;
 pub mod project;
 pub mod sensitive;

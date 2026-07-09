@@ -69,6 +69,14 @@ const SENSITIVE_NEEDLES: &[&str] = &[
 /// compiled when a token actually carries a credential-shaped
 /// fragment.
 pub(super) fn matches_sensitive_path(token: &str) -> bool {
+    // Fold curated Unicode confusables to ASCII first so homoglyph
+    // spellings (`.еnv` with a Cyrillic `е`) are caught by the ASCII-only
+    // regex (ADR 0007). Pure-ASCII tokens are returned borrowed, so the
+    // existing needle gate and regex behaviour are unchanged for them.
+    // This mirrors the fold applied in `facts::sensitive::classify_into`,
+    // keeping the two classifiers in parity (`pbt_sensitive_path_matches_classify`).
+    let folded = crate::facts::homoglyph::fold_confusables(token);
+    let token = folded.as_ref();
     // The regex only folds ASCII case (`(?i-u:…)`), so an ASCII
     // lowercase of the token is enough for the needle gate.
     let lower = token.to_ascii_lowercase();
@@ -264,6 +272,24 @@ mod tests {
                 !crate::facts::sensitive::classify(&s).is_empty(),
                 "SENSITIVE_PATH and classify diverged on {:?}",
                 s,
+            );
+        }
+
+        // Homoglyph folding (ADR 0007): a curated confusable spelling of a
+        // sensitive token must be caught by BOTH the Bash-side folded
+        // helper and the file-tool-side `classify`, keeping the two
+        // classifiers in parity on non-ASCII input as well.
+        #[test]
+        fn pbt_homoglyph_sensitive_tokens_caught_by_both(
+            token in crate::testing::proptest::homoglyph_sensitive_token(),
+        ) {
+            prop_assert!(
+                matches_sensitive_path(&token),
+                "matches_sensitive_path missed homoglyph {token:?}",
+            );
+            prop_assert!(
+                !crate::facts::sensitive::classify(&token).is_empty(),
+                "classify missed homoglyph {token:?}",
             );
         }
     }

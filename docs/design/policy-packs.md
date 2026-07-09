@@ -81,6 +81,14 @@ engine レベルの `pbt_sensitive_path_parity_across_surfaces`
 bypass 対策)。`.env` 系の anchor には
 `/`・空白に加えて glob meta (`*`, `?`, `[`, `]`) と `=` も含まれ、`cat *.env`、
 `cp ?.env`、`dd if=.env`、`--env-file=.env` 等の literal token も検出する。
+両分類器は判定の前段で curated な Unicode confusables (同形異字) を ASCII へ
+畳み込むため、`.еnv` (キリル `е` = U+0435) や `．ｅｎｖ` (全角ラテン) のような
+同形異字綴りも ASCII 形と同格に検出する (ADR 0007)。畳み込みは
+`src/facts/homoglyph.rs::fold_confusables` に一元化し両系統から呼ぶことで
+パリティを保つ。ASCII トークンは畳み込みゼロコスト (`Cow::Borrowed`) で挙動
+不変。curated 表 (キリル・ギリシャ・全角 ASCII ブロック) の外にある exotic
+codepoint (Mathematical Alphanumeric Symbols `𝖾` 等) は依然素通りする残余 gap
+で、`tests/bypass/corpus.jsonl` に `known_gap` として境界を pin する。
 
 `sensitive-path-to-network` は segment (`;` / `&&` / `||` 区切り) ごとに判定する
 ため `ls ~/.ssh; curl https://example.com` のように無関係な segment を並べた

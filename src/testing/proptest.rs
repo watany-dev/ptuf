@@ -993,3 +993,80 @@ pub fn sensitive_shaped_token() -> impl Strategy<Value = String> {
     ];
     (prefix, leaf).prop_map(|(p, l)| format!("{p}{l}"))
 }
+
+/// One curated confusable per lowercase ASCII letter that the
+/// `facts::homoglyph` fold table restores. Every returned codepoint folds
+/// back to `c`, so substituting it into a sensitive shape yields a token
+/// that classifies identically after folding. Letters without a curated
+/// lowercase confusable (`b`, `f`, `g`, `l`, `m`, `n`, `r`, `z`) return
+/// `None` and are left as ASCII.
+fn ascii_to_confusable(c: char) -> Option<char> {
+    Some(match c {
+        'a' => '\u{0430}', // Cyrillic а
+        'c' => '\u{0441}', // Cyrillic с
+        'd' => '\u{0501}', // Cyrillic ԁ
+        'e' => '\u{0435}', // Cyrillic е
+        'h' => '\u{04BB}', // Cyrillic һ
+        'i' => '\u{0456}', // Cyrillic і
+        'j' => '\u{0458}', // Cyrillic ј
+        'k' => '\u{043A}', // Cyrillic к
+        'o' => '\u{043E}', // Cyrillic о
+        'p' => '\u{0440}', // Cyrillic р
+        'q' => '\u{051B}', // Cyrillic ԛ
+        's' => '\u{0455}', // Cyrillic ѕ
+        't' => '\u{03C4}', // Greek τ
+        'u' => '\u{03C5}', // Greek υ
+        'v' => '\u{03BD}', // Greek ν
+        'w' => '\u{051D}', // Cyrillic ԝ
+        'x' => '\u{0445}', // Cyrillic х
+        'y' => '\u{0443}', // Cyrillic у
+        _ => return None,
+    })
+}
+
+/// Rewrite `base` by substituting a `seed`-selected subset of its
+/// confusable-eligible ASCII letters with their homoglyph. At least one
+/// eligible letter is always substituted, so the result carries a
+/// non-ASCII byte and exercises the fold path; every substituted
+/// codepoint folds back to the original letter, so the folded token is
+/// byte-identical to `base`.
+fn substitute_confusables(base: &str, seed: u64) -> String {
+    // Force the first eligible letter so the result always carries a
+    // non-ASCII byte; any other eligible letter is substituted when its
+    // `seed` bit is set.
+    let first_eligible = base
+        .char_indices()
+        .find(|(_, c)| ascii_to_confusable(*c).is_some())
+        .map(|(i, _)| i);
+    let mut out = String::with_capacity(base.len());
+    for (bit, (idx, c)) in base.char_indices().enumerate() {
+        let want = Some(idx) == first_eligible || seed & (1_u64 << (bit % 64)) != 0;
+        out.push(ascii_to_confusable(c).filter(|_| want).unwrap_or(c));
+    }
+    out
+}
+
+/// Homoglyph spellings of sensitive path tokens: a curated sensitive
+/// shape with a `seed`-selected subset of its letters replaced by
+/// confusables that fold back to ASCII. Every generated token must, after
+/// `facts::homoglyph::fold_confusables`, classify identically to its
+/// ASCII form on both the Bash-side (`matches_sensitive_path`) and
+/// file-tool-side (`classify`) detectors (ADR 0007).
+pub fn homoglyph_sensitive_token() -> impl Strategy<Value = String> {
+    let base = proptest::sample::select(
+        &[
+            ".env",
+            ".env.production",
+            ".npmrc",
+            ".pypirc",
+            "id_rsa",
+            "id_dsa",
+            "id_ecdsa",
+            "~/.ssh/id_rsa",
+            "~/.aws/credentials",
+            "~/.kube/config",
+            "~/.docker/config.json",
+        ][..],
+    );
+    (base, any::<u64>()).prop_map(|(base, seed)| substitute_confusables(base, seed))
+}

@@ -23,7 +23,7 @@ opaque な flag surface として扱う点に限定される。
 
 | 状態 | 項目 |
 | --- | --- |
-| Resolved in current HEAD | §2 / D4 parser wrapper・redirect 系、D10 adapter 分離、D12 contract test 拡充、§5.4 Claude Code hook stable marker、§6.1 proptest strategy feature gate、§4.3 reason temporary allocation、§4.5 self-protection label allocation、D11 大型ファイル分割 (engine / cli / doctor)、§1 権限昇格ラッパー unwrap 一般化 (sudo/doas/pkexec/run0/su)、2026-06 A1–A3 機密 path / rm / dev/tcp bypass (ADR 0002)、B3 nesting_budget=3、B4 plugin shell.pipeline inner_argv |
+| Resolved in current HEAD | §2 / D4 parser wrapper・redirect 系、D10 adapter 分離、D12 contract test 拡充、§5.4 Claude Code hook stable marker、§6.1 proptest strategy feature gate、§4.3 reason temporary allocation、§4.5 self-protection label allocation、D11 大型ファイル分割 (engine / cli / doctor)、§1 権限昇格ラッパー unwrap 一般化 (sudo/doas/pkexec/run0/su)、2026-06 A1–A3 機密 path / rm / dev/tcp bypass (ADR 0002)、B3 nesting_budget=3、B4 plugin shell.pipeline inner_argv、2026-07 B1 Unicode homoglyph 畳み込み (ADR 0007) |
 | Deferred architecture backlog | §1.3 / §4.1 data model・borrowed shell AST、§4.4 plugin cache、§5.1 CLI parser、§1.1 / §1.2 builtin rule / DSL 統合 |
 | Deferred design choice | §6.2 coverage 95% 方針転換候補 |
 
@@ -45,6 +45,12 @@ opaque な flag surface として扱う点に限定される。
 
 - 権限昇格ラッパーのネストは `nesting_budget = 3` まで展開する。
   4 段超は最深層を取り逃す (`tests/bypass/corpus.jsonl` で上限を pin)。
+- Unicode homoglyph (`.еnv` キリル e / `．ｅｎｖ` 全角等) は curated
+  confusables 畳み込みで解消済み (ADR 0007、`src/facts/homoglyph.rs`)。
+  ただし curated 表の外にある exotic codepoint (Mathematical Alphanumeric
+  Symbols `𝖾` 等) は依然素通りする残余 gap。
+  `tests/bypass/corpus.jsonl` の `gap-unicode-homoglyph-uncurated-codepoint`
+  で境界を pin し、表拡張時に更新を強制する。
 
 (§3.3 / §3.5 は解消済み。`Bash::has_command_substitution`
 で command substitution を pessimistic 扱いに surface できるようになった。

@@ -77,7 +77,8 @@ regex (`SSH_DIR` 等) の prefix を `(?:^|/|\s|(?:~|$HOME|${HOME})/)` に統一
 
 ### Known limitations (本イテレーション外)
 
-- B1 Unicode homoglyph `.еnv` (GAP-01)
+- ~~B1 Unicode homoglyph `.еnv` (GAP-01)~~ — 解消 (ADR 0007、curated
+  confusables 畳み込み)。curated 表外の exotic codepoint のみ残余 gap。
 - B2 Bash token symlink (GAP-15)
 - B5 `echo $(cat .env)` — cmdsubst opaque 化 (GAP-01)
 - C2 `$CMD .env` 変数 head 隠蔽

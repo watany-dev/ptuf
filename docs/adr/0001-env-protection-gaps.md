@@ -109,7 +109,8 @@ Accepted (2026-05-11).
   内部での `.env` 参照は `core.engine.dynamic-eval` の Ask に依存。
 - Bash arg の symlink 解決 (`cat /tmp/link.env` の link が `.env` を指す
   ケース) は I/O コストのため対応しない。
-- Unicode homoglyph (`.еnv` キリル e 等) は規模から本イテレーション対象外。
+- Unicode homoglyph (`.еnv` キリル e 等) は curated confusables 畳み込みで
+  解決済み (ADR 0007)。curated 表の外にある exotic codepoint のみ残余 gap。
 - `echo $(cat .env)` のように、外側 argv head が非 reader で内側に
   reader が隠れる command-substitution shape は parser 制約により
   pessimistic mode でも取り逃す (`cat $(echo .env)` 型は cover)。

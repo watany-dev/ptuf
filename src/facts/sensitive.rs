@@ -178,6 +178,13 @@ pub fn classify(token: &str) -> Vec<SensitivePath> {
 /// [`classify`] variant that appends into a caller-owned buffer, so
 /// per-token sweeps over large payloads skip the intermediate `Vec`.
 pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
+    // Fold curated Unicode confusables to ASCII first so homoglyph
+    // spellings (`.еnv` with a Cyrillic `е`) resolve to the same shapes
+    // as their ASCII form (ADR 0007). Pure-ASCII tokens — the common
+    // case — are returned borrowed, so the byte-mask fast path below is
+    // unchanged for them.
+    let folded = crate::facts::homoglyph::fold_confusables(token);
+    let token = folded.as_ref();
     let mask = needle_mask(token.as_bytes());
     if mask == 0 {
         return;
@@ -608,6 +615,18 @@ mod tests {
                     "expected SshDir from {s:?}, got {kinds:?}",
                 );
             }
+        }
+
+        // Homoglyph folding (ADR 0007): confusable spellings of sensitive
+        // tokens classify identically to their ASCII form after folding.
+        #[test]
+        fn pbt_homoglyph_tokens_classify(
+            token in crate::testing::proptest::homoglyph_sensitive_token(),
+        ) {
+            prop_assert!(
+                !classify(&token).is_empty(),
+                "classify missed homoglyph {token:?}",
+            );
         }
     }
 }
