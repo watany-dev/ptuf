@@ -911,7 +911,7 @@ pub fn bash_cmdsubst_outer_nonreader_sensitive() -> impl Strategy<Value = String
         proptest::sample::select(&["echo", "printf", "true", "false"][..]),
         proptest::sample::select(&["cat", "head", "tail", "source"][..]),
         proptest::sample::select(&[".env", ".env.local", ".env.production", "~/.ssh/id_rsa"][..]),
-        proptest::bool(),
+        proptest::bool::ANY,
     )
         .prop_map(|(outer, reader, token, dollar)| {
             if dollar {

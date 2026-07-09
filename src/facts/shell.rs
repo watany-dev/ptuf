@@ -811,7 +811,7 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
                         i += 2;
                         continue;
                     }
-                    push_latin1(&mut buf, &bytes[i..i + 1]);
+                    push_latin1(&mut buf, &bytes[i..=i]);
                     i += 1;
                 }
                 let body = latin1_slice(&bytes[body_start..i]);
