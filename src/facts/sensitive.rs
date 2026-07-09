@@ -167,7 +167,6 @@ const PROBES: &[(SensitiveKind, &str, &str)] = &[
 static SENSITIVE_REGEXES: [OnceLock<Regex>; PROBES.len()] =
     [const { OnceLock::new() }; PROBES.len()];
 
-
 /// Fold needle lookalikes (Cyrillic / Greek) to ASCII, after optional
 /// Latin-1→UTF-8 recovery for Bash `push_latin1` mojibake.
 ///
@@ -580,7 +579,6 @@ mod tests {
 
     use crate::testing::proptest::sensitive_kind;
     use proptest::prelude::*;
-
 
     #[test]
     fn homoglyph_single_letter_fold_matches_ascii() {
