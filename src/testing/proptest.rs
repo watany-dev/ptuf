@@ -993,3 +993,65 @@ pub fn sensitive_shaped_token() -> impl Strategy<Value = String> {
     ];
     (prefix, leaf).prop_map(|(p, l)| format!("{p}{l}"))
 }
+
+/// ASCII letters in credential needles that have known Cyrillic/Greek
+/// lookalikes in [`crate::facts::sensitive::fold_sensitive_homoglyphs`].
+/// Pairs must match `fold_char` (visual lookalikes: Cyrillic р → p, Greek ν → v).
+pub const NEEDLE_HOMOGLYPHS: &[(char, char)] = &[
+    ('a', '\u{0430}'), // Cyrillic а
+    ('e', '\u{0435}'), // Cyrillic е
+    ('o', '\u{043E}'), // Cyrillic о
+    ('c', '\u{0441}'), // Cyrillic с
+    ('p', '\u{0440}'), // Cyrillic р (looks like p, not r)
+    ('x', '\u{0445}'), // Cyrillic х
+    ('y', '\u{0443}'), // Cyrillic у
+    ('i', '\u{0456}'), // Cyrillic і
+    ('s', '\u{0455}'), // Cyrillic ѕ
+    ('v', '\u{03BD}'), // Greek ν (looks like v)
+    ('k', '\u{03BA}'), // Greek κ
+    ('t', '\u{03C4}'), // Greek τ
+    ('h', '\u{03B7}'), // Greek η
+    ('u', '\u{03C5}'), // Greek υ
+];
+
+/// Credential-shaped needles with one ASCII letter replaced by a known
+/// homoglyph lookalike. Returns `(homoglyph_token, ascii_needle)`.
+const HOMOGLYPH_NEEDLES: &[&str] = &[
+    ".env", ".ssh", ".aws", ".npmrc", ".pypirc", "id_rsa", ".tfstate",
+];
+
+pub fn homoglyph_substituted_needle() -> impl Strategy<Value = (String, String)> {
+    (
+        proptest::sample::select(HOMOGLYPH_NEEDLES),
+        proptest::sample::select(NEEDLE_HOMOGLYPHS),
+    )
+        .prop_filter(
+            "needle must contain ascii letter",
+            |(needle, (ascii, _))| needle.contains(*ascii),
+        )
+        .prop_map(|(needle, (ascii, homoglyph))| {
+            let mut out = String::new();
+            let mut replaced = false;
+            for c in needle.chars() {
+                if !replaced && c == ascii {
+                    out.push(homoglyph);
+                    replaced = true;
+                } else {
+                    out.push(c);
+                }
+            }
+            (out, needle.to_string())
+        })
+}
+
+/// Non-ASCII text that must not classify as a credential path after fold.
+pub fn non_table_non_ascii_token() -> impl Strategy<Value = String> {
+    proptest::sample::select(
+        &[
+            "\u{8d44}\u{6599}.txt",
+            "\u{30c6}\u{30b9}\u{30c8}.md",
+            "\u{0447}\u{0442}\u{043e}.txt",
+        ][..],
+    )
+    .prop_map(std::string::ToString::to_string)
+}

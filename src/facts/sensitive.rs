@@ -429,6 +429,13 @@ mod tests {
     }
 
     #[test]
+    fn fold_is_noop_for_ascii() {
+        let token = "/home/user/.ssh/id_rsa";
+        let folded = fold_sensitive_homoglyphs(token);
+        assert!(matches!(folded, Cow::Borrowed(s) if std::ptr::eq(s, token)));
+    }
+
+    #[test]
     fn classifies_case_variant_paths() {
         assert!(kinds(".ENV").contains(&SensitiveKind::Dotenv));
         assert!(kinds(".Env.PRODUCTION").contains(&SensitiveKind::Dotenv));
@@ -581,31 +588,6 @@ mod tests {
     use proptest::prelude::*;
 
     #[test]
-    fn homoglyph_single_letter_fold_matches_ascii() {
-        // Replacing one ASCII needle letter with a table lookalike must
-        // classify the same as the plain ASCII token (ADR 0007).
-        let pairs = [
-            (".env", ".\u{0435}nv"),     // Cyrillic e
-            (".env", ".\u{03B5}nv"),     // Greek epsilon
-            (".ssh", ".\u{0455}sh"),     // Cyrillic dze → s
-            (".aws", ".\u{0430}ws"),     // Cyrillic a
-            ("id_rsa", "id_r\u{0455}a"), // Cyrillic s
-            (".npmrc", ".n\u{0440}mrc"), // Cyrillic p
-            (".pypirc", ".\u{0440}ypirc"),
-        ];
-        for (ascii, glyph) in pairs {
-            let a = classify(ascii);
-            let g = classify(glyph);
-            assert_eq!(
-                a.iter().map(|m| m.kind).collect::<Vec<_>>(),
-                g.iter().map(|m| m.kind).collect::<Vec<_>>(),
-                "ascii={ascii:?} glyph={glyph:?}"
-            );
-            assert!(!a.is_empty(), "sanity: {ascii:?} must classify");
-        }
-    }
-
-    #[test]
     fn fold_table_miss_does_not_invent_hit() {
         // Hiragana / CJK outside the fold table must not become a needle.
         assert!(classify(".\u{3042}nv").is_empty());
@@ -615,6 +597,24 @@ mod tests {
     proptest! {
         // classify never panics on arbitrary printable ASCII.
         #[test]
+        // Homoglyph substitution on a needle letter must classify like ASCII.
+        #[test]
+        fn pbt_homoglyph_needle_classifies_like_ascii(
+            (token, needle) in crate::testing::proptest::homoglyph_substituted_needle(),
+        ) {
+            let ascii_kinds = kinds(&needle);
+            let homoglyph_kinds = kinds(&token);
+            prop_assert_eq!(homoglyph_kinds, ascii_kinds);
+        }
+
+        // Non-table non-ASCII must not invent a credential classification.
+        #[test]
+        fn pbt_non_table_non_ascii_preserves_classify(
+            token in crate::testing::proptest::non_table_non_ascii_token(),
+        ) {
+            prop_assert!(classify(&token).is_empty(), "false positive on {token:?}");
+        }
+
         #[test]
         fn pbt_fold_is_idempotent(s in "\\PC{0,40}") {
             let once = fold_sensitive_homoglyphs(&s);
@@ -622,16 +622,6 @@ mod tests {
             prop_assert_eq!(once.as_ref(), twice.as_ref());
         }
 
-        #[test]
-        fn pbt_fold_outside_table_preserves_classify(s in "[ -~]{0,20}\\PC{0,5}[ -~]{0,20}") {
-            // If fold changes nothing, classify is unchanged (tautology on
-            // the folded path). Pin: tokens whose fold equals themselves
-            // classify identically before/after an explicit fold call.
-            let folded = fold_sensitive_homoglyphs(&s);
-            if folded.as_ref() == s.as_str() {
-                prop_assert_eq!(classify(&s), classify(folded.as_ref()));
-            }
-        }
 
         fn pbt_classify_never_panics(s in "[ -~]{0,80}") {
             let _ = classify(&s);

@@ -266,6 +266,16 @@ mod tests {
         }
 
         #[test]
+        fn pbt_sensitive_path_matches_classify_on_homoglyphs(
+            (token, _needle) in crate::testing::proptest::homoglyph_substituted_needle(),
+        ) {
+            prop_assert_eq!(
+                matches_sensitive_path(&token),
+                !crate::facts::sensitive::classify(&token).is_empty(),
+            );
+        }
+
+        #[test]
         fn pbt_sensitive_path_matches_classify_on_secret_shapes(
             s in crate::testing::proptest::sensitive_shaped_token(),
         ) {
