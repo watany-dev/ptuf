@@ -44,9 +44,13 @@ pub(crate) fn fold_sensitive_homoglyphs(token: &str) -> Cow<'_, str>
 内部:
 
 1. `token.is_ascii()` → `Cow::Borrowed(token)` で即 return。
-2. 全 `char` が `≤ U+00FF` なら `bytes = token.chars().map(|c| c as u8)` を
-   `str::from_utf8` で再デコード。成功したらその `&str` を fold 対象に、
-   失敗したら元 token のまま fold。
+2. **Latin-1 再デコード (Bash 経路専用の前処理)**: 全 `char` が
+   `≤ U+00FF` のときだけ `bytes = token.chars().map(|c| c as u8)` を
+   `str::from_utf8` で再デコード。成功したら recovered を fold 対象に、
+   失敗 / 条件不一致なら元 token のまま fold。
+   - 本物 UTF-8 `.еnv` (Read 経路): `е` は U+0435 > U+00FF → 再デコード
+     スキップ → 直後の fold table が `е→e`。
+   - Bash mojibake `.Ðµnv`: 全 char ≤ FF → 再デコードで `.еnv` 復元 → fold。
 3. char 単位で `fold_char(c) -> char` (`match` table)。変化が無ければ
    Borrowed / 元の recovered を返し、1 文字でも変われば `String` を Owned で返す。
 
