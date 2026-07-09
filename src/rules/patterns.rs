@@ -69,13 +69,14 @@ const SENSITIVE_NEEDLES: &[&str] = &[
 /// compiled when a token actually carries a credential-shaped
 /// fragment.
 pub(super) fn matches_sensitive_path(token: &str) -> bool {
+    let normalized = crate::facts::sensitive::normalize_for_sensitive_match(token);
     // The regex only folds ASCII case (`(?i-u:…)`), so an ASCII
-    // lowercase of the token is enough for the needle gate.
-    let lower = token.to_ascii_lowercase();
+    // lowercase of the normalized token is enough for the needle gate.
+    let lower = normalized.to_ascii_lowercase();
     if !SENSITIVE_NEEDLES.iter().any(|n| lower.contains(n)) {
         return false;
     }
-    SENSITIVE_PATH.is_match(token)
+    SENSITIVE_PATH.is_match(normalized.as_ref())
 }
 
 /// True when this argv has a token (head, positional/flag arg, or env
@@ -96,6 +97,12 @@ pub(super) fn argv_references_sensitive(argv: &Argv) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sensitive_path_matches_cyrillic_dotenv() {
+        assert!(matches_sensitive_path(".\u{0435}nv"));
+    }
+
     #[test]
     fn sensitive_path_matches_dotenv_case_insensitive() {
         let cases = [
@@ -256,6 +263,17 @@ mod tests {
         }
 
         #[test]
+
+        #[test]
+        fn pbt_sensitive_path_matches_classify_on_homoglyphs(
+            (token, _needle) in crate::testing::proptest::homoglyph_substituted_needle(),
+        ) {
+            prop_assert_eq!(
+                crate::rules::patterns::matches_sensitive_path(&token),
+                !crate::facts::sensitive::classify(&token).is_empty(),
+            );
+        }
+
         fn pbt_sensitive_path_matches_classify_on_secret_shapes(
             s in crate::testing::proptest::sensitive_shaped_token(),
         ) {

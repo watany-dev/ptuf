@@ -993,3 +993,55 @@ pub fn sensitive_shaped_token() -> impl Strategy<Value = String> {
     ];
     (prefix, leaf).prop_map(|(p, l)| format!("{p}{l}"))
 }
+
+/// ASCII letters in credential needles that have known Cyrillic/Greek
+/// lookalikes in [`crate::facts::sensitive::normalize_for_sensitive_match`].
+pub const NEEDLE_HOMOGLYPHS: &[(char, char)] = &[
+    ('a', '\u{0430}'), // Cyrillic а
+    ('e', '\u{0435}'), // Cyrillic е
+    ('o', '\u{043E}'), // Cyrillic о
+    ('c', '\u{0441}'), // Cyrillic с
+    ('r', '\u{0440}'), // Cyrillic р
+    ('x', '\u{0445}'), // Cyrillic х
+    ('y', '\u{0443}'), // Cyrillic у
+    ('i', '\u{0456}'), // Cyrillic і
+    ('n', '\u{03BD}'), // Greek ν
+    ('k', '\u{03BA}'), // Greek κ
+    ('t', '\u{03C4}'), // Greek τ
+];
+
+/// Credential-shaped needles with one ASCII letter replaced by a known
+/// homoglyph lookalike. Returns `(homoglyph_token, ascii_needle)`.
+const HOMOGLYPH_NEEDLES: &[&str] = &[
+    ".env", ".ssh", ".aws", ".npmrc", ".pypirc", "id_rsa", ".tfstate",
+];
+
+pub fn homoglyph_substituted_needle() -> impl Strategy<Value = (String, String)> {
+    (
+        proptest::sample::select(HOMOGLYPH_NEEDLES),
+        proptest::sample::select(NEEDLE_HOMOGLYPHS),
+    )
+        .prop_filter(
+            "needle must contain ascii letter",
+            |(needle, (ascii, _))| needle.contains(*ascii),
+        )
+        .prop_map(|(needle, (ascii, homoglyph))| {
+            let mut out = String::new();
+            let mut replaced = false;
+            for c in needle.chars() {
+                if !replaced && c == ascii {
+                    out.push(homoglyph);
+                    replaced = true;
+                } else {
+                    out.push(c);
+                }
+            }
+            (out, needle.to_string())
+        })
+}
+
+/// Non-ASCII text that must not change classification after normalization.
+pub fn non_table_non_ascii_token() -> impl Strategy<Value = String> {
+    proptest::sample::select(&["资料.txt", "テスト.md", "что.txt"][..])
+        .prop_map(std::string::ToString::to_string)
+}

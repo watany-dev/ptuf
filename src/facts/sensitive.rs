@@ -8,6 +8,7 @@
 //! [`SensitiveKind`] without disturbing the existing rule's tests.
 
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// Distinct kinds of sensitive token that `classify` recognises.
@@ -166,6 +167,70 @@ const PROBES: &[(SensitiveKind, &str, &str)] = &[
 static SENSITIVE_REGEXES: [OnceLock<Regex>; PROBES.len()] =
     [const { OnceLock::new() }; PROBES.len()];
 
+/// Recover UTF-8 that was widened byte-by-byte through the shell parser's
+/// Latin-1 decode (`push_latin1`). Cyrillic `.еnv` arrives as `.Ðµnv` on
+/// argv tokens; re-encoding the U+00FF-or-below chars as bytes and
+/// re-decoding as UTF-8 yields the original scalar sequence for folding.
+fn try_recover_mojibake_utf8(token: &str) -> Option<String> {
+    if token.chars().any(|c| c > '\u{00FF}') {
+        return None;
+    }
+    let bytes: Vec<u8> = token
+        .chars()
+        .filter_map(|c| u8::try_from(c as u32).ok())
+        .collect();
+    std::str::from_utf8(&bytes).ok().map(str::to_string)
+}
+
+/// Map a bounded set of Cyrillic/Greek lookalikes for credential-needle
+/// letters to ASCII. Unknown scalars pass through unchanged so legitimate
+/// non-ASCII filenames (e.g. CJK) are not falsely promoted to secrets.
+fn fold_sensitive_homoglyph(c: char) -> char {
+    match c {
+        '\u{0430}' | '\u{0410}' | '\u{03B1}' | '\u{0391}' => 'a',
+        '\u{0435}' | '\u{0415}' | '\u{03B5}' | '\u{0395}' => 'e',
+        '\u{043E}' | '\u{041E}' | '\u{03BF}' | '\u{039F}' => 'o',
+        '\u{0441}' | '\u{0421}' => 'c',
+        '\u{0440}' | '\u{0420}' | '\u{03C1}' | '\u{03A1}' => 'r',
+        '\u{0445}' | '\u{0425}' => 'x',
+        '\u{0443}' | '\u{0423}' | '\u{03C5}' | '\u{03A5}' => 'y',
+        '\u{0456}' | '\u{0406}' | '\u{03B9}' | '\u{0399}' => 'i',
+        '\u{03BD}' | '\u{039D}' => 'n',
+        '\u{03BA}' | '\u{039A}' => 'k',
+        '\u{03C4}' | '\u{03A4}' => 't',
+        other => other,
+    }
+}
+
+/// Normalize a token before sensitive-path needle/regex matching.
+///
+/// ASCII-only tokens are returned borrowed with zero extra work. Tokens
+/// that may carry homoglyph bypasses are mojibake-recovered (when the
+/// shell parser widened UTF-8 bytes as Latin-1) and then homoglyph-folded
+/// to ASCII. Shared by [`classify_into`] and
+/// [`crate::rules::patterns::matches_sensitive_path`] for classifier parity.
+pub(crate) fn normalize_for_sensitive_match(token: &str) -> Cow<'_, str> {
+    if token.is_ascii() {
+        return Cow::Borrowed(token);
+    }
+    let recovered = try_recover_mojibake_utf8(token);
+    let working = recovered.as_deref().unwrap_or(token);
+    let mut changed = recovered.is_some();
+    let mut buf = String::with_capacity(working.len());
+    for c in working.chars() {
+        let folded = fold_sensitive_homoglyph(c);
+        if folded != c {
+            changed = true;
+        }
+        buf.push(folded);
+    }
+    if changed {
+        Cow::Owned(buf)
+    } else {
+        Cow::Borrowed(token)
+    }
+}
+
 /// Inspect a single string token and return every sensitive shape it
 /// matches. The slice preserves variant declaration order for
 /// determinism.
@@ -178,7 +243,8 @@ pub fn classify(token: &str) -> Vec<SensitivePath> {
 /// [`classify`] variant that appends into a caller-owned buffer, so
 /// per-token sweeps over large payloads skip the intermediate `Vec`.
 pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
-    let mask = needle_mask(token.as_bytes());
+    let normalized = normalize_for_sensitive_match(token);
+    let mask = needle_mask(normalized.as_bytes());
     if mask == 0 {
         return;
     }
@@ -187,7 +253,7 @@ pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
             continue;
         }
         let re = SENSITIVE_REGEXES[idx].get_or_init(|| build(pat));
-        for m in re.find_iter(token) {
+        for m in re.find_iter(normalized.as_ref()) {
             out.push(SensitivePath {
                 kind: *kind,
                 raw: m.as_str().to_string(),
@@ -494,6 +560,30 @@ mod tests {
         assert!(ms.iter().any(|m| m.kind == SensitiveKind::PrivateKeyFile));
     }
 
+    #[test]
+    fn classifies_cyrillic_dotenv_homoglyph() {
+        assert!(kinds(".\u{0435}nv").contains(&SensitiveKind::Dotenv));
+    }
+
+    #[test]
+    fn mojibake_dotenv_recovered_from_shell_token() {
+        // UTF-8 `.еnv` widened through push_latin1: `.` + U+00D0 + U+00B5 + `nv`.
+        let mojibake = ".\u{00D0}\u{00B5}nv";
+        assert!(kinds(mojibake).contains(&SensitiveKind::Dotenv));
+    }
+
+    #[test]
+    fn homoglyph_fold_does_not_classify_legitimate_cjk() {
+        assert!(classify("\u{8D44}\u{6599}.txt").is_empty());
+    }
+
+    #[test]
+    fn normalize_is_noop_for_ascii() {
+        let token = "/home/user/.ssh/id_rsa";
+        let normalized = normalize_for_sensitive_match(token);
+        assert!(matches!(normalized, Cow::Borrowed(s) if std::ptr::eq(s, token)));
+    }
+
     use crate::testing::proptest::sensitive_kind;
     use proptest::prelude::*;
 
@@ -597,7 +687,26 @@ mod tests {
             );
         }
 
-                // SSH-dir samples always classify as SshDir.
+
+        // Homoglyph substitution on a needle letter must classify like ASCII.
+        #[test]
+        fn pbt_homoglyph_needle_classifies_like_ascii(
+            (token, needle) in crate::testing::proptest::homoglyph_substituted_needle(),
+        ) {
+            let ascii_kinds = kinds(&needle);
+            let homoglyph_kinds = kinds(&token);
+            prop_assert_eq!(homoglyph_kinds, ascii_kinds);
+        }
+
+        // Non-table non-ASCII must not change classification vs pre-normalize view.
+        #[test]
+        fn pbt_non_table_non_ascii_preserves_classify(
+            token in crate::testing::proptest::non_table_non_ascii_token(),
+        ) {
+            prop_assert!(classify(&token).is_empty(), "false positive on {token:?}");
+        }
+
+        // SSH-dir samples always classify as SshDir.
         #[test]
         fn pbt_ssh_dir_always_classifies(tail in "[a-zA-Z0-9_./-]{0,16}") {
             for prefix in ["~", "$HOME", "${HOME}"] {
