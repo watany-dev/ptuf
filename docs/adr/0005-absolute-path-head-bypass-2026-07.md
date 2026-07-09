@@ -81,8 +81,8 @@ inner head も同様に basename 照合する。
   照合するようになった (`243`, `252`, `283` 行)。テスト
   `evaluate_shell_argv_head_any_matches_basename` /
   `evaluate_shell_pipeline_matches_basename` で pin 済み。
-- ADR 0002 / 0003 の据え置き項目 (Unicode homoglyph / symlink /
-  コマンド置換 / プロセス置換 / 変数 head) は継続。
+- ADR 0002 / 0003 の据え置き項目 (~~Unicode homoglyph~~ / symlink /
+  コマンド置換 / プロセス置換 / 変数 head) は継続。Unicode homoglyph は ADR 0007 で解消。
 
 ## Implementation map
 

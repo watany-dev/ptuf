@@ -104,8 +104,8 @@ surface する変更を入れると期待が破れ、意図的な corpus / ADR �
 ### Known limitations (本イテレーション外 / 継続)
 
 - C `bash <(curl …)` — プロセス置換 opaque 化 (本 ADR で known_gap 固定)
-- ADR 0002 の B1/B2/B5/C2 (Unicode homoglyph / symlink / cmdsubst /
-  変数 head) は据え置き
+- ADR 0002 の ~~B1~~/B2/B5/C2 (~~Unicode homoglyph~~ / symlink / cmdsubst /
+  変数 head) は据え置き。B1 は ADR 0007 で解消
 - ~~C3 `rm -rf /e*` glob 展開前 bypass~~ — 解消 (ADR 0006)
 
 ## Implementation map

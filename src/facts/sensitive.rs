@@ -177,8 +177,8 @@ pub(crate) fn fold_sensitive_homoglyphs(token: &str) -> Cow<'_, str> {
     if token.is_ascii() {
         return Cow::Borrowed(token);
     }
-    // Bash path: Latin-1 mojibake of UTF-8 → recover when every char ≤ U+00FF.
-    let recovered: Cow<'_, str> = if token.chars().all(|c| c <= '\u{00FF}') {
+    // Bash `push_latin1` mojibake: re-decode when every char ≤ U+00FF.
+    let working: Cow<'_, str> = if token.chars().all(|c| c <= '\u{00FF}') {
         let bytes: Vec<u8> = token.chars().map(|c| c as u8).collect();
         match std::str::from_utf8(&bytes) {
             Ok(s) => Cow::Owned(s.to_owned()),
@@ -187,20 +187,18 @@ pub(crate) fn fold_sensitive_homoglyphs(token: &str) -> Cow<'_, str> {
     } else {
         Cow::Borrowed(token)
     };
-    let folded = fold_lookalike_chars(recovered.as_ref());
-    if folded.as_str() == token {
-        Cow::Borrowed(token)
+    let mut buf = String::with_capacity(working.len());
+    let mut changed = matches!(&working, Cow::Owned(_));
+    for c in working.chars() {
+        let f = fold_char(c);
+        changed |= f != c;
+        buf.push(f);
+    }
+    if changed {
+        Cow::Owned(buf)
     } else {
-        Cow::Owned(folded)
+        Cow::Borrowed(token)
     }
-}
-
-fn fold_lookalike_chars(token: &str) -> String {
-    let mut out = String::with_capacity(token.len());
-    for c in token.chars() {
-        out.push(fold_char(c));
-    }
-    out
 }
 
 fn fold_char(c: char) -> char {

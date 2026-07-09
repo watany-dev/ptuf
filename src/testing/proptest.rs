@@ -997,7 +997,7 @@ pub fn sensitive_shaped_token() -> impl Strategy<Value = String> {
 /// ASCII letters in credential needles that have known Cyrillic/Greek
 /// lookalikes in [`crate::facts::sensitive::fold_sensitive_homoglyphs`].
 /// Pairs must match `fold_char` (visual lookalikes: Cyrillic р → p, Greek ν → v).
-pub const NEEDLE_HOMOGLYPHS: &[(char, char)] = &[
+const NEEDLE_HOMOGLYPHS: &[(char, char)] = &[
     ('a', '\u{0430}'), // Cyrillic а
     ('e', '\u{0435}'), // Cyrillic е
     ('o', '\u{043E}'), // Cyrillic о
