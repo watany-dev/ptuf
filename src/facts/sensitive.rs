@@ -8,6 +8,7 @@
 //! [`SensitiveKind`] without disturbing the existing rule's tests.
 
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// Distinct kinds of sensitive token that `classify` recognises.
@@ -166,6 +167,66 @@ const PROBES: &[(SensitiveKind, &str, &str)] = &[
 static SENSITIVE_REGEXES: [OnceLock<Regex>; PROBES.len()] =
     [const { OnceLock::new() }; PROBES.len()];
 
+
+/// Fold needle lookalikes (Cyrillic / Greek) to ASCII, after optional
+/// Latin-1→UTF-8 recovery for Bash `push_latin1` mojibake.
+///
+/// ASCII-only tokens return [`Cow::Borrowed`] (zero cost). Non-ASCII
+/// outside the fold table is left unchanged (fail-closed; no FP on
+/// legitimate non-ASCII filenames). See ADR 0007 / issue #163.
+pub(crate) fn fold_sensitive_homoglyphs(token: &str) -> Cow<'_, str> {
+    if token.is_ascii() {
+        return Cow::Borrowed(token);
+    }
+    // Bash path: Latin-1 mojibake of UTF-8 → recover when every char ≤ U+00FF.
+    let recovered: Cow<'_, str> = if token.chars().all(|c| c <= '\u{00FF}') {
+        let bytes: Vec<u8> = token.chars().map(|c| c as u8).collect();
+        match std::str::from_utf8(&bytes) {
+            Ok(s) => Cow::Owned(s.to_owned()),
+            Err(_) => Cow::Borrowed(token),
+        }
+    } else {
+        Cow::Borrowed(token)
+    };
+    let folded = fold_lookalike_chars(recovered.as_ref());
+    if folded.as_str() == token {
+        Cow::Borrowed(token)
+    } else {
+        Cow::Owned(folded)
+    }
+}
+
+fn fold_lookalike_chars(token: &str) -> String {
+    let mut out = String::with_capacity(token.len());
+    for c in token.chars() {
+        out.push(fold_char(c));
+    }
+    out
+}
+
+fn fold_char(c: char) -> char {
+    // Needle alphabet lookalikes only (Cyrillic + Greek). Caps included;
+    // downstream ASCII case-fold handles case. ponytail: bounded table,
+    // full confusables if a new needle letter needs coverage.
+    match c {
+        '\u{0430}' | '\u{0410}' | '\u{03B1}' | '\u{0391}' => 'a',
+        '\u{0441}' | '\u{0421}' => 'c',
+        '\u{0435}' | '\u{0415}' | '\u{03B5}' | '\u{0395}' => 'e',
+        '\u{0456}' | '\u{0406}' | '\u{03B9}' | '\u{0399}' => 'i',
+        '\u{043A}' | '\u{041A}' | '\u{03BA}' | '\u{039A}' => 'k',
+        '\u{043E}' | '\u{041E}' | '\u{03BF}' | '\u{039F}' => 'o',
+        '\u{0440}' | '\u{0420}' | '\u{03C1}' | '\u{03A1}' => 'p',
+        '\u{0455}' | '\u{0405}' => 's',
+        '\u{03C4}' | '\u{03A4}' => 't',
+        '\u{03C5}' | '\u{03A5}' => 'u',
+        '\u{03BD}' | '\u{039D}' => 'v',
+        '\u{0445}' | '\u{0425}' => 'x',
+        '\u{0443}' | '\u{0423}' => 'y',
+        '\u{03B7}' | '\u{0397}' => 'h',
+        _ => c,
+    }
+}
+
 /// Inspect a single string token and return every sensitive shape it
 /// matches. The slice preserves variant declaration order for
 /// determinism.
@@ -178,6 +239,8 @@ pub fn classify(token: &str) -> Vec<SensitivePath> {
 /// [`classify`] variant that appends into a caller-owned buffer, so
 /// per-token sweeps over large payloads skip the intermediate `Vec`.
 pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
+    let folded = fold_sensitive_homoglyphs(token);
+    let token = folded.as_ref();
     let mask = needle_mask(token.as_bytes());
     if mask == 0 {
         return;
@@ -346,6 +409,27 @@ mod tests {
     }
 
     #[test]
+    fn classifies_cyrillic_homoglyph_dotenv() {
+        // U+0435 CYRILLIC SMALL LETTER IE — ADR 0007 / issue #163.
+        assert!(kinds(".\u{0435}nv").contains(&SensitiveKind::Dotenv));
+    }
+
+    #[test]
+    fn classifies_latin1_mojibake_dotenv() {
+        // Bash `push_latin1` turns UTF-8 Cyrillic-e dotenv into Latin-1 mojibake.
+        let real = ".\u{0435}nv";
+        let mojibake: String = real.as_bytes().iter().map(|&b| b as char).collect();
+        assert_eq!(mojibake, ".\u{00d0}\u{00b5}nv");
+        assert!(kinds(&mojibake).contains(&SensitiveKind::Dotenv));
+    }
+
+    #[test]
+    fn does_not_classify_non_ascii_non_needle() {
+        // Fail-closed: table-outside non-ASCII must not become a hit.
+        assert!(classify("\u{8cc7}\u{6599}.txt").is_empty());
+    }
+
+    #[test]
     fn classifies_case_variant_paths() {
         assert!(kinds(".ENV").contains(&SensitiveKind::Dotenv));
         assert!(kinds(".Env.PRODUCTION").contains(&SensitiveKind::Dotenv));
@@ -497,9 +581,60 @@ mod tests {
     use crate::testing::proptest::sensitive_kind;
     use proptest::prelude::*;
 
+
+    #[test]
+    fn homoglyph_single_letter_fold_matches_ascii() {
+        // Replacing one ASCII needle letter with a table lookalike must
+        // classify the same as the plain ASCII token (ADR 0007).
+        let pairs = [
+            (".env", ".\u{0435}nv"),     // Cyrillic e
+            (".env", ".\u{03B5}nv"),     // Greek epsilon
+            (".ssh", ".\u{0455}sh"),     // Cyrillic dze → s
+            (".aws", ".\u{0430}ws"),     // Cyrillic a
+            ("id_rsa", "id_r\u{0455}a"), // Cyrillic s
+            (".npmrc", ".n\u{0440}mrc"), // Cyrillic p
+            (".pypirc", ".\u{0440}ypirc"),
+        ];
+        for (ascii, glyph) in pairs {
+            let a = classify(ascii);
+            let g = classify(glyph);
+            assert_eq!(
+                a.iter().map(|m| m.kind).collect::<Vec<_>>(),
+                g.iter().map(|m| m.kind).collect::<Vec<_>>(),
+                "ascii={ascii:?} glyph={glyph:?}"
+            );
+            assert!(!a.is_empty(), "sanity: {ascii:?} must classify");
+        }
+    }
+
+    #[test]
+    fn fold_table_miss_does_not_invent_hit() {
+        // Hiragana / CJK outside the fold table must not become a needle.
+        assert!(classify(".\u{3042}nv").is_empty());
+        assert!(classify("\u{8cc7}\u{6599}.txt").is_empty());
+    }
+
     proptest! {
         // classify never panics on arbitrary printable ASCII.
         #[test]
+        #[test]
+        fn pbt_fold_is_idempotent(s in "\\PC{0,40}") {
+            let once = fold_sensitive_homoglyphs(&s);
+            let twice = fold_sensitive_homoglyphs(once.as_ref());
+            prop_assert_eq!(once.as_ref(), twice.as_ref());
+        }
+
+        #[test]
+        fn pbt_fold_outside_table_preserves_classify(s in "[ -~]{0,20}\\PC{0,5}[ -~]{0,20}") {
+            // If fold changes nothing, classify is unchanged (tautology on
+            // the folded path). Pin: tokens whose fold equals themselves
+            // classify identically before/after an explicit fold call.
+            let folded = fold_sensitive_homoglyphs(&s);
+            if folded.as_ref() == s.as_str() {
+                prop_assert_eq!(classify(&s), classify(folded.as_ref()));
+            }
+        }
+
         fn pbt_classify_never_panics(s in "[ -~]{0,80}") {
             let _ = classify(&s);
         }

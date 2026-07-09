@@ -69,6 +69,8 @@ const SENSITIVE_NEEDLES: &[&str] = &[
 /// compiled when a token actually carries a credential-shaped
 /// fragment.
 pub(super) fn matches_sensitive_path(token: &str) -> bool {
+    let folded = crate::facts::sensitive::fold_sensitive_homoglyphs(token);
+    let token = folded.as_ref();
     // The regex only folds ASCII case (`(?i-u:…)`), so an ASCII
     // lowercase of the token is enough for the needle gate.
     let lower = token.to_ascii_lowercase();
@@ -117,6 +119,14 @@ mod tests {
         ] {
             assert!(SENSITIVE_PATH.is_match(token), "token {token:?}");
         }
+    }
+
+    #[test]
+    fn matches_sensitive_path_folds_cyrillic_homoglyph() {
+        assert!(matches_sensitive_path(".\u{0435}nv")); // U+0435
+        let real = ".\u{0435}nv";
+        let mojibake: String = real.as_bytes().iter().map(|&b| b as char).collect();
+        assert!(matches_sensitive_path(&mojibake));
     }
 
     #[test]
