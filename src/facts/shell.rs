@@ -12,10 +12,10 @@
 //! Process substitution (`<(…)` / `>(…)`) is *detected* via
 //! [`Bash::has_process_substitution`] but the inner command is folded
 //! into the surrounding word as opaque text. Command substitution
-//! (`` `…` `` / `$(…)`) is similarly *detected* via
-//! [`Bash::has_command_substitution`] without re-entry. Rules that
-//! depend on accurate argv can opt in to pessimistic handling by
-//! reading those flags.
+//! (`` `…` `` / `$(…)`) sets [`Bash::has_command_substitution`] and
+//! re-parses each body into [`Argv::subst_argv`] (ADR 0008), separate
+//! from wrapper [`Argv::inner_argv`]. Budget exhaustion keeps the flag
+//! as a pessimistic-mode backstop without clearing captured opacity.
 //!
 //! See `docs/design/architecture.md` §fact extraction.
 
@@ -24,9 +24,10 @@
 pub struct Bash {
     pub segments: Vec<Pipeline>,
     /// `true` if the source contained a `` ` … ` `` or `$(…)` command
-    /// substitution. The substitution body is folded into the
-    /// surrounding word as opaque text, so callers that depend on
-    /// accurate argv should treat such commands pessimistically.
+    /// substitution. Bodies are also re-parsed into [`Argv::subst_argv`]
+    /// when nesting budget remains; the flag stays set so rules can
+    /// still fall back to pessimistic co-occurrence when re-entry
+    /// yields nothing.
     pub has_command_substitution: bool,
     /// `true` if the source contained any redirect operator
     /// (`>`, `>>`, `<`, `2>`, `&>`, `<<`, `<<-`). Per-pipeline targets
@@ -112,6 +113,11 @@ pub struct Argv {
     /// 'echo hi > file'`. Kept separate from the outer pipeline so
     /// self-protection can inspect wrapped writes.
     pub inner_redirects: Vec<Redirect>,
+    /// Command-substitution bodies (`$(…)` / `` `…` ``) re-parsed with
+    /// the same bounded-depth engine as `bash -c`. Not mixed into
+    /// [`Self::inner_argv`]: `bash -c 'curl x'` and `echo $(curl x)`
+    /// are different shapes (ADR 0008).
+    pub subst_argv: Vec<Self>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,12 +149,16 @@ impl Argv {
         for inner in &self.inner_argv {
             inner.collect_commands(out);
         }
+        for subst in &self.subst_argv {
+            subst.collect_commands(out);
+        }
     }
 }
 
 impl Bash {
     /// All surfaced commands, including nested wrapper payloads such as
-    /// `bash -c`, `xargs`, and `find -exec`.
+    /// `bash -c`, `xargs`, `find -exec`, and command-substitution
+    /// bodies in [`Argv::subst_argv`].
     pub fn commands(&self) -> Vec<&Argv> {
         let mut out = Vec::new();
         for pipe in &self.segments {
@@ -375,6 +385,7 @@ pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
         inner_argv: Vec::new(),
         inner_code: Vec::new(),
         inner_redirects: Vec::new(),
+        subst_argv: Vec::new(),
     })
 }
 
@@ -420,7 +431,10 @@ fn parse_with_depth(command: &str, nesting_budget: usize) -> Bash {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Token {
-    Word(String),
+    Word {
+        text: String,
+        subst_bodies: Vec<String>,
+    },
     Pipe,
     And,
     Or,
@@ -494,7 +508,7 @@ fn tokenize(s: &str) -> TokenizeOutput {
             while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
                 j += 1;
             }
-            let (tag, tag_len, _) = read_word(&bytes[j..]);
+            let (tag, tag_len, _, _) = read_word(&bytes[j..]);
             if !tag.is_empty() {
                 j += tag_len;
                 let body = read_heredoc_body(&bytes[j..], &tag);
@@ -516,13 +530,17 @@ fn tokenize(s: &str) -> TokenizeOutput {
         if c == b'<' {
             if i + 1 < bytes.len() && bytes[i + 1] == b'(' {
                 // Process substitution: fold into a word (opaque) and flag.
-                let (word, advanced, word_subst) = read_word(&bytes[i..]);
+                // Bodies from nested $(…) inside <(…) still surface.
+                let (word, advanced, word_subst, bodies) = read_word(&bytes[i..]);
                 debug_assert!(advanced > 0, "read_word must consume at least one byte");
                 if word_subst {
                     saw_command_substitution = true;
                 }
                 saw_process_substitution = true;
-                out.push(Token::Word(word));
+                out.push(Token::Word {
+                    text: word,
+                    subst_bodies: bodies,
+                });
                 i += advanced;
                 continue;
             }
@@ -533,13 +551,16 @@ fn tokenize(s: &str) -> TokenizeOutput {
         }
         if c == b'>' {
             if i + 1 < bytes.len() && bytes[i + 1] == b'(' {
-                let (word, advanced, word_subst) = read_word(&bytes[i..]);
+                let (word, advanced, word_subst, bodies) = read_word(&bytes[i..]);
                 debug_assert!(advanced > 0, "read_word must consume at least one byte");
                 if word_subst {
                     saw_command_substitution = true;
                 }
                 saw_process_substitution = true;
-                out.push(Token::Word(word));
+                out.push(Token::Word {
+                    text: word,
+                    subst_bodies: bodies,
+                });
                 i += advanced;
                 continue;
             }
@@ -595,7 +616,7 @@ fn tokenize(s: &str) -> TokenizeOutput {
             }
         }
         // Otherwise: read a word, honouring quotes.
-        let (word, advanced, word_subst) = read_word(&bytes[i..]);
+        let (word, advanced, word_subst, bodies) = read_word(&bytes[i..]);
         // Forward-progress invariant: every separator and whitespace
         // byte is consumed above, so `read_word` is always called on a
         // non-trivial first byte and must advance by at least 1. The
@@ -605,7 +626,10 @@ fn tokenize(s: &str) -> TokenizeOutput {
         if word_subst {
             saw_command_substitution = true;
         }
-        out.push(Token::Word(word));
+        out.push(Token::Word {
+            text: word,
+            subst_bodies: bodies,
+        });
         i += advanced;
     }
     TokenizeOutput {
@@ -688,10 +712,11 @@ fn read_heredoc_body(bytes: &[u8], tag: &str) -> HeredocBody {
 /// The caller is expected to skip whitespace and the separator bytes
 /// (`|`, `&`, `;`) before calling — under that contract this function
 /// always consumes at least one byte.
-fn read_word(bytes: &[u8]) -> (String, usize, bool) {
+fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
     let mut buf = String::new();
     let mut i = 0;
     let mut saw_subst = false;
+    let mut bodies = Vec::new();
     while i < bytes.len() {
         let c = bytes[i];
         if c.is_ascii_whitespace() {
@@ -706,45 +731,48 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool) {
             continue;
         }
         // Process substitution `<(…)` / `>(…)`: absorb the entire
-        // parenthesised group as opaque text, balancing nested
-        // parens. Without this, an inner `|` would terminate the word
-        // mid-expression and corrupt the pipeline structure.
+        // parenthesised group as opaque text. Without this, an inner
+        // `|` would terminate the word mid-expression.
         if (c == b'<' || c == b'>') && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
             buf.push(c as char);
             buf.push('(');
             i += 2;
-            let mut depth: usize = 1;
-            while i < bytes.len() && depth > 0 {
-                let run = i;
-                i += memchr::memchr2(b'(', b')', &bytes[i..]).unwrap_or(bytes.len() - i);
-                push_latin1(&mut buf, &bytes[run..i]);
-                if i >= bytes.len() {
-                    break;
-                }
-                let pc = bytes[i];
-                if pc == b'(' {
-                    depth += 1;
-                } else {
-                    depth -= 1;
-                    if depth == 0 {
-                        buf.push(')');
-                        i += 1;
-                        break;
-                    }
-                }
-                buf.push(pc as char);
-                i += 1;
-            }
+            absorb_parens(bytes, &mut i, &mut buf, None);
             continue;
         }
-        // Unquoted `$(`: command substitution. Body bytes fall through
-        // and are folded into the word as opaque text.
+        // Unquoted `$(…)`: balance-absorb and capture body (ADR 0008).
         if c == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
             saw_subst = true;
+            buf.push('$');
+            buf.push('(');
+            i += 2;
+            absorb_parens(bytes, &mut i, &mut buf, Some(&mut bodies));
+            continue;
         }
         if c == b'\'' || c == b'"' || c == b'`' {
             if c == b'`' {
+                // Backtick command substitution: absorb to closing `
+                // (or EOF) and capture the body.
                 saw_subst = true;
+                i += 1;
+                let body_start = i;
+                while i < bytes.len() && bytes[i] != b'`' {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        buf.push(bytes[i + 1] as char);
+                        i += 2;
+                        continue;
+                    }
+                    push_latin1(&mut buf, &bytes[i..=i]);
+                    i += 1;
+                }
+                let body = latin1_slice(&bytes[body_start..i]);
+                if !body.is_empty() {
+                    bodies.push(body);
+                }
+                if i < bytes.len() {
+                    i += 1; // closing backtick
+                }
+                continue;
             }
             let quote = c;
             i += 1;
@@ -755,11 +783,15 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool) {
                     continue;
                 }
                 // `$(` inside a double-quoted span is still a command
-                // substitution. Single-quoted spans are literal so the
-                // sequence does not count there.
+                // substitution — balance-absorb and capture the body.
                 if quote == b'"' && bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'('
                 {
                     saw_subst = true;
+                    buf.push('$');
+                    buf.push('(');
+                    i += 2;
+                    absorb_parens(bytes, &mut i, &mut buf, Some(&mut bodies));
+                    continue;
                 }
                 // Copy the maximal quoted run in one span: everything up
                 // to the closing quote, or (inside `"`) the next escape /
@@ -786,7 +818,7 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool) {
         i += plain_run_len(&bytes[i..]);
         push_latin1(&mut buf, &bytes[run..i]);
     }
-    (buf, i, saw_subst)
+    (buf, i, saw_subst, bodies)
 }
 
 /// Length of the leading run of plain word bytes (see
@@ -852,6 +884,49 @@ fn push_latin1(buf: &mut String, bytes: &[u8]) {
     }
 }
 
+/// Balance-absorb a parenthesised group. `*i` points at the first byte
+/// *after* the opening `(`. Appends through the matching `)` into `buf`.
+/// When `bodies` is `Some`, also pushes the inner slice for subst re-entry.
+fn absorb_parens(bytes: &[u8], i: &mut usize, buf: &mut String, bodies: Option<&mut Vec<String>>) {
+    let body_start = *i;
+    let mut depth: usize = 1;
+    while *i < bytes.len() && depth > 0 {
+        let run = *i;
+        *i += memchr::memchr2(b'(', b')', &bytes[*i..]).unwrap_or(bytes.len() - *i);
+        push_latin1(buf, &bytes[run..*i]);
+        if *i >= bytes.len() {
+            break;
+        }
+        let pc = bytes[*i];
+        if pc == b'(' {
+            depth += 1;
+        } else {
+            depth -= 1;
+            if depth == 0 {
+                if let Some(bodies) = bodies {
+                    let body = latin1_slice(&bytes[body_start..*i]);
+                    if !body.is_empty() {
+                        bodies.push(body);
+                    }
+                }
+                buf.push(')');
+                *i += 1;
+                break;
+            }
+        }
+        buf.push(pc as char);
+        *i += 1;
+    }
+}
+
+/// Decode a byte slice the same way [`push_latin1`] appends — ASCII as
+/// one `str`, otherwise Latin-1 widening — into an owned `String`.
+fn latin1_slice(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len());
+    push_latin1(&mut s, bytes);
+    s
+}
+
 fn split_segments(tokens: Vec<Token>) -> Vec<Vec<Token>> {
     let mut segments = Vec::new();
     let mut current = Vec::new();
@@ -874,11 +949,11 @@ fn split_segments(tokens: Vec<Token>) -> Vec<Vec<Token>> {
 fn parse_pipeline(tokens: Vec<Token>, nesting_budget: usize) -> Pipeline {
     let mut commands = Vec::new();
     let mut redirects = Vec::new();
-    let mut current_words: Vec<String> = Vec::new();
+    let mut current_words: Vec<(String, Vec<String>)> = Vec::new();
     let mut iter = tokens.into_iter();
     while let Some(tok) = iter.next() {
         match tok {
-            Token::Word(w) => current_words.push(w),
+            Token::Word { text, subst_bodies } => current_words.push((text, subst_bodies)),
             Token::Pipe => {
                 if !current_words.is_empty() {
                     commands.push(parse_argv(
@@ -912,24 +987,39 @@ fn parse_pipeline(tokens: Vec<Token>, nesting_budget: usize) -> Pipeline {
 fn take_redirect_target(
     iter: &mut std::vec::IntoIter<Token>,
     op: RedirectOp,
-    current_words: &mut Vec<String>,
+    current_words: &mut Vec<(String, Vec<String>)>,
 ) -> String {
     let next = iter.next();
     match (op, next) {
         (RedirectOp::Heredoc, Some(Token::HeredocBody(b))) => b,
-        (_, Some(Token::Word(w))) if op != RedirectOp::Heredoc => w,
-        (_, Some(Token::Word(w))) => {
-            current_words.push(w);
+        (_, Some(Token::Word { text, subst_bodies })) if op != RedirectOp::Heredoc => {
+            // Redirect targets can carry $(…) too; fold bodies into the
+            // preceding argv so subst_argv still surfaces them.
+            current_words.extend(subst_bodies.into_iter().map(|b| (String::new(), vec![b])));
+            text
+        },
+        (_, Some(Token::Word { text, subst_bodies })) => {
+            current_words.push((text, subst_bodies));
             String::new()
         },
         _ => String::new(),
     }
 }
 
-fn parse_argv(words: Vec<String>, nesting_budget: usize) -> Argv {
+fn parse_argv(words: Vec<(String, Vec<String>)>, nesting_budget: usize) -> Argv {
+    // Collect substitution bodies from every word that built this argv
+    // before stripping env assignments / head (ADR 0008).
+    let mut subst_bodies: Vec<String> = Vec::new();
+    for (_, bodies) in &words {
+        subst_bodies.extend(bodies.iter().cloned());
+    }
     // VecDeque so the head-stripping loop runs in O(N) overall instead
     // of O(N²) — `Vec::remove(0)` shifts every remaining element.
-    let mut words: std::collections::VecDeque<String> = words.into();
+    let mut words: std::collections::VecDeque<String> = words
+        .into_iter()
+        .map(|(text, _)| text)
+        .filter(|t| !t.is_empty())
+        .collect();
     let mut env_assignments = Vec::new();
     while let Some(first) = words.front() {
         match split_env_assignment(first) {
@@ -948,9 +1038,18 @@ fn parse_argv(words: Vec<String>, nesting_budget: usize) -> Argv {
         inner_argv: Vec::new(),
         inner_code: Vec::new(),
         inner_redirects: Vec::new(),
+        subst_argv: Vec::new(),
     };
     if nesting_budget > 0 {
-        augment_inner_commands(&mut argv, nesting_budget - 1);
+        let child_budget = nesting_budget - 1;
+        augment_inner_commands(&mut argv, child_budget);
+        for body in subst_bodies {
+            let inner = parse_inner_shell(&body, child_budget);
+            argv.subst_argv.extend(inner.commands);
+            // ponytail: subst redirects reuse inner_redirects (no separate
+            // field); self-protection / sensitive-bash-read already walk it.
+            argv.inner_redirects.extend(inner.redirects);
+        }
     }
     argv
 }
@@ -1054,7 +1153,13 @@ fn extract_xargs_inner(argv: &Argv, nesting_budget: usize) -> Option<Argv> {
         return None;
     }
     let start = xargs_command_start(&argv.args)?;
-    let words: Vec<String> = argv.args.iter().skip(start).cloned().collect();
+    let words: Vec<(String, Vec<String>)> = argv
+        .args
+        .iter()
+        .skip(start)
+        .cloned()
+        .map(|text| (text, Vec::new()))
+        .collect();
     if words.is_empty() {
         return None;
     }
@@ -1118,13 +1223,14 @@ fn extract_find_exec_inner(argv: &Argv, nesting_budget: usize) -> Option<Argv> {
         .iter()
         .skip(start + 1)
         .position(|arg| arg == ";" || arg == "+")?;
-    let words: Vec<String> = argv
+    let words: Vec<(String, Vec<String>)> = argv
         .args
         .iter()
         .skip(start + 1)
         .take(end)
         .filter(|arg| arg.as_str() != "{}")
         .cloned()
+        .map(|text| (text, Vec::new()))
         .collect();
     if words.is_empty() {
         return None;
@@ -1184,6 +1290,7 @@ mod tests {
             inner_argv: Vec::new(),
             inner_code: Vec::new(),
             inner_redirects: Vec::new(),
+            subst_argv: Vec::new(),
         }
     }
 
@@ -1348,9 +1455,10 @@ mod tests {
     #[test]
     fn handles_backtick_substring_as_word_chunk() {
         let b = parse("echo `date`");
-        assert_eq!(b.segments[0].commands[0], argv("echo", &["date"]));
-        // Backtick must mark the whole command as containing a
-        // substitution so rules can opt into pessimistic handling.
+        let outer = &b.segments[0].commands[0];
+        assert_eq!(outer.head, "echo");
+        assert_eq!(outer.args, vec!["date".to_string()]);
+        assert_eq!(outer.subst_argv, vec![argv("date", &[])]);
         assert!(b.has_command_substitution);
     }
 
@@ -1377,6 +1485,76 @@ mod tests {
     fn does_not_flag_plain_command() {
         let b = parse("ls -la /etc");
         assert!(!b.has_command_substitution);
+    }
+
+    #[test]
+    fn subst_argv_surfaces_dollar_paren_body() {
+        let b = parse("echo $(cat .env)");
+        assert!(b.has_command_substitution);
+        let outer = &b.segments[0].commands[0];
+        assert_eq!(outer.head, "echo");
+        assert_eq!(outer.subst_argv.len(), 1);
+        assert_eq!(outer.subst_argv[0], argv("cat", &[".env"]));
+        // Opaque word kept on outer args for pessimistic backstop.
+        assert!(
+            outer
+                .args
+                .iter()
+                .any(|a| a.contains("cat") && a.contains(".env"))
+        );
+    }
+
+    #[test]
+    fn subst_argv_surfaces_backtick_body() {
+        let b = parse("echo `cat .env`");
+        assert!(b.has_command_substitution);
+        let outer = &b.segments[0].commands[0];
+        assert_eq!(outer.subst_argv, vec![argv("cat", &[".env"])]);
+    }
+
+    #[test]
+    fn subst_argv_surfaces_double_quoted_dollar_paren() {
+        let b = parse(r#"echo "x$(cat .env)y""#);
+        assert!(b.has_command_substitution);
+        let outer = &b.segments[0].commands[0];
+        assert!(
+            outer
+                .subst_argv
+                .iter()
+                .any(|a| a.head == "cat" && a.args.iter().any(|x| x == ".env")),
+            "got {:?}",
+            outer.subst_argv
+        );
+    }
+
+    #[test]
+    fn subst_argv_benign_date_still_flagged() {
+        let b = parse("echo $(date)");
+        assert!(b.has_command_substitution);
+        assert_eq!(
+            b.segments[0].commands[0].subst_argv,
+            vec![argv("date", &[])]
+        );
+    }
+
+    #[test]
+    fn commands_flatten_includes_subst_argv() {
+        let b = parse("echo $(rm -rf /)");
+        let heads: Vec<_> = b.commands().iter().map(|a| a.head.as_str()).collect();
+        assert!(heads.contains(&"echo"), "{heads:?}");
+        assert!(heads.contains(&"rm"), "{heads:?}");
+    }
+
+    #[test]
+    fn nested_subst_respects_budget_or_surfaces() {
+        let b = parse("echo $(echo $(cat .env))");
+        assert!(b.has_command_substitution);
+        let surfaces_cat = b.commands().iter().any(|a| a.head == "cat");
+        assert!(
+            surfaces_cat,
+            "nested subst should surface cat within budget; commands={:?}",
+            b.commands().iter().map(|a| &a.head).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1725,7 +1903,7 @@ mod tests {
                 continue;
             }
             let buf = [byte];
-            let (_, advanced, _) = read_word(&buf);
+            let (_, advanced, _, _) = read_word(&buf);
             assert!(advanced > 0, "read_word stalled on byte {byte:#x}");
         }
     }

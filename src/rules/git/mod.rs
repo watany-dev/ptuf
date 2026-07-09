@@ -791,6 +791,7 @@ mod tests {
             inner_argv: Vec::new(),
             inner_code: Vec::new(),
             inner_redirects: Vec::new(),
+            subst_argv: Vec::new(),
         };
         assert_eq!(unwrap_prefix_wrapper(&argv), None);
     }

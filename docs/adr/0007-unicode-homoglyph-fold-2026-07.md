@@ -57,8 +57,8 @@ the parser itself is unchanged.
 ### Known limitations (unchanged / deferred)
 
 - Full Unicode confusables / NFKC normalization remain out of scope.
-- ADR 0002 B2/B5/C2 (symlink / cmdsubst outer-nonreader / variable head)
-  remain open.
+- ADR 0002 B2/~~B5~~/C2 (symlink / ~~cmdsubst outer-nonreader~~ / variable head).
+  B5 is resolved by ADR 0008; B2/C2 remain open.
 
 ## Implementation map
 

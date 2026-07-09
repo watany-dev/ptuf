@@ -262,6 +262,11 @@ fn walk_argv_for_pipeline_from_to(
             return true;
         }
     }
+    for subst in &argv.subst_argv {
+        if walk_argv_for_pipeline_from_to(subst, from, to, seen_from) {
+            return true;
+        }
+    }
     false
 }
 
