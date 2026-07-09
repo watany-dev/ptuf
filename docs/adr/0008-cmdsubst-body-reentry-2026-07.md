@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-07-09). Implementation tracked by issue #161 / `docs/plans/161-cmdsubst-body-reentry.md`.
+Accepted (2026-07-09). Implemented with issue #161.
 
 ## Context
 

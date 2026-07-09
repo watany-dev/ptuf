@@ -386,6 +386,9 @@ fn collect_command_redirects(
     for nested in &command.inner_argv {
         collect_command_redirects(nested, repo_root, out);
     }
+    for subst in &command.subst_argv {
+        collect_command_redirects(subst, repo_root, out);
+    }
 }
 
 fn push_redirect_fact(redirect: &Redirect, repo_root: Option<&Path>, out: &mut Vec<PathFact>) {

@@ -60,9 +60,9 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - `bash -lc`, `sh -ec` のような combined short option でも `-c` / `-e` を認識する
 - `Argv.inner_argv` / `inner_redirects` は wrapper (`bash -c`, `eval`, `xargs`,
   `find -exec`) の内側 command / redirect を bounded depth で surface する
-- ADR 0008 (実装時に追加): `` `…` `` / `$(…)` 本体は opaque word を保ったまま
-  `Argv.subst_argv` へ同じ `NESTING_BUDGET` で再 parse され、`commands()` は
-  `inner_argv` と `subst_argv` を flatten する。budget 超過・空 body では
+- `` `…` `` / `$(…)` 本体は opaque word を保ったまま `Argv.subst_argv` へ
+  同じ `NESTING_BUDGET` で再 parse され、`commands()` は `inner_argv` と
+  `subst_argv` を flatten する (ADR 0008)。budget 超過・空 body では
   capture を捨てるが `has_command_substitution` は true のまま。置換内
   reader × 機密 (`echo $(cat .env)`) は `sensitive-bash-read` が Ask 以上
   (PBT で固定)

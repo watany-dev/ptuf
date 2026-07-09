@@ -1,0 +1,5 @@
+echo $(cat .env)
+echo `cat .env`
+echo $(echo $(cat .env))
+echo "x$(head .env)y"
+VERSION=$(git rev-parse HEAD)

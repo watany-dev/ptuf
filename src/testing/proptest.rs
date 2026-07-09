@@ -904,6 +904,24 @@ pub fn dotenv_anchored_literal_token() -> impl Strategy<Value = String> {
     ]
 }
 
+/// Outer non-reader wrapping a reader×sensitive command substitution
+/// (`echo $(cat .env)` and siblings) — ADR 0008 positive space.
+pub fn bash_cmdsubst_outer_nonreader_sensitive() -> impl Strategy<Value = String> {
+    (
+        proptest::sample::select(&["echo", "printf", "true", "false"][..]),
+        proptest::sample::select(&["cat", "head", "tail", "source"][..]),
+        proptest::sample::select(&[".env", ".env.local", ".env.production", "~/.ssh/id_rsa"][..]),
+        proptest::bool(),
+    )
+        .prop_map(|(outer, reader, token, dollar)| {
+            if dollar {
+                format!("{outer} $({reader} {token})")
+            } else {
+                format!("{outer} `{reader} {token}`")
+            }
+        })
+}
+
 /// `cat {a,b}.env` and siblings — reader head + brace dotenv token.
 pub fn bash_reader_brace_dotenv_command() -> impl Strategy<Value = String> {
     (

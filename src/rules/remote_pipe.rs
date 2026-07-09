@@ -78,7 +78,11 @@ fn argv_inner_pipes_to_interpreter(argv: &Argv) -> bool {
     if !argv.inner_argv.is_empty() && sequence_pipes_to_interpreter(&argv.inner_argv) {
         return true;
     }
+    if !argv.subst_argv.is_empty() && sequence_pipes_to_interpreter(&argv.subst_argv) {
+        return true;
+    }
     argv.inner_argv.iter().any(argv_inner_pipes_to_interpreter)
+        || argv.subst_argv.iter().any(argv_inner_pipes_to_interpreter)
 }
 
 fn sequence_pipes_to_interpreter(commands: &[Argv]) -> bool {

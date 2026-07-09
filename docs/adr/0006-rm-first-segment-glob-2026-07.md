@@ -46,8 +46,8 @@ destructive 扱いする。**
 
 ### Known limitations (継続)
 
-- ADR 0002 / 0003 の ~~B1~~/B2/B5/C2 (~~Unicode homoglyph~~ / symlink / cmdsubst /
-  変数 head)。B1 は ADR 0007 で解消。B5 の解消方針は ADR 0008。
+- ADR 0002 / 0003 の ~~B1~~/B2/~~B5~~/C2 (~~Unicode homoglyph~~ / symlink /
+  ~~cmdsubst~~ / 変数 head)。B1 は ADR 0007、B5 は ADR 0008 で解消。
 - shell 実行時 glob 展開のシミュレーションは行わない (parser 限界)。
 
 ## Implementation map

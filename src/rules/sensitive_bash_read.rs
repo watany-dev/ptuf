@@ -126,6 +126,7 @@ fn argv_reads_sensitive(argv: &Argv) -> bool {
         return true;
     }
     argv.inner_argv.iter().any(argv_reads_sensitive)
+        || argv.subst_argv.iter().any(argv_reads_sensitive)
 }
 
 fn argv_has_sensitive_positional(argv: &Argv) -> bool {
@@ -229,23 +230,31 @@ mod tests {
 
     #[test]
     fn gap_cmdsubst_outer_nonreader_surfaces_sensitive_token() {
-        // ADR 0001 known_gap: outer head `echo` is not a reader, so the
-        // rule stays silent even though the substitution body mentions
-        // `.env`. Pin both the surfaced token and the Allow-equivalent
-        // outcome so a fix must update corpus + this test together.
+        // ADR 0008: subst_argv re-entry surfaces inner `cat .env` so the
+        // rule Asks even when the outer head is a non-reader.
         let cmd = "echo $(cat .env)";
         let input = bash(cmd);
         let facts = crate::facts::extract(&input);
         let bash_facts = facts.bash.as_ref().expect("bash facts");
-        let surfaces_sensitive = bash_facts
-            .commands()
-            .iter()
-            .any(|argv| crate::rules::patterns::argv_references_sensitive(argv));
+        let outer = &bash_facts.segments[0].commands[0];
+        assert_eq!(outer.head, "echo");
         assert!(
-            surfaces_sensitive,
-            "parser should still surface the .env token in argv"
+            outer
+                .subst_argv
+                .iter()
+                .any(|a| a.head == "cat" && a.args.iter().any(|x| x == ".env")),
+            "subst_argv should carry cat .env, got {:?}",
+            outer.subst_argv
         );
-        assert_silent(cmd);
+        assert_ask(cmd);
+        assert_ask("echo `cat .env`");
+    }
+
+    #[test]
+    fn allows_benign_command_substitution() {
+        assert_silent("echo $(date)");
+        assert_silent("VERSION=$(git rev-parse HEAD)");
+        assert_silent(r#"echo "backup of $(date).env-file""#);
     }
 
     #[test]
@@ -345,8 +354,8 @@ mod tests {
     }
 
     use crate::testing::proptest::{
-        arbitrary_command, bash_command, bash_reader_brace_dotenv_command, dotenv_brace_token,
-        non_bash_hook_input,
+        arbitrary_command, bash_cmdsubst_outer_nonreader_sensitive, bash_command,
+        bash_reader_brace_dotenv_command, dotenv_brace_token, non_bash_hook_input,
     };
     use proptest::prelude::*;
 
@@ -375,6 +384,19 @@ mod tests {
         // Reader + brace dotenv argv token must always Ask.
         #[test]
         fn pbt_reader_brace_dotenv_always_asks(cmd in bash_reader_brace_dotenv_command()) {
+            let input = bash(&cmd);
+            let d = evaluate_for(&input);
+            prop_assert!(
+                matches!(d, Some(Decision::Ask { ref rule_id, .. }) if rule_id == RULE_ID),
+                "expected Ask for {cmd:?}, got {d:?}",
+            );
+        }
+
+        // ADR 0008: outer non-reader + subst body reader×sensitive ⇒ Ask.
+        #[test]
+        fn pbt_cmdsubst_outer_nonreader_sensitive_asks(
+            cmd in bash_cmdsubst_outer_nonreader_sensitive()
+        ) {
             let input = bash(&cmd);
             let d = evaluate_for(&input);
             prop_assert!(
