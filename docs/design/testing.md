@@ -60,6 +60,12 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - `bash -lc`, `sh -ec` のような combined short option でも `-c` / `-e` を認識する
 - `Argv.inner_argv` / `inner_redirects` は wrapper (`bash -c`, `eval`, `xargs`,
   `find -exec`) の内側 command / redirect を bounded depth で surface する
+- ADR 0008 (実装時に追加): `` `…` `` / `$(…)` 本体は opaque word を保ったまま
+  `Argv.subst_argv` へ同じ `NESTING_BUDGET` で再 parse され、`commands()` は
+  `inner_argv` と `subst_argv` を flatten する。budget 超過・空 body では
+  capture を捨てるが `has_command_substitution` は true のまま。置換内
+  reader × 機密 (`echo $(cat .env)`) は `sensitive-bash-read` が Ask 以上
+  (PBT で固定)
 - `Argv.head` は最初のトークンを正規化せず保持する (生値契約;
   `full_path_command_keeps_head_intact` が保証)。`Argv::head_basename()` は
   `head.rsplit('/').next()` で比較用の basename を導出する委譲メソッドで、

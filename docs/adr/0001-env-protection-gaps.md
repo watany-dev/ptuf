@@ -48,7 +48,8 @@ Accepted (2026-05-11).
   - `$(...)` を含む場合は pessimistic mode (`bash.commands()` フラット列で
     reader argv と sensitive argv の coexistence を要求)。外側が非 reader
     で内側に reader が隠れる shape (`echo $(cat .env)`) は parser 制約に
-    より取り逃すことを既知の限界として明示。
+    より取り逃すことを既知の限界として明示。解消方針は ADR 0008
+    (`subst_argv` re-entry; 悲観モードは backstop として残す)。
   - `tee` は READER_HEADS から除外 (writer なので前段のリーダー判定で
     cover)。書き込み系 redirect (`>`, `>>`, `2>`, `&>`) も対象外で、
     `sensitive-read` (Write tool 経由) の責務とする。
@@ -114,6 +115,7 @@ Accepted (2026-05-11).
 - `echo $(cat .env)` のように、外側 argv head が非 reader で内側に
   reader が隠れる command-substitution shape は parser 制約により
   pessimistic mode でも取り逃す (`cat $(echo .env)` 型は cover)。
+  **解消方針は ADR 0008** (`Argv.subst_argv` re-entry; 実装は issue #161)。
 - 権限昇格ラッパーは `nesting_budget = 3` まで展開する (ADR 0002 B3)。
   4 段を超えるネストは最深層を取り逃す (`tests/bypass/corpus.jsonl` で固定)。
 - plugin DSL の `shell.pipeline` (`ShellPipelineFromTo`) は `pipe.commands`

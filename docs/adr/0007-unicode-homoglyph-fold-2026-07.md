@@ -58,7 +58,7 @@ the parser itself is unchanged.
 
 - Full Unicode confusables / NFKC normalization remain out of scope.
 - ADR 0002 B2/B5/C2 (symlink / cmdsubst outer-nonreader / variable head)
-  remain open.
+  remain open; B5 resolution is designed in ADR 0008 (issue #161).
 
 ## Implementation map
 
