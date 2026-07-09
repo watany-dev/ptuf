@@ -9,9 +9,10 @@
 
 現行 parser は redirect / heredoc / process substitution 検出に加え、
 `bash -c` / `su -c` / `eval` / `xargs` / `find -exec` の bounded inner parse と
-`inner_code` / `inner_redirects` 抽出を実装済み。残る parser リスクは
-完全な shell 解釈ではなく、command substitution / process substitution の中身を
-opaque な flag surface として扱う点に限定される。
+`inner_code` / `inner_redirects` 抽出、および `` `…` `` / `$(…)` / `<(…)` /
+`>(…)` 本体の `subst_argv` re-entry (ADR 0008 / #162) を実装済み。残る
+parser リスクは完全な shell 解釈ではなく、未対応構文や budget 超過時の
+flag backstop に限定される。
 
 各項目には次を付ける:
 
