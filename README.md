@@ -55,7 +55,8 @@ runs the call. A few examples of what fires by default:
 - **`core.secrets.sensitive-bash-read`** — asks before Bash readers
   (`cat`, `head`, `source`, `awk`, `<` redirect, …) target a credentials
   file, even without a network sink. Catches `cat .env`, `source .env`,
-  `read -r LINE < .env`. Suppressible per-project via `overrides.allow`.
+  `read -r LINE < .env`, and Cyrillic/Greek needle lookalikes (e.g. `.еnv`).
+  Suppressible per-project via `overrides.allow`.
 - **`core.engine.dynamic-eval`** — asks before opaque interpreter calls
   (`bash -c '…'`, `python -c '…'`, `node -e '…'`, `eval`) where other rules
   cannot inspect what actually runs.

@@ -8,6 +8,7 @@
 //! [`SensitiveKind`] without disturbing the existing rule's tests.
 
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// Distinct kinds of sensitive token that `classify` recognises.
@@ -166,6 +167,63 @@ const PROBES: &[(SensitiveKind, &str, &str)] = &[
 static SENSITIVE_REGEXES: [OnceLock<Regex>; PROBES.len()] =
     [const { OnceLock::new() }; PROBES.len()];
 
+/// Fold needle lookalikes (Cyrillic / Greek) to ASCII, after optional
+/// Latin-1→UTF-8 recovery for Bash `push_latin1` mojibake.
+///
+/// ASCII-only tokens return [`Cow::Borrowed`] (zero cost). Non-ASCII
+/// outside the fold table is left unchanged (fail-closed; no FP on
+/// legitimate non-ASCII filenames). See ADR 0007 / issue #163.
+pub(crate) fn fold_sensitive_homoglyphs(token: &str) -> Cow<'_, str> {
+    if token.is_ascii() {
+        return Cow::Borrowed(token);
+    }
+    // Bash `push_latin1` mojibake: re-decode when every char ≤ U+00FF.
+    let working: Cow<'_, str> = if token.chars().all(|c| c <= '\u{00FF}') {
+        let bytes: Vec<u8> = token.chars().map(|c| c as u8).collect();
+        match std::str::from_utf8(&bytes) {
+            Ok(s) => Cow::Owned(s.to_owned()),
+            Err(_) => Cow::Borrowed(token),
+        }
+    } else {
+        Cow::Borrowed(token)
+    };
+    let mut buf = String::with_capacity(working.len());
+    let mut changed = matches!(&working, Cow::Owned(_));
+    for c in working.chars() {
+        let f = fold_char(c);
+        changed |= f != c;
+        buf.push(f);
+    }
+    if changed {
+        Cow::Owned(buf)
+    } else {
+        Cow::Borrowed(token)
+    }
+}
+
+fn fold_char(c: char) -> char {
+    // Needle alphabet lookalikes only (Cyrillic + Greek). Caps included;
+    // downstream ASCII case-fold handles case. ponytail: bounded table,
+    // full confusables if a new needle letter needs coverage.
+    match c {
+        '\u{0430}' | '\u{0410}' | '\u{03B1}' | '\u{0391}' => 'a',
+        '\u{0441}' | '\u{0421}' => 'c',
+        '\u{0435}' | '\u{0415}' | '\u{03B5}' | '\u{0395}' => 'e',
+        '\u{0456}' | '\u{0406}' | '\u{03B9}' | '\u{0399}' => 'i',
+        '\u{043A}' | '\u{041A}' | '\u{03BA}' | '\u{039A}' => 'k',
+        '\u{043E}' | '\u{041E}' | '\u{03BF}' | '\u{039F}' => 'o',
+        '\u{0440}' | '\u{0420}' | '\u{03C1}' | '\u{03A1}' => 'p',
+        '\u{0455}' | '\u{0405}' => 's',
+        '\u{03C4}' | '\u{03A4}' => 't',
+        '\u{03C5}' | '\u{03A5}' => 'u',
+        '\u{03BD}' | '\u{039D}' => 'v',
+        '\u{0445}' | '\u{0425}' => 'x',
+        '\u{0443}' | '\u{0423}' => 'y',
+        '\u{03B7}' | '\u{0397}' => 'h',
+        _ => c,
+    }
+}
+
 /// Inspect a single string token and return every sensitive shape it
 /// matches. The slice preserves variant declaration order for
 /// determinism.
@@ -178,6 +236,8 @@ pub fn classify(token: &str) -> Vec<SensitivePath> {
 /// [`classify`] variant that appends into a caller-owned buffer, so
 /// per-token sweeps over large payloads skip the intermediate `Vec`.
 pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
+    let folded = fold_sensitive_homoglyphs(token);
+    let token = folded.as_ref();
     let mask = needle_mask(token.as_bytes());
     if mask == 0 {
         return;
@@ -346,6 +406,15 @@ mod tests {
     }
 
     #[test]
+    fn classifies_latin1_mojibake_dotenv() {
+        // Bash `push_latin1` turns UTF-8 Cyrillic-e dotenv into Latin-1 mojibake.
+        let real = ".\u{0435}nv";
+        let mojibake: String = real.as_bytes().iter().map(|&b| b as char).collect();
+        assert_eq!(mojibake, ".\u{00d0}\u{00b5}nv");
+        assert!(kinds(&mojibake).contains(&SensitiveKind::Dotenv));
+    }
+
+    #[test]
     fn classifies_case_variant_paths() {
         assert!(kinds(".ENV").contains(&SensitiveKind::Dotenv));
         assert!(kinds(".Env.PRODUCTION").contains(&SensitiveKind::Dotenv));
@@ -500,6 +569,26 @@ mod tests {
     proptest! {
         // classify never panics on arbitrary printable ASCII.
         #[test]
+        // Homoglyph substitution on a needle letter must classify like ASCII.
+        #[test]
+        fn pbt_homoglyph_needle_classifies_like_ascii(
+            (token, needle) in crate::testing::proptest::homoglyph_substituted_needle(),
+        ) {
+            let ascii_kinds = kinds(&needle);
+            let homoglyph_kinds = kinds(&token);
+            prop_assert_eq!(homoglyph_kinds, ascii_kinds);
+        }
+
+        // Non-table non-ASCII must not invent a credential classification.
+        #[test]
+        fn pbt_non_table_non_ascii_preserves_classify(
+            token in crate::testing::proptest::non_table_non_ascii_token(),
+        ) {
+            prop_assert!(classify(&token).is_empty(), "false positive on {token:?}");
+        }
+
+
+
         fn pbt_classify_never_panics(s in "[ -~]{0,80}") {
             let _ = classify(&s);
         }

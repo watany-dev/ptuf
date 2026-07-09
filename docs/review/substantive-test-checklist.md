@@ -20,8 +20,8 @@ example-based / 契約 / corpus / PBT の追加タスク一覧。
 | --- | --- | --- | --- | --- |
 | [x] | `gap_cmdsubst_outer_nonreader_surfaces_sensitive_token` | `src/rules/sensitive_bash_read.rs` `mod tests` | `HookInput` Bash: `echo $(cat .env)` | `Facts` に `.env` 相当トークンが載る **か**、載らない理由を `rule_id` 付き Deny/Ask で固定（改善後は `assert_deny` または `assert_ask`） |
 | [x] | `gap_brace_expansion_matches_sensitive_path` | 同上 | `cat {a,b}.env` | 改善後: `evaluate()` が `Some` かつ `rule_id == "core.filesystem.sensitive-bash-read"`（または新 rule id） |
-| [x] | `gap_unicode_homoglyph_normalizes_or_flags` | 同上 + 必要なら `src/facts/shell.rs` | `cat .еnv`（Cyrillic е） | 改善後: Ask/Deny；現状維持なら corpus `known_gap` のまま本テストは **Allow + 理由コメント** で pin |
-| [x] | *(corpus)* `gap-*` → `must_catch` 昇格 | `tests/bypass/corpus.jsonl` | 上記 3 件を直した PR | N/A — ADR 0001 gaps remain `known_gap`; no corpus promotion until fixes land |
+| [x] | `gap_unicode_homoglyph_normalizes_or_flags` | `src/facts/sensitive.rs` fold (ADR 0007) | `cat .еnv`（Cyrillic е） | Ask (`sensitive-bash-read`); corpus `must_catch` |
+| [x] | *(corpus)* `gap-*` → `must_catch` 昇格 | `tests/bypass/corpus.jsonl` | 上記 3 件を直した PR | brace + unicode-homoglyph は `must_catch` (ADR 0007); cmdsubst-outer-nonreader は `known_gap` 継続 |
 
 ---
 

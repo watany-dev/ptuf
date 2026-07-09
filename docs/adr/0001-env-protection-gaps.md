@@ -68,7 +68,7 @@ Accepted (2026-05-11).
 - **B2**: DOTENV と SENSITIVE_PATH 内 dotenv branch の開始 anchor を
   `(?:^|/|\s|[*?\[\]={},])` に拡張。`*`/`?`/`[`/`]` は glob meta、`{`/`}`/`,` は
   brace expansion (`{a,b}.env`)、`=` は `dd if=.env` や `--env-file=.env` のような flag value 形を catch する。
-  Unicode homoglyph (`.еnv` キリル e 等) は本イテレーション範囲外。
+  Unicode homoglyph (`.еnv` キリル e 等) は当時範囲外 → ADR 0007 で解消。
 - **B3**: `facts::path::collect_mcp_paths` に同義キー名
   (`file_path`, `filename`, `file`, `filepath`, `target`, `target_file`,
   `dest`, `destination`, `src`, `source`, `from`, `to`, `location`, `uri`)
@@ -109,7 +109,8 @@ Accepted (2026-05-11).
   内部での `.env` 参照は `core.engine.dynamic-eval` の Ask に依存。
 - Bash arg の symlink 解決 (`cat /tmp/link.env` の link が `.env` を指す
   ケース) は I/O コストのため対応しない。
-- Unicode homoglyph (`.еnv` キリル e 等) は規模から本イテレーション対象外。
+- ~~Unicode homoglyph (`.еnv` キリル e 等)~~ — Resolved by ADR 0007
+  (bounded lookalike fold; full confusables still deferred).
 - `echo $(cat .env)` のように、外側 argv head が非 reader で内側に
   reader が隠れる command-substitution shape は parser 制約により
   pessimistic mode でも取り逃す (`cat $(echo .env)` 型は cover)。

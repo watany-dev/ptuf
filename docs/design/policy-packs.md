@@ -78,7 +78,10 @@ engine レベルの `pbt_sensitive_path_parity_across_surfaces`
 `/root/.aws/credentials` 等) も同一 regex で分類する (Claude Code の Read が
 絶対 `file_path` を渡す bypass 対策)。判定は case-insensitive で行うため
 `.ENV` / `.Ssh` / `.AWS` 等の大文字混じりでも一致する (case-insensitive FS 上の
-bypass 対策)。`.env` 系の anchor には
+bypass 対策)。さらに機密 needle 英字の Unicode lookalike (キリル `е`→`e` 等) は照合前に
+ASCII へ fold する (ADR 0007)。Bash argv の Latin-1 mojibake も同ヘルパで
+UTF-8 復元してから fold する。table 外の非 ASCII は素通し (正当な非 ASCII
+ファイル名での FP を避ける)。`.env` 系の anchor には
 `/`・空白に加えて glob meta (`*`, `?`, `[`, `]`) と `=` も含まれ、`cat *.env`、
 `cp ?.env`、`dd if=.env`、`--env-file=.env` 等の literal token も検出する。
 

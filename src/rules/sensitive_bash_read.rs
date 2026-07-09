@@ -259,9 +259,9 @@ mod tests {
 
     #[test]
     fn gap_unicode_homoglyph_normalizes_or_flags() {
-        // ADR 0001 known_gap: Cyrillic homoglyph `.еnv` evades the ASCII
-        // `(?i-u:.env)` anchor until normalization is implemented.
-        assert_silent("cat .еnv"); // U+0435 CYRILLIC SMALL LETTER IE
+        // ADR 0007: Cyrillic homoglyph folds to dotenv → Ask.
+        // Bash argv sees Latin-1 mojibake; fold recovers then matches.
+        assert_ask("cat .\u{0435}nv"); // U+0435 CYRILLIC SMALL LETTER IE
     }
 
     #[test]
