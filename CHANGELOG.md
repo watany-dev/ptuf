@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   分類は従来どおり全 shape を対象とする。
 
 ### Added
+- `apply_patch` の added 行 (`+` prefix) を content lane で PEM スキャン
+  (`facts::patch::added_content`)。非機密 path 宛 patch への PEM 埋め込み bypass
+  (ADR 0001 known limitation) を解消。
+- Cline adapter が `patch` / `patchText` / `content` を `command` へ正規化
+  (OpenCode `reshape_patch` と同等)。Cline 経由 apply_patch の path / content
+  空振りを修正。
+
 - Process substitution (`<(…)` / `>(…)`) 本体を `Argv.subst_argv` へ
   re-parse (ADR 0003 C / issue #162)。`bash <(curl …)` と
   `bash -c "$(curl …)"` を `remote-script-pipe` が Deny。subst 再帰は

@@ -15,6 +15,7 @@
 
 use crate::HookInput;
 
+pub mod patch;
 pub mod path;
 pub mod project;
 pub mod sensitive;
@@ -140,6 +141,12 @@ fn collect_sensitive(
         sensitive::classify_content_into(s, &mut out);
     }
 
+    if let Some(cmd) = event.patch
+        && let Some(body) = patch::added_content(cmd)
+    {
+        sensitive::classify_content_into(&body, &mut out);
+    }
+
     out
 }
 
@@ -221,6 +228,22 @@ mod tests {
             tool_input: serde_json::json!({
                 "file_path": "/tmp/key.pem",
                 "content": "-----BEGIN RSA PRIVATE KEY-----\n..."
+            }),
+        };
+        let f = extract(&i);
+        assert!(
+            f.sensitive
+                .iter()
+                .any(|s| s.kind == sensitive::SensitiveKind::PemBlob)
+        );
+    }
+
+    #[test]
+    fn extract_collects_sensitive_from_apply_patch_added_lines() {
+        let i = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Add File: src/notes.md\n+-----BEGIN RSA PRIVATE KEY-----\n+X\n*** End Patch\n",
             }),
         };
         let f = extract(&i);

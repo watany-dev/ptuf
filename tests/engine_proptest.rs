@@ -216,6 +216,31 @@ fn write_of_pem_body_still_denied() {
         .decision;
     assert_eq!(dec.kind(), DecisionKind::Deny, "got {dec:?}");
 }
+#[test]
+fn apply_patch_of_pem_body_still_denied() {
+    let dec = default_engine()
+        .decide(&ptuf::HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Add File: /repo/notes.md\n+-----BEGIN RSA PRIVATE KEY-----\n+X\n+-----END RSA PRIVATE KEY-----\n*** End Patch\n",
+            }),
+        })
+        .decision;
+    assert_eq!(dec.kind(), DecisionKind::Deny, "got {dec:?}");
+}
+
+#[test]
+fn apply_patch_deleting_pem_body_still_allowed() {
+    let dec = default_engine()
+        .decide(&ptuf::HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Update File: /repo/notes.md\n -----BEGIN RSA PRIVATE KEY-----\n-leaked\n*** End Patch\n",
+            }),
+        })
+        .decision;
+    assert_eq!(dec.kind(), DecisionKind::Allow, "got {dec:?}");
+}
 
 /// Representative credentials paths spanning every `SensitiveKind`,
 /// including the `id_dsa` key and the boundary-anchored `~/.npmrc` /

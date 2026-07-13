@@ -146,7 +146,10 @@ fn normalize_call(raw_name: &str, raw_input: Value, id: Option<&str>) -> HookInp
             normalize_path(&mut args);
             "Write".to_string()
         },
-        "apply_patch" => "apply_patch".to_string(),
+        "apply_patch" => {
+            normalize_patch(&mut args);
+            "apply_patch".to_string()
+        },
         "fetch_web" | "fetch_web_content" | "web_fetch" => {
             normalize_url(&mut args);
             "WebFetch".to_string()
@@ -309,6 +312,12 @@ fn normalize_path(args: &mut Map<String, Value>) {
 fn normalize_url(args: &mut Map<String, Value>) {
     if let Some(url) = first_string(args, &["url", "uri", "href"]) {
         args.insert("url".into(), Value::String(url));
+    }
+}
+
+fn normalize_patch(args: &mut Map<String, Value>) {
+    if let Some(body) = first_string(args, &["command", "patchText", "patch", "content"]) {
+        args.insert("command".into(), Value::String(body));
     }
 }
 
@@ -509,13 +518,19 @@ mod tests {
     }
 
     #[test]
-    fn cline_apply_patch_keeps_canonical_name() {
-        let body = r#"{
+    fn cline_apply_patch_normalizes_patch_body_to_command() {
+        let patch = "*** Begin Patch\n*** Add File: src/x\n+hello\n*** End Patch\n";
+        let body = format!(
+            r#"{{
             "hookName": "tool_call",
-            "tool_call": { "name": "apply_patch", "input": { "patch": "diff" } }
-        }"#;
-        let input = parse(body).unwrap();
+            "tool_call": {{ "name": "apply_patch", "input": {{ "patch": {patch_json} }} }}
+        }}"#,
+            patch_json = serde_json::to_string(patch).unwrap(),
+        );
+        let input = parse(&body).unwrap();
         assert_eq!(input.tool_name, "apply_patch");
+        assert_eq!(input.tool_input["command"], patch);
+        assert_eq!(input.tool_input["patch"], patch);
     }
 
     #[test]
@@ -789,5 +804,27 @@ mod tests {
                 ),
             }
         }
+    }
+
+    #[test]
+    fn cline_apply_patch_pem_body_denies_via_engine() {
+        use crate::config::Config;
+        use crate::decision::DecisionKind;
+        use crate::engine::Engine;
+        use crate::plugin::PluginSet;
+
+        let pem = "-----BEGIN RSA PRIVATE KEY-----\nX\n-----END RSA PRIVATE KEY-----";
+        let patch = format!("*** Begin Patch\n*** Add File: src/notes.md\n+{pem}\n*** End Patch\n");
+        let body = format!(
+            r#"{{
+            "hookName": "tool_call",
+            "tool_call": {{ "name": "apply_patch", "input": {{ "patch": {patch_json} }} }}
+        }}"#,
+            patch_json = serde_json::to_string(&patch).unwrap(),
+        );
+        let input = parse(&body).unwrap();
+        let engine = Engine::with_components(Config::default(), PluginSet::new());
+        let decision = engine.decide(&input).decision;
+        assert_eq!(decision.kind(), DecisionKind::Deny, "got {decision:?}");
     }
 }

@@ -103,8 +103,12 @@ Accepted (2026-05-11).
 
 ### Known limitations (本イテレーション外)
 
-- `apply_patch` の patch body 内 PEM/credentials の内容スキャンは未実装
-  (path 抽出までで content は scan していない)。
+- ~~`apply_patch` の patch body 内 PEM/credentials の内容スキャン~~ —
+  Resolved by issue #175 (`facts::patch::added_content` scans `+` lines via
+  `classify_content_into`; deletion/context lines are excluded).
+- `fold_char` が大文字 Cyrillic を小文字 ASCII に fold しないため、
+  case-sensitive PEM probe と uppercase homoglyph が噛み合わない gap が
+  Write / apply_patch 両経路に残る (本 issue scope 外)。
 - `python -c "open('.env').read()"`, `node -e "..."` などの dynamic-eval
   内部での `.env` 参照は `core.engine.dynamic-eval` の Ask に依存。
 - Bash arg の symlink 解決 (`cat /tmp/link.env` の link が `.env` を指す

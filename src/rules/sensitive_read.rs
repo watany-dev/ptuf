@@ -13,8 +13,9 @@
 //! (`docs/design/policy-packs.md` `core.secrets`).
 //!
 //! The written *body* (`Write` content / `Edit` `new_string` / MCP
-//! `content`) only counts when it carries secret data itself (PEM
-//! blobs, via `facts::sensitive::classify_content_into`); prose that
+//! `content`, and `apply_patch` added lines via `facts::patch::added_content`)
+//! only counts when it carries secret data itself (PEM blobs, via
+//! `facts::sensitive::classify_content_into`); prose that
 //! merely mentions credential paths — a setup guide naming
 //! `~/.aws/credentials` — does not fire this rule.
 
@@ -250,6 +251,57 @@ mod tests {
             tool_input: serde_json::json!({
                 "command": "*** Begin Patch\n*** Add File: src/lib.rs\n+fn main() {}\n\
                             *** End Patch\n",
+            }),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(SensitiveRead.evaluate(&facts, &input).is_none());
+    }
+
+    #[test]
+    fn denies_apply_patch_pem_body_to_non_sensitive_path() {
+        let input = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Add File: src/notes.md\n+-----BEGIN RSA PRIVATE KEY-----\n+X\n+-----END RSA PRIVATE KEY-----\n*** End Patch\n",
+            }),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(matches!(
+            SensitiveRead.evaluate(&facts, &input),
+            Some(Decision::Deny { .. }),
+        ));
+    }
+
+    #[test]
+    fn allows_apply_patch_deleting_pem_body() {
+        let input = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Update File: src/notes.md\n                            -----BEGIN RSA PRIVATE KEY-----\n-leaked\n*** End Patch\n",
+            }),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(SensitiveRead.evaluate(&facts, &input).is_none());
+    }
+
+    #[test]
+    fn allows_apply_patch_context_line_mentioning_pem() {
+        let input = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Update File: src/notes.md\n                             -----BEGIN RSA PRIVATE KEY-----\n+safe line\n*** End Patch\n",
+            }),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(SensitiveRead.evaluate(&facts, &input).is_none());
+    }
+
+    #[test]
+    fn allows_apply_patch_body_mentioning_credential_paths_only() {
+        let input = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Add File: docs/setup.md\n                            +See ~/.aws/credentials and .env\n*** End Patch\n",
             }),
         };
         let facts = crate::facts::extract(&input);
