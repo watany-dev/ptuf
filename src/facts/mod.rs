@@ -41,8 +41,9 @@ pub struct Facts {
     pub url: Option<url::Url>,
     /// Sensitive tokens detected across the payload's strings (Bash
     /// tokens, file paths, `WebFetch` URL components, Edit/Write
-    /// content). Order is non-significant; rules typically just check
-    /// `is_empty()`.
+    /// content — the content lane only reports data-bearing kinds such
+    /// as `pem_blob`, never path mentions). Order is non-significant;
+    /// rules typically just check `is_empty()`.
     pub sensitive: Vec<sensitive::SensitivePath>,
     /// Self-protection match labels populated by the engine layer; pure
     /// `extract` leaves this empty.
@@ -131,8 +132,12 @@ fn collect_sensitive(
         push_all(&u.host);
     }
 
+    // Written bodies go through the narrower content lane: only
+    // data-bearing shapes (PEM blobs) classify there, so a docs file
+    // that merely mentions `~/.aws/credentials` or `.env` is not
+    // flagged (`docs/design/policy-packs.md` §`core.secrets`).
     if let Some(s) = event.content {
-        push_all(s);
+        sensitive::classify_content_into(s, &mut out);
     }
 
     out
@@ -224,6 +229,24 @@ mod tests {
                 .iter()
                 .any(|s| s.kind == sensitive::SensitiveKind::PemBlob)
         );
+    }
+
+    #[test]
+    fn extract_ignores_path_mentions_in_write_content() {
+        // Prose that merely *mentions* credential paths (a setup guide
+        // naming `~/.aws/credentials`, a tfstate-bearing ARN, `.env`)
+        // must not classify via the written-body lane; only the
+        // destination path and data-bearing shapes (PEM) count there.
+        let i = HookInput {
+            tool_name: "Write".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/docs/setup.md",
+                "content": "Put creds in ~/.aws/credentials, never commit \
+                            arn:aws:s3:::bucket/terraform.tfstate or .env",
+            }),
+        };
+        let f = extract(&i);
+        assert!(f.sensitive.is_empty(), "got {:?}", f.sensitive);
     }
 
     #[test]

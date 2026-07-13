@@ -11,6 +11,12 @@
 //! arbitrary content into `~/.ssh/authorized_keys` or `~/.aws/credentials`
 //! is a privilege-escalation primitive
 //! (`docs/design/policy-packs.md` `core.secrets`).
+//!
+//! The written *body* (`Write` content / `Edit` `new_string` / MCP
+//! `content`) only counts when it carries secret data itself (PEM
+//! blobs, via `facts::sensitive::classify_content_into`); prose that
+//! merely mentions credential paths — a setup guide naming
+//! `~/.aws/credentials` — does not fire this rule.
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
@@ -178,6 +184,30 @@ mod tests {
             SensitiveRead.evaluate(&facts, &input),
             Some(Decision::Deny { ref rule_id, .. }) if rule_id == RULE_ID,
         ));
+    }
+
+    #[test]
+    fn allows_markdown_write_mentioning_secret_paths() {
+        // A docs file whose body merely *mentions* credential paths must
+        // not trip the content-side classifier — only data-bearing
+        // shapes (PEM blobs) count in a written body.
+        let input = HookInput {
+            tool_name: "Write".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/docs/setup.md",
+                "content": "Put creds in ~/.aws/credentials, never commit \
+                            arn:aws:s3:::bucket/terraform.tfstate or .env",
+            }),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(SensitiveRead.evaluate(&facts, &input).is_none());
+    }
+
+    #[test]
+    fn allows_edit_new_string_mentioning_dotenv() {
+        let input = edit("/repo/README.md", "copy .env.example to .env");
+        let facts = crate::facts::extract(&input);
+        assert!(SensitiveRead.evaluate(&facts, &input).is_none());
     }
 
     #[test]

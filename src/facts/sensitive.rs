@@ -47,6 +47,31 @@ impl SensitiveKind {
         }
     }
 
+    /// True when a match of this kind found inside a *written body*
+    /// (`Write` content / `Edit` `new_string` / MCP `content`) is itself
+    /// secret data. Path-mention kinds (`.aws`, `.env`, `*.tfstate`,
+    /// `id_rsa` filenames, …) are prose-safe — a setup guide may name
+    /// them — and must not fire on content.
+    ///
+    /// Exhaustive (no wildcard arm) on purpose: adding a new
+    /// [`SensitiveKind`] variant must force a deliberate choice here
+    /// rather than silently defaulting to "not content-eligible".
+    pub const fn applies_to_content(self) -> bool {
+        match self {
+            Self::PemBlob => true,
+            Self::SshDir
+            | Self::AwsDir
+            | Self::GcloudDir
+            | Self::KubeConfig
+            | Self::DockerConfig
+            | Self::PrivateKeyFile
+            | Self::Dotenv
+            | Self::Npmrc
+            | Self::Pypirc
+            | Self::Tfstate => false,
+        }
+    }
+
     /// Parse a tag back into a [`SensitiveKind`]. Used by the plugin
     /// DSL when matching `sensitive.pathKindAny:`.
     pub fn parse(s: &str) -> Option<Self> {
@@ -236,6 +261,21 @@ pub fn classify(token: &str) -> Vec<SensitivePath> {
 /// [`classify`] variant that appends into a caller-owned buffer, so
 /// per-token sweeps over large payloads skip the intermediate `Vec`.
 pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
+    classify_into_filtered(token, out, false);
+}
+
+/// [`classify_into`] variant for written bodies (`Write` content /
+/// `Edit` `new_string` / MCP `content`): only kinds whose match is
+/// secret data itself ([`SensitiveKind::applies_to_content`]) fire, so
+/// prose merely mentioning credential paths stays clean.
+pub fn classify_content_into(token: &str, out: &mut Vec<SensitivePath>) {
+    classify_into_filtered(token, out, true);
+}
+
+/// Shared sweep behind [`classify_into`] / [`classify_content_into`].
+/// `content_only` is checked before the regex `get_or_init`, so a lane
+/// that drops a variant never even compiles its pattern.
+fn classify_into_filtered(token: &str, out: &mut Vec<SensitivePath>, content_only: bool) {
     let folded = fold_sensitive_homoglyphs(token);
     let token = folded.as_ref();
     let mask = needle_mask(token.as_bytes());
@@ -243,7 +283,7 @@ pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
         return;
     }
     for (idx, (kind, _, pat)) in PROBES.iter().enumerate() {
-        if mask & (1_u16 << idx) == 0 {
+        if mask & (1_u16 << idx) == 0 || (content_only && !kind.applies_to_content()) {
             continue;
         }
         let re = SENSITIVE_REGEXES[idx].get_or_init(|| build(pat));
@@ -563,6 +603,41 @@ mod tests {
         assert!(ms.iter().any(|m| m.kind == SensitiveKind::PrivateKeyFile));
     }
 
+    #[test]
+    fn applies_to_content_is_true_only_for_pem_blob() {
+        // Pins the content lane's kind set: adding a PROBES variant
+        // forces a deliberate decision about whether it is data-bearing.
+        for (kind, _, _) in PROBES {
+            assert_eq!(
+                kind.applies_to_content(),
+                *kind == SensitiveKind::PemBlob,
+                "unexpected content applicability for {kind:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn classify_content_into_drops_path_mention_kinds() {
+        let mut out = Vec::new();
+        classify_content_into(
+            "Put creds in ~/.aws/credentials, never commit \
+             arn:aws:s3:::bucket/terraform.tfstate, .env, or ~/.ssh/id_rsa",
+            &mut out,
+        );
+        assert!(out.is_empty(), "got {out:?}");
+    }
+
+    #[test]
+    fn classify_content_into_keeps_pem_blob() {
+        let mut out = Vec::new();
+        classify_content_into(
+            "-----BEGIN RSA PRIVATE KEY-----\nX\n-----END RSA PRIVATE KEY-----",
+            &mut out,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind, SensitiveKind::PemBlob);
+    }
+
     use crate::testing::proptest::sensitive_kind;
     use proptest::prelude::*;
 
@@ -612,6 +687,21 @@ mod tests {
                 }
             }
             prop_assert_eq!(classify(&s), reference);
+        }
+
+        // The content lane is exactly `classify` filtered down to the
+        // data-bearing kinds — same matches, same order, nothing else.
+        // Keeps `classify_content_into` honest against the needle gate
+        // and kills mutations of `applies_to_content`.
+        #[test]
+        fn pbt_classify_content_into_equals_filtered_classify(s in "[ -~]{0,80}") {
+            let mut content = Vec::new();
+            classify_content_into(&s, &mut content);
+            let reference: Vec<SensitivePath> = classify(&s)
+                .into_iter()
+                .filter(|m| m.kind.applies_to_content())
+                .collect();
+            prop_assert_eq!(content, reference);
         }
 
         // SensitiveKind::as_str is total and parse round-trips for every

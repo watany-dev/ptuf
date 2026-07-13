@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `core.secrets.sensitive-read` の書き込み本文スキャンを data-bearing shape
+  (PEM blob) のみに限定 (`classify_content_into`)。手順書等のドキュメントが
+  `~/.aws/credentials` や `*.tfstate` を含む ARN に言及しただけで Write が
+  hard-deny される false positive を解消。書き込み**先** path・Bash・URL の
+  分類は従来どおり全 shape を対象とする。
+
 ### Added
 - Process substitution (`<(…)` / `>(…)`) 本体を `Argv.subst_argv` へ
   re-parse (ADR 0003 C / issue #162)。`bash <(curl …)` と
