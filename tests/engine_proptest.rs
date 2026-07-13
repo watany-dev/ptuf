@@ -169,6 +169,54 @@ proptest! {
     }
 }
 
+// Deterministic companions to the parity property above, pinning the
+// written-body lane of `core.secrets.sensitive-read`: prose that merely
+// mentions credential paths is allowed, while the destination-path and
+// PEM-body denials stay intact.
+
+#[test]
+fn write_of_docs_mentioning_secret_paths_is_allowed() {
+    let dec = default_engine()
+        .decide(&ptuf::HookInput {
+            tool_name: "Write".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/docs/setup.md",
+                "content": "Put creds in ~/.aws/credentials, never commit \
+                            arn:aws:s3:::bucket/terraform.tfstate or .env",
+            }),
+        })
+        .decision;
+    assert_eq!(dec.kind(), DecisionKind::Allow, "got {dec:?}");
+}
+
+#[test]
+fn write_to_aws_credentials_path_still_denied() {
+    let dec = default_engine()
+        .decide(&ptuf::HookInput {
+            tool_name: "Write".into(),
+            tool_input: serde_json::json!({
+                "file_path": "~/.aws/credentials",
+                "content": "[default]\naws_access_key_id = X",
+            }),
+        })
+        .decision;
+    assert_eq!(dec.kind(), DecisionKind::Deny, "got {dec:?}");
+}
+
+#[test]
+fn write_of_pem_body_still_denied() {
+    let dec = default_engine()
+        .decide(&ptuf::HookInput {
+            tool_name: "Write".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/repo/notes.md",
+                "content": "-----BEGIN RSA PRIVATE KEY-----\nX\n-----END RSA PRIVATE KEY-----",
+            }),
+        })
+        .decision;
+    assert_eq!(dec.kind(), DecisionKind::Deny, "got {dec:?}");
+}
+
 /// Representative credentials paths spanning every `SensitiveKind`,
 /// including the `id_dsa` key and the boundary-anchored `~/.npmrc` /
 /// `~/.pypirc` shapes that the two path classifiers previously disagreed

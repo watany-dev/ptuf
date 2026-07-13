@@ -62,7 +62,7 @@ head は `head_basename` で basename 化するため `/usr/bin/curl ... | /bin/
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
 | `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`nc`/`ncat`/`socat`/`telnet`/`scp`/`rsync`/`ftp`/`sftp`、および bash の `/dev/(tcp\|udp)/` への書き込み redirect) が共存。pipeline の redirect 先が機密 path の場合も対象。`ssh` は `ssh -i ~/.ssh/id_rsa host` 等の正当用途で偽陽性が多いため sink に含めない |
-| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする |
+| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする。書き込み本文 (`Write` content / `Edit` `new_string` / MCP `content`) は実データ shape (PEM blob) のみ対象で、`~/.aws/credentials` 等の path 言及 (手順書の記載など) では発火しない |
 | `core.secrets.sensitive-bash-read` | ask | false | high | Bash の reader head (`cat`/`head`/`tail`/`source`/`.`/`grep`/`awk`/`sed`/`dd` 等) または `<` redirect が機密 path を読む |
 
 機密分類は `~/.ssh/**`, `~/.aws/**`, `~/.config/gcloud/**`, `~/.kube/config`,
@@ -79,7 +79,17 @@ engine レベルの `pbt_sensitive_path_parity_across_surfaces`
 (`tests/engine_proptest.rs`) が恒久的に縛る。
 `~` / `$HOME` 展開済みの絶対パス (`/home/user/.ssh/config`,
 `/root/.aws/credentials` 等) も同一 regex で分類する (Claude Code の Read が
-絶対 `file_path` を渡す bypass 対策)。判定は case-insensitive で行うため
+絶対 `file_path` を渡す bypass 対策)。
+ファイルツール系分類器は 2 レーン構成: path / Bash token / URL には全 shape を
+適用する `classify_into`、書き込み本文 (`Write` content / `Edit` `new_string` /
+MCP `content`) には data-bearing shape (`SensitiveKind::applies_to_content` =
+`pem_blob` のみ) に絞った `classify_content_into` を使う。手順書等の散文が
+機密 path に言及しただけでは `facts.sensitive` に載らず、plugin DSL の
+`sensitive.pathKindAny:` にも content 由来の path kind は現れない。本文中の
+path 言及を実行に移す時点では Bash 系ルール (`sensitive-bash-read` /
+`sensitive-path-to-network`) が引き続き捕捉する。2 レーンの整合は
+`pbt_classify_content_into_equals_filtered_classify`
+(`src/facts/sensitive.rs`) が縛る。判定は case-insensitive で行うため
 `.ENV` / `.Ssh` / `.AWS` 等の大文字混じりでも一致する (case-insensitive FS 上の
 bypass 対策)。さらに機密 needle 英字の Unicode lookalike (キリル `е`→`e` 等) は照合前に
 ASCII へ fold する (ADR 0007)。Bash argv の Latin-1 mojibake も同ヘルパで
