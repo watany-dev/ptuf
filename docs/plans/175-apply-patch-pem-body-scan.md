@@ -20,8 +20,9 @@ content scanning both missed Cline-shaped payloads.
    that delete leaked keys are not hard-denied.
 2. **`facts::patch::paths`** — move Codex path directive parsing out of
    `facts::path` (behaviour unchanged).
-3. **`HookInput::apply_patch_command` + `Event.patch`** — wire the raw patch
-   command into the content lane without overloading `write_payload()`.
+3. **`HookInput::apply_patch_command`** — wire the raw patch command into
+   the content lane from `extract()` without overloading `write_payload()` or
+   extending the public `Event` struct (SemVer-safe).
 4. **Cline `normalize_patch`** — same key priority as OpenCode
    `reshape_patch`: `command`, `patchText`, `patch`, `content`.
 

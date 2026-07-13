@@ -73,7 +73,13 @@ pub fn extract(input: &HookInput) -> Facts {
     let paths = path::extract_all(input);
     let path = paths.first().cloned();
     let url = event.urls.first().and_then(|url| url::parse(url));
-    let sensitive = collect_sensitive(&event, bash.as_ref(), &paths, url.as_ref());
+    let sensitive = collect_sensitive(
+        &event,
+        input.apply_patch_command(),
+        bash.as_ref(),
+        &paths,
+        url.as_ref(),
+    );
     let bash_redirects = path::from_bash_redirects(bash.as_ref(), None);
     Facts {
         bash,
@@ -90,6 +96,7 @@ pub fn extract(input: &HookInput) -> Facts {
 
 fn collect_sensitive(
     event: &crate::hook_input::Event<'_>,
+    patch_command: Option<&str>,
     bash: Option<&shell::Bash>,
     paths: &[path::FilePath],
     url: Option<&url::Url>,
@@ -141,7 +148,7 @@ fn collect_sensitive(
         sensitive::classify_content_into(s, &mut out);
     }
 
-    if let Some(cmd) = event.patch
+    if let Some(cmd) = patch_command
         && let Some(body) = patch::added_content(cmd)
     {
         sensitive::classify_content_into(&body, &mut out);

@@ -24,7 +24,6 @@ pub struct Event<'a> {
     pub paths: Vec<&'a str>,
     pub urls: Vec<&'a str>,
     pub content: Option<&'a str>,
-    pub patch: Option<&'a str>,
 }
 
 impl From<RawHookInput> for HookInput {
@@ -47,7 +46,6 @@ impl HookInput {
             paths: collect_event_paths(self),
             urls: collect_event_urls(self),
             content: self.write_payload(),
-            patch: self.apply_patch_command(),
         }
     }
 
@@ -363,8 +361,6 @@ mod tests {
             parsed.apply_patch_command(),
             Some("*** Begin Patch\n*** End Patch\n")
         );
-        let event = parsed.event();
-        assert_eq!(event.patch, Some("*** Begin Patch\n*** End Patch\n"));
     }
 
     #[test]
@@ -372,7 +368,6 @@ mod tests {
         let raw = r#"{"tool_name":"Write","tool_input":{"command":"x"}}"#;
         let parsed: HookInput = serde_json::from_str(raw).expect("parse");
         assert!(parsed.apply_patch_command().is_none());
-        assert!(parsed.event().patch.is_none());
     }
 
     #[test]
