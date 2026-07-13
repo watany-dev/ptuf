@@ -52,8 +52,24 @@ impl SensitiveKind {
     /// secret data. Path-mention kinds (`.aws`, `.env`, `*.tfstate`,
     /// `id_rsa` filenames, …) are prose-safe — a setup guide may name
     /// them — and must not fire on content.
+    ///
+    /// Exhaustive (no wildcard arm) on purpose: adding a new
+    /// [`SensitiveKind`] variant must force a deliberate choice here
+    /// rather than silently defaulting to "not content-eligible".
     pub const fn applies_to_content(self) -> bool {
-        matches!(self, Self::PemBlob)
+        match self {
+            Self::PemBlob => true,
+            Self::SshDir
+            | Self::AwsDir
+            | Self::GcloudDir
+            | Self::KubeConfig
+            | Self::DockerConfig
+            | Self::PrivateKeyFile
+            | Self::Dotenv
+            | Self::Npmrc
+            | Self::Pypirc
+            | Self::Tfstate => false,
+        }
     }
 
     /// Parse a tag back into a [`SensitiveKind`]. Used by the plugin
@@ -245,7 +261,7 @@ pub fn classify(token: &str) -> Vec<SensitivePath> {
 /// [`classify`] variant that appends into a caller-owned buffer, so
 /// per-token sweeps over large payloads skip the intermediate `Vec`.
 pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
-    classify_into_filtered(token, out, |_| true);
+    classify_into_filtered(token, out, false);
 }
 
 /// [`classify_into`] variant for written bodies (`Write` content /
@@ -253,17 +269,13 @@ pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
 /// secret data itself ([`SensitiveKind::applies_to_content`]) fire, so
 /// prose merely mentioning credential paths stays clean.
 pub fn classify_content_into(token: &str, out: &mut Vec<SensitivePath>) {
-    classify_into_filtered(token, out, SensitiveKind::applies_to_content);
+    classify_into_filtered(token, out, true);
 }
 
 /// Shared sweep behind [`classify_into`] / [`classify_content_into`].
-/// `keep` is checked before the regex `get_or_init`, so a lane that
-/// drops a variant never even compiles its pattern.
-fn classify_into_filtered(
-    token: &str,
-    out: &mut Vec<SensitivePath>,
-    keep: fn(SensitiveKind) -> bool,
-) {
+/// `content_only` is checked before the regex `get_or_init`, so a lane
+/// that drops a variant never even compiles its pattern.
+fn classify_into_filtered(token: &str, out: &mut Vec<SensitivePath>, content_only: bool) {
     let folded = fold_sensitive_homoglyphs(token);
     let token = folded.as_ref();
     let mask = needle_mask(token.as_bytes());
@@ -271,7 +283,7 @@ fn classify_into_filtered(
         return;
     }
     for (idx, (kind, _, pat)) in PROBES.iter().enumerate() {
-        if mask & (1_u16 << idx) == 0 || !keep(*kind) {
+        if mask & (1_u16 << idx) == 0 || (content_only && !kind.applies_to_content()) {
             continue;
         }
         let re = SENSITIVE_REGEXES[idx].get_or_init(|| build(pat));
