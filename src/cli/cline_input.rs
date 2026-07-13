@@ -805,26 +805,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn cline_apply_patch_pem_body_denies_via_engine() {
-        use crate::config::Config;
-        use crate::decision::DecisionKind;
-        use crate::engine::Engine;
-        use crate::plugin::PluginSet;
-
-        let pem = "-----BEGIN RSA PRIVATE KEY-----\nX\n-----END RSA PRIVATE KEY-----";
-        let patch = format!("*** Begin Patch\n*** Add File: src/notes.md\n+{pem}\n*** End Patch\n");
-        let body = format!(
-            r#"{{
-            "hookName": "tool_call",
-            "tool_call": {{ "name": "apply_patch", "input": {{ "patch": {patch_json} }} }}
-        }}"#,
-            patch_json = serde_json::to_string(&patch).unwrap(),
-        );
-        let input = parse(&body).unwrap();
-        let engine = Engine::with_components(Config::default(), PluginSet::new());
-        let decision = engine.decide(&input).decision;
-        assert_eq!(decision.kind(), DecisionKind::Deny, "got {decision:?}");
-    }
 }

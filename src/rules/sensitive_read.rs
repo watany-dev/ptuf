@@ -277,7 +277,7 @@ mod tests {
         let input = HookInput {
             tool_name: "apply_patch".into(),
             tool_input: serde_json::json!({
-                "command": "*** Begin Patch\n*** Update File: src/notes.md\n                            -----BEGIN RSA PRIVATE KEY-----\n-leaked\n*** End Patch\n",
+                "command": "*** Begin Patch\n*** Update File: src/notes.md\n -----BEGIN RSA PRIVATE KEY-----\n-leaked\n*** End Patch\n",
             }),
         };
         let facts = crate::facts::extract(&input);
@@ -289,7 +289,7 @@ mod tests {
         let input = HookInput {
             tool_name: "apply_patch".into(),
             tool_input: serde_json::json!({
-                "command": "*** Begin Patch\n*** Update File: src/notes.md\n                             -----BEGIN RSA PRIVATE KEY-----\n+safe line\n*** End Patch\n",
+                "command": "*** Begin Patch\n*** Update File: src/notes.md\n -----BEGIN RSA PRIVATE KEY-----\n+safe line\n*** End Patch\n",
             }),
         };
         let facts = crate::facts::extract(&input);
@@ -301,7 +301,7 @@ mod tests {
         let input = HookInput {
             tool_name: "apply_patch".into(),
             tool_input: serde_json::json!({
-                "command": "*** Begin Patch\n*** Add File: docs/setup.md\n                            +See ~/.aws/credentials and .env\n*** End Patch\n",
+                "command": "*** Begin Patch\n*** Add File: docs/setup.md\n+See ~/.aws/credentials and .env\n*** End Patch\n",
             }),
         };
         let facts = crate::facts::extract(&input);

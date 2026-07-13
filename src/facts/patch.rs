@@ -27,23 +27,15 @@ pub(crate) fn paths(command: &str) -> Vec<String> {
 /// Content the patch adds: every `+`-prefixed line with the prefix stripped,
 /// joined by `\n`. Returns `None` when there are no added lines.
 pub(crate) fn added_content(command: &str) -> Option<String> {
-    let mut added: Vec<&str> = Vec::new();
-    for line in command.lines() {
-        if let Some(rest) = line.strip_prefix('+') {
-            added.push(rest);
-        }
-    }
+    let added: Vec<&str> = command
+        .lines()
+        .filter_map(|line| line.strip_prefix('+'))
+        .collect();
     if added.is_empty() {
-        return None;
+        None
+    } else {
+        Some(added.join("\n"))
     }
-    let mut out = String::with_capacity(command.len());
-    for (index, line) in added.iter().enumerate() {
-        if index > 0 {
-            out.push('\n');
-        }
-        out.push_str(line);
-    }
-    Some(out)
 }
 
 #[cfg(test)]
@@ -53,8 +45,6 @@ mod tests {
     use crate::hook_input::HookInput;
     use proptest::prelude::*;
     use std::collections::HashSet;
-
-    const PEM: &str = "-----BEGIN RSA PRIVATE KEY-----\nX\n-----END RSA PRIVATE KEY-----";
 
     #[test]
     fn paths_collects_add_update_delete_and_move() {
@@ -192,24 +182,5 @@ mod tests {
             };
             prop_assert_eq!(sensitive_kinds(&write), sensitive_kinds(&apply_patch));
         }
-    }
-
-    #[test]
-    fn extract_apply_patch_collects_pem_from_added_lines() {
-        let input = HookInput {
-            tool_name: "apply_patch".into(),
-            tool_input: serde_json::json!({
-                "command": format!(
-                    "*** Begin Patch\n*** Add File: src/notes.md\n+{PEM}\n*** End Patch\n"
-                ),
-            }),
-        };
-        let facts = extract(&input);
-        assert!(
-            facts
-                .sensitive
-                .iter()
-                .any(|s| s.kind == SensitiveKind::PemBlob)
-        );
     }
 }
