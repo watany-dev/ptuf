@@ -5,6 +5,8 @@ name: Nightly
 # decision core. Mirrors the `make fuzz` / `make mutants` local targets.
 # Runs on a schedule and on demand; never blocks a PR.
 on:
+  push:
+    branches: [agent/nightly-v0.6.0]
   schedule:
     # 03:00 UTC daily.
     - cron: '0 3 * * *'
