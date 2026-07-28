@@ -171,6 +171,9 @@ The current hand-patch set:
   `subject-checksums: artifacts/SHA256SUMS`. The SBOM attestation uses the
   same `subject-checksums` plus
   `sbom-path: artifacts/ptuf-${TAG}.spdx.json`.
+- crates.io publishing is **not** part of `release.yml`; it lives in
+  `.github/workflows/publish-crates.yml`, triggered by the published GitHub
+  Release. Do not re-add a `publish-crates-io` job when regenerating.
 
 `zizmor` audit suppressions for cargo-dist patterns that cannot currently be
 patched live in `.github/zizmor.yml`.
