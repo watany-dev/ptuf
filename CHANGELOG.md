@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-28
+
+### Changed (BREAKING)
+- `facts::shell::Argv` に公開フィールド `subst_argv: Vec<Argv>` を追加
+  (ADR 0008)。既存の `Argv { … }` 構造体リテラルは更新が必要。
+
 ### Fixed
 - `core.secrets.sensitive-read` の書き込み本文スキャンを data-bearing shape
   (PEM blob) のみに限定 (`classify_content_into`)。手順書等のドキュメントが
@@ -23,14 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-parse (ADR 0003 C / issue #162)。`bash <(curl …)` と
   `bash -c "$(curl …)"` を `remote-script-pipe` が Deny。subst 再帰は
   fresh `seen_from` で `echo <(curl) | bash` の漏洩 FP を防ぐ。
-
-## [0.6.0] - 2026-07-09
-
-### Changed (BREAKING)
-- `facts::shell::Argv` に公開フィールド `subst_argv: Vec<Argv>` を追加
-  (ADR 0008)。既存の `Argv { … }` 構造体リテラルは更新が必要。
-
-### Added
 - Command substitution (`$(…)` / backticks) 本体の bounded re-parse。
   `echo $(cat .env)` を `sensitive-bash-read` が Ask する (issue #161)。
   `Bash::commands()` は `subst_argv` も flatten する。悲観モードは

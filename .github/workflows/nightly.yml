@@ -56,9 +56,7 @@ jobs:
       - name: Install gnu target for sanitizer fuzz builds
         run: rustup target add x86_64-unknown-linux-gnu
       - name: Fuzz ${{ matrix.target }}
-        env:
-          CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=300 -timeout=10
+        run: cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=300 -timeout=10
       # A crash leaves a reproducer under fuzz/artifacts/<target>/; keep
       # it so the failure can be triaged and added to the regression set.
       - name: Upload crash artifacts
