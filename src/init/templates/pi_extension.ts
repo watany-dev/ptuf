@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const PTUF_BINARY = "__PTUF_BINARY__";
+const PTUF_BINARY = __PTUF_BINARY__;
 const ASK_MODE = process.env.PTUF_PI_ASK_MODE ?? "confirm-if-ui-else-deny";
 const TIMEOUT_MS = Number(process.env.PTUF_PI_TIMEOUT_MS ?? "10000");
 

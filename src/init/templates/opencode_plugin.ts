@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import type { Plugin } from "@opencode-ai/plugin";
 
-const PTUF_BINARY = "__PTUF_BINARY__";
+const PTUF_BINARY = __PTUF_BINARY__;
 const TIMEOUT_MS = Number(process.env.PTUF_OPENCODE_TIMEOUT_MS ?? "10000");
 const MAX_CAPTURE_BYTES = 65536;
 const KILL_GRACE_MS = 1000;

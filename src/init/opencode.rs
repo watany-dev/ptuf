@@ -166,8 +166,9 @@ fn apply(path: &Path, desired: &[u8], dry_run: bool) -> Result<InstallStatus, In
 }
 
 pub fn render_plugin(ptuf_binary: &str, version: &str) -> Vec<u8> {
+    let ptuf_binary = serde_json::to_string(ptuf_binary).unwrap_or_else(|_| "\"ptuf\"".into());
     TEMPLATE
-        .replace(BINARY_PLACEHOLDER, ptuf_binary)
+        .replace(BINARY_PLACEHOLDER, &ptuf_binary)
         .replace(VERSION_PLACEHOLDER, version)
         .into_bytes()
 }
@@ -268,10 +269,23 @@ mod tests {
     #[test]
     fn render_plugin_substitutes_binary_and_version() {
         let rendered = String::from_utf8(render_plugin("/x/ptuf", "9.9.9")).unwrap();
-        assert!(rendered.contains("/x/ptuf"));
+        assert!(rendered.contains(r#""/x/ptuf""#));
         assert!(rendered.contains("9.9.9"));
         assert!(!rendered.contains(BINARY_PLACEHOLDER));
         assert!(!rendered.contains(VERSION_PLACEHOLDER));
+    }
+
+    #[test]
+    fn render_plugin_json_escapes_binary_literal() {
+        let rendered = String::from_utf8(render_plugin(
+            r#"/tmp/x"; throw new Error("owned") //"#,
+            "9.9.9",
+        ))
+        .unwrap();
+        assert!(
+            rendered.contains(r#"const PTUF_BINARY = "/tmp/x\"; throw new Error(\"owned\") //";"#),
+            "{rendered}"
+        );
     }
 
     #[test]
