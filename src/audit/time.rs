@@ -194,6 +194,57 @@ mod tests {
         assert!(parse_rfc3339_to_secs("2023-02-29T00:00:00Z").is_none());
     }
 
+    // Characterization tests pinning parser behavior at calendar and
+    // offset boundaries. These were written (and verified green) against
+    // the original `time`-crate-backed implementation before it was
+    // replaced with the in-tree integer-arithmetic implementation, so
+    // they guard the swap against silent behavior drift.
+
+    // A leap second that is not the last second of a UTC day is invalid.
+    #[test]
+    fn rejects_leap_second_outside_end_of_day() {
+        assert!(parse_rfc3339_to_secs("2024-01-01T00:00:60Z").is_none());
+    }
+
+    // Day-of-month must respect the actual month length, including the
+    // Gregorian century rule (2100 is not a leap year, 2000 is).
+    #[test]
+    fn respects_month_lengths_and_century_rule() {
+        assert!(parse_rfc3339_to_secs("2024-04-31T00:00:00Z").is_none());
+        assert_eq!(
+            parse_rfc3339_to_secs("2024-04-30T00:00:00Z"),
+            Some(1_714_435_200)
+        );
+        assert!(parse_rfc3339_to_secs("2100-02-29T00:00:00Z").is_none());
+        assert_eq!(
+            parse_rfc3339_to_secs("2100-02-28T00:00:00Z"),
+            Some(4_107_456_000)
+        );
+        assert_eq!(
+            parse_rfc3339_to_secs("2000-02-29T00:00:00Z"),
+            Some(951_782_400)
+        );
+    }
+
+    // A positive offset can push an instant before the Unix epoch; the
+    // parser reports those as unrepresentable rather than wrapping.
+    #[test]
+    fn rejects_instants_that_offset_before_the_epoch() {
+        assert!(parse_rfc3339_to_secs("1970-01-01T00:00:00+09:00").is_none());
+        assert_eq!(parse_rfc3339_to_secs("1970-01-01T09:00:00+09:00"), Some(0));
+    }
+
+    // Offset fields have their own ranges: hour <= 23, minute <= 59.
+    #[test]
+    fn enforces_offset_component_ranges() {
+        assert_eq!(
+            parse_rfc3339_to_secs("2024-01-01T23:59:00+23:59"),
+            Some(1_704_067_200)
+        );
+        assert!(parse_rfc3339_to_secs("2024-01-01T00:00:00+24:00").is_none());
+        assert!(parse_rfc3339_to_secs("2024-01-01T00:00:00+00:60").is_none());
+    }
+
     #[test]
     fn rejects_separator_typos() {
         assert!(parse_rfc3339_to_secs("2024.01-01T00:00:00Z").is_none());
