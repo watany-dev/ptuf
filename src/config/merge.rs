@@ -2,28 +2,61 @@
 //! into a single [`Config`].
 //!
 //! Merge rules:
-//! * Scalars (`mode`, `fail_closed`, `audit.enabled`, `audit.path`): later layers'
+//! * Scalars (`mode`, `fail_closed`, `readonly`, `audit.enabled`, `audit.path`): later layers'
 //!   `Some(_)` wins.
 //! * `pack_overrides`: union by pack name; for the same name the later
 //!   layer's [`PackOverride`] wins for any `Some(_)` field.
 //! * `allowlists`: concatenate in scope order so audit can attribute a
 //!   match to the layer that contributed it.
+//! * `PTUF_READONLY=1|true|on` appends a synthetic top layer that sets
+//!   `readonly: true` only — falsy / unset values do not create a layer,
+//!   so the env can strengthen but never weaken a config `readonly: true`.
 //!
 //! `hardDeny` / `overridable` enforcement happens at engine evaluation
 //! time, not in merge — the engine inspects the rule's static metadata
 //! and refuses `Disable` overrides for `hardDeny: true` rules.
 
 use super::schema::{MergeLayer, RawConfig};
+use super::scope::{EnvLookup, SystemEnv};
 use super::{Config, PackOverride, RuleOverride};
 
 /// Fold `layers` into a final [`Config`]. Layers are applied in the
 /// order they appear (so `layers[0]` is the lowest-priority scope).
+/// Resolves `PTUF_READONLY` from the process environment.
 pub fn merge(layers: Vec<RawConfig>) -> Config {
+    merge_with_env(layers, &SystemEnv)
+}
+
+/// Like [`merge`] but resolves `PTUF_READONLY` via `env` (tests inject
+/// [`super::scope::MapEnv`]).
+pub fn merge_with_env(layers: Vec<RawConfig>, env: &dyn EnvLookup) -> Config {
+    let mut layers = layers;
+    if env_readonly_enabled(env) {
+        layers.push(RawConfig {
+            readonly: Some(true),
+            ..RawConfig::default()
+        });
+    }
     let mut acc = Config::default();
     for layer in layers {
         apply(&mut acc, layer.into_merge_layer());
     }
     acc
+}
+
+/// `true` when `PTUF_READONLY` is one of `1` / `true` / `on` (ASCII
+/// case-insensitive for the word forms). Any other value — including
+/// `0` / `false` / `off` — leaves the env layer out so it cannot demote
+/// a config-file `readonly: true`.
+pub(crate) fn env_readonly_enabled(env: &dyn EnvLookup) -> bool {
+    let Some(raw) = env.var_os("PTUF_READONLY") else {
+        return false;
+    };
+    let value = raw.to_string_lossy();
+    matches!(
+        value.as_ref(),
+        "1" | "true" | "TRUE" | "True" | "on" | "ON" | "On"
+    )
 }
 
 fn apply(acc: &mut Config, layer: MergeLayer) {
@@ -32,6 +65,9 @@ fn apply(acc: &mut Config, layer: MergeLayer) {
     }
     if let Some(fc) = layer.fail_closed {
         acc.fail_closed = fc;
+    }
+    if let Some(ro) = layer.readonly {
+        acc.readonly = ro;
     }
     for (pack, overlay) in layer.pack_overrides {
         let entry = acc.pack_overrides.entry(pack).or_default();
@@ -355,6 +391,77 @@ mod tests {
         assert_eq!(cfg.audit.path, Some(PathBuf::from("/tmp/lower.jsonl")));
     }
 
+    #[test]
+    fn readonly_last_write_wins_across_layers() {
+        use super::super::scope::MapEnv;
+        let empty = MapEnv::new(&[]);
+        let cfg = merge_with_env(
+            vec![
+                RawConfig {
+                    readonly: Some(false),
+                    ..raw()
+                },
+                RawConfig {
+                    readonly: Some(true),
+                    ..raw()
+                },
+            ],
+            &empty,
+        );
+        assert!(cfg.readonly);
+        let cfg = merge_with_env(
+            vec![
+                RawConfig {
+                    readonly: Some(true),
+                    ..raw()
+                },
+                RawConfig {
+                    readonly: Some(false),
+                    ..raw()
+                },
+            ],
+            &empty,
+        );
+        assert!(!cfg.readonly);
+    }
+
+    #[test]
+    fn ptuf_readonly_env_strengthens_only() {
+        use super::super::scope::MapEnv;
+        // env=1 turns false → true
+        let cfg = merge_with_env(
+            vec![RawConfig {
+                readonly: Some(false),
+                ..raw()
+            }],
+            &MapEnv::new(&[("PTUF_READONLY", "1")]),
+        );
+        assert!(cfg.readonly);
+        // env=0 cannot demote config true
+        let cfg = merge_with_env(
+            vec![RawConfig {
+                readonly: Some(true),
+                ..raw()
+            }],
+            &MapEnv::new(&[("PTUF_READONLY", "0")]),
+        );
+        assert!(cfg.readonly);
+        // env=false cannot demote
+        let cfg = merge_with_env(
+            vec![RawConfig {
+                readonly: Some(true),
+                ..raw()
+            }],
+            &MapEnv::new(&[("PTUF_READONLY", "false")]),
+        );
+        assert!(cfg.readonly);
+        // env=true also strengthens
+        let cfg = merge_with_env(vec![raw()], &MapEnv::new(&[("PTUF_READONLY", "true")]));
+        assert!(cfg.readonly);
+        let cfg = merge_with_env(vec![raw()], &MapEnv::new(&[("PTUF_READONLY", "on")]));
+        assert!(cfg.readonly);
+    }
+
     use proptest::collection::{btree_map, vec};
     use proptest::prelude::*;
 
@@ -408,6 +515,7 @@ mod tests {
                     version: None,
                     mode,
                     fail_closed,
+                    readonly: None,
                     packs,
                     rules: BTreeMap::new(),
                     allowlists,
@@ -449,7 +557,8 @@ mod tests {
         fn pbt_merge_scalars_are_last_write_wins(
             layers in vec(raw_config_strategy(), 0..5),
         ) {
-            let cfg = merge(layers.clone());
+            use super::super::scope::MapEnv;
+            let cfg = merge_with_env(layers.clone(), &MapEnv::new(&[]));
             let expected_mode = layers
                 .iter()
                 .rev()
@@ -460,8 +569,10 @@ mod tests {
                 .rev()
                 .find_map(|l| l.fail_closed)
                 .unwrap_or(true);
+            let expected_readonly = layers.iter().rev().find_map(|l| l.readonly).unwrap_or(false);
             prop_assert_eq!(cfg.mode, expected_mode);
             prop_assert_eq!(cfg.fail_closed, expected_fail_closed);
+            prop_assert_eq!(cfg.readonly, expected_readonly);
         }
 
         // Allowlists concatenate in scope order across every layer.

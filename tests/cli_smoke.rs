@@ -1133,3 +1133,82 @@ fn update_curl_missing_is_friendly_error() {
     assert_eq!(code, 1);
     assert!(stderr.contains("requires curl on PATH"), "stderr: {stderr}");
 }
+
+#[test]
+fn help_mentions_readonly_subcommand() {
+    let (code, stdout, _) = run(&["--help"], "");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("readonly on|off|status"));
+}
+
+#[test]
+fn readonly_on_off_round_trip_through_hook() {
+    let dir = tempfile::tempdir().expect("tmpdir");
+    // repo marker
+    std::fs::create_dir(dir.path().join(".git")).expect("git");
+    // seed local yaml with an unrelated key that must survive
+    std::fs::write(
+        dir.path().join(".ptuf.local.yaml"),
+        "mode: enforce\npacks:\n  core.network:\n    enabled: true\n",
+    )
+    .expect("seed");
+
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("home");
+
+    let (code, stdout, stderr) = run_in(
+        &["readonly", "on"],
+        dir.path(),
+        Some(home.as_path()),
+        "",
+    );
+    assert_eq!(code, 0, "stderr={stderr} stdout={stdout}");
+    assert!(stdout.contains("readonly on"));
+    let local = std::fs::read_to_string(dir.path().join(".ptuf.local.yaml")).expect("read");
+    assert!(local.contains("readonly: true"));
+    assert!(local.contains("core.network"));
+
+    let write_payload = r#"{"tool_name":"Write","tool_input":{"file_path":"f","content":"x"}}"#;
+    let (code, stdout, stderr) = run_in(
+        &["hook", "claude-code"],
+        dir.path(),
+        Some(home.as_path()),
+        write_payload,
+    );
+    assert_eq!(code, 2, "stderr={stderr} stdout={stdout}");
+    assert!(
+        stdout.contains("deny") || stderr.contains("core.readonly.file-write"),
+        "stdout={stdout} stderr={stderr}"
+    );
+
+    let (code, _, stderr) = run_in(
+        &["readonly", "off"],
+        dir.path(),
+        Some(home.as_path()),
+        "",
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+
+    let (code, stdout, stderr) = run_in(
+        &["hook", "claude-code"],
+        dir.path(),
+        Some(home.as_path()),
+        write_payload,
+    );
+    assert_eq!(code, 0, "stderr={stderr} stdout={stdout}");
+}
+
+#[test]
+fn readonly_status_reports_effective_value() {
+    let dir = tempfile::tempdir().expect("tmpdir");
+    std::fs::create_dir(dir.path().join(".git")).expect("git");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("home");
+    let (code, _, _) = run_in(&["readonly", "on"], dir.path(), Some(home.as_path()), "");
+    assert_eq!(code, 0);
+    let (code, stdout, stderr) =
+        run_in(&["readonly", "status"], dir.path(), Some(home.as_path()), "");
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(stdout.contains("readonly: on"), "stdout={stdout}");
+    assert!(stdout.contains(".ptuf.local.yaml"), "stdout={stdout}");
+}

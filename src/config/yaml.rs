@@ -52,6 +52,14 @@ mod tests {
     }
 
     #[test]
+    fn parses_readonly_flag() {
+        let raw = parse_str(&p(), "readonly: true\n").expect("parse");
+        assert_eq!(raw.readonly, Some(true));
+        let raw = parse_str(&p(), "readonly: false\n").expect("parse");
+        assert_eq!(raw.readonly, Some(false));
+    }
+
+    #[test]
     fn parses_minimal_config() {
         let yaml = "version: 1\nmode: enforce\nfailClosed: true\n";
         let raw = parse_str(&p(), yaml).expect("parse");

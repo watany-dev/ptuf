@@ -23,6 +23,7 @@ pub mod merge;
 pub mod repo;
 pub mod schema;
 pub mod scope;
+pub mod toggle;
 pub mod yaml;
 
 /// Operating mode for the engine.
@@ -42,6 +43,10 @@ pub enum Mode {
 pub struct Config {
     pub mode: Mode,
     pub fail_closed: bool,
+    /// Forced readonly gate (orthogonal to [`Mode`]). When `true`, the
+    /// engine denies file / bash / MCP writes after mode demotion; pack
+    /// disable, rule override, and allowlist cannot weaken it.
+    pub readonly: bool,
     /// Per-pack overrides keyed by pack name (`core.network`).
     /// A rule whose id starts with `<pack>.` inherits the pack toggle.
     pub pack_overrides: BTreeMap<String, PackOverride>,
@@ -92,6 +97,7 @@ impl Default for Config {
         Self {
             mode: Mode::default(),
             fail_closed: true,
+            readonly: false,
             pack_overrides,
             rule_overrides: BTreeMap::new(),
             allowlists: Vec::new(),
@@ -231,6 +237,14 @@ pub fn load_for(repo_root: Option<&Path>) -> Result<Config, ConfigError> {
 /// public [`load_for`] helper as well as by integration tests that
 /// inject fixture directories.
 pub fn load_with_layout(layout: scope::Layout) -> Result<Config, ConfigError> {
+    load_with_layout_env(layout, &scope::SystemEnv)
+}
+
+/// Like [`load_with_layout`] but resolves `PTUF_READONLY` via `env`.
+pub fn load_with_layout_env(
+    layout: scope::Layout,
+    env: &dyn scope::EnvLookup,
+) -> Result<Config, ConfigError> {
     let mut layers = Vec::new();
     for path in layout.ordered_paths() {
         if !path.is_file() {
@@ -239,7 +253,7 @@ pub fn load_with_layout(layout: scope::Layout) -> Result<Config, ConfigError> {
         let raw = yaml::load_path(&path)?;
         layers.push(raw);
     }
-    Ok(merge::merge(layers))
+    Ok(merge::merge_with_env(layers, env))
 }
 
 #[cfg(test)]

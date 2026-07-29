@@ -10,6 +10,7 @@ pub mod injection_content;
 pub mod patterns;
 pub mod project_hygiene;
 pub mod remote_pipe;
+pub(crate) mod readonly;
 pub mod self_protection;
 pub mod sensitive_bash_read;
 pub mod sensitive_net;
@@ -110,6 +111,11 @@ pub fn iter() -> impl Iterator<Item = &'static (dyn ConfigRule + Sync)> {
 /// `hard_deny`. Used by mode demotion so repository `mode: monitor`
 /// cannot weaken critical safeguards.
 pub fn is_hard_deny_rule_id(rule_id: &str, plugins: &crate::plugin::PluginSet) -> bool {
+    // Readonly gate denials are structurally hard-deny: pack disable /
+    // allowlist / mode demotion must not weaken them.
+    if rule_id.starts_with("core.readonly.") {
+        return true;
+    }
     for rule in iter() {
         if rule.id() == rule_id {
             return rule.hard_deny();

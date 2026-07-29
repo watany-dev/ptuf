@@ -34,6 +34,7 @@ built-in rules + plugin rules
 aggregate(deny > ask > monitor > allow)
   ↓
 mode に応じて demote
+→ readonly ゲート (`Config.readonly` 時、rule ループ外)
   ↓
 hook response / eval text / audit JSONL
 ```

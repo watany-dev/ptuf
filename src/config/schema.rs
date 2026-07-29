@@ -27,6 +27,8 @@ pub struct RawConfig {
     #[serde(default)]
     pub fail_closed: Option<bool>,
     #[serde(default)]
+    pub readonly: Option<bool>,
+    #[serde(default)]
     pub packs: BTreeMap<String, RawPack>,
     #[serde(default)]
     pub rules: BTreeMap<String, RawRuleOverride>,
@@ -55,6 +57,7 @@ impl RawConfig {
         MergeLayer {
             mode: self.mode,
             fail_closed: self.fail_closed,
+            readonly: self.readonly,
             pack_overrides: self
                 .packs
                 .into_iter()
@@ -189,6 +192,7 @@ impl From<RawAllowlist> for Allowlist {
 pub(super) struct MergeLayer {
     pub mode: Option<Mode>,
     pub fail_closed: Option<bool>,
+    pub readonly: Option<bool>,
     pub pack_overrides: BTreeMap<String, PackOverride>,
     pub rule_overrides: BTreeMap<String, RuleOverride>,
     pub allowlists: Vec<Allowlist>,

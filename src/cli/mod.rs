@@ -176,10 +176,21 @@ pub enum Command {
     /// prebuilt installer, auto-detected from the running binary's
     /// location.
     Update(UpdateOptions),
+    /// `ptuf readonly on|off|status [--global]` — toggle forced
+    /// readonly mode in `.ptuf.local.yaml` (or the user config).
+    Readonly { action: ReadonlyAction, global: bool },
     /// `--help` / `-h`.
     Help,
     /// `--version` / `-V`.
     Version,
+}
+
+/// Subcommand of `ptuf readonly`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadonlyAction {
+    On,
+    Off,
+    Status,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -228,6 +239,7 @@ pub fn parse(args: &[String]) -> Result<(GlobalFlags, Command), ParseError> {
         "plugin" => parse::parse_plugin(&mut iter)?,
         "init" => parse::parse_init(&mut iter)?,
         "update" => parse::parse_update(&mut iter)?,
+        "readonly" => parse::parse_readonly(&mut iter)?,
         other => return Err(ParseError::UnknownCommand(other.to_string())),
     };
 
@@ -288,6 +300,9 @@ USAGE:
     ptuf update [--check] [--version <TAG>] [--force]
         (update the ptuf binary in-place from the latest GitHub
          release; auto-detects cargo install vs. prebuilt installer)
+    ptuf readonly on|off|status [--global]
+        (toggle forced readonly mode; writes <repo>/.ptuf.local.yaml
+         by default, or the user config with --global)
     ptuf --help | --version
 
 EXIT CODES:
@@ -313,6 +328,7 @@ pub fn run<R: Read, W1: Write, W2: Write>(
         Command::PluginCheck { path } => run::run_plugin_check(&path, stdout, stderr),
         Command::Init(options) => run::run_init(globals, options, stdout, stderr),
         Command::Update(options) => run::run_update(options, stdout, stderr),
+        Command::Readonly { action, global } => run::run_readonly(action, global, stdout, stderr),
         Command::Help => {
             let _ = writeln!(stdout, "{HELP}");
             0

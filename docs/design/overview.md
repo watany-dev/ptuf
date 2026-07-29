@@ -40,7 +40,7 @@ ptuf `v0.6.0` は次を実装済み:
 - `aggregate`
 - `Engine`
 - `EngineError`
-- `Outcome`
+- `Outcome` (`readonly` フラグを含む)
 - `Facts`
 - `HookInput`
 - `decide`

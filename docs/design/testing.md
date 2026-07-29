@@ -35,6 +35,13 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 
 ### `engine::demote_for_mode`
 
+### `Config.readonly` ゲート
+
+- pack disable / allowlist / `mode: monitor` 下でも Write / 非 read bash は Deny
+- `rank(readonly) >= rank(baseline)` の単調強化 PBT
+- bypass corpus の `readonly: true` ケース (ADR 0009)
+
+
 - `Mode::Enforce` ⇒ 入力をそのまま返す (恒等)
 - `Mode::Monitor` で `Allow / Ask / Monitor` ⇒ 不変
 - `Mode::Monitor` で `Deny { rule_id, .. }` かつ rule が `hard_deny` ⇒ 不変

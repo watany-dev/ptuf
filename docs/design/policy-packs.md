@@ -325,3 +325,10 @@ allowlists:
       path.filePathPrefixAny: [/tmp/build-]
     reason: ビルドキャッシュは workspace 外 OK
 ```
+
+## `core.readonly` は pack ではない
+
+強制 readonly (`Config.readonly` / `ptuf readonly on`) は engine ゲートで、
+pack テーブルには載らない。`core.readonly.*` rule id は名前空間予約のみ
+([ADR 0009](../adr/0009-readonly-mode-2026-07.md))。
+

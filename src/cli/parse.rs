@@ -13,7 +13,7 @@ use crate::init::opencode::{OpencodeInitOptions, OpencodeScope};
 use crate::init::pi::{PiInitOptions, PiScope};
 use crate::update::UpdateOptions;
 
-use super::{Command, HookAgent, InitOptions, ParseError};
+use super::{Command, HookAgent, InitOptions, ParseError, ReadonlyAction};
 
 pub(super) fn parse_init<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
@@ -308,6 +308,29 @@ where
         force,
         skip_attestation,
     }))
+}
+
+pub(super) fn parse_readonly<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let action_tok = iter.next().ok_or(ParseError::MissingValue("on|off|status"))?;
+    let action = match action_tok.as_str() {
+        "on" => ReadonlyAction::On,
+        "off" => ReadonlyAction::Off,
+        "status" => ReadonlyAction::Status,
+        other => {
+            return Err(ParseError::UnexpectedArgument(other.to_string()));
+        },
+    };
+    let mut global = false;
+    for arg in iter {
+        match arg.as_str() {
+            "--global" => global = true,
+            other => return Err(ParseError::UnexpectedArgument(other.to_string())),
+        }
+    }
+    Ok(Command::Readonly { action, global })
 }
 
 pub(super) fn parse_plugin<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -1110,7 +1133,39 @@ mod tests {
     }
 
     #[test]
-    fn parse_error_display() {
+    #[test]
+    fn parse_readonly_on_off_status_and_global() {
+        use crate::cli::{Command, ReadonlyAction, parse};
+        let args = |v: &[&str]| v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+        let (_, cmd) = parse(&args(&["readonly", "on"])).expect("on");
+        assert_eq!(
+            cmd,
+            Command::Readonly {
+                action: ReadonlyAction::On,
+                global: false
+            }
+        );
+        let (_, cmd) = parse(&args(&["readonly", "off", "--global"])).expect("off");
+        assert_eq!(
+            cmd,
+            Command::Readonly {
+                action: ReadonlyAction::Off,
+                global: true
+            }
+        );
+        let (_, cmd) = parse(&args(&["readonly", "status"])).expect("status");
+        assert_eq!(
+            cmd,
+            Command::Readonly {
+                action: ReadonlyAction::Status,
+                global: false
+            }
+        );
+        assert!(parse(&args(&["readonly"])).is_err());
+        assert!(parse(&args(&["readonly", "maybe"])).is_err());
+    }
+
+        fn parse_error_display() {
         assert!(format!("{}", ParseError::UnknownCommand("x".into())).contains("unknown command"));
         assert!(format!("{}", ParseError::UnknownAgent("x".into())).contains("unknown agent"));
         assert!(format!("{}", ParseError::MissingValue("x")).contains("missing value"));
