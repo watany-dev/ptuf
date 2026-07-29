@@ -23,6 +23,7 @@
 - `ptuf plugin check <path>`
 - audit JSONL
 - `mode`, `failClosed`, allowlist
+- `readonly` 強制ゲート (ADR 0009; `mode` と直交)
 
 ### M3 — ツール面の拡張 (実装済み)
 

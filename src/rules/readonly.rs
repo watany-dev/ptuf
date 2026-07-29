@@ -169,11 +169,6 @@ const GIT_READ_SUBCOMMANDS: &[&str] = &[
     "stash", // `stash list` only — guarded below
 ];
 
-const SHELL_WRAPPER_HEADS: &[&str] = &[
-    "bash", "sh", "zsh", "dash", "ksh", "fish", "xargs", "eval", "exec", "sudo", "doas", "pkexec",
-    "run0", "command", "su", "nice", "nohup", "time", "timeout", "env",
-];
-
 /// Evaluate the readonly gate. Returns `Some(Deny)` when the input is
 /// a write; `None` when it is a pure read (caller keeps the demoted
 /// decision).
@@ -274,21 +269,10 @@ fn is_opaque(bash: &Bash) -> bool {
     if bash.has_command_substitution && !has_any_subst_argv(bash) {
         return true;
     }
-    for argv in bash.commands() {
-        if !argv.inner_code.is_empty() && argv.inner_argv.is_empty() {
-            return true;
-        }
-    }
-    // Also walk top-level for unreparsed wrappers that commands() may
-    // still surface as the wrapper itself with empty inner_argv.
-    for pipe in &bash.segments {
-        for argv in &pipe.commands {
-            if argv_opaque_tree(argv) {
-                return true;
-            }
-        }
-    }
-    false
+    bash.segments
+        .iter()
+        .flat_map(|p| &p.commands)
+        .any(argv_opaque_tree)
 }
 
 fn argv_opaque_tree(argv: &Argv) -> bool {
@@ -306,9 +290,7 @@ fn has_any_subst_argv(bash: &Bash) -> bool {
 }
 
 fn argv_has_subst(argv: &Argv) -> bool {
-    !argv.subst_argv.is_empty()
-        || argv.inner_argv.iter().any(argv_has_subst)
-        || argv.subst_argv.iter().any(argv_has_subst)
+    !argv.subst_argv.is_empty() || argv.inner_argv.iter().any(argv_has_subst)
 }
 
 fn has_write_redirect(bash: &Bash) -> bool {
@@ -344,11 +326,8 @@ fn redirects_write(redirects: &[Redirect]) -> bool {
 
 fn head_denied(argv: &Argv) -> Option<String> {
     let head = argv.head_basename();
-    if SHELL_WRAPPER_HEADS.contains(&head) {
-        // Container — payload already in commands(); flag-guard still
-        // applies to find/sed/etc. insides, not the wrapper itself.
-        return None;
-    }
+    // Shell wrappers (bash/sh/xargs/…) sit on READONLY_HEADS; their
+    // payloads are already flattened into bash.commands().
     if !READONLY_HEADS.contains(&head) {
         return Some(format!(
             "ptuf readonly mode blocks command `{head}` — not on the pure-read allowlist."
@@ -490,26 +469,11 @@ fn git_denied(argv: &Argv) -> Option<String> {
             if matches!(
                 flag,
                 "--unset" | "--unset-all" | "--remove-section" | "--add" | "--replace-all"
-            ) || flag == "-f"
-                || flag.starts_with("--file")
-            {
-                // reading via -f/--file is fine; --unset etc. mutate.
-                if matches!(
-                    flag,
-                    "--unset" | "--unset-all" | "--remove-section" | "--add" | "--replace-all"
-                ) {
-                    return Some(format!("ptuf readonly mode blocks `git config {flag}`."));
-                }
+            ) {
+                return Some(format!("ptuf readonly mode blocks `git config {flag}`."));
             }
         }
-        // `git config name value` (2+ positionals after config) writes.
-        let positionals: Vec<_> = argv
-            .args
-            .iter()
-            .filter(|a| !a.starts_with('-') && a.as_str() != "config")
-            .collect();
-        // skip the "config" word itself already filtered; first positional
-        // after flags is the key, second is value.
+        // `git config <key> <value>` writes; bare `git config <key>` reads.
         let after: Vec<_> = argv
             .args
             .iter()
@@ -517,7 +481,6 @@ fn git_denied(argv: &Argv) -> Option<String> {
             .skip(1)
             .filter(|a| !a.starts_with('-'))
             .collect();
-        let _ = positionals;
         if after.len() >= 2 {
             return Some("ptuf readonly mode blocks `git config <key> <value>` writes.".into());
         }
@@ -530,11 +493,8 @@ fn git_denied(argv: &Argv) -> Option<String> {
             .nth(1)
             .map(String::as_str)
             .unwrap_or("show");
-        if matches!(action, "expire" | "delete" | "exists") {
-            // exists is read-ish but expire/delete mutate
-            if matches!(action, "expire" | "delete") {
-                return Some(format!("ptuf readonly mode blocks `git reflog {action}`."));
-            }
+        if matches!(action, "expire" | "delete") {
+            return Some(format!("ptuf readonly mode blocks `git reflog {action}`."));
         }
     }
     None
@@ -571,11 +531,8 @@ mod tests {
 
     fn assert_allow_bash(cmd: &str) {
         let (facts, input) = bash(cmd);
-        assert!(
-            evaluate(&facts, &input).is_none(),
-            "expected allow for `{cmd}`, got {:?}",
-            evaluate(&facts, &input)
-        );
+        let got = evaluate(&facts, &input);
+        assert!(got.is_none(), "expected allow for `{cmd}`, got {got:?}");
     }
 
     fn assert_deny_bash(cmd: &str, rule: &str) {

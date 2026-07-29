@@ -292,6 +292,7 @@ ptuf [--json] init [<agent>] [--no-verify] [--dry-run]
                    [--hooks <PATH>]  # cursor only
                    [--extension <PATH>]  # pi only
 ptuf update [--check] [--version <TAG>] [--force]
+ptuf readonly on|off|status [--global]
 ptuf --help
 ptuf --version
 ```
@@ -316,6 +317,7 @@ override:
 version: 1
 mode: enforce
 failClosed: true
+readonly: false   # set true, or run `ptuf readonly on`, for plan-mode writes-off
 
 rules:
   core.git.reset-hard:
@@ -325,6 +327,10 @@ audit:
   path: ~/.local/share/ptuf/audit.jsonl
   includeDenied: true
 ```
+
+`readonly: true` (or `ptuf readonly on`, or `PTUF_READONLY=1`) forces a
+fail-closed read-only gate across every adapter — orthogonal to `mode`.
+See [`docs/adr/0009-readonly-mode-2026-07.md`](docs/adr/0009-readonly-mode-2026-07.md).
 
 Full schema (allowlists, plugin loading, audit redaction) lives in
 [`docs/design/config-and-plugins.md`](docs/design/config-and-plugins.md).
