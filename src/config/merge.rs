@@ -28,7 +28,7 @@ pub fn merge(layers: Vec<RawConfig>) -> Config {
 }
 
 /// Like [`merge`] but resolves `PTUF_READONLY` via `env` (tests inject
-/// [`super::scope::MapEnv`]).
+/// an in-memory `EnvLookup`).
 pub fn merge_with_env(layers: Vec<RawConfig>, env: &dyn EnvLookup) -> Config {
     let mut layers = layers;
     if env_readonly_enabled(env) {

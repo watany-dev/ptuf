@@ -15,17 +15,11 @@ use crate::reason;
 #[cfg(test)]
 use super::sensitive_bash_read::READER_HEADS;
 
-pub(crate) const FILE_WRITE_RULE: &str = "core.readonly.file-write";
-pub(crate) const BASH_WRITE_RULE: &str = "core.readonly.bash-write";
-pub(crate) const MCP_WRITE_RULE: &str = "core.readonly.mcp-write";
+pub const FILE_WRITE_RULE: &str = "core.readonly.file-write";
+pub const BASH_WRITE_RULE: &str = "core.readonly.bash-write";
+pub const MCP_WRITE_RULE: &str = "core.readonly.mcp-write";
 
-const FILE_WRITERS: &[&str] = &[
-    "Write",
-    "Edit",
-    "MultiEdit",
-    "NotebookEdit",
-    "apply_patch",
-];
+const FILE_WRITERS: &[&str] = &["Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"];
 
 /// MCP tool-name leading verbs treated as reads. Anything else is
 /// denied (fail-closed). Underscore-split first segment of
@@ -41,25 +35,138 @@ const READ_VERBS: &[&str] = &[
 const READONLY_HEADS: &[&str] = &[
     // READER_HEADS (keep in sync — duplicated so the const can stay a
     // single slice for `contains` without heap allocation).
-    "cat", "head", "tail", "less", "more", "view", "bat", "xxd", "od", "hexdump", "strings",
-    "base64", "base32", "grep", "egrep", "fgrep", "awk", "gawk", "mawk", "sed", "cut", "tr",
-    "sort", "uniq", "wc", "nl", "tac", "rev", "column", "file", "dd", "source", ".",
+    "cat",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "view",
+    "bat",
+    "xxd",
+    "od",
+    "hexdump",
+    "strings",
+    "base64",
+    "base32",
+    "grep",
+    "egrep",
+    "fgrep",
+    "awk",
+    "gawk",
+    "mawk",
+    "sed",
+    "cut",
+    "tr",
+    "sort",
+    "uniq",
+    "wc",
+    "nl",
+    "tac",
+    "rev",
+    "column",
+    "file",
+    "dd",
+    "source",
+    ".",
     // pure-read extras
-    "ls", "stat", "pwd", "echo", "printf", "which", "type", "rg", "jq", "diff", "du", "ps",
-    "id", "whoami", "uname", "hostname", "date", "cal", "env", "printenv", "true", "false",
-    "test", "[", "basename", "dirname", "realpath", "readlink", "find", "tree", "git",
-    "cmp", "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum", "seq", "yes", "sleep",
-    "expr", "bc", "fold", "fmt", "paste", "join", "comm",
+    "ls",
+    "stat",
+    "pwd",
+    "echo",
+    "printf",
+    "which",
+    "type",
+    "rg",
+    "jq",
+    "diff",
+    "du",
+    "ps",
+    "id",
+    "whoami",
+    "uname",
+    "hostname",
+    "date",
+    "cal",
+    "env",
+    "printenv",
+    "true",
+    "false",
+    "test",
+    "[",
+    "basename",
+    "dirname",
+    "realpath",
+    "readlink",
+    "find",
+    "tree",
+    "git",
+    "cmp",
+    "md5sum",
+    "sha1sum",
+    "sha256sum",
+    "sha512sum",
+    "cksum",
+    "seq",
+    "yes",
+    "sleep",
+    "expr",
+    "bc",
+    "fold",
+    "fmt",
+    "paste",
+    "join",
+    "comm",
     // shell / privilege wrappers (payload checked separately)
-    "bash", "sh", "zsh", "dash", "ksh", "fish", "xargs", "eval", "exec", "sudo", "doas",
-    "pkexec", "run0", "command", "su", "nice", "nohup", "time", "timeout",
+    "bash",
+    "sh",
+    "zsh",
+    "dash",
+    "ksh",
+    "fish",
+    "xargs",
+    "eval",
+    "exec",
+    "sudo",
+    "doas",
+    "pkexec",
+    "run0",
+    "command",
+    "su",
+    "nice",
+    "nohup",
+    "time",
+    "timeout",
 ];
 
 const GIT_READ_SUBCOMMANDS: &[&str] = &[
-    "status", "log", "show", "diff", "blame", "grep", "ls-files", "ls-tree", "rev-parse",
-    "rev-list", "describe", "branch", "tag", "remote", "config", "help", "version", "whatchanged",
-    "shortlog", "name-rev", "cat-file", "check-ignore", "check-attr", "ls-remote", "for-each-ref",
-    "symbolic-ref", "reflog", "stash", // `stash list` only — guarded below
+    "status",
+    "log",
+    "show",
+    "diff",
+    "blame",
+    "grep",
+    "ls-files",
+    "ls-tree",
+    "rev-parse",
+    "rev-list",
+    "describe",
+    "branch",
+    "tag",
+    "remote",
+    "config",
+    "help",
+    "version",
+    "whatchanged",
+    "shortlog",
+    "name-rev",
+    "cat-file",
+    "check-ignore",
+    "check-attr",
+    "ls-remote",
+    "for-each-ref",
+    "symbolic-ref",
+    "reflog",
+    "stash", // `stash list` only — guarded below
 ];
 
 const SHELL_WRAPPER_HEADS: &[&str] = &[
@@ -70,7 +177,7 @@ const SHELL_WRAPPER_HEADS: &[&str] = &[
 /// Evaluate the readonly gate. Returns `Some(Deny)` when the input is
 /// a write; `None` when it is a pure read (caller keeps the demoted
 /// decision).
-pub(crate) fn evaluate(facts: &Facts, input: &HookInput) -> Option<Decision> {
+pub fn evaluate(facts: &Facts, input: &HookInput) -> Option<Decision> {
     if let Some(d) = evaluate_file(input) {
         return Some(d);
     }
@@ -84,7 +191,7 @@ pub(crate) fn evaluate(facts: &Facts, input: &HookInput) -> Option<Decision> {
 }
 
 /// Severity for `core.readonly.*` rule ids (not registered in RULES).
-pub(crate) fn severity_for(rule_id: &str) -> Option<Severity> {
+pub fn severity_for(rule_id: &str) -> Option<Severity> {
     if rule_id.starts_with("core.readonly.") {
         Some(Severity::High)
     } else {
@@ -267,8 +374,7 @@ fn flag_guard(argv: &Argv) -> Option<String> {
                     || flag.starts_with("--in-place=")
                 {
                     return Some(
-                        "ptuf readonly mode blocks `sed -i` / `--in-place` (in-place edit)."
-                            .into(),
+                        "ptuf readonly mode blocks `sed -i` / `--in-place` (in-place edit).".into(),
                     );
                 }
             }
@@ -281,18 +387,16 @@ fn flag_guard(argv: &Argv) -> Option<String> {
             }
         },
         "sort" => {
-            let mut args = argv.args.iter();
-            while let Some(arg) = args.next() {
+            for arg in &argv.args {
                 if arg == "-o" || arg == "--output" {
                     return Some("ptuf readonly mode blocks `sort -o` (write destination).".into());
                 }
-                if let Some(rest) = arg.strip_prefix("--output=") {
-                    if !rest.is_empty() {
-                        return Some(
-                            "ptuf readonly mode blocks `sort --output=` (write destination)."
-                                .into(),
-                        );
-                    }
+                if let Some(rest) = arg.strip_prefix("--output=")
+                    && !rest.is_empty()
+                {
+                    return Some(
+                        "ptuf readonly mode blocks `sort --output=` (write destination).".into(),
+                    );
                 }
             }
         },

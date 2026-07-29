@@ -88,10 +88,7 @@ pub fn set_readonly(path: &Path, value: bool) -> Result<(), ConfigError> {
 
 fn atomic_write(path: &Path, contents: &str) -> Result<(), ConfigError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let tmp = parent.join(format!(
-        ".ptuf-readonly-{}.tmp",
-        std::process::id()
-    ));
+    let tmp = parent.join(format!(".ptuf-readonly-{}.tmp", std::process::id()));
     fs::write(&tmp, contents).map_err(|e| ConfigError::Io {
         path: tmp.clone(),
         source: e,
@@ -113,11 +110,8 @@ mod tests {
 
     #[test]
     fn resolve_prefers_project_local_when_repo_present() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-ro-target-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-ro-target-{}-{}", std::process::id(), line!()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join(".git")).expect("mkdir");
         let env = MapEnv::new(&[("HOME", "/home/x")]);
@@ -132,16 +126,16 @@ mod tests {
 
     #[test]
     fn set_readonly_preserves_other_keys() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-ro-write-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-ro-write-{}-{}", std::process::id(), line!()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("mkdir");
         let path = dir.join(".ptuf.local.yaml");
-        fs::write(&path, "mode: monitor\npacks:\n  core.network:\n    enabled: false\n")
-            .expect("write");
+        fs::write(
+            &path,
+            "mode: monitor\npacks:\n  core.network:\n    enabled: false\n",
+        )
+        .expect("write");
         set_readonly(&path, true).expect("set");
         let body = fs::read_to_string(&path).expect("read");
         assert!(body.contains("readonly: true"));
@@ -156,11 +150,8 @@ mod tests {
 
     #[test]
     fn set_readonly_creates_missing_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "ptuf-ro-create-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-ro-create-{}-{}", std::process::id(), line!()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("mkdir");
         let path = dir.join("nested").join("config.yaml");

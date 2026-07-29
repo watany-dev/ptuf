@@ -52,10 +52,11 @@ fn bypass_corpus_holds() {
         .agent("bypass-corpus")
         .build()
         .expect("default-config engine builds");
-    let mut readonly_cfg = ptuf::config::Config::default();
-    readonly_cfg.readonly = true;
     let readonly_engine = Engine::builder()
-        .config(readonly_cfg)
+        .config(ptuf::config::Config {
+            readonly: true,
+            ..ptuf::config::Config::default()
+        })
         .agent("bypass-corpus-readonly")
         .build()
         .expect("readonly-config engine builds");

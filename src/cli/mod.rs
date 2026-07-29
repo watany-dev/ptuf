@@ -178,7 +178,10 @@ pub enum Command {
     Update(UpdateOptions),
     /// `ptuf readonly on|off|status [--global]` — toggle forced
     /// readonly mode in `.ptuf.local.yaml` (or the user config).
-    Readonly { action: ReadonlyAction, global: bool },
+    Readonly {
+        action: ReadonlyAction,
+        global: bool,
+    },
     /// `--help` / `-h`.
     Help,
     /// `--version` / `-V`.

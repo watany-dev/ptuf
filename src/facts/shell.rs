@@ -745,7 +745,10 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
         // Bare `<` / `>` mid-word (`echo x>f`) is a redirect — stop the
         // word so the tokenizer can emit RedirectOp (bash attaches the
         // redirect to the preceding argv even without surrounding spaces).
-        if matches!(c, b'<' | b'>') {
+        // Only break once the word has started: a leading `<`/`>` is
+        // handled by `tokenize`, and the forward-progress contract
+        // requires we never return zero bytes consumed.
+        if !buf.is_empty() && matches!(c, b'<' | b'>') {
             break;
         }
         // Unquoted `$(…)`: balance-absorb and capture body (ADR 0008).
@@ -1641,7 +1644,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn parses_nospace_stdout_redirect() {
         let b = parse("echo x>f");
         assert_eq!(b.segments[0].redirects.len(), 1);
@@ -1650,7 +1652,8 @@ mod tests {
         assert_eq!(b.segments[0].commands[0].args, vec!["x".to_string()]);
     }
 
-        fn preserves_redirects_from_inner_shell_code() {
+    #[test]
+    fn preserves_redirects_from_inner_shell_code() {
         let b = parse("bash -c 'echo hi > .claude/settings.json'");
         assert_eq!(b.segments[0].commands[0].inner_redirects.len(), 1);
         assert_eq!(

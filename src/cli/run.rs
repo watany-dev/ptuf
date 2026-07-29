@@ -348,9 +348,8 @@ pub(super) fn run_readonly<W1: Write, W2: Write>(
                     return 1;
                 },
             };
-            let env_set = crate::config::merge::env_readonly_enabled(
-                &crate::config::scope::SystemEnv,
-            );
+            let env_set =
+                crate::config::merge::env_readonly_enabled(&crate::config::scope::SystemEnv);
             let effective = if config.readonly { "on" } else { "off" };
             let env = if env_set { "set (forces on)" } else { "unset" };
             let _ = writeln!(stdout, "readonly: {effective}");

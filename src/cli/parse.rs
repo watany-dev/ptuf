@@ -314,7 +314,9 @@ pub(super) fn parse_readonly<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
     I: Iterator<Item = &'a String>,
 {
-    let action_tok = iter.next().ok_or(ParseError::MissingValue("on|off|status"))?;
+    let action_tok = iter
+        .next()
+        .ok_or(ParseError::MissingValue("on|off|status"))?;
     let action = match action_tok.as_str() {
         "on" => ReadonlyAction::On,
         "off" => ReadonlyAction::Off,
@@ -1133,7 +1135,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn parse_readonly_on_off_status_and_global() {
         use crate::cli::{Command, ReadonlyAction, parse};
         let args = |v: &[&str]| v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
@@ -1161,11 +1162,12 @@ mod tests {
                 global: false
             }
         );
-        assert!(parse(&args(&["readonly"])).is_err());
-        assert!(parse(&args(&["readonly", "maybe"])).is_err());
+        let _ = parse(&args(&["readonly"])).unwrap_err();
+        let _ = parse(&args(&["readonly", "maybe"])).unwrap_err();
     }
 
-        fn parse_error_display() {
+    #[test]
+    fn parse_error_display() {
         assert!(format!("{}", ParseError::UnknownCommand("x".into())).contains("unknown command"));
         assert!(format!("{}", ParseError::UnknownAgent("x".into())).contains("unknown agent"));
         assert!(format!("{}", ParseError::MissingValue("x")).contains("missing value"));

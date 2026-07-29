@@ -1156,12 +1156,7 @@ fn readonly_on_off_round_trip_through_hook() {
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).expect("home");
 
-    let (code, stdout, stderr) = run_in(
-        &["readonly", "on"],
-        dir.path(),
-        Some(home.as_path()),
-        "",
-    );
+    let (code, stdout, stderr) = run_in(&["readonly", "on"], dir.path(), Some(home.as_path()), "");
     assert_eq!(code, 0, "stderr={stderr} stdout={stdout}");
     assert!(stdout.contains("readonly on"));
     let local = std::fs::read_to_string(dir.path().join(".ptuf.local.yaml")).expect("read");
@@ -1181,12 +1176,7 @@ fn readonly_on_off_round_trip_through_hook() {
         "stdout={stdout} stderr={stderr}"
     );
 
-    let (code, _, stderr) = run_in(
-        &["readonly", "off"],
-        dir.path(),
-        Some(home.as_path()),
-        "",
-    );
+    let (code, _, stderr) = run_in(&["readonly", "off"], dir.path(), Some(home.as_path()), "");
     assert_eq!(code, 0, "stderr={stderr}");
 
     let (code, stdout, stderr) = run_in(
@@ -1206,8 +1196,12 @@ fn readonly_status_reports_effective_value() {
     std::fs::create_dir_all(&home).expect("home");
     let (code, _, _) = run_in(&["readonly", "on"], dir.path(), Some(home.as_path()), "");
     assert_eq!(code, 0);
-    let (code, stdout, stderr) =
-        run_in(&["readonly", "status"], dir.path(), Some(home.as_path()), "");
+    let (code, stdout, stderr) = run_in(
+        &["readonly", "status"],
+        dir.path(),
+        Some(home.as_path()),
+        "",
+    );
     assert_eq!(code, 0, "stderr={stderr}");
     assert!(stdout.contains("readonly: on"), "stdout={stdout}");
     assert!(stdout.contains(".ptuf.local.yaml"), "stdout={stdout}");

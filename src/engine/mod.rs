@@ -1245,9 +1245,10 @@ mod readonly_tests {
     use std::sync::Arc;
 
     fn readonly_cfg() -> Config {
-        let mut cfg = Config::default();
-        cfg.readonly = true;
-        cfg
+        Config {
+            readonly: true,
+            ..Config::default()
+        }
     }
 
     #[test]

@@ -124,10 +124,9 @@ mod tests {
 
     #[test]
     fn try_decide_returns_ok_for_clean_cwd() {
-        // Happy-path wrapper test. The error path is exercised by
-        // `Engine::for_cwd` / `Engine::new` tests in `engine.rs`; we
-        // avoid replicating those here because changing the process
-        // CWD is racy under cargo's parallel test execution.
+        // Happy-path wrapper test. Hold CWD_LOCK so a parallel test that
+        // chdirs into a broken-plugin fixture cannot make for_cwd fail.
+        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let outcome = try_decide(&sample("Bash"));
         assert!(matches!(outcome, Ok(Decision::Allow)));
     }
