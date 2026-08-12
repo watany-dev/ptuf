@@ -7,11 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-07-28
+## [0.6.0] - 2026-08-12
 
 ### Changed (BREAKING)
 - `facts::shell::Argv` に公開フィールド `subst_argv: Vec<Argv>` を追加
   (ADR 0008)。既存の `Argv { … }` 構造体リテラルは更新が必要。
+- `PluginError` に `ReservedRuleId` / `DuplicateRuleId` variant を追加。
+  `PluginError` は `#[non_exhaustive]` ではないため、この enum を網羅 `match`
+  している下流ライブラリ利用者は更新が必要。
+
+### Changed
+- builtin rule の DSL 統合スライス 1 (ADR 0004): `core.network.remote-script-pipe`
+  を `src/rules/builtins.yaml` (plugin DSL) から提供するように変更。reason /
+  remediation / rule id / hardDeny / severity は旧 Rust 実装と wire 互換。旧
+  実装 (`rules::remote_pipe::RemoteScriptPipe`) はパリティ oracle として残置。
 
 ### Fixed
 - `core.secrets.sensitive-read` の書き込み本文スキャンを data-bearing shape
@@ -33,24 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `echo $(cat .env)` を `sensitive-bash-read` が Ask する (issue #161)。
   `Bash::commands()` は `subst_argv` も flatten する。悲観モードは
   budget 超過時の backstop として維持。
-
-## [0.5.1] - 2026-07-08
-
-### Changed (BREAKING)
-- `PluginError` に `ReservedRuleId` / `DuplicateRuleId` variant を追加。
-  `PluginError` は `#[non_exhaustive]` ではないため、この enum を網羅 `match`
-  している下流ライブラリ利用者にとっては厳密には破壊的変更（SemVer 上は
-  minor 相当）。CLI 利用者への実害はなく、機能追加＋セキュリティ強化が主目的
-  のため、オーナー判断でパッチ (0.5.1) として公開する。破壊性を隠さず本見出しに
-  明記する。
-
-### Changed
-- builtin rule の DSL 統合スライス 1 (ADR 0004): `core.network.remote-script-pipe`
-  を `src/rules/builtins.yaml` (plugin DSL) から提供するように変更。reason /
-  remediation / rule id / hardDeny / severity は旧 Rust 実装と wire 互換。旧
-  実装 (`rules::remote_pipe::RemoteScriptPipe`) はパリティ oracle として残置。
-
-### Added
 - 外部 plugin の rule id 検証: `core.` prefix の予約 (`ReservedRuleId`) と
   同一 plugin 内の id 重複 (`DuplicateRuleId`) を load 時に reject。
 - `builtins.yaml` のコンパイル失敗 (構造的に到達不能、テストで pin) 時は
@@ -429,8 +420,7 @@ Initial public release.
 - crates.io publication
 
 [Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.6.0...HEAD
-[0.6.0]: https://github.com/watany-dev/ptuf/compare/v0.5.1...v0.6.0
-[0.5.1]: https://github.com/watany-dev/ptuf/compare/v0.5.0...v0.5.1
+[0.6.0]: https://github.com/watany-dev/ptuf/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/watany-dev/ptuf/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/watany-dev/ptuf/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/watany-dev/ptuf/compare/v0.3.0...v0.4.0
