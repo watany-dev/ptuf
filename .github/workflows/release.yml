@@ -30,6 +30,7 @@
 #     GitHub Release) — do NOT re-add a publish-crates-io job here
 #   - publish-npm job appended after `announce` for npm publish
 #     (uses npm Trusted Publishing / GitHub OIDC, no long-lived token)
+#   - workflow_dispatch reruns only publish-npm for partial npm recovery
 #   - publish-homebrew-formula job inserted between `host` and `announce`
 #     (cargo-dist 0.31.0 native, pushes formula to watany-dev/homebrew-tap;
 #     requires `HOMEBREW_TAP_TOKEN` secret; SHA-pinned to match other jobs)
@@ -68,6 +69,12 @@ on:
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to recover on npm
+        required: true
+        type: string
 
 # Serialize releases per ref. We deliberately do NOT cancel-in-progress so a
 # re-trigger does not abandon partially-uploaded artifacts.
@@ -78,6 +85,7 @@ concurrency:
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     runs-on: "ubuntu-22.04"
     permissions:
       contents: read
@@ -533,19 +541,20 @@ jobs:
     needs:
       - plan
       - host
-    if: ${{ always() && needs.host.result == 'success' && needs.plan.outputs.publishing == 'true' && !fromJson(needs.plan.outputs.val).announcement_is_prerelease }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (needs.host.result == 'success' && needs.plan.outputs.publishing == 'true' && !fromJson(needs.plan.outputs.val).announcement_is_prerelease)) }}
     runs-on: "ubuntu-22.04"
     permissions:
       contents: read
       id-token: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      TAG: ${{ needs.plan.outputs.tag }}
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: recursive
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: "24"
