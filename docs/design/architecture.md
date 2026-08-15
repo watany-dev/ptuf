@@ -14,6 +14,8 @@ ptuf は CLI shim と判定コアを分けた構成を取る。`src/main.rs` は
   - facts を抽出する
   - built-in rule と plugin rule を評価する
   - `Decision` を集約し audit を記録する
+  - `Config.readonly` 時は demote 後に `src/rules/readonly.rs` を合成する
+    (`src/config/toggle.rs` が `ptuf readonly` の YAML 書き込み)
 
 `src/main.rs` は coverage 集計から除外する。新規ロジックは `src/lib.rs` 配下へ
 置く。

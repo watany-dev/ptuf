@@ -124,6 +124,7 @@ YAML 設定を `/etc/ptuf/policy.yaml` → `~/.config/ptuf/config.yaml` →
 version: 1
 mode: enforce
 failClosed: true
+readonly: false
 
 rules:
   core.git.reset-hard:
@@ -136,7 +137,9 @@ audit:
 
 スキーマ全体と YAML plugin による独自ルールの書き方は
 [`docs/design/config-and-plugins.md`](docs/design/config-and-plugins.md)
-を参照してください。
+を参照してください。`readonly: true`（または `ptuf readonly on` /
+`PTUF_READONLY=1`）は `mode` と直交する強制読み取り専用ゲートです
+([ADR 0009](docs/adr/0009-readonly-mode-2026-07.md))。
 
 ## さらに詳しく
 

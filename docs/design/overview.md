@@ -75,6 +75,8 @@ CLI 経路はこれと異なり fail-closed で動作する。
 - `ptuf [--json] check --tool <name> <command>`
 - `ptuf [--json] plugin check <path>`
 - `ptuf [--json] init [<agent>] [--no-verify] [--dry-run]`
+- `ptuf update [--check] [--version <TAG>] [--force]`
+- `ptuf readonly on|off|status [--global]`
 - `ptuf --help`
 - `ptuf --version`
 
