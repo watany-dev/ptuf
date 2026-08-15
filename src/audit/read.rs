@@ -42,7 +42,7 @@ pub struct ValidatedAuditRecord {
     pub command_redacted: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ReadOutcome {
     pub lines_read: u64,
     pub valid_records: u64,
@@ -53,7 +53,7 @@ pub struct ReadOutcome {
     pub records: Vec<(Value, ValidatedAuditRecord)>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AuditStats {
     pub lines_read: u64,
     pub valid_records: u64,
@@ -400,10 +400,8 @@ fn classify(bytes: &[u8]) -> Classified {
 }
 
 fn validate(raw: RawAuditRecord) -> Option<ValidatedAuditRecord> {
-    let schema_version = raw.schema_version?;
-    if schema_version != 1 {
-        return None;
-    }
+    // classify() already dropped schemaVersion != 1 as Unsupported.
+    raw.schema_version?;
     let timestamp = raw.timestamp?;
     let timestamp_secs = parse_rfc3339_to_secs(&timestamp)?;
     let decision = raw.decision.filter(|d| is_decision(d))?;
@@ -768,6 +766,44 @@ mod tests {
     #[test]
     fn open_snapshot_propagates_missing_file() {
         assert!(open_snapshot(Path::new("/no/such/ptuf-audit.jsonl")).is_err());
+    }
+
+    #[test]
+    fn skip_oversize_resets_on_newline_and_keeps_going_without_one() {
+        let mut oversized = true;
+        let mut hits = 0u32;
+        let rest = skip_oversize(b"xxxx\nabc", &mut oversized, &mut |_| hits += 1);
+        assert!(!oversized);
+        assert_eq!(rest, b"abc");
+        assert_eq!(hits, 1);
+
+        oversized = true;
+        let rest = skip_oversize(b"no-nl", &mut oversized, &mut |_| hits += 1);
+        assert!(oversized);
+        assert!(rest.is_empty());
+        assert_eq!(hits, 1);
+    }
+
+    #[test]
+    fn relative_secs_rejects_unknown_unit() {
+        assert_eq!(relative_secs(1, b'x'), Err(SinceError::Invalid));
+    }
+
+    #[test]
+    fn emit_complete_oversize_is_oversize_event() {
+        let mut hits = 0u32;
+        emit_complete(&vec![b'x'; MAX_AUDIT_RECORD_BYTES + 1], &mut |_| hits += 1);
+        assert_eq!(hits, 1);
+        hits = 0;
+        emit_complete(b"ok", &mut |_| hits += 1);
+        assert_eq!(hits, 1);
+    }
+
+    #[test]
+    fn json_non_object_is_invalid() {
+        let out = scan_all("[]\n1\n\"x\"\n", &AuditFilter::default(), 0);
+        assert_eq!(out.skipped_invalid, 3);
+        assert_eq!(out.valid_records, 0);
     }
 
     #[test]
