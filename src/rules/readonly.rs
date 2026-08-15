@@ -100,9 +100,10 @@ const READONLY_EXTRA_HEADS: &[&str] = &[
     "timeout",
 ];
 
-// ponytail: ambiguous git verbs (branch/tag/stash/remote/config/reflog)
-// create refs without flags — keep them off this list instead of
-// writing a mini git parser.
+// ponytail: first non-flag arg is the subcommand. branch/tag/stash/remote/
+// config/reflog mutate with no flags — mini-parser if listing those is
+// required. `git -C dir status` denies — git_subcommand() if global flags
+// must pass.
 const GIT_READ_SUBCOMMANDS: &[&str] = &[
     "status",
     "log",
@@ -111,21 +112,7 @@ const GIT_READ_SUBCOMMANDS: &[&str] = &[
     "blame",
     "grep",
     "ls-files",
-    "ls-tree",
     "rev-parse",
-    "rev-list",
-    "describe",
-    "help",
-    "version",
-    "whatchanged",
-    "shortlog",
-    "name-rev",
-    "cat-file",
-    "check-ignore",
-    "check-attr",
-    "ls-remote",
-    "for-each-ref",
-    "symbolic-ref",
 ];
 
 /// Evaluate the readonly gate. Returns `Some(Deny)` when the input is
@@ -289,8 +276,8 @@ fn is_readonly_head(head: &str) -> bool {
 
 fn head_denied(argv: &Argv) -> Option<String> {
     let head = argv.head_basename();
-    // Shell wrappers (bash/sh/xargs/…) sit on READONLY_HEADS; their
-    // payloads are already flattened into bash.commands().
+    // Shell wrappers (bash/sh/xargs/…) sit on READONLY_EXTRA_HEADS;
+    // their payloads are already flattened into bash.commands().
     if !is_readonly_head(head) {
         return Some(format!(
             "ptuf readonly mode blocks command `{head}` — not on the pure-read allowlist."
@@ -300,7 +287,12 @@ fn head_denied(argv: &Argv) -> Option<String> {
         return Some(msg);
     }
     if head == "git" {
-        return git_denied(argv);
+        let sub = argv.positional().next().unwrap_or("");
+        if !GIT_READ_SUBCOMMANDS.contains(&sub) {
+            return Some(format!(
+                "ptuf readonly mode blocks `git {sub}` — not a pure-read git subcommand."
+            ));
+        }
     }
     None
 }
@@ -354,21 +346,6 @@ fn flag_guard(argv: &Argv) -> Option<String> {
         _ => {},
     }
     None
-}
-
-fn git_denied(argv: &Argv) -> Option<String> {
-    let sub = argv
-        .args
-        .iter()
-        .find(|a| !a.starts_with('-'))
-        .map(String::as_str)
-        .unwrap_or("");
-    if sub.is_empty() || GIT_READ_SUBCOMMANDS.contains(&sub) {
-        return None;
-    }
-    Some(format!(
-        "ptuf readonly mode blocks `git {sub}` — only read-oriented git subcommands are allowed."
-    ))
 }
 
 fn deny(rule_id: &str, problem: &str) -> Decision {
@@ -467,6 +444,15 @@ mod tests {
             "git branch new-feature",
             "git tag v1.0",
             "git stash",
+            "git remote -v",
+            "git config --get user.name",
+            "git reflog",
+            "git ls-tree HEAD",
+            "git help status",
+            "git version",
+            "git describe",
+            "git --version",
+            "git -C . status",
             "mkdir x",
             "cargo build",
             "ptuf readonly off",

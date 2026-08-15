@@ -53,9 +53,7 @@ pub(crate) fn env_readonly_enabled(env: &dyn EnvLookup) -> bool {
         return false;
     };
     let value = raw.to_string_lossy();
-    value.eq_ignore_ascii_case("1")
-        || value.eq_ignore_ascii_case("true")
-        || value.eq_ignore_ascii_case("on")
+    value.as_ref() == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("on")
 }
 
 fn apply(acc: &mut Config, layer: MergeLayer) {
@@ -457,7 +455,11 @@ mod tests {
         // env=true also strengthens
         let cfg = merge_with_env(vec![raw()], &MapEnv::new(&[("PTUF_READONLY", "true")]));
         assert!(cfg.readonly);
+        let cfg = merge_with_env(vec![raw()], &MapEnv::new(&[("PTUF_READONLY", "TRUE")]));
+        assert!(cfg.readonly);
         let cfg = merge_with_env(vec![raw()], &MapEnv::new(&[("PTUF_READONLY", "on")]));
+        assert!(cfg.readonly);
+        let cfg = merge_with_env(vec![raw()], &MapEnv::new(&[("PTUF_READONLY", "On")]));
         assert!(cfg.readonly);
     }
 
