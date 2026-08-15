@@ -191,11 +191,13 @@ AND 結合。未指定のキーは制限しない。
 --since <CANONICAL_RFC3339|<N>m|<N>h|<N>d>
 ```
 
-- 相対: 非空の十進 `N` + `m` / `h` / `d` (`30m`, `1h`, `24h`, `7d`)
+- 相対: 1 個以上の ASCII 数字 `N` + `m` / `h` / `d` (`30m`, `1h`, `24h`,
+  `7d`)。符号・小数点・空白は reject。`0m` は受理 (`since = now`)
 - 絶対: 既存 `audit::time::parse_rfc3339_to_secs` の canonical form
   (`2026-08-15T09:00:00Z` / `2026-08-15T18:00:00+09:00`)。分数秒・
   lowercase `t`・colon 無し offset は reject
 - 相対計算は `checked_mul` / `checked_sub`。overflow は reject
+  (`now` が epoch 近くで `N` が大きい場合を含む)
 - `now` は引数注入 (`parse_since(value, now) -> Result<u64, SinceError>`)
 
 help 文言は「RFC3339」ではなく canonical form / 秒精度を書く。
@@ -265,9 +267,10 @@ scanned 812 lines, 810 valid, 100 matched, 20 returned, 1 invalid, 1 unsupported
 ### `--stats`
 
 filter 後の全レコードを集計する。明示 `--limit` との併用は parse で
-reject (`ParseError::ConflictingFlags`、exit 1)。既定 limit 20 と衝突
-しないよう、parse 時の `limit` は `Option<usize>`。一覧モードに入った
-時点で `None → 20` を適用する。
+reject (`ParseError::ConflictingFlags`、exit 1)。`--limit 0 --stats` も
+同じ (0 は「未指定」ではない)。既定 limit 20 と衝突しないよう、parse
+時の `limit` は `Option<usize>`。一覧モードに入った時点で `None → 20`
+を適用する。
 
 `ruleId` の無いレコードは `byRule` から除外する (decision 集計には含める)。
 
@@ -306,7 +309,9 @@ count 0 の decision / rule は出さない。通常 JSON / stats JSON の
 \n → \\n
 \r → \\r
 \t → \\t
-ESC / その他 C0 / DEL / C1 / BiDi control → \\u{XXXX}
+その他 C0 (U+0000..=U+001F) / DEL (U+007F) / C1 (U+0080..=U+009F)
+  / BiDi (U+061C, U+200E, U+200F, U+202A..=U+202E, U+2066..=U+2069)
+  → \\u{XXXX}
 ```
 
 `severity` / `ruleId` が無いときは `-`。列は空白区切り、整列しない:
@@ -317,6 +322,14 @@ ESC / その他 C0 / DEL / C1 / BiDi control → \\u{XXXX}
 ```
 
 stats のテキストは `byDecision` を先に、続けて `byRule`。同じ sort。
+整列しない:
+
+```text
+deny 20
+ask 4
+core.example.a 12
+core.example.b 12
+```
 
 ### パス解決
 
