@@ -134,6 +134,66 @@ point は、外部 agent との信頼境界として以下の不変を持つ。
 
 - `Decision`, `Severity`, `DecisionKind` は `to_string` → `from_str` で同値
 
+### `audit::read` (計画中, issue #189)
+
+閲覧 CLI の reader は書き込み経路と独立した信頼境界 (JSONL は同 uid から
+改竄され得る)。テストは `src/audit/read.rs` の unit / proptest を主にし、
+CLI 配線は `parse.rs` / `run.rs` / `tests/cli_smoke.rs` で足す。
+
+example-based (`src/audit/read.rs`):
+
+- 各フィルタと AND 合成
+- file order の末尾 N 件 (timestamp sort しない) / `limit 0` 全件 /
+  `matched > returned`
+- 空白行 skip (`skippedInvalid` にしない)
+- 不正 UTF-8 / malformed JSON / 必須 field 欠落 / invalid decision /
+  invalid timestamp → `skippedInvalid`、panic しない
+- `schemaVersion` 欠落は `skippedInvalid`、非 `1` は
+  `skippedUnsupportedSchema` (混同しない)
+- 途中で `Read` error を返す reader は `Err`
+- EOF の incomplete tail (`incompleteTail: true`)
+- concurrent append 中の snapshot read (writer の exclusive lock と
+  共存し、途中行を返さない)
+- `parse_since`: `1h` / `30m` / `24h` / `7d` 受理、canonical RFC3339 の
+  timezone offset、overflow reject、`timestamp == since` は含む
+- stats: `count desc → id asc`、`ruleId` 無しは `byRule` から除外
+- 1 行が `MAX_AUDIT_RECORD_BYTES` を超えると `skippedInvalid`
+
+proptest (`src/audit/read.rs` 内):
+
+- 任意バイト列を食わせても panic しない
+- `limit == 0 || returned <= limit`
+
+CLI parse (`src/cli/parse.rs`):
+
+- 全フラグ、`--flag=value` 形式
+- 不正 `--decision` / 非数値 `--limit` は `UnexpectedArgument`
+- `--stats --limit N` は `ConflictingFlags`
+
+CLI run (`src/cli/run.rs` の `run_with`):
+
+- JSON / text / stats / エラー分岐 (coverage 95%)
+- `--path` が audit disabled / home 未設定 / 壊れた project config を迂回
+- audit disabled と default path resolution failure を区別
+- text renderer が newline / CR / tab / ESC / BiDi を escape
+
+バイナリ (`tests/cli_smoke.rs`):
+
+- tempfile JSONL に対する `--path` / `--json` / `--decision deny`
+- ファイル不在 (exit 0 空)
+- 壊れた行混入
+- default audit path (home を temp に向ける)
+- project config の custom `audit.path`
+
+契約 fixture (`tests/contracts/`):
+
+- `audit-list-json-keys.json` — 通常 JSON のトップレベル key
+- `audit-stats-json-keys.json` — stats JSON のトップレベル key
+  (`byDecision` / `byRule` は array)
+
+重 E2E (`tests/e2e_heavy.rs` `subcommand_robustness`): `audit` を
+既存 subcommand 連続実行に足す。fuzz ターゲット追加は本 issue の非スコープ。
+
 ## ランタイム / CI 構成
 
 PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。case 数の
@@ -162,7 +222,7 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   する: 8 adapter (claude-code / codex / copilot / kiro / cline / cursor / pi /
   opencode) の出力契約 parity、病的入力 (非 UTF-8 / NUL / 深いネスト JSON・bash /
   envelope / 巨大 secret 列) を fail-closed で弾くか、per-call latency 予算、
-  `check` / `plugin check` / `init` / `update` subcommand の連続 / 敵対的
+  `check` / `plugin check` / `init` / `update` / (計画) `audit` subcommand の連続 / 敵対的
   実行。spawn ハーネスはタイムアウト付きで、`Child::try_wait()` ポーリング
   により無期限ハングを「タイムアウト失敗」へ変換し、signal kill された子
   (クラッシュ) も `SpawnOutcome::signal` で検出する — `assert_clean_exit`
@@ -255,6 +315,9 @@ fact カバレッジを確保する。
 - hook deny 時の `hookSpecificOutput` JSON shape
 - `init --json` の verify report top-level schema
 - audit JSONL の field contract (`schemaVersion`, `agent`, `allowlistId` など)
+- `ptuf --json audit` / `ptuf --json audit --stats` のトップレベル key
+  集合 (issue #189。実装後に `tests/contracts/audit-list-json-keys.json`
+  と `audit-stats-json-keys.json` で固定)
 - plugin loader error の fail-closed 契約
 - hook stdin の fail-closed 契約 (`core.engine.invalid-payload` での deny)
 - allowlist `when` の suppression 契約
