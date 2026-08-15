@@ -125,7 +125,7 @@ allowlist は suppression できた場合だけ `allowlistId` として audit �
 
 | key | 型 | 説明 |
 | --- | --- | --- |
-| `enabled` | `bool` | audit を有効化 |
+| `enabled` | `bool` | 書き込みを有効化。閲覧 CLI (`ptuf audit`) は既存ファイルを読める。`--path` 未指定時は warning を出して表示する (issue #189) |
 | `path` | path | 出力先。省略時は既定パス |
 | `includeAllowed` | `bool` | `Allow` を記録するか |
 | `includeDenied` | `bool` | `Deny` を記録するか |

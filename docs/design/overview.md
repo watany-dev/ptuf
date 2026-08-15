@@ -76,6 +76,9 @@ CLI 経路はこれと異なり fail-closed で動作する。
 - `ptuf --help`
 - `ptuf --version`
 
+計画中 (issue #189): `ptuf [--json] audit` — 監査 JSONL の閲覧。詳細は
+[`audit.md`](audit.md) と [`docs/plans/189-audit-cli.md`](../plans/189-audit-cli.md)。
+
 `init` は引数なしで `$HOME` / repo root を見て agent を auto-detect する。
 verify は既定で実行され、`--no-verify` で skip、`--dry-run` 時は書き込みも
 verify も行わない。
@@ -108,7 +111,7 @@ verify も行わない。
 | [`config-and-plugins.md`](config-and-plugins.md) | config schema、plugin schema、allowlist |
 | [`cli-and-hooks.md`](cli-and-hooks.md) | `init` / `hook` / `check` と agent 統合 |
 | [`kiro-cli.md`](kiro-cli.md) | Kiro CLI adapter の正規化・fail-closed |
-| [`audit.md`](audit.md) | audit JSONL schema と redaction |
+| [`audit.md`](audit.md) | audit JSONL schema、redaction、閲覧 CLI |
 | [`npm-distribution.md`](npm-distribution.md) | npm 配布 (platform-package 方式) の設計 |
 | [`threat-model.md`](threat-model.md) | STRIDE 脅威モデル・信頼境界・残存リスク |
 | [`testing.md`](testing.md) | example-based test と PBT の役割分担 |
