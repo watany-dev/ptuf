@@ -13,7 +13,7 @@ use crate::init::opencode::{OpencodeInitOptions, OpencodeScope};
 use crate::init::pi::{PiInitOptions, PiScope};
 use crate::update::UpdateOptions;
 
-use super::{Command, HookAgent, InitOptions, ParseError};
+use super::{AuditOptions, Command, HookAgent, InitOptions, ParseError};
 
 pub(super) fn parse_init<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
@@ -310,6 +310,71 @@ where
     }))
 }
 
+pub(super) fn parse_audit<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let mut path = None;
+    let mut decision = None;
+    let mut rule_id = None;
+    let mut tool = None;
+    let mut since_secs = None;
+    let mut limit = None;
+    let mut stats = false;
+    while let Some(arg) = iter.next() {
+        let arg = arg.as_str();
+        if let Some(value) = value_flag(arg, "--path", iter)? {
+            path = Some(PathBuf::from(value));
+        } else if let Some(value) = value_flag(arg, "--decision", iter)? {
+            decision = Some(parse_audit_decision(&value)?);
+        } else if let Some(value) = value_flag(arg, "--rule", iter)? {
+            rule_id = Some(value);
+        } else if let Some(value) = value_flag(arg, "--tool", iter)? {
+            tool = Some(value);
+        } else if let Some(value) = value_flag(arg, "--since", iter)? {
+            since_secs = Some(parse_audit_since(&value)?);
+        } else if let Some(value) = value_flag(arg, "--limit", iter)? {
+            limit = Some(parse_audit_limit(&value)?);
+        } else if arg == "--stats" {
+            stats = true;
+        } else {
+            return Err(ParseError::UnexpectedArgument(arg.to_string()));
+        }
+    }
+    if stats && limit.is_some() {
+        return Err(ParseError::ConflictingFlags("--stats vs --limit"));
+    }
+    Ok(Command::Audit(AuditOptions {
+        path,
+        decision,
+        rule_id,
+        tool,
+        since_secs,
+        limit,
+        stats,
+    }))
+}
+
+fn parse_audit_decision(value: &str) -> Result<String, ParseError> {
+    match value {
+        "allow" | "monitor" | "ask" | "deny" => Ok(value.to_string()),
+        other => Err(ParseError::UnexpectedArgument(format!(
+            "--decision {other}"
+        ))),
+    }
+}
+
+fn parse_audit_since(value: &str) -> Result<u64, ParseError> {
+    crate::audit::read::parse_since(value, std::time::SystemTime::now())
+        .map_err(|_| ParseError::UnexpectedArgument(format!("--since {value}")))
+}
+
+fn parse_audit_limit(value: &str) -> Result<usize, ParseError> {
+    value
+        .parse::<usize>()
+        .map_err(|_| ParseError::UnexpectedArgument(format!("--limit {value}")))
+}
+
 pub(super) fn parse_plugin<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
     I: Iterator<Item = &'a String>,
@@ -339,7 +404,9 @@ mod tests {
     use crate::update::UpdateOptions;
 
     use super::super::test_support::s;
-    use super::super::{Command, GlobalFlags, HookAgent, InitOptions, ParseError, parse};
+    use super::super::{
+        AuditOptions, Command, GlobalFlags, HookAgent, InitOptions, ParseError, parse,
+    };
 
     fn ok(args: &[&str]) -> (GlobalFlags, Command) {
         parse(&s(args)).unwrap()
@@ -1106,6 +1173,119 @@ mod tests {
         assert!(matches!(
             parse(&s(&["--json", "update"])),
             Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn parses_audit_defaults() {
+        assert_eq!(cmd(&["audit"]), Command::Audit(AuditOptions::default()));
+    }
+
+    #[test]
+    fn parses_audit_flags_and_equals_form() {
+        assert_eq!(
+            cmd(&[
+                "audit",
+                "--path",
+                "/tmp/a.jsonl",
+                "--decision=deny",
+                "--rule",
+                "core.x",
+                "--tool=Bash",
+                "--since=2024-01-01T00:00:00Z",
+                "--limit",
+                "5",
+            ]),
+            Command::Audit(AuditOptions {
+                path: Some(PathBuf::from("/tmp/a.jsonl")),
+                decision: Some("deny".into()),
+                rule_id: Some("core.x".into()),
+                tool: Some("Bash".into()),
+                since_secs: Some(1_704_067_200),
+                limit: Some(5),
+                stats: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_audit_stats_without_limit() {
+        assert_eq!(
+            cmd(&["audit", "--stats"]),
+            Command::Audit(AuditOptions {
+                stats: true,
+                ..AuditOptions::default()
+            })
+        );
+    }
+
+    #[test]
+    fn parses_audit_limit_zero() {
+        assert_eq!(
+            cmd(&["audit", "--limit", "0"]),
+            Command::Audit(AuditOptions {
+                limit: Some(0),
+                ..AuditOptions::default()
+            })
+        );
+    }
+
+    #[test]
+    fn parses_audit_accepts_global_json() {
+        let (g, c) = ok(&["--json", "audit"]);
+        assert!(g.json);
+        assert!(matches!(c, Command::Audit(_)));
+    }
+
+    #[test]
+    fn audit_rejects_invalid_decision() {
+        assert!(matches!(
+            parse(&s(&["audit", "--decision", "block"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn audit_rejects_non_numeric_limit() {
+        assert!(matches!(
+            parse(&s(&["audit", "--limit", "all"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn audit_rejects_stats_with_limit() {
+        assert!(matches!(
+            parse(&s(&["audit", "--stats", "--limit", "1"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+        assert!(matches!(
+            parse(&s(&["audit", "--limit=0", "--stats"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn audit_rejects_bad_since() {
+        assert!(matches!(
+            parse(&s(&["audit", "--since", "yesterday"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn audit_rejects_unknown_flag() {
+        assert!(matches!(
+            parse(&s(&["audit", "--bogus"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn audit_requires_value_for_path() {
+        assert!(matches!(
+            parse(&s(&["audit", "--path"])),
+            Err(ParseError::MissingValue("--path"))
         ));
     }
 

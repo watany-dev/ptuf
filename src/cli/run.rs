@@ -25,7 +25,8 @@ use super::opencode_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
 use super::pi_input;
 use super::{
-    GlobalFlags, HookAgent, INVALID_PAYLOAD_RULE, InitOptions, build_engine_or_fail_closed,
+    AuditOptions, GlobalFlags, HookAgent, INVALID_PAYLOAD_RULE, InitOptions,
+    build_engine_or_fail_closed,
 };
 
 pub(super) const MAX_HOOK_STDIN_BYTES: u64 = 8 * 1024 * 1024;
@@ -302,6 +303,15 @@ pub(super) fn run_update<W1: Write, W2: Write>(
     let spawner = ProcessSpawner;
     let locator = RealExeLocator;
     update::run(options, &spawner, &locator, stdout, stderr)
+}
+
+pub(super) fn run_audit<W1: Write, W2: Write>(
+    _globals: GlobalFlags,
+    _options: AuditOptions,
+    _stdout: &mut W1,
+    _stderr: &mut W2,
+) -> u8 {
+    1
 }
 
 struct InstallStep {
