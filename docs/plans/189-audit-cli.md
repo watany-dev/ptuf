@@ -178,7 +178,8 @@ concurrent append テストは既存 `JsonlSink` を writer に使う。
 `AuditOptions` + `Command::Audit`。`parse_audit`。HELP 追記。
 `--json` は `hook` / `update` のように reject しない。
 parse テストを `src/cli/parse.rs` に足す。`tests/cli_parse_proptest.rs`
-の「未知 subcommand」戦略が `audit` を未知扱いしないことを確認する。
+の `KNOWN_HEADS` に `audit` を足す (`update` も欠けているので同じコミットで
+直す)。
 
 ### Phase 4 — `run_audit`
 
@@ -266,4 +267,57 @@ TDD なら「red コミット」を残さず Phase 内で緑にする):
 3. `feat(cli): run ptuf audit with snapshot read`
 4. `test: cover audit CLI smoke and JSON contracts`
 5. `docs: document ptuf audit in README and CHANGELOG`
+
+## 検証サマリ (update-design / update-plan)
+
+設計書 (`docs/design/audit.md`, `cli-and-hooks.md`, `testing.md`) と
+本プランを、実装 ready 基準 (90 点) で採点した。
+
+| カテゴリ | 点数 | 所見 |
+| --- | --- | --- |
+| モジュール / 構造体設計 | 19 / 20 | `read.rs` は `pub(crate)`。公開破壊は `Command::Audit` と `AuditOptions` に限定。`ParseError` 新 variant は作らない |
+| フック契約 | 20 / 20 | PreToolUse I/O・Decision JSON・exit `2` は不変。`audit` は engine 非経由、stdin 非読取 |
+| 判定ルール / ポリシー | 18 / 20 | 判定ロジック非変更。`audit.enabled` を書き込み設定として分離。閲覧フィルタは exact match + AND のみ |
+| エラーハンドリング | 20 / 20 | `io::Result`、fail-soft は行内容のみ、I/O は exit 1、`unwrap` なし、1 行上限 |
+| テスト容易性 | 20 / 20 | reader 純関数、`now` 注入、`run_with`、contract fixture、proptest invariant が具体 |
+| **合計** | **97 / 100** | 実装 ready (≥ 90) |
+
+### 整合性
+
+- 参照シンボル (`Command`, `ParseError::{UnexpectedArgument,ConflictingFlags,MissingValue}`,
+  `parse_rfc3339_to_secs`, `JsonlSink`, `File::lock` / `lock_shared`,
+  `resolved_audit_path`, `default_audit_path`, `config::load_for`,
+  `config::repo::discover`, `run_with`, `KNOWN_HEADS`) は現行 `src/` /
+  `tests/` に実在。
+- `resolved_audit_path` を閲覧に使わない判断は `enabled == false` と
+  HOME 未設定が同じ `None` になる HEAD 実装と一致。
+- 段階順: reader テスト → reader → parse (breaking) → run → smoke /
+  contracts → README/CHANGELOG → `make check`。依存前後に問題なし。
+- 書き込み経路 (`record` / `writer` / `redaction` / engine audit sink)
+  は非対象のまま。
+
+### 改善反映済み
+
+- P0: reader は `io::Result`。fail-soft と I/O error を分離。
+- P0: raw parse と validation を分離。必須 5 field。
+- P0: `--json` records は元 JSON object。未知フィールド保持。
+- P0: `--stats` と明示 `--limit` (0 を含む) を reject。`limit: Option<usize>`。
+- P0: カウンタ 6 種 + `incompleteTail`。`--json` 成功時は stderr summary なし。
+- P0: text escape の符号点範囲を固定 (C0 / DEL / C1 / BiDi)。
+- P0: shared lock snapshot。失敗時は `incompleteTail`。
+- P0: `--path` は config を見ない。disabled と HOME 未設定を区別。
+- P0: `--since` grammar + overflow + inclusive。
+- P0: メモリは O(limit) / stats は unique keys / 1 行 1 MiB。
+- P1: `KNOWN_HEADS` に `audit` を足す。既存の `update` 欠落も同コミットで直す。
+- P1: stats テキスト例を固定。
+- P2: HELP 文言の完全草稿は Phase 3 で `src/cli/mod.rs` に書く (設計書に
+  二重管理しない)。
+- P2: fuzz target は issue どおり非スコープ。
+
+### 実装時の SemVer
+
+`cargo-semver-checks` の PR ジョブは `Command` の variant 追加で失敗する。
+それは意図した breaking。CHANGELOG Changed (BREAKING) とリリースノートで
+網羅 match している下流に `Audit` 腕を足すよう書く。
+
 
