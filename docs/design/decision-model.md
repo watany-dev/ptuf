@@ -63,6 +63,22 @@ block する。repository 側の `.ptuf.yaml` で `mode: monitor` を指定し�
 降格前の結果が `Deny` で、mode によって `Monitor` へ変わった場合は
 `Outcome.mode_demoted = true` となり、audit の `modeDemoted` にも反映される。
 
+## readonly ゲート
+
+`Config.readonly: bool` は `mode` と直交する強制読み取り専用軸
+([ADR 0009](../adr/0009-readonly-mode-2026-07.md))。
+
+- `demote_for_mode` の**後**に合成する。既存の具体 `Deny` があればその
+  rule id を優先し、そうでなければ `core.readonly.{file,bash,mcp}-write`
+  が Deny を返す
+- Bash は head allowlist (未知コマンドは Deny)、file は writer 名
+  (`Write` / `Edit` / `MultiEdit` / `NotebookEdit` / `apply_patch`)、
+  MCP は tool 名の leading verb allowlist。それ以外の tool 名は通過する
+- pack disable / rule override / allowlist は rule ループ外のため到達不能
+- `mode: monitor` でも readonly Deny は降格しない (`core.readonly.` は
+  hardDeny 相当)
+- `Outcome.readonly` / audit の `readonly` に実効値を載せる
+
 ## fail-closed の境界
 
 - CLI (`hook`, `eval`) は policy load に失敗すると

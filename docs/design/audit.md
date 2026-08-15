@@ -43,6 +43,7 @@ redaction を通してから書き込む。
 | `projectRoot` | string \| null | repo root が分かった場合 |
 | `mode` | string | `enforce` / `monitor` |
 | `modeDemoted` | bool | deny が monitor に降格された場合のみ `true` で出力 |
+| `readonly` | bool | 強制 readonly が有効な場合のみ `true` で出力 (additive、schemaVersion 据え置き) |
 | `allowlistId` | string \| null | allowlist suppression で `Allow` になった場合のみ |
 | `agent` | string | `claude-code` / `codex` / `copilot` / `kiro` / `cline` / `cli` / `unknown` |
 | `pluginVersions` | string[] | 読み込んだ plugin の `name@version`。空なら省略 |

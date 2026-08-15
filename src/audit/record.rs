@@ -46,6 +46,10 @@ pub struct AuditRecord {
     /// because the policy mode was `monitor`.
     #[serde(rename = "modeDemoted", skip_serializing_if = "is_false")]
     pub mode_demoted: bool,
+    /// Effective forced-readonly gate. Omitted when `false` so existing
+    /// consumers ignore the additive field (schemaVersion stays 1).
+    #[serde(skip_serializing_if = "is_false")]
+    pub readonly: bool,
     /// Allowlist `id` whose suppression turned a would-be Deny / Ask /
     /// Monitor into an `Allow`. Only set on `Allow` outcomes; `None`
     /// otherwise. When multiple allowlist entries hit, the first one
@@ -84,6 +88,7 @@ impl AuditRecord {
             timestamp: None,
             mode: None,
             mode_demoted: false,
+            readonly: false,
             project_root: None,
             severity: None,
             allowlist_id: None,
@@ -134,6 +139,7 @@ pub struct AuditRecordBuilder<'a> {
     timestamp: Option<SystemTime>,
     mode: Option<Mode>,
     mode_demoted: bool,
+    readonly: bool,
     project_root: Option<&'a Path>,
     severity: Option<Severity>,
     allowlist_id: Option<String>,
@@ -157,6 +163,12 @@ impl<'a> AuditRecordBuilder<'a> {
     /// Set whether the engine demoted a `Deny` to `Monitor`.
     pub fn mode_demoted(mut self, mode_demoted: bool) -> Self {
         self.mode_demoted = mode_demoted;
+        self
+    }
+
+    /// Set whether forced readonly was active for this decision.
+    pub fn readonly(mut self, readonly: bool) -> Self {
+        self.readonly = readonly;
         self
     }
 
@@ -220,6 +232,7 @@ impl<'a> AuditRecordBuilder<'a> {
                 .and_then(|p| p.to_str().map(str::to_owned)),
             mode: mode_label(mode),
             mode_demoted: self.mode_demoted,
+            readonly: self.readonly,
             allowlist_id: self.allowlist_id,
             agent: self.agent,
             plugin_versions: self.plugin_versions,

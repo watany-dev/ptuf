@@ -67,8 +67,8 @@ pub struct Engine {
 /// Result of [`Engine::decide`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
-    /// The decision after pack-override filtering, aggregation, and
-    /// mode-based demotion.
+    /// The decision after pack-override filtering, aggregation,
+    /// mode-based demotion, and the optional readonly gate.
     pub decision: Decision,
     /// The mode that was in effect when the outcome was produced.
     /// Useful for audit records and the `mode_demoted` flag.
@@ -81,6 +81,8 @@ pub struct Outcome {
     /// `Allow` decisions; always `None` otherwise. When multiple
     /// allowlists hit, the first one wins.
     pub allowlist_id: Option<String>,
+    /// Effective `Config.readonly` at decide time. Surfaced in audit.
+    pub readonly: bool,
 }
 
 /// Errors raised while building an engine.
@@ -369,16 +371,26 @@ impl Engine {
         let demoted_decision = demote_for_mode(raw.clone(), self.config.mode, &self.plugins);
         let mode_demoted = matches!(raw, Decision::Deny { .. })
             && matches!(demoted_decision, Decision::Monitor { .. });
-        let allowlist_id = if matches!(demoted_decision, Decision::Allow) {
+        // Readonly gate runs *after* demotion and outside the rule loop
+        // so pack disable / override / allowlist cannot reach it. An
+        // existing concrete Deny keeps its rule id for audit attribution.
+        let final_decision =
+            if self.config.readonly && !matches!(demoted_decision, Decision::Deny { .. }) {
+                rules::readonly::evaluate(&facts, input).unwrap_or(demoted_decision)
+            } else {
+                demoted_decision
+            };
+        let allowlist_id = if matches!(final_decision, Decision::Allow) {
             allowlist_hits.first().map(|id| (*id).to_string())
         } else {
             None
         };
         let outcome = Outcome {
-            decision: demoted_decision,
+            decision: final_decision,
             mode: self.config.mode,
             mode_demoted,
             allowlist_id,
+            readonly: self.config.readonly,
         };
         self.record_audit(input, &outcome);
         outcome
@@ -387,6 +399,9 @@ impl Engine {
     /// Look up the severity of a rule by id across builtin and plugin
     /// rules. Used when assembling audit records.
     fn severity_for(&self, rule_id: &str) -> Option<Severity> {
+        if let Some(s) = rules::readonly::severity_for(rule_id) {
+            return Some(s);
+        }
         for r in rules::iter() {
             if r.id() == rule_id {
                 return Some(effective_severity(r, &self.config));
@@ -425,6 +440,7 @@ impl Engine {
             .timestamp(std::time::SystemTime::now())
             .mode(outcome.mode)
             .mode_demoted(outcome.mode_demoted)
+            .readonly(outcome.readonly)
             .project_root(self.repo_root.as_deref())
             .severity(severity)
             .allowlist_id(outcome.allowlist_id.clone())
@@ -1213,6 +1229,148 @@ rules:
             prop_assert!(!recs.is_empty(), "expected at least one audit record");
             let expected = redact_strict(&cmd);
             prop_assert_eq!(&recs[0].command_redacted, &expected);
+        }
+    }
+}
+
+#[cfg(test)]
+mod readonly_tests {
+    use super::test_support::{bash, engine_with};
+    use crate::audit::MemorySink;
+    use crate::config::{Allowlist, Config, Mode, PackOverride, RuleOverride};
+    use crate::decision::{Decision, DecisionKind, Severity};
+    use crate::hook_input::HookInput;
+    use crate::rules::readonly::{BASH_WRITE_RULE, FILE_WRITE_RULE};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn readonly_cfg() -> Config {
+        Config {
+            readonly: true,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn readonly_denies_write_tool() {
+        let input = HookInput {
+            tool_name: "Write".into(),
+            tool_input: json!({ "file_path": "f", "content": "x" }),
+        };
+        let outcome = engine_with(readonly_cfg()).decide(&input);
+        assert!(matches!(
+            outcome.decision,
+            Decision::Deny { ref rule_id, .. } if rule_id == FILE_WRITE_RULE
+        ));
+        assert!(outcome.readonly);
+        assert!(!outcome.mode_demoted);
+        assert!(outcome.allowlist_id.is_none());
+    }
+
+    #[test]
+    fn readonly_survives_monitor_mode() {
+        let mut cfg = readonly_cfg();
+        cfg.mode = Mode::Monitor;
+        let outcome = engine_with(cfg).decide(&bash("mkdir x"));
+        assert!(matches!(
+            outcome.decision,
+            Decision::Deny { ref rule_id, .. } if rule_id == BASH_WRITE_RULE
+        ));
+        assert!(!outcome.mode_demoted);
+    }
+
+    #[test]
+    fn readonly_survives_pack_disable_and_allowlist() {
+        let mut cfg = readonly_cfg();
+        cfg.pack_overrides.insert(
+            "core.filesystem".into(),
+            PackOverride {
+                enabled: Some(false),
+            },
+        );
+        cfg.allowlists.push(Allowlist {
+            id: "allow-all".into(),
+            rule_ids: vec!["core.readonly.bash-write".into()],
+            when: None,
+            expires_at: None,
+            reason: None,
+        });
+        cfg.rule_overrides.insert(
+            "core.readonly.bash-write".into(),
+            RuleOverride {
+                enabled: Some(false),
+                decision: Some(DecisionKind::Allow),
+                severity: Some(Severity::Low),
+            },
+        );
+        let outcome = engine_with(cfg).decide(&bash("mkdir x"));
+        assert!(matches!(
+            outcome.decision,
+            Decision::Deny { ref rule_id, .. } if rule_id == BASH_WRITE_RULE
+        ));
+    }
+
+    #[test]
+    fn concrete_rule_deny_preferred_over_readonly() {
+        let outcome = engine_with(readonly_cfg()).decide(&bash("rm -rf /"));
+        assert_eq!(
+            outcome.decision.rule_id(),
+            Some("core.filesystem.destructive-rm")
+        );
+    }
+
+    #[test]
+    fn readonly_allows_pure_read() {
+        let outcome = engine_with(readonly_cfg()).decide(&bash("cat f"));
+        assert_eq!(outcome.decision, Decision::Allow);
+        assert!(outcome.readonly);
+    }
+
+    #[test]
+    fn audit_records_readonly_flag() {
+        use super::Engine;
+        use super::test_support::SharedMemorySink;
+        let captured = Arc::new(MemorySink::new());
+        let mut cfg = readonly_cfg();
+        cfg.audit.include_denied = true;
+        let engine = Engine::builder()
+            .config(cfg)
+            .audit_sink(Box::new(SharedMemorySink(captured.clone())))
+            .agent("test")
+            .build()
+            .expect("build");
+        let _ = engine.decide(&bash("mkdir x"));
+        let records = captured.records();
+        assert!(!records.is_empty());
+        assert!(records[0].readonly);
+        assert_eq!(records[0].rule_id.as_deref(), Some(BASH_WRITE_RULE));
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn pbt_readonly_is_monotone_strengthening(
+            cmd in crate::testing::proptest::bash_command(),
+        ) {
+            let baseline = engine_with(Config::default()).decide(&bash(&cmd));
+            let strengthened = engine_with(readonly_cfg()).decide(&bash(&cmd));
+            prop_assert!(
+                strengthened.decision.rank() >= baseline.decision.rank(),
+                "readonly weakened {:?} → {:?}",
+                baseline.decision.kind(),
+                strengthened.decision.kind(),
+            );
+        }
+
+        #[test]
+        fn pbt_readonly_write_tool_always_deny(_dummy in 0u8..=0u8) {
+            let input = HookInput {
+                tool_name: "Write".into(),
+                tool_input: json!({ "file_path": "f", "content": "x" }),
+            };
+            let outcome = engine_with(readonly_cfg()).decide(&input);
+            prop_assert_eq!(outcome.decision.kind(), DecisionKind::Deny);
         }
     }
 }

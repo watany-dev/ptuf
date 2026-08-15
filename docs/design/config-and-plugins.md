@@ -15,6 +15,14 @@ ptuf の runtime 設定は複数 scope の YAML を merge して決まる。plug
 
 存在しないファイルは無視する。
 
+`readonly: true` は file writer / 非 read MCP verb / allowlist 外の bash
+を拒否する強制ゲート (`mode` と直交)。未知の非 Bash tool 名は通過する。
+環境変数 `PTUF_READONLY=1|true|on` は合成レイヤーとして `readonly: true`
+を最上段に積む (`1` は完全一致、`true` / `on` は ASCII 大小無視。falsy 値は
+レイヤーを作らない = 強化のみ可能)。
+`core.readonly.*` は engine ゲートであり pack ではない
+([ADR 0009](../adr/0009-readonly-mode-2026-07.md))。
+
 ## Config schema
 
 ```yaml
@@ -22,6 +30,7 @@ version: 1
 
 mode: enforce
 failClosed: true
+readonly: false
 
 packs:
   core.project_hygiene:

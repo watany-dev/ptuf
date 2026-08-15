@@ -42,6 +42,12 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
   `Monitor { rule_id }` (rule_id を保存)
 - demote は severity を増加させない
 
+### `Config.readonly` ゲート
+
+- pack disable / allowlist / `mode: monitor` 下でも Write / 非 read bash は Deny
+- `rank(readonly) >= rank(baseline)` の単調強化 PBT
+- bypass corpus の `readonly: true` ケース (ADR 0009)
+
 ### `facts::shell::parse`
 
 - 任意の UTF-8 入力で panic しない

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+- `Config` / `RawConfig` / `Outcome` / `AuditRecord` に公開フィールド
+  `readonly: bool` を追加。既存の構造体リテラルは更新が必要。
+- `cli::Command` に `Readonly` variant を追加。
+
+### Added
+- Forced readonly ゲート (`Config.readonly` / `ptuf readonly on|off|status` /
+  `PTUF_READONLY=1|true|on`)。`mode` と直交し、demotion 後に file / bash /
+  MCP の書き込みを hard-deny する。未知の非 Bash tool 名は通過する
+  (ADR 0009, issue #182)。
+
 ## [0.6.0] - 2026-08-12
 
 ### Changed (BREAKING)

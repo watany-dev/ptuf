@@ -27,6 +27,9 @@ struct Case {
     id: String,
     hook_input: HookInput,
     expect: Expect,
+    /// When true, decide under `Config.readonly = true`.
+    #[serde(default)]
+    readonly: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +52,14 @@ fn bypass_corpus_holds() {
         .agent("bypass-corpus")
         .build()
         .expect("default-config engine builds");
+    let readonly_engine = Engine::builder()
+        .config(ptuf::config::Config {
+            readonly: true,
+            ..ptuf::config::Config::default()
+        })
+        .agent("bypass-corpus-readonly")
+        .build()
+        .expect("readonly-config engine builds");
 
     let mut cases = 0_usize;
     let mut failures: Vec<String> = Vec::new();
@@ -62,6 +73,11 @@ fn bypass_corpus_holds() {
             .unwrap_or_else(|e| panic!("corpus.jsonl:{}: invalid JSON: {e}", idx + 1));
         cases += 1;
 
+        let engine = if case.readonly {
+            &readonly_engine
+        } else {
+            &engine
+        };
         let got = engine.decide(&case.hook_input).decision.kind();
         let ok = match case.expect.kind {
             ExpectKind::MustCatch => got >= case.expect.decision,

@@ -742,6 +742,15 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
             absorb_parens(bytes, &mut i, &mut buf, Some(&mut bodies));
             continue;
         }
+        // Bare `<` / `>` mid-word (`echo x>f`) is a redirect — stop the
+        // word so the tokenizer can emit RedirectOp (bash attaches the
+        // redirect to the preceding argv even without surrounding spaces).
+        // Only break once the word has started: a leading `<`/`>` is
+        // handled by `tokenize`, and the forward-progress contract
+        // requires we never return zero bytes consumed.
+        if !buf.is_empty() && matches!(c, b'<' | b'>') {
+            break;
+        }
         // Unquoted `$(…)`: balance-absorb and capture body (ADR 0008).
         if c == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
             saw_subst = true;
@@ -1632,6 +1641,15 @@ mod tests {
         let inner = &b.segments[0].commands[0].inner_argv;
         assert_eq!(inner.len(), 1);
         assert_eq!(inner[0], argv("rm", &["-rf"]));
+    }
+
+    #[test]
+    fn parses_nospace_stdout_redirect() {
+        let b = parse("echo x>f");
+        assert_eq!(b.segments[0].redirects.len(), 1);
+        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::Stdout);
+        assert_eq!(b.segments[0].redirects[0].target, "f");
+        assert_eq!(b.segments[0].commands[0].args, vec!["x".to_string()]);
     }
 
     #[test]

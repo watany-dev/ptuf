@@ -25,7 +25,8 @@ use super::opencode_input;
 use super::output::{decision_exit_code, decision_label, emit_decision};
 use super::pi_input;
 use super::{
-    GlobalFlags, HookAgent, INVALID_PAYLOAD_RULE, InitOptions, build_engine_or_fail_closed,
+    GlobalFlags, HookAgent, INVALID_PAYLOAD_RULE, InitOptions, ReadonlyAction,
+    build_engine_or_fail_closed,
 };
 
 pub(super) const MAX_HOOK_STDIN_BYTES: u64 = 8 * 1024 * 1024;
@@ -302,6 +303,66 @@ pub(super) fn run_update<W1: Write, W2: Write>(
     let spawner = ProcessSpawner;
     let locator = RealExeLocator;
     update::run(options, &spawner, &locator, stdout, stderr)
+}
+
+pub(super) fn run_readonly<W1: Write, W2: Write>(
+    action: ReadonlyAction,
+    global: bool,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> u8 {
+    let target = match crate::config::toggle::resolve_target_default(global) {
+        Ok(t) => t,
+        Err(msg) => {
+            let _ = writeln!(stderr, "ptuf: {msg}");
+            return 1;
+        },
+    };
+    match action {
+        ReadonlyAction::On | ReadonlyAction::Off => {
+            let value = matches!(action, ReadonlyAction::On);
+            if let Err(err) = crate::config::toggle::set_readonly(&target.path, value) {
+                let _ = writeln!(
+                    stderr,
+                    "ptuf: failed to write {}: {err}",
+                    target.path.display()
+                );
+                return 1;
+            }
+            let state = if value { "on" } else { "off" };
+            let _ = writeln!(
+                stdout,
+                "readonly {state} ({} → {})",
+                target.scope,
+                target.path.display(),
+            );
+            0
+        },
+        ReadonlyAction::Status => {
+            let cwd = std::env::current_dir().ok();
+            let repo = cwd.as_deref().and_then(crate::config::repo::discover);
+            let config = match crate::config::load_for(repo.as_deref()) {
+                Ok(c) => c,
+                Err(err) => {
+                    let _ = writeln!(stderr, "ptuf: could not load config: {err}");
+                    return 1;
+                },
+            };
+            let env_set =
+                crate::config::merge::env_readonly_enabled(&crate::config::scope::SystemEnv);
+            let effective = if config.readonly { "on" } else { "off" };
+            let env = if env_set { "set (forces on)" } else { "unset" };
+            let _ = writeln!(stdout, "readonly: {effective}");
+            let _ = writeln!(stdout, "env PTUF_READONLY: {env}");
+            let _ = writeln!(
+                stdout,
+                "write target: {} ({})",
+                target.path.display(),
+                target.scope,
+            );
+            0
+        },
+    }
 }
 
 struct InstallStep {
@@ -1468,6 +1529,37 @@ rules:
         let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
         let (code, _out, _err) = run_with(&["hook", "codex"], payload);
         assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn readonly_on_off_status_round_trip_in_repo() {
+        let dir = workdir("readonly-toggle");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _cwd = CwdGuard::change_to(&dir).unwrap();
+        let (code, out, err) = run_with(&["readonly", "on"], "");
+        assert_eq!(code, 0, "on stderr={err} stdout={out}");
+        assert!(out.contains("readonly on"), "stdout={out}");
+        let body = std::fs::read_to_string(dir.join(".ptuf.local.yaml")).unwrap();
+        assert!(body.contains("readonly: true"));
+        let (code, out, err) = run_with(&["readonly", "status"], "");
+        assert_eq!(code, 0, "status stderr={err}");
+        assert!(out.contains("readonly: on"), "stdout={out}");
+        let (code, out, err) = run_with(&["readonly", "off"], "");
+        assert_eq!(code, 0, "off stderr={err} stdout={out}");
+        assert!(out.contains("readonly off"), "stdout={out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn readonly_on_reports_error_when_target_is_a_directory() {
+        let dir = workdir("readonly-isdir");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join(".ptuf.local.yaml")).unwrap();
+        let _cwd = CwdGuard::change_to(&dir).unwrap();
+        let (code, _, err) = run_with(&["readonly", "on"], "");
+        assert_eq!(code, 1);
+        assert!(err.contains("failed to write"), "stderr={err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

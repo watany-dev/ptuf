@@ -22,6 +22,7 @@ ptuf [--json] init claude-code           # pin to one adapter
 ptuf [--json] init claude-code --no-verify
 ptuf [--json] init claude-code --dry-run
 ptuf update [--check] [--version <TAG>] [--force]
+ptuf readonly on|off|status [--global]
 ```
 
 | サブコマンド | 用途 |
@@ -31,6 +32,7 @@ ptuf update [--check] [--version <TAG>] [--force]
 | `ptuf plugin check <path>` | plugin rule の `tests:` を実行 |
 | `ptuf init [<agent>] [--no-verify] [--dry-run]` | agent 側の hook 設定を配線 (verify は既定 ON、`--dry-run` 時は自動 OFF) |
 | `ptuf update [--check] [--version <TAG>] [--force]` | GitHub Releases から最新 tag を取得し、`cargo install --force` または cargo-dist 製 installer を auto-detect で起動して binary を差し替える |
+| `ptuf readonly on|off|status [--global]` | 強制 readonly を `<repo>/.ptuf.local.yaml` (または `--global` で user config) に書き込む / 実効値を表示する |
 | `ptuf --help`, `ptuf --version` | 情報表示 |
 
 計画中 (issue #189 / [`audit.md`](audit.md)):
