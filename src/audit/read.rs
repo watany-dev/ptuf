@@ -96,27 +96,11 @@ struct RawAuditRecord {
     command_redacted: Option<String>,
 }
 
-enum ScanEvent<'a> {
-    Line(&'a [u8]),
-    Oversize,
-}
-
 enum Classified {
     Blank,
     Invalid,
     Unsupported,
     Valid(Value, ValidatedAuditRecord),
-}
-
-enum Collector {
-    List {
-        limit: usize,
-        items: VecDeque<(Value, ValidatedAuditRecord)>,
-    },
-    Stats {
-        by_decision: HashMap<String, u64>,
-        by_rule: HashMap<String, u64>,
-    },
 }
 
 #[derive(Default)]
@@ -141,15 +125,13 @@ pub fn read_filtered<R: Read>(
     filter: &AuditFilter,
     limit: usize,
 ) -> io::Result<ReadOutcome> {
-    let mut collector = Collector::List {
-        limit,
-        items: VecDeque::new(),
-    };
-    let counters = scan_into(reader, filter, &mut collector)?;
-    let records = match collector {
-        Collector::List { items, .. } => Vec::from(items),
-        Collector::Stats { .. } => Vec::new(),
-    };
+    let mut items = VecDeque::new();
+    let counters = scan_into(reader, filter, |value, rec| {
+        if limit > 0 && items.len() == limit {
+            items.pop_front();
+        }
+        items.push_back((value, rec));
+    })?;
     Ok(ReadOutcome {
         lines_read: counters.lines_read,
         valid_records: counters.valid_records,
@@ -157,23 +139,19 @@ pub fn read_filtered<R: Read>(
         skipped_invalid: counters.skipped_invalid,
         skipped_unsupported_schema: counters.skipped_unsupported_schema,
         incomplete_tail: counters.incomplete_tail,
-        records,
+        records: Vec::from(items),
     })
 }
 
 pub fn stats<R: Read>(reader: R, filter: &AuditFilter) -> io::Result<AuditStats> {
-    let mut collector = Collector::Stats {
-        by_decision: HashMap::new(),
-        by_rule: HashMap::new(),
-    };
-    let counters = scan_into(reader, filter, &mut collector)?;
-    let (by_decision, by_rule) = match collector {
-        Collector::Stats {
-            by_decision,
-            by_rule,
-        } => (sorted_counts(by_decision), sorted_counts(by_rule)),
-        Collector::List { .. } => (Vec::new(), Vec::new()),
-    };
+    let mut by_decision = HashMap::new();
+    let mut by_rule = HashMap::new();
+    let counters = scan_into(reader, filter, |_, rec| {
+        *by_decision.entry(rec.decision).or_insert(0) += 1;
+        if let Some(rule_id) = rec.rule_id {
+            *by_rule.entry(rule_id).or_insert(0) += 1;
+        }
+    })?;
     Ok(AuditStats {
         lines_read: counters.lines_read,
         valid_records: counters.valid_records,
@@ -181,8 +159,8 @@ pub fn stats<R: Read>(reader: R, filter: &AuditFilter) -> io::Result<AuditStats>
         skipped_invalid: counters.skipped_invalid,
         skipped_unsupported_schema: counters.skipped_unsupported_schema,
         incomplete_tail: counters.incomplete_tail,
-        by_decision,
-        by_rule,
+        by_decision: sorted_counts(by_decision),
+        by_rule: sorted_counts(by_rule),
     })
 }
 
@@ -241,129 +219,72 @@ fn snapshot_len(file: &File) -> io::Result<(u64, bool)> {
     }
 }
 
-fn scan_into<R: Read>(
-    reader: R,
-    filter: &AuditFilter,
-    collector: &mut Collector,
-) -> io::Result<Counters> {
-    let mut counters = Counters::default();
-    let incomplete = scan(reader, |event| match event {
-        ScanEvent::Oversize => {
-            counters.lines_read += 1;
-            counters.skipped_invalid += 1;
-        },
-        ScanEvent::Line(bytes) => {
-            counters.lines_read += 1;
-            apply_line(bytes, filter, collector, &mut counters);
-        },
-    })?;
-    counters.incomplete_tail = incomplete;
-    Ok(counters)
-}
-
-fn scan<R: Read, F>(mut reader: R, mut visit: F) -> io::Result<bool>
+fn scan_into<R, F>(mut reader: R, filter: &AuditFilter, mut accept: F) -> io::Result<Counters>
 where
-    F: FnMut(ScanEvent<'_>),
+    R: Read,
+    F: FnMut(Value, ValidatedAuditRecord),
 {
+    let mut counters = Counters::default();
     let mut buf = Vec::new();
     let mut oversized = false;
     let mut tmp = [0u8; 8192];
     loop {
         let n = reader.read(&mut tmp)?;
         if n == 0 {
-            return Ok(finish_eof(oversized, &buf, &mut visit));
+            if oversized {
+                counters.lines_read += 1;
+                counters.skipped_invalid += 1;
+                counters.incomplete_tail = true;
+            } else {
+                counters.incomplete_tail = !buf.is_empty();
+            }
+            return Ok(counters);
         }
-        feed(&tmp[..n], &mut buf, &mut oversized, &mut visit);
+        let mut rest = &tmp[..n];
+        while !rest.is_empty() {
+            if oversized {
+                if let Some(i) = memchr::memchr(b'\n', rest) {
+                    oversized = false;
+                    counters.lines_read += 1;
+                    counters.skipped_invalid += 1;
+                    rest = &rest[i + 1..];
+                } else {
+                    rest = &[];
+                }
+                continue;
+            }
+            if let Some(i) = memchr::memchr(b'\n', rest) {
+                buf.extend_from_slice(&rest[..i]);
+                counters.lines_read += 1;
+                if buf.len() > MAX_AUDIT_RECORD_BYTES {
+                    counters.skipped_invalid += 1;
+                } else {
+                    apply_line(&buf, filter, &mut accept, &mut counters);
+                }
+                buf.clear();
+                rest = &rest[i + 1..];
+            } else {
+                let room = MAX_AUDIT_RECORD_BYTES
+                    .saturating_add(1)
+                    .saturating_sub(buf.len());
+                let take = rest.len().min(room);
+                buf.extend_from_slice(&rest[..take]);
+                rest = &rest[take..];
+                if buf.len() > MAX_AUDIT_RECORD_BYTES {
+                    buf.clear();
+                    oversized = true;
+                } else {
+                    rest = &[];
+                }
+            }
+        }
     }
 }
 
-fn finish_eof(oversized: bool, buf: &[u8], visit: &mut impl FnMut(ScanEvent<'_>)) -> bool {
-    if oversized {
-        visit(ScanEvent::Oversize);
-        true
-    } else {
-        !buf.is_empty()
-    }
-}
-
-fn feed(
-    chunk: &[u8],
-    buf: &mut Vec<u8>,
-    oversized: &mut bool,
-    visit: &mut impl FnMut(ScanEvent<'_>),
-) {
-    let mut rest = chunk;
-    while !rest.is_empty() {
-        rest = if *oversized {
-            skip_oversize(rest, oversized, visit)
-        } else {
-            take_line(rest, buf, oversized, visit)
-        };
-    }
-}
-
-fn skip_oversize<'a>(
-    rest: &'a [u8],
-    oversized: &mut bool,
-    visit: &mut impl FnMut(ScanEvent<'_>),
-) -> &'a [u8] {
-    match memchr::memchr(b'\n', rest) {
-        Some(i) => {
-            *oversized = false;
-            visit(ScanEvent::Oversize);
-            &rest[i + 1..]
-        },
-        None => &[],
-    }
-}
-
-fn take_line<'a>(
-    rest: &'a [u8],
-    buf: &mut Vec<u8>,
-    oversized: &mut bool,
-    visit: &mut impl FnMut(ScanEvent<'_>),
-) -> &'a [u8] {
-    match memchr::memchr(b'\n', rest) {
-        Some(i) => {
-            buf.extend_from_slice(&rest[..i]);
-            emit_complete(buf, visit);
-            buf.clear();
-            &rest[i + 1..]
-        },
-        None => absorb_tail(rest, buf, oversized),
-    }
-}
-
-fn absorb_tail<'a>(rest: &'a [u8], buf: &mut Vec<u8>, oversized: &mut bool) -> &'a [u8] {
-    let room = MAX_AUDIT_RECORD_BYTES
-        .saturating_add(1)
-        .saturating_sub(buf.len());
-    let take = rest.len().min(room);
-    buf.extend_from_slice(&rest[..take]);
-    let leftover = &rest[take..];
-    if buf.len() > MAX_AUDIT_RECORD_BYTES {
-        buf.clear();
-        *oversized = true;
-        leftover
-    } else {
-        &[]
-    }
-}
-
-fn emit_complete(buf: &[u8], visit: &mut impl FnMut(ScanEvent<'_>)) {
-    if buf.len() > MAX_AUDIT_RECORD_BYTES {
-        visit(ScanEvent::Oversize);
-    } else {
-        visit(ScanEvent::Line(buf));
-    }
-}
-
-fn apply_line(
-    bytes: &[u8],
-    filter: &AuditFilter,
-    collector: &mut Collector,
-    counters: &mut Counters,
-) {
+fn apply_line<F>(bytes: &[u8], filter: &AuditFilter, accept: &mut F, counters: &mut Counters)
+where
+    F: FnMut(Value, ValidatedAuditRecord),
+{
     match classify(bytes) {
         Classified::Blank => {},
         Classified::Invalid => counters.skipped_invalid += 1,
@@ -372,7 +293,7 @@ fn apply_line(
             counters.valid_records += 1;
             if filter.matches(&rec) {
                 counters.matched += 1;
-                collector.accept(value, rec);
+                accept(value, rec);
             }
         },
     }
@@ -445,28 +366,6 @@ impl AuditFilter {
             return false;
         }
         true
-    }
-}
-
-impl Collector {
-    fn accept(&mut self, value: Value, rec: ValidatedAuditRecord) {
-        match self {
-            Self::List { limit, items } => {
-                if *limit > 0 && items.len() == *limit {
-                    items.pop_front();
-                }
-                items.push_back((value, rec));
-            },
-            Self::Stats {
-                by_decision,
-                by_rule,
-            } => {
-                *by_decision.entry(rec.decision).or_insert(0) += 1;
-                if let Some(rule_id) = rec.rule_id {
-                    *by_rule.entry(rule_id).or_insert(0) += 1;
-                }
-            },
-        }
     }
 }
 
@@ -698,7 +597,17 @@ mod tests {
     #[test]
     fn oversized_line_is_skipped_invalid() {
         let valid = rec_line("2024-01-01T00:00:00Z", "deny", "Bash", Some("r"), "ok");
-        let mut body = vec![b'x'; MAX_AUDIT_RECORD_BYTES + 1];
+        // newline completes a line just over the cap
+        let mut body = vec![b'x'; MAX_AUDIT_RECORD_BYTES];
+        body.extend_from_slice(b"y\n");
+        body.extend_from_slice(valid.as_bytes());
+        let out = read_filtered(Cursor::new(body), &AuditFilter::default(), 0).unwrap();
+        assert_eq!(out.skipped_invalid, 1);
+        assert_eq!(out.valid_records, 1);
+        assert!(!out.incomplete_tail);
+
+        // cap exceeded before newline; skip until `\n`
+        let mut body = vec![b'x'; MAX_AUDIT_RECORD_BYTES + 8];
         body.push(b'\n');
         body.extend_from_slice(valid.as_bytes());
         let out = read_filtered(Cursor::new(body), &AuditFilter::default(), 0).unwrap();
@@ -769,34 +678,8 @@ mod tests {
     }
 
     #[test]
-    fn skip_oversize_resets_on_newline_and_keeps_going_without_one() {
-        let mut oversized = true;
-        let mut hits = 0u32;
-        let rest = skip_oversize(b"xxxx\nabc", &mut oversized, &mut |_| hits += 1);
-        assert!(!oversized);
-        assert_eq!(rest, b"abc");
-        assert_eq!(hits, 1);
-
-        oversized = true;
-        let rest = skip_oversize(b"no-nl", &mut oversized, &mut |_| hits += 1);
-        assert!(oversized);
-        assert!(rest.is_empty());
-        assert_eq!(hits, 1);
-    }
-
-    #[test]
     fn relative_secs_rejects_unknown_unit() {
         assert_eq!(relative_secs(1, b'x'), Err(SinceError::Invalid));
-    }
-
-    #[test]
-    fn emit_complete_oversize_is_oversize_event() {
-        let mut hits = 0u32;
-        emit_complete(&vec![b'x'; MAX_AUDIT_RECORD_BYTES + 1], &mut |_| hits += 1);
-        assert_eq!(hits, 1);
-        hits = 0;
-        emit_complete(b"ok", &mut |_| hits += 1);
-        assert_eq!(hits, 1);
     }
 
     #[test]

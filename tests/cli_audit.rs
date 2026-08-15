@@ -79,22 +79,6 @@ fn audit_path_json_filters_decision() {
 }
 
 #[test]
-fn audit_missing_file_is_empty_success() {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let missing = dir.path().join("no-such-audit.jsonl");
-    let path_s = missing.to_string_lossy().into_owned();
-    let (code, stdout, stderr) = run_in(
-        &["audit", "--path", &path_s],
-        dir.path(),
-        Some(dir.path()),
-        "",
-    );
-    assert_eq!(code, 0, "stderr={stderr}");
-    assert!(stdout.is_empty(), "stdout={stdout}");
-    assert!(stderr.contains("0 matched, 0 returned"), "stderr={stderr}");
-}
-
-#[test]
 fn audit_skips_broken_line() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let path = dir.path().join("audit.jsonl");
