@@ -766,6 +766,19 @@ mod tests {
     }
 
     #[test]
+    fn open_snapshot_propagates_missing_file() {
+        assert!(open_snapshot(Path::new("/no/such/ptuf-audit.jsonl")).is_err());
+    }
+
+    #[test]
+    fn empty_tool_is_invalid() {
+        let body = r#"{"schemaVersion":1,"timestamp":"2024-01-01T00:00:00Z","decision":"deny","tool":"","commandRedacted":"x"}"#;
+        let out = scan_all(&format!("{body}\n"), &AuditFilter::default(), 0);
+        assert_eq!(out.skipped_invalid, 1);
+        assert_eq!(out.valid_records, 0);
+    }
+
+    #[test]
     fn snapshot_ignores_bytes_appended_after_length_is_taken() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");

@@ -1282,11 +1282,40 @@ mod tests {
     }
 
     #[test]
-    fn audit_requires_value_for_path() {
+    fn audit_requires_values_and_accepts_remaining_decisions() {
+        for flag in [
+            "--path",
+            "--decision",
+            "--rule",
+            "--tool",
+            "--since",
+            "--limit",
+        ] {
+            assert!(
+                matches!(
+                    parse(&s(&["audit", flag])),
+                    Err(ParseError::MissingValue(_))
+                ),
+                "{flag}"
+            );
+        }
+        for decision in ["allow", "monitor", "ask"] {
+            assert_eq!(
+                cmd(&["audit", "--decision", decision]),
+                Command::Audit(AuditOptions {
+                    decision: Some(decision.into()),
+                    ..AuditOptions::default()
+                })
+            );
+        }
         assert!(matches!(
-            parse(&s(&["audit", "--path"])),
-            Err(ParseError::MissingValue("--path"))
+            parse(&s(&["audit", "--since", "18446744073709551615m"])),
+            Err(ParseError::UnexpectedArgument(_))
         ));
+        match cmd(&["audit", "--since", "1h"]) {
+            Command::Audit(opts) => assert!(opts.since_secs.is_some()),
+            other => panic!("expected audit, got {other:?}"),
+        }
     }
 
     #[test]

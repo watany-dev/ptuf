@@ -1082,6 +1082,7 @@ mod tests {
         let (code, out, err) = run_with(&["--help"], "");
         assert_eq!(code, 0);
         assert!(out.contains("USAGE"));
+        assert!(out.contains("audit"));
         assert!(err.is_empty());
     }
 
@@ -2474,5 +2475,142 @@ rules:
         assert_eq!(code, 0, "stderr={stderr}");
         assert!(stderr.contains("audit is currently disabled; showing existing records"));
         assert!(stdout.contains("shown"));
+    }
+
+    #[test]
+    fn run_audit_missing_stats_renders_empty_text_and_json() {
+        let (code, stdout, stderr) = run_with(
+            &["audit", "--path", "/no/such/ptuf-audit.jsonl", "--stats"],
+            "",
+        );
+        assert_eq!(code, 0);
+        assert!(stdout.is_empty());
+        assert!(stderr.contains("0 matched, 0 returned"));
+
+        let (code, stdout, stderr) = run_with(
+            &[
+                "--json",
+                "audit",
+                "--path",
+                "/no/such/ptuf-audit.jsonl",
+                "--stats",
+            ],
+            "",
+        );
+        assert_eq!(code, 0, "stderr={stderr}");
+        let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(v["matched"], 0);
+        assert!(v["byDecision"].as_array().unwrap().is_empty());
+        assert!(v["byRule"].as_array().unwrap().is_empty());
+        assert!(!stderr.contains("scanned"));
+    }
+
+    #[test]
+    fn run_audit_applies_and_filters_and_dashes_optional_fields() {
+        let keep = audit_line("2024-01-01T02:00:00Z", "deny", "Bash", "core.keep", "kept");
+        let drop_decision = audit_line(
+            "2024-01-01T02:00:00Z",
+            "ask",
+            "Bash",
+            "core.keep",
+            "dropped-decision",
+        );
+        let drop_since = audit_line(
+            "2024-01-01T00:00:00Z",
+            "deny",
+            "Bash",
+            "core.keep",
+            "dropped-since",
+        );
+        let missing_optionals = r#"{"schemaVersion":1,"timestamp":"2024-01-01T02:00:00Z","decision":"allow","tool":"Read","commandRedacted":"plain"}"#;
+        let (_dir, path) =
+            write_audit_file(&[&keep, &drop_decision, &drop_since, missing_optionals]);
+        let (code, stdout, stderr) = run_with(
+            &[
+                "audit",
+                "--path",
+                &path,
+                "--decision",
+                "deny",
+                "--rule",
+                "core.keep",
+                "--tool",
+                "Bash",
+                "--since",
+                "2024-01-01T01:00:00Z",
+                "--limit",
+                "0",
+            ],
+            "",
+        );
+        assert_eq!(code, 0, "stderr={stderr}");
+        assert!(stdout.contains("kept"));
+        assert!(!stdout.contains("dropped-decision"));
+        assert!(!stdout.contains("dropped-since"));
+
+        let (code, stdout, _) = run_with(&["audit", "--path", &path, "--decision", "allow"], "");
+        assert_eq!(code, 0);
+        assert!(stdout.contains("allow - - Read plain"));
+    }
+
+    #[test]
+    fn run_audit_escapes_remaining_control_and_bidi() {
+        let rec = serde_json::json!({
+            "schemaVersion": 1,
+            "timestamp": "2024-01-01T00:00:00Z",
+            "decision": "deny",
+            "tool": "Bash",
+            "ruleId": "r",
+            "severity": "high",
+            "commandRedacted": "echo \r\u{7f}\u{80}\u{9f}\u{061c}\u{200e}\u{200f}\u{202a}\u{2066}done",
+        })
+        .to_string();
+        let (_dir, path) = write_audit_file(&[&rec]);
+        let (code, stdout, _) = run_with(&["audit", "--path", &path], "");
+        assert_eq!(code, 0);
+        assert!(stdout.contains("\\r"));
+        assert!(stdout.contains("\\u{007F}"));
+        assert!(stdout.contains("\\u{0080}"));
+        assert!(stdout.contains("\\u{009F}"));
+        assert!(stdout.contains("\\u{061C}"));
+        assert!(stdout.contains("\\u{200E}"));
+        assert!(stdout.contains("\\u{200F}"));
+        assert!(stdout.contains("\\u{202A}"));
+        assert!(stdout.contains("\\u{2066}"));
+        assert_eq!(stdout.lines().count(), 1);
+    }
+
+    #[test]
+    fn run_audit_incomplete_tail_marks_list_and_stats_summaries() {
+        let rec = audit_line("2024-01-01T00:00:00Z", "deny", "Bash", "r", "ok");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        std::fs::write(&path, format!("{rec}\n{{\"partial\"")).unwrap();
+        let path_s = path.to_string_lossy().into_owned();
+        let (code, _, stderr) = run_with(&["audit", "--path", &path_s], "");
+        assert_eq!(code, 0);
+        assert!(stderr.contains("incomplete tail"));
+
+        let (code, _, stderr) = run_with(&["audit", "--path", &path_s, "--stats"], "");
+        assert_eq!(code, 0);
+        assert!(stderr.contains("incomplete tail"));
+    }
+
+    #[test]
+    fn run_audit_unreadable_file_is_io_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        std::fs::write(&path, "{}\n").unwrap();
+        let original = std::fs::metadata(&path).unwrap().permissions();
+        let mut denied = original.clone();
+        denied.set_mode(0o000);
+        std::fs::set_permissions(&path, denied).unwrap();
+        let path_s = path.to_string_lossy().into_owned();
+        let (code, stdout, stderr) = run_with(&["audit", "--path", &path_s], "");
+        let _ = std::fs::set_permissions(&path, original);
+        assert_eq!(code, 1);
+        assert!(stdout.is_empty());
+        assert!(stderr.contains("ptuf:"));
     }
 }
