@@ -152,13 +152,13 @@ reader API は `io::Result` を返す。fail-soft は「読めた行の内容が
 いる」場合に限定する。
 
 ```rust
-fn read_filtered<R: BufRead>(
+fn read_filtered<R: Read>(
     reader: R,
     filter: &AuditFilter,
     limit: usize,
 ) -> io::Result<ReadOutcome>;
 
-fn stats<R: BufRead>(
+fn stats<R: Read>(
     reader: R,
     filter: &AuditFilter,
 ) -> io::Result<AuditStats>;
