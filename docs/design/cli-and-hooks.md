@@ -35,6 +35,19 @@ ptuf readonly on|off|status [--global]
 | `ptuf readonly on|off|status [--global]` | 強制 readonly を `<repo>/.ptuf.local.yaml` (または `--global` で user config) に書き込む / 実効値を表示する |
 | `ptuf --help`, `ptuf --version` | 情報表示 |
 
+計画中 (issue #189 / [`audit.md`](audit.md)):
+
+```bash
+ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
+                    [--rule <ID>] [--tool <NAME>]
+                    [--since <CANONICAL_RFC3339|<N>m|<N>h|<N>d>]
+                    [--limit <N>] [--stats]
+```
+
+| サブコマンド | 用途 |
+| --- | --- |
+| `ptuf [--json] audit` | 監査 JSONL の閲覧。書き込み経路には触れない |
+
 `--json` はトップレベルの global flag で、サブコマンド **の前** にのみ
 書ける (`ptuf --json init ...`)。`hook <agent>` は host 側の出力形が
 固定なので `--json` を parse 段で reject する。
@@ -65,7 +78,7 @@ install になる。
 | `Allow` / `Monitor` / Claude Code・Cursor・Pi の `Ask` | `0` |
 | `Deny` (Claude Code / Codex / Kiro / Cursor / Pi) | `2` |
 | Copilot / Cline の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
-| 内部エラー、引数不正、plugin check fail、init verify fail、update 失敗 (curl 不在 / updater 非ゼロ) | `1` |
+| 内部エラー、引数不正、plugin check fail、init verify fail、update 失敗 (curl 不在 / updater 非ゼロ)、`audit` の I/O エラー / 引数不正 / default path 解決不能 | `1` |
 
 Codex / Kiro では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
 Cursor は Claude Code と同じく `Ask` channel を持つため `Ask` を降格せず、
@@ -798,3 +811,52 @@ update` の binary 差し替えは互いに干渉しない: 前者は **他プ�
 tool call を hook して block する経路で、後者は ptuf 自身が子プロセスを
 起動して updater に差し替えを委譲する経路だからである。同一バイナリを
 別ホスト経由で書こうとすれば self-protection が依然 deny する。
+
+## `ptuf audit` (計画中, issue #189)
+
+`ptuf audit` も Decision エンジンを **経由しない**。stdin は読まず、
+既存 JSONL を read-only で開く。`hook` / `check` の fail-closed 契約
+(`policy-load-failed`, `invalid-payload`) は適用しない。exit `2` は
+deny 専用なので使わない。
+
+```text
+ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
+                    [--rule <ID>] [--tool <NAME>]
+                    [--since <CANONICAL_RFC3339|<N>m|<N>h|<N>d>]
+                    [--limit <N>] [--stats]
+```
+
+parse (`src/cli/parse.rs` の `parse_audit`):
+
+- `--flag value` / `--flag=value` は既存 `parse_check` / `parse_update` と同型
+- `--decision` は `allow` / `monitor` / `ask` / `deny` 以外を
+  `ParseError::UnexpectedArgument` で reject (新 variant は足さない)
+- `--limit` は十進 `usize`。非数値は `UnexpectedArgument`
+- 明示 `--limit` と `--stats` は `ParseError::ConflictingFlags`
+- `limit: Option<usize>`。未指定は `None` (一覧モードで 20、`--stats` では使わない)
+- `--limit 0` は `Some(0)` (全件)
+- `--since` は `parse_since(value, SystemTime::now())`。grammar / overflow
+  失敗は `UnexpectedArgument`
+- `--json` は既存どおり subcommand **の前** のみ (`ptuf --json audit`)
+
+`Command::Audit(AuditOptions)` の追加は公開 enum の網羅 match を壊す
+breaking change。`AuditOptions` も公開になるが、`src/audit/read.rs` は
+`pub(crate)` のまま。
+
+run (`src/cli/run.rs` の `run_audit`):
+
+| 条件 | exit | stdout | stderr |
+| --- | --- | --- | --- |
+| 成功 (テキスト) | `0` | レコード行 or stats 行 | summary。`--json` では出さない |
+| 成功 (JSON) | `0` | pretty JSON (`init` と同型 `to_string_pretty`) | 成功 summary なし |
+| ファイル不在 | `0` | 空 / ゼロ件数 JSON | テキストなら summary のみ |
+| `audit.enabled: false` (`--path` なし) | `0` | 既存レコード (無ければ空) | `audit is currently disabled; showing existing records` |
+| 引数不正 | `1` | 空 | `ptuf: …` (`io_runner` の parse エラー経路) |
+| HOME unset で default path 不能 (`--path` なし) | `1` | 空 | `audit disabled` とは書かない |
+| `--path` なしで config load 失敗 | `1` | 空 | 既存 `ConfigError` |
+| I/O error (permission / 途中 Read 失敗 / ディレクトリを開いた) | `1` | 空 | エラー |
+
+`--path` があるときは config / `audit.enabled` / `$HOME` を見ない。
+reader 契約・JSON schema・control character escape は
+[`audit.md`](audit.md) を正本とする。
+

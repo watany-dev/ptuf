@@ -75,7 +75,7 @@ Cursor / Pi / OpenCode) の tool hook として呼ばれる Rust CLI** である
 
 | ID | 脅威 | 影響 | 緩和策 |
 |---|---|---|---|
-| T-1 | 同 uid プロセスが audit JSONL を append 中に書き込み割込ませて record を破壊 | medium | flock(2) advisory lock で 1 record 単位 atomic append (`src/audit/writer.rs`) |
+| T-1 | 同 uid プロセスが audit JSONL を append 中に書き込み割込ませて record を破壊 | medium | flock(2) advisory lock で 1 record 単位 atomic append (`src/audit/writer.rs`)。閲覧 CLI (issue #189) は shared lock で length snapshot を取り、読み取り開始時点で完成していた範囲だけを対象にする |
 | T-2 | 同 uid プロセスが事後に audit JSONL を直接編集して record を削除 / 改竄 | **high** | **現状未対応 (residual risk)**。現在の advisory lock は並行 append の interleave のみを防ぐ |
 | T-3 | redaction 漏れによる機密情報の audit log 流出 | high | `src/audit/redaction.rs` の strict mode (token / API key / PEM / JWT / credential) を proptest で網羅、PBT 3 段で 100k cases ソーク |
 | T-4 | plugin YAML を engine 起動中に書き換え、TOCTOU で異なる rule を適用 | low | plugin は engine 起動時に 1 度だけ読み込み、メモリ上で固定。途中書き換えは無視 |
@@ -95,6 +95,7 @@ Cursor / Pi / OpenCode) の tool hook として呼ばれる Rust CLI** である
 | I-1 | redaction が外れ、API キーや個人情報が audit log に書かれる | high | `src/audit/redaction.rs` の token / API key / PEM / JWT / credential 5 系統、PBT で 100k cases、`docs/design/audit.md` に schema 固定 |
 | I-2 | エラーメッセージに plugin 内部の secret が逆流 | medium | plugin error は path / rule id / parser・compile message に限定する (`src/plugin/mod.rs`) |
 | I-3 | telemetry / 外部送信による意図せぬデータ流出 | **scope-blocking** | **ptuf は telemetry を一切持たない。`SECURITY.md` に "No Telemetry" を明示**。hook / check / config / plugin / audit 経路は network I/O を行わず、明示的な `ptuf update` だけが GitHub Releases にアクセスする |
+| I-4 | audit JSONL の control character が `ptuf audit` の text 出力で terminal を偽装する | medium | 計画 (issue #189): text renderer が C0 / DEL / C1 / BiDi を escape し、1 record = 1 line を保つ |
 
 ### Denial of service — リソース枯渇
 
@@ -104,6 +105,7 @@ Cursor / Pi / OpenCode) の tool hook として呼ばれる Rust CLI** である
 | D-2 | malicious plugin の `(a+)+$` 等 ReDoS pattern で engine が無限ループ | low (no current attack surface) | plugin DSL (`src/plugin/dsl.rs` の `WhenNode`) は **user 由来 regex を一切受け付けない**。比較は exact match (`Tool`, `Event`)、list membership (`ToolAny`, `ShellArgvHeadAny`)、prefix (`PathFilePathPrefixAny`)、scheme (`UrlSchemeAny`) のみ。本体内 regex はすべて static `LazyLock<Regex>` (`src/audit/redaction.rs`, `src/facts/sensitive.rs`, `src/rules/patterns.rs`) で、`regex` crate が線形時間を保証。**将来 DSL が regex leaf を採用する場合は本項を再評価し、`RegexBuilder::size_limit` 等を導入する** |
 | D-3 | malicious plugin の大量 rule で memory 枯渇 / engine 起動失敗 | high | **現状未対応 (residual risk)**。plugin rule 数・総数の上限導入を要検討 |
 | D-4 | panic で agent 全体が止まる | medium | `unsafe_code = "forbid"` + clippy `unwrap_used` / `expect_used` / `panic` deny で明示的な panic 経路を抑制し、`Result` 伝播と敵対的入力テストで fail-closed を検証 |
+| D-5 | 改行無しの巨大 audit 行で viewer が OOM する | medium | 計画 (issue #189): 1 行 `MAX_AUDIT_RECORD_BYTES` (1 MiB)。一覧の保持は O(limit) |
 
 ### Elevation of privilege — 権限昇格
 
