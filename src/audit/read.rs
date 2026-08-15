@@ -3,13 +3,6 @@
 //! Byte-oriented: lines are split on `\n` and fed to `serde_json::from_slice`
 //! so invalid UTF-8 is a skipped record, not a hard failure. Fail-soft applies
 //! only to line contents; real I/O errors propagate as [`io::Result`].
-//!
-//! Production callers land in `cli::run_audit`; until that is wired the
-//! non-test lib build sees this module as unused.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired by cli::run_audit (issue #189)")
-)]
 
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
