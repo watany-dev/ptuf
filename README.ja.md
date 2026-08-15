@@ -66,6 +66,9 @@ Rule: core.filesystem.destructive-rm
 
 $ ptuf check --tool Bash 'ls'
 Decision: allow
+
+$ ptuf audit --decision deny --since 1h
+# 監査 JSONL の該当レコード (既定は末尾 20 件)
 ```
 
 ## インストール

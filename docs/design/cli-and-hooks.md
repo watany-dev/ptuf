@@ -22,6 +22,10 @@ ptuf [--json] init claude-code           # pin to one adapter
 ptuf [--json] init claude-code --no-verify
 ptuf [--json] init claude-code --dry-run
 ptuf update [--check] [--version <TAG>] [--force]
+ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
+                    [--rule <ID>] [--tool <NAME>]
+                    [--since <CANONICAL_RFC3339|<N>m|<N>h|<N>d>]
+                    [--limit <N>] [--stats]
 ```
 
 | サブコマンド | 用途 |
@@ -31,20 +35,8 @@ ptuf update [--check] [--version <TAG>] [--force]
 | `ptuf plugin check <path>` | plugin rule の `tests:` を実行 |
 | `ptuf init [<agent>] [--no-verify] [--dry-run]` | agent 側の hook 設定を配線 (verify は既定 ON、`--dry-run` 時は自動 OFF) |
 | `ptuf update [--check] [--version <TAG>] [--force]` | GitHub Releases から最新 tag を取得し、`cargo install --force` または cargo-dist 製 installer を auto-detect で起動して binary を差し替える |
-| `ptuf --help`, `ptuf --version` | 情報表示 |
-
-計画中 (issue #189 / [`audit.md`](audit.md)):
-
-```bash
-ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
-                    [--rule <ID>] [--tool <NAME>]
-                    [--since <CANONICAL_RFC3339|<N>m|<N>h|<N>d>]
-                    [--limit <N>] [--stats]
-```
-
-| サブコマンド | 用途 |
-| --- | --- |
 | `ptuf [--json] audit` | 監査 JSONL の閲覧。書き込み経路には触れない |
+| `ptuf --help`, `ptuf --version` | 情報表示 |
 
 `--json` はトップレベルの global flag で、サブコマンド **の前** にのみ
 書ける (`ptuf --json init ...`)。`hook <agent>` は host 側の出力形が
@@ -810,7 +802,7 @@ tool call を hook して block する経路で、後者は ptuf 自身が子プ
 起動して updater に差し替えを委譲する経路だからである。同一バイナリを
 別ホスト経由で書こうとすれば self-protection が依然 deny する。
 
-## `ptuf audit` (計画中, issue #189)
+## `ptuf audit`
 
 `ptuf audit` も Decision エンジンを **経由しない**。stdin は読まず、
 既存 JSONL を read-only で開く。`hook` / `check` の fail-closed 契約

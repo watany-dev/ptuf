@@ -101,6 +101,10 @@ Rule: core.filesystem.destructive-rm
 $ ptuf check --tool Bash 'ls'
 Decision: allow
 # exit 0
+
+$ ptuf audit --decision deny --since 1h
+# last matching records from the audit JSONL log
+# stderr: scanned N lines, … matched, … returned
 ```
 
 ## Install
@@ -292,13 +296,18 @@ ptuf [--json] init [<agent>] [--no-verify] [--dry-run]
                    [--hooks <PATH>]  # cursor only
                    [--extension <PATH>]  # pi only
 ptuf update [--check] [--version <TAG>] [--force]
+ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
+                    [--rule <ID>] [--tool <NAME>]
+                    [--since <RFC3339|<N>m|<N>h|<N>d>] [--limit <N>] [--stats]
 ptuf --help
 ptuf --version
 ```
 
 `--json` is a global, top-level flag; it must appear *before* the
 subcommand. `hook` does not accept `--json` because the hook protocol
-output shape is fixed by the host. `init` runs the post-install verify
+output shape is fixed by the host. `audit` is a read-only viewer for the
+JSONL audit log (default last 20 matches; `--stats` prints counts).
+`init` runs the post-install verify
 by default; pass `--no-verify` to skip, or `--dry-run` to plan only
 (dry-run implicitly turns verify off because nothing is written).
 For the Claude Code adapter a `hook_event_name` other than `preToolUse`

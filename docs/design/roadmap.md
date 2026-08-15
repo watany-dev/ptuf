@@ -169,11 +169,8 @@
 
 ### 指定済み・未実装
 
-- **`ptuf audit` 閲覧 CLI** (issue #189) — 設計は
-  [`audit.md`](audit.md) / [`cli-and-hooks.md`](cli-and-hooks.md) /
-  [`docs/plans/189-audit-cli.md`](../plans/189-audit-cli.md)。
-  書き込み経路は触らない。`Command::Audit` 追加は公開 enum の breaking
-  change。
+なし。`ptuf audit` 閲覧 CLI (issue #189) は実装済み。`Command::Audit`
+追加は公開 enum の breaking change。
 
 ## 設計原則
 

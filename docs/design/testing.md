@@ -134,11 +134,11 @@ point は、外部 agent との信頼境界として以下の不変を持つ。
 
 - `Decision`, `Severity`, `DecisionKind` は `to_string` → `from_str` で同値
 
-### `audit::read` (計画中, issue #189)
+### `audit::read`
 
 閲覧 CLI の reader は書き込み経路と独立した信頼境界 (JSONL は同 uid から
 改竄され得る)。テストは `src/audit/read.rs` の unit / proptest を主にし、
-CLI 配線は `parse.rs` / `run.rs` / `tests/cli_smoke.rs` で足す。
+CLI 配線は `parse.rs` / `run.rs` / `tests/cli_audit.rs` で足す。
 
 example-based (`src/audit/read.rs`):
 
@@ -177,7 +177,7 @@ CLI run (`src/cli/run.rs` の `run_with`):
 - audit disabled と default path resolution failure を区別
 - text renderer が newline / CR / tab / ESC / BiDi を escape
 
-バイナリ (`tests/cli_smoke.rs`):
+バイナリ (`tests/cli_audit.rs`):
 
 - tempfile JSONL に対する `--path` / `--json` / `--decision deny`
 - ファイル不在 (exit 0 空)
@@ -222,7 +222,7 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   する: 8 adapter (claude-code / codex / copilot / kiro / cline / cursor / pi /
   opencode) の出力契約 parity、病的入力 (非 UTF-8 / NUL / 深いネスト JSON・bash /
   envelope / 巨大 secret 列) を fail-closed で弾くか、per-call latency 予算、
-  `check` / `plugin check` / `init` / `update` / (計画) `audit` subcommand の連続 / 敵対的
+  `check` / `plugin check` / `init` / `update` / `audit` subcommand の連続 / 敵対的
   実行。spawn ハーネスはタイムアウト付きで、`Child::try_wait()` ポーリング
   により無期限ハングを「タイムアウト失敗」へ変換し、signal kill された子
   (クラッシュ) も `SpawnOutcome::signal` で検出する — `assert_clean_exit`
@@ -316,8 +316,8 @@ fact カバレッジを確保する。
 - `init --json` の verify report top-level schema
 - audit JSONL の field contract (`schemaVersion`, `agent`, `allowlistId` など)
 - `ptuf --json audit` / `ptuf --json audit --stats` のトップレベル key
-  集合 (issue #189。実装後に `tests/contracts/audit-list-json-keys.json`
-  と `audit-stats-json-keys.json` で固定)
+  集合 (`tests/contracts/audit-list-json-keys.json` /
+  `audit-stats-json-keys.json`、検証は `tests/cli_audit.rs`)
 - plugin loader error の fail-closed 契約
 - hook stdin の fail-closed 契約 (`core.engine.invalid-payload` での deny)
 - allowlist `when` の suppression 契約
