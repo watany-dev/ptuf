@@ -328,8 +328,9 @@ audit:
   includeDenied: true
 ```
 
-`readonly: true` (or `ptuf readonly on`, or `PTUF_READONLY=1`) forces a
-fail-closed read-only gate across every adapter — orthogonal to `mode`.
+`readonly: true` (or `ptuf readonly on`, or `PTUF_READONLY=1`) is orthogonal
+to `mode`: Bash uses a fail-closed head allowlist, file tools a writer-name
+list, MCP a leading-verb allowlist; other tool names pass.
 See [`docs/adr/0009-readonly-mode-2026-07.md`](docs/adr/0009-readonly-mode-2026-07.md).
 
 Full schema (allowlists, plugin loading, audit redaction) lives in

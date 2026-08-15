@@ -8,7 +8,7 @@
 
 ptuf's `mode` axis is only `enforce` / `monitor` (`demote_for_mode`).
 Operators want a Claude Code plan-mode equivalent: a single toggle that
-blocks all writes across every adapter, without inventing a third
+blocks file / bash / MCP writes on every adapter, without inventing a third
 `Mode` value or a toggleable pack.
 
 ## Decision
@@ -44,7 +44,9 @@ key into `<repo>/.ptuf.local.yaml` (or the user config).
 ## Consequences
 
 - Readonly is intentionally strict: builds, installs, and mkdir deny.
-  Git verbs that mutate with no flags (`branch` / `tag` / `stash` /
+  Bash is a fail-closed head allowlist; file tools are a writer-name
+  list; MCP is a leading-verb allowlist; other tool names pass. Git
+  verbs that mutate with no flags (`branch` / `tag` / `stash` /
   `remote` / `config` / `reflog`) are off the read-subcommand list
   rather than special-cased. There is no allowlist relaxation path
   by design.

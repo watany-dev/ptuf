@@ -71,6 +71,9 @@ block する。repository 側の `.ptuf.yaml` で `mode: monitor` を指定し�
 - `demote_for_mode` の**後**に合成する。既存の具体 `Deny` があればその
   rule id を優先し、そうでなければ `core.readonly.{file,bash,mcp}-write`
   が Deny を返す
+- Bash は head allowlist (未知コマンドは Deny)、file は writer 名
+  (`Write` / `Edit` / `MultiEdit` / `NotebookEdit` / `apply_patch`)、
+  MCP は tool 名の leading verb allowlist。それ以外の tool 名は通過する
 - pack disable / rule override / allowlist は rule ループ外のため到達不能
 - `mode: monitor` でも readonly Deny は降格しない (`core.readonly.` は
   hardDeny 相当)

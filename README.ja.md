@@ -138,7 +138,9 @@ audit:
 スキーマ全体と YAML plugin による独自ルールの書き方は
 [`docs/design/config-and-plugins.md`](docs/design/config-and-plugins.md)
 を参照してください。`readonly: true`（または `ptuf readonly on` /
-`PTUF_READONLY=1`）は `mode` と直交する強制読み取り専用ゲートです
+`PTUF_READONLY=1`）は `mode` と直交する。Bash は head 許可リスト外を
+fail-closed 拒否、ファイルは writer ツール名、MCP は leading verb
+許可リスト。それ以外のツール名は通す
 ([ADR 0009](docs/adr/0009-readonly-mode-2026-07.md))。
 
 ## さらに詳しく
