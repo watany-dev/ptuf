@@ -12,7 +12,6 @@ use crate::facts::shell::{Argv, Bash, Redirect, RedirectOp};
 use crate::hook_input::HookInput;
 use crate::reason;
 
-#[cfg(test)]
 use super::sensitive_bash_read::READER_HEADS;
 
 pub const FILE_WRITE_RULE: &str = "core.readonly.file-write";
@@ -29,46 +28,9 @@ const READ_VERBS: &[&str] = &[
     "check", "find", "count", "watch", "download",
 ];
 
-/// Pure-read command heads allowed under readonly. Includes
-/// [`READER_HEADS`] plus inspection / formatting utilities and shell
-/// container heads whose payloads are inspected via [`Bash::commands`].
-const READONLY_HEADS: &[&str] = &[
-    // READER_HEADS (keep in sync — duplicated so the const can stay a
-    // single slice for `contains` without heap allocation).
-    "cat",
-    "head",
-    "tail",
-    "less",
-    "more",
-    "view",
-    "bat",
-    "xxd",
-    "od",
-    "hexdump",
-    "strings",
-    "base64",
-    "base32",
-    "grep",
-    "egrep",
-    "fgrep",
-    "awk",
-    "gawk",
-    "mawk",
-    "sed",
-    "cut",
-    "tr",
-    "sort",
-    "uniq",
-    "wc",
-    "nl",
-    "tac",
-    "rev",
-    "column",
-    "file",
-    "dd",
-    "source",
-    ".",
-    // pure-read extras
+/// Extra pure-read heads on top of [`READER_HEADS`]. Shell wrappers
+/// sit here so `bash.commands()` can inspect their payloads.
+const READONLY_EXTRA_HEADS: &[&str] = &[
     "ls",
     "stat",
     "pwd",
@@ -138,6 +100,9 @@ const READONLY_HEADS: &[&str] = &[
     "timeout",
 ];
 
+// ponytail: ambiguous git verbs (branch/tag/stash/remote/config/reflog)
+// create refs without flags — keep them off this list instead of
+// writing a mini git parser.
 const GIT_READ_SUBCOMMANDS: &[&str] = &[
     "status",
     "log",
@@ -150,10 +115,6 @@ const GIT_READ_SUBCOMMANDS: &[&str] = &[
     "rev-parse",
     "rev-list",
     "describe",
-    "branch",
-    "tag",
-    "remote",
-    "config",
     "help",
     "version",
     "whatchanged",
@@ -165,8 +126,6 @@ const GIT_READ_SUBCOMMANDS: &[&str] = &[
     "ls-remote",
     "for-each-ref",
     "symbolic-ref",
-    "reflog",
-    "stash", // `stash list` only — guarded below
 ];
 
 /// Evaluate the readonly gate. Returns `Some(Deny)` when the input is
@@ -324,11 +283,15 @@ fn redirects_write(redirects: &[Redirect]) -> bool {
     })
 }
 
+fn is_readonly_head(head: &str) -> bool {
+    READER_HEADS.contains(&head) || READONLY_EXTRA_HEADS.contains(&head)
+}
+
 fn head_denied(argv: &Argv) -> Option<String> {
     let head = argv.head_basename();
     // Shell wrappers (bash/sh/xargs/…) sit on READONLY_HEADS; their
     // payloads are already flattened into bash.commands().
-    if !READONLY_HEADS.contains(&head) {
+    if !is_readonly_head(head) {
         return Some(format!(
             "ptuf readonly mode blocks command `{head}` — not on the pure-read allowlist."
         ));
@@ -348,7 +311,7 @@ fn flag_guard(argv: &Argv) -> Option<String> {
         "sed" => {
             for flag in argv.flags() {
                 if flag == "-i"
-                    || flag.starts_with("-i")
+                    || (flag.starts_with("-i") && !flag.starts_with("--"))
                     || flag == "--in-place"
                     || flag.starts_with("--in-place=")
                 {
@@ -400,104 +363,12 @@ fn git_denied(argv: &Argv) -> Option<String> {
         .find(|a| !a.starts_with('-'))
         .map(String::as_str)
         .unwrap_or("");
-    if sub.is_empty() {
-        // bare `git` — harmless help path
+    if sub.is_empty() || GIT_READ_SUBCOMMANDS.contains(&sub) {
         return None;
     }
-    if !GIT_READ_SUBCOMMANDS.contains(&sub) {
-        return Some(format!(
-            "ptuf readonly mode blocks `git {sub}` — only read-oriented git subcommands are allowed."
-        ));
-    }
-    // `git stash` without `list` / `show` mutates; allow list/show only.
-    if sub == "stash" {
-        let action = argv
-            .args
-            .iter()
-            .skip_while(|a| a.as_str() != "stash")
-            .nth(1)
-            .map(String::as_str)
-            .unwrap_or("push");
-        if !matches!(action, "list" | "show" | "-l" | "--list") {
-            return Some(
-                "ptuf readonly mode blocks mutating `git stash` (only `list` / `show` allowed)."
-                    .into(),
-            );
-        }
-    }
-    // `git branch` / `git tag` / `git remote` / `git config` without
-    // mutating flags are treated as read; mutating forms (-d/-D/-m, add,
-    // set-url, --unset, …) are denied.
-    if matches!(sub, "branch" | "tag") {
-        for flag in argv.flags() {
-            if matches!(
-                flag,
-                "-d" | "-D"
-                    | "-m"
-                    | "-M"
-                    | "--delete"
-                    | "--move"
-                    | "-c"
-                    | "-C"
-                    | "--copy"
-                    | "-f"
-                    | "--force"
-            ) {
-                return Some(format!(
-                    "ptuf readonly mode blocks mutating `git {sub} {flag}`."
-                ));
-            }
-        }
-    }
-    if sub == "remote" {
-        let action = argv
-            .args
-            .iter()
-            .skip_while(|a| a.as_str() != "remote")
-            .nth(1)
-            .map(String::as_str)
-            .unwrap_or("");
-        if matches!(
-            action,
-            "add" | "remove" | "rm" | "set-url" | "rename" | "prune" | "set-branches" | "set-head"
-        ) {
-            return Some(format!("ptuf readonly mode blocks `git remote {action}`."));
-        }
-    }
-    if sub == "config" {
-        for flag in argv.flags() {
-            if matches!(
-                flag,
-                "--unset" | "--unset-all" | "--remove-section" | "--add" | "--replace-all"
-            ) {
-                return Some(format!("ptuf readonly mode blocks `git config {flag}`."));
-            }
-        }
-        // `git config <key> <value>` writes; bare `git config <key>` reads.
-        let after: Vec<_> = argv
-            .args
-            .iter()
-            .skip_while(|a| a.as_str() != "config")
-            .skip(1)
-            .filter(|a| !a.starts_with('-'))
-            .collect();
-        if after.len() >= 2 {
-            return Some("ptuf readonly mode blocks `git config <key> <value>` writes.".into());
-        }
-    }
-    if sub == "reflog" {
-        let action = argv
-            .args
-            .iter()
-            .skip_while(|a| a.as_str() != "reflog")
-            .nth(1)
-            .map(String::as_str)
-            .unwrap_or("show");
-        if matches!(action, "expire" | "delete") {
-            return Some(format!("ptuf readonly mode blocks `git reflog {action}`."));
-        }
-    }
-    None
+    Some(format!(
+        "ptuf readonly mode blocks `git {sub}` — only read-oriented git subcommands are allowed."
+    ))
 }
 
 fn deny(rule_id: &str, problem: &str) -> Decision {
@@ -542,14 +413,11 @@ mod tests {
     }
 
     #[test]
-    fn reader_heads_subset_of_readonly_heads() {
+    fn tee_is_not_a_readonly_head() {
+        assert!(!is_readonly_head("tee"));
         for h in READER_HEADS {
-            assert!(
-                READONLY_HEADS.contains(h),
-                "READER_HEADS entry `{h}` missing from READONLY_HEADS"
-            );
+            assert!(is_readonly_head(h), "READER_HEADS `{h}` must stay allowed");
         }
-        assert!(!READONLY_HEADS.contains(&"tee"));
     }
 
     #[test]
@@ -579,6 +447,7 @@ mod tests {
             "git rev-parse HEAD",
             "bash -lc 'cat f'",
             "cat < f",
+            "sed --include=*.c s/x/y/ f",
         ] {
             assert_allow_bash(cmd);
         }
@@ -595,6 +464,9 @@ mod tests {
             "tee g",
             "find . -delete",
             "git push",
+            "git branch new-feature",
+            "git tag v1.0",
+            "git stash",
             "mkdir x",
             "cargo build",
             "ptuf readonly off",

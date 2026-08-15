@@ -44,7 +44,9 @@ key into `<repo>/.ptuf.local.yaml` (or the user config).
 ## Consequences
 
 - Readonly is intentionally strict: builds, installs, and mkdir deny.
-  There is no allowlist relaxation path by design.
+  Git verbs that create refs without flags (`branch` / `tag` / `stash`)
+  are off the read-subcommand list rather than special-cased. There is
+  no allowlist relaxation path by design.
 - Agents cannot self-disable: config edits hit
   `core.self_protection.config`; `Bash: ptuf readonly off` is an
   unknown head under the bash gate. Humans outside the hook remain

@@ -53,10 +53,9 @@ pub(crate) fn env_readonly_enabled(env: &dyn EnvLookup) -> bool {
         return false;
     };
     let value = raw.to_string_lossy();
-    matches!(
-        value.as_ref(),
-        "1" | "true" | "TRUE" | "True" | "on" | "ON" | "On"
-    )
+    value.eq_ignore_ascii_case("1")
+        || value.eq_ignore_ascii_case("true")
+        || value.eq_ignore_ascii_case("on")
 }
 
 fn apply(acc: &mut Config, layer: MergeLayer) {
