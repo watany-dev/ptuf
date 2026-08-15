@@ -1164,6 +1164,7 @@ mod tests {
         );
         let _ = parse(&args(&["readonly"])).unwrap_err();
         let _ = parse(&args(&["readonly", "maybe"])).unwrap_err();
+        let _ = parse(&args(&["readonly", "on", "extra"])).unwrap_err();
     }
 
     #[test]

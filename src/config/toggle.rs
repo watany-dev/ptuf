@@ -158,6 +158,66 @@ mod tests {
         set_readonly(&path, true).expect("create");
         let body = fs::read_to_string(&path).expect("read");
         assert!(body.contains("readonly: true"));
+        fs::write(&path, "  \n").expect("empty");
+        set_readonly(&path, false).expect("empty file");
+        let body = fs::read_to_string(&path).expect("read");
+        assert!(body.contains("readonly: false"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_falls_back_to_user_when_cwd_is_not_a_repo() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-ro-norepo-{}-{}", std::process::id(), line!()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let env = MapEnv::new(&[("HOME", "/home/x")]);
+        let t = resolve_target(false, &dir, &env).expect("user");
+        assert_eq!(t.path, PathBuf::from("/home/x/.config/ptuf/config.yaml"));
+        assert_eq!(t.scope, "user");
+        let env = MapEnv::new(&[]);
+        assert!(resolve_target(false, &dir, &env).is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_readonly_rejects_non_mapping_and_invalid_yaml() {
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-ro-bad-{}-{}", std::process::id(), line!()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("config.yaml");
+        fs::write(&path, "- just a list\n").expect("write");
+        assert!(set_readonly(&path, true).is_err());
+        fs::write(&path, ":\n  -").expect("write");
+        assert!(set_readonly(&path, true).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_readonly_reports_io_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-ro-io-{}-{}", std::process::id(), line!()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let file_as_parent = dir.join("not-a-dir");
+        fs::write(&file_as_parent, "x").expect("write");
+        assert!(set_readonly(&file_as_parent.join("cfg.yaml"), true).is_err());
+
+        let path = dir.join("config.yaml");
+        fs::write(&path, "mode: enforce\n").expect("write");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("chmod");
+        let failed = set_readonly(&path, true).is_err();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("restore");
+        assert!(failed, "unreadable file must fail");
+
+        let frozen = dir.join("frozen");
+        fs::create_dir_all(&frozen).expect("mkdir");
+        fs::set_permissions(&frozen, fs::Permissions::from_mode(0o555)).expect("chmod dir");
+        let tmp_failed = set_readonly(&frozen.join("config.yaml"), true).is_err();
+        fs::set_permissions(&frozen, fs::Permissions::from_mode(0o755)).expect("restore dir");
+        assert!(tmp_failed, "unwritable parent must fail");
         let _ = fs::remove_dir_all(&dir);
     }
 }

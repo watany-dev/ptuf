@@ -431,6 +431,86 @@ mod tests {
     }
 
     #[test]
+    fn denies_flag_guard_and_empty_git() {
+        for cmd in [
+            "sort --output=out in",
+            "find . -exec echo {} +",
+            "find . -ok echo {} +",
+            "sed --in-place s/x/y/ f",
+            "echo x 2> err",
+            "git",
+        ] {
+            assert_deny_bash(cmd, BASH_WRITE_RULE);
+        }
+    }
+
+    #[test]
+    fn denies_bash_without_command_and_unknown_mcp_verb() {
+        let input = HookInput {
+            tool_name: "Bash".into(),
+            tool_input: json!({}),
+        };
+        let facts = crate::facts::extract(&input);
+        let d = evaluate(&facts, &input).expect("deny empty bash");
+        assert_eq!(d.rule_id(), Some(BASH_WRITE_RULE));
+
+        let input = HookInput {
+            tool_name: "mcp__fs__create_file".into(),
+            tool_input: json!({}),
+        };
+        let facts = crate::facts::extract(&input);
+        let d = evaluate(&facts, &input).expect("deny mcp write verb");
+        assert_eq!(d.rule_id(), Some(MCP_WRITE_RULE));
+    }
+
+    #[test]
+    fn denies_unparsed_bash_and_allows_reparsed_subst() {
+        let input = HookInput {
+            tool_name: "Bash".into(),
+            tool_input: json!({ "command": "cat f" }),
+        };
+        let facts = crate::facts::Facts::default();
+        let d = evaluate(&facts, &input).expect("deny unparsed bash");
+        assert_eq!(d.rule_id(), Some(BASH_WRITE_RULE));
+        assert_allow_bash("echo $(cat f)");
+        assert_deny_bash("eval \"$cmd\"", BASH_WRITE_RULE);
+    }
+
+    #[test]
+    fn denies_opaque_command_subst_and_unparsed_wrapper_payload() {
+        let input = HookInput {
+            tool_name: "Bash".into(),
+            tool_input: json!({ "command": "echo x" }),
+        };
+        let mut facts = crate::facts::extract(&input);
+        if let Some(bash) = facts.bash.as_mut() {
+            bash.has_command_substitution = true;
+            for pipe in &mut bash.segments {
+                for argv in &mut pipe.commands {
+                    argv.subst_argv.clear();
+                }
+            }
+        }
+        let d = evaluate(&facts, &input).expect("deny unreparsed subst");
+        assert_eq!(d.rule_id(), Some(BASH_WRITE_RULE));
+
+        let mut facts = crate::facts::extract(&input);
+        if let Some(bash) = facts.bash.as_mut() {
+            bash.has_command_substitution = false;
+            bash.has_process_substitution = false;
+            for pipe in &mut bash.segments {
+                for argv in &mut pipe.commands {
+                    argv.inner_code = vec!["opaque".into()];
+                    argv.inner_argv.clear();
+                    argv.subst_argv.clear();
+                }
+            }
+        }
+        let d = evaluate(&facts, &input).expect("deny opaque wrapper");
+        assert_eq!(d.rule_id(), Some(BASH_WRITE_RULE));
+    }
+
+    #[test]
     fn denies_writers() {
         for cmd in [
             "echo x > f",

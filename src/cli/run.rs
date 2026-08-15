@@ -1532,6 +1532,37 @@ rules:
     }
 
     #[test]
+    fn readonly_on_off_status_round_trip_in_repo() {
+        let dir = workdir("readonly-toggle");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _cwd = CwdGuard::change_to(&dir).unwrap();
+        let (code, out, err) = run_with(&["readonly", "on"], "");
+        assert_eq!(code, 0, "on stderr={err} stdout={out}");
+        assert!(out.contains("readonly on"), "stdout={out}");
+        let body = std::fs::read_to_string(dir.join(".ptuf.local.yaml")).unwrap();
+        assert!(body.contains("readonly: true"));
+        let (code, out, err) = run_with(&["readonly", "status"], "");
+        assert_eq!(code, 0, "status stderr={err}");
+        assert!(out.contains("readonly: on"), "stdout={out}");
+        let (code, out, err) = run_with(&["readonly", "off"], "");
+        assert_eq!(code, 0, "off stderr={err} stdout={out}");
+        assert!(out.contains("readonly off"), "stdout={out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn readonly_on_reports_error_when_target_is_a_directory() {
+        let dir = workdir("readonly-isdir");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join(".ptuf.local.yaml")).unwrap();
+        let _cwd = CwdGuard::change_to(&dir).unwrap();
+        let (code, _, err) = run_with(&["readonly", "on"], "");
+        assert_eq!(code, 1);
+        assert!(err.contains("failed to write"), "stderr={err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn render_install_outcome_for_already_present_dry_run_uses_suffix() {
         let run = init::AdapterRunReport {
             outcome: init::InstallOutcome {

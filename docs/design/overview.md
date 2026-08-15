@@ -5,7 +5,7 @@
 
 ## 現在の実装スコープ
 
-ptuf `v0.6.0` は次を実装済み:
+ptuf `v0.7.0` は次を実装済み:
 
 - `PreToolUse` 向け CLI とライブラリ
 - Claude Code / Codex / GitHub Copilot / Kiro CLI / Cline / Cursor / Pi /
@@ -19,7 +19,9 @@ ptuf `v0.6.0` は次を実装済み:
 - `bash -c`, `sh -c`, `su -c`, `eval`, `xargs`, `find -exec` に対する bounded
   wrapper inspection と、wrapped redirect を含む self-protection
 - layered YAML config, YAML plugin, allowlist, audit JSONL
-- `ptuf init [<agent>]` (auto-detect), `ptuf check`, `ptuf plugin check <path>`
+- `ptuf init [<agent>]` (auto-detect), `ptuf check`, `ptuf plugin check <path>`,
+  `ptuf readonly on|off|status`
+- `Config.readonly` 強制ゲート (ADR 0009; `mode` と直交)
 - `tests/contracts.rs` による hook / audit / `init --json` 契約の固定
 
 ## ビルド前提と依存

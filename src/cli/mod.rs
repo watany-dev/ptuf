@@ -359,4 +359,10 @@ mod tests {
         assert_eq!(HookAgent::Pi.audit_name(), "pi");
         assert_eq!(HookAgent::Opencode.audit_name(), "opencode");
     }
+
+    #[test]
+    fn fuzz_entry_points_accept_empty_input() {
+        super::fuzz_copilot_parse("");
+        super::fuzz_opencode_parse("");
+    }
 }
