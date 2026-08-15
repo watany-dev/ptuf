@@ -180,7 +180,6 @@ CLI run (`src/cli/run.rs` の `run_with`):
 バイナリ (`tests/cli_audit.rs`):
 
 - tempfile JSONL に対する `--path` / `--json` / `--decision deny`
-- ファイル不在 (exit 0 空)
 - 壊れた行混入
 - default audit path (home を temp に向ける)
 - project config の custom `audit.path`

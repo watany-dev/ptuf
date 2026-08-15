@@ -227,7 +227,8 @@ lock protocol に参加する:
 5. 取得した length までを snapshot として読む
 
 読み取り本体のあいだ writer を block しない。shared lock が失敗したら
-lock 無しで読み、EOF の incomplete tail を通常の malformed と区別する。
+lock 無しで length を取り、`incompleteTail` を立てる (EOF の newline
+未終端と同じフラグ。malformed 行とは区別する)。
 
 ### カウンタ
 

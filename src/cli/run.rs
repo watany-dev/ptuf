@@ -313,6 +313,8 @@ fn audit_fail(stderr: &mut impl Write, err: impl std::fmt::Display) -> u8 {
     1
 }
 
+// ponytail: `map_err` closures are invisible to tarpaulin; keep the match
+// until coverage has slack, then inline.
 fn audit_ok<T, E: std::fmt::Display>(
     result: Result<T, E>,
     stderr: &mut impl Write,
