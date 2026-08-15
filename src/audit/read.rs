@@ -97,7 +97,6 @@ struct RawAuditRecord {
 }
 
 enum Classified {
-    Blank,
     Invalid,
     Unsupported,
     Valid(Value, ValidatedAuditRecord),
@@ -228,18 +227,8 @@ where
     let mut buf = Vec::new();
     let mut oversized = false;
     let mut tmp = [0u8; 8192];
-    loop {
-        let n = reader.read(&mut tmp)?;
-        if n == 0 {
-            if oversized {
-                counters.lines_read += 1;
-                counters.skipped_invalid += 1;
-                counters.incomplete_tail = true;
-            } else {
-                counters.incomplete_tail = !buf.is_empty();
-            }
-            return Ok(counters);
-        }
+    let mut n = reader.read(&mut tmp)?;
+    while n != 0 {
         let mut rest = &tmp[..n];
         while !rest.is_empty() {
             if oversized {
@@ -251,14 +240,12 @@ where
                 } else {
                     rest = &[];
                 }
-                continue;
-            }
-            if let Some(i) = memchr::memchr(b'\n', rest) {
+            } else if let Some(i) = memchr::memchr(b'\n', rest) {
                 buf.extend_from_slice(&rest[..i]);
                 counters.lines_read += 1;
                 if buf.len() > MAX_AUDIT_RECORD_BYTES {
                     counters.skipped_invalid += 1;
-                } else {
+                } else if buf.iter().any(|b| !b.is_ascii_whitespace()) {
                     apply_line(&buf, filter, &mut accept, &mut counters);
                 }
                 buf.clear();
@@ -278,7 +265,16 @@ where
                 }
             }
         }
+        n = reader.read(&mut tmp)?;
     }
+    if oversized {
+        counters.lines_read += 1;
+        counters.skipped_invalid += 1;
+        counters.incomplete_tail = true;
+    } else {
+        counters.incomplete_tail = !buf.is_empty();
+    }
+    Ok(counters)
 }
 
 fn apply_line<F>(bytes: &[u8], filter: &AuditFilter, accept: &mut F, counters: &mut Counters)
@@ -286,7 +282,6 @@ where
     F: FnMut(Value, ValidatedAuditRecord),
 {
     match classify(bytes) {
-        Classified::Blank => {},
         Classified::Invalid => counters.skipped_invalid += 1,
         Classified::Unsupported => counters.skipped_unsupported_schema += 1,
         Classified::Valid(value, rec) => {
@@ -300,9 +295,6 @@ where
 }
 
 fn classify(bytes: &[u8]) -> Classified {
-    if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Classified::Blank;
-    }
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
         return Classified::Invalid;
     };
@@ -512,6 +504,15 @@ mod tests {
         let out = scan_all(&format!("{with}{without}"), &filter, 0);
         assert_eq!(out.matched, 1);
         assert_eq!(out.records[0].1.command_redacted, "a");
+
+        let tool = AuditFilter {
+            tool: Some("Bash".into()),
+            ..AuditFilter::default()
+        };
+        let other = rec_line("2024-01-01T00:00:00Z", "deny", "Read", None, "c");
+        let out = scan_all(&format!("{with}{other}"), &tool, 0);
+        assert_eq!(out.matched, 1);
+        assert_eq!(out.records[0].1.command_redacted, "a");
     }
 
     #[test]
@@ -606,8 +607,8 @@ mod tests {
         assert_eq!(out.valid_records, 1);
         assert!(!out.incomplete_tail);
 
-        // cap exceeded before newline; skip until `\n`
-        let mut body = vec![b'x'; MAX_AUDIT_RECORD_BYTES + 8];
+        // cap exceeded before newline, spanning a later chunk that holds `\n`
+        let mut body = vec![b'x'; MAX_AUDIT_RECORD_BYTES + 8192 + 8];
         body.push(b'\n');
         body.extend_from_slice(valid.as_bytes());
         let out = read_filtered(Cursor::new(body), &AuditFilter::default(), 0).unwrap();

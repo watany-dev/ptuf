@@ -313,6 +313,16 @@ fn audit_fail(stderr: &mut impl Write, err: impl std::fmt::Display) -> u8 {
     1
 }
 
+fn audit_ok<T, E: std::fmt::Display>(
+    result: Result<T, E>,
+    stderr: &mut impl Write,
+) -> Result<T, u8> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(err) => Err(audit_fail(stderr, err)),
+    }
+}
+
 pub(super) fn run_audit<W1: Write, W2: Write>(
     globals: GlobalFlags,
     options: AuditOptions,
@@ -342,24 +352,20 @@ fn run_audit_inner<W1: Write, W2: Write>(
         let _ = writeln!(stderr, "ptuf: {}: is a directory", target.path.display());
         return Err(1);
     }
-    let snap =
-        crate::audit::read::open_snapshot(&target.path).map_err(|err| audit_fail(stderr, err))?;
+    let snap = audit_ok(crate::audit::read::open_snapshot(&target.path), stderr)?;
     let lock_failed = snap.lock_failed();
     let filter = audit_filter(options);
     if options.stats {
-        let mut stats =
-            crate::audit::read::stats(snap, &filter).map_err(|err| audit_fail(stderr, err))?;
-        if lock_failed {
-            stats.incomplete_tail = true;
-        }
+        let mut stats = audit_ok(crate::audit::read::stats(snap, &filter), stderr)?;
+        stats.incomplete_tail |= lock_failed;
         render_stats(globals, &target.path, &stats, stdout, stderr)
     } else {
         let limit = options.limit.unwrap_or(DEFAULT_AUDIT_LIMIT);
-        let mut outcome = crate::audit::read::read_filtered(snap, &filter, limit)
-            .map_err(|err| audit_fail(stderr, err))?;
-        if lock_failed {
-            outcome.incomplete_tail = true;
-        }
+        let mut outcome = audit_ok(
+            crate::audit::read::read_filtered(snap, &filter, limit),
+            stderr,
+        )?;
+        outcome.incomplete_tail |= lock_failed;
         render_list(globals, &target.path, &outcome, stdout, stderr)
     }
 }
