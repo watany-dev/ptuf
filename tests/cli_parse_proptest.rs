@@ -25,6 +25,8 @@ const KNOWN_HEADS: &[&str] = &[
     "check",
     "plugin",
     "init",
+    "update",
+    "audit",
     "-h",
     "--help",
     "-V",

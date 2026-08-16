@@ -5,7 +5,7 @@
 
 ## 現在の実装スコープ
 
-ptuf `v0.6.0` は次を実装済み:
+ptuf `v0.7.0` は次を実装済み:
 
 - `PreToolUse` 向け CLI とライブラリ
 - Claude Code / Codex / GitHub Copilot / Kiro CLI / Cline / Cursor / Pi /
@@ -20,6 +20,7 @@ ptuf `v0.6.0` は次を実装済み:
   wrapper inspection と、wrapped redirect を含む self-protection
 - layered YAML config, YAML plugin, allowlist, audit JSONL
 - `ptuf init [<agent>]` (auto-detect), `ptuf check`, `ptuf plugin check <path>`
+- `ptuf audit` (JSONL の read-only 閲覧。書き込み経路は変更しない)
 - `tests/contracts.rs` による hook / audit / `init --json` 契約の固定
 
 ## ビルド前提と依存
@@ -73,11 +74,11 @@ CLI 経路はこれと異なり fail-closed で動作する。
 - `ptuf [--json] check --tool <name> <command>`
 - `ptuf [--json] plugin check <path>`
 - `ptuf [--json] init [<agent>] [--no-verify] [--dry-run]`
+- `ptuf [--json] audit`
 - `ptuf --help`
 - `ptuf --version`
 
-計画中 (issue #189): `ptuf [--json] audit` — 監査 JSONL の閲覧。詳細は
-[`audit.md`](audit.md) と [`docs/plans/189-audit-cli.md`](../plans/189-audit-cli.md)。
+`ptuf [--json] audit` は監査 JSONL の閲覧。詳細は [`audit.md`](audit.md)。
 
 `init` は引数なしで `$HOME` / repo root を見て agent を auto-detect する。
 verify は既定で実行され、`--no-verify` で skip、`--dry-run` 時は書き込みも

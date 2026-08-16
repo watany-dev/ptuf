@@ -87,8 +87,8 @@ audit:
   (Unix は `flock(2)`、Windows は `LockFileEx`)
 - NFS など advisory lock が no-op になる FS では原子性を保証できないため、
   ローカルファイルシステム上に置くこと
-- 閲覧 CLI (`ptuf audit`) の契約は次節。実装は issue #189
-  ([プラン](../plans/189-audit-cli.md))
+- 閲覧 CLI (`ptuf audit`) の契約は次節。実装は `src/audit/read.rs` +
+  `src/cli/{parse,run}.rs` ([プラン](../plans/189-audit-cli.md))
 - audit sink の **open 失敗** は `Engine::audit_warning()` に保持される。
   CLI は `Engine::audit_warning_for_decision()` を使い、その decision が
   audit 記録対象 (`Allow` は `includeAllowed: true` の場合のみ、`Deny` は
@@ -97,7 +97,7 @@ audit:
   `Engine::drain_audit_write_warnings()` に蓄積し、CLI が hook / eval 完了後に
   stderr へドレインする — どちらも tool 実行は止めない (best-effort 契約)
 
-## 閲覧 CLI (`ptuf audit`) — 計画中 (issue #189)
+## 閲覧 CLI (`ptuf audit`)
 
 書き込み経路は変更しない。本節は read-only の閲覧契約である。
 
@@ -152,13 +152,13 @@ reader API は `io::Result` を返す。fail-soft は「読めた行の内容が
 いる」場合に限定する。
 
 ```rust
-fn read_filtered<R: BufRead>(
+fn read_filtered<R: Read>(
     reader: R,
     filter: &AuditFilter,
     limit: usize,
 ) -> io::Result<ReadOutcome>;
 
-fn stats<R: BufRead>(
+fn stats<R: Read>(
     reader: R,
     filter: &AuditFilter,
 ) -> io::Result<AuditStats>;
@@ -227,7 +227,8 @@ lock protocol に参加する:
 5. 取得した length までを snapshot として読む
 
 読み取り本体のあいだ writer を block しない。shared lock が失敗したら
-lock 無しで読み、EOF の incomplete tail を通常の malformed と区別する。
+lock 無しで length を取り、`incompleteTail` を立てる (EOF の newline
+未終端と同じフラグ。malformed 行とは区別する)。
 
 ### カウンタ
 

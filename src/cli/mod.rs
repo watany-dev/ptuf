@@ -20,6 +20,19 @@ use crate::reason;
 
 pub use crate::update::UpdateOptions;
 
+/// Parsed `ptuf audit` flags. `limit = None` means the list-mode
+/// default of 20; `Some(0)` means return every match.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AuditOptions {
+    pub path: Option<PathBuf>,
+    pub decision: Option<String>,
+    pub rule_id: Option<String>,
+    pub tool: Option<String>,
+    pub since_secs: Option<u64>,
+    pub limit: Option<usize>,
+    pub stats: bool,
+}
+
 mod cline_input;
 mod copilot_input;
 mod cursor_input;
@@ -176,6 +189,9 @@ pub enum Command {
     /// prebuilt installer, auto-detected from the running binary's
     /// location.
     Update(UpdateOptions),
+    /// `ptuf [--json] audit` — read-only JSONL viewer. Does not go
+    /// through the decision engine and does not read stdin.
+    Audit(AuditOptions),
     /// `--help` / `-h`.
     Help,
     /// `--version` / `-V`.
@@ -228,6 +244,7 @@ pub fn parse(args: &[String]) -> Result<(GlobalFlags, Command), ParseError> {
         "plugin" => parse::parse_plugin(&mut iter)?,
         "init" => parse::parse_init(&mut iter)?,
         "update" => parse::parse_update(&mut iter)?,
+        "audit" => parse::parse_audit(&mut iter)?,
         other => return Err(ParseError::UnknownCommand(other.to_string())),
     };
 
@@ -288,11 +305,16 @@ USAGE:
     ptuf update [--check] [--version <TAG>] [--force]
         (update the ptuf binary in-place from the latest GitHub
          release; auto-detects cargo install vs. prebuilt installer)
+    ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
+                        [--rule <ID>] [--tool <NAME>]
+                        [--since <YYYY-MM-DDTHH:MM:SSZ|+HH:MM|<N>m|<N>h|<N>d>]
+                        [--limit <N>] [--stats]
+        (read-only viewer for the audit JSONL log)
     ptuf --help | --version
 
 EXIT CODES:
     0   allow / monitor / ask / plugin tests pass / init succeeds
-    1   non-hook internal error (check / plugin / init / bad arguments)
+    1   non-hook internal error (check / plugin / init / audit / bad arguments)
         or plugin tests fail or verify fails
     2   deny — including hook initialisation failures (invalid stdin
         payload, policy load error)
@@ -313,6 +335,7 @@ pub fn run<R: Read, W1: Write, W2: Write>(
         Command::PluginCheck { path } => run::run_plugin_check(&path, stdout, stderr),
         Command::Init(options) => run::run_init(globals, options, stdout, stderr),
         Command::Update(options) => run::run_update(options, stdout, stderr),
+        Command::Audit(options) => run::run_audit(globals, options, stdout, stderr),
         Command::Help => {
             let _ = writeln!(stdout, "{HELP}");
             0

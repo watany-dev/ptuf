@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`ptuf audit`** — 監査 JSONL の read-only 閲覧 CLI (`--path` /
+  `--decision` / `--rule` / `--tool` / `--since` / `--limit` / `--stats`)。
+  書き込み経路は変更しない。`--json` の `records` は元 JSON object を保持し、
+  text 出力は C0 / DEL / C1 / BiDi を escape する。
+
+### Changed (BREAKING)
+- `cli::Command` に `Audit(AuditOptions)` variant を追加。
+  `Command` は `#[non_exhaustive]` ではないため、この enum を網羅 `match`
+  している下流ライブラリ利用者は更新が必要。
+
 ## [0.6.0] - 2026-08-12
 
 ### Changed (BREAKING)

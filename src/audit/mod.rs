@@ -6,6 +6,7 @@
 //! via the [`AuditSink`] trait so tests can capture records in memory
 //! and the production engine can append to disk.
 
+pub(crate) mod read;
 pub mod record;
 pub mod redaction;
 pub mod time;
