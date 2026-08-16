@@ -287,7 +287,7 @@ impl ProtectedPaths {
         }
 
         // Pre-cache `canonical_or_raw` on every target list so
-        // `path_matches` only canonicalises the candidate. Symlinks
+        // `match_path` only canonicalises the candidate. Symlinks
         // collapse for files that exist; non-existent targets keep
         // their raw form, which still matches a likewise non-existent
         // candidate via byte equality.
@@ -376,56 +376,49 @@ impl ProtectedPaths {
     }
 
     fn match_path(&self, candidate: &Path) -> Option<ProtectedKind> {
+        // `candidate` is constant across every target list, so its
+        // `canonicalize` (a syscall) is computed lazily at most once
+        // per call instead of once per (candidate, target) pair.
+        let mut canon: Option<Option<PathBuf>> = None;
+        let mut matches = |target: &Path| {
+            if candidate == target {
+                return true;
+            }
+            canon
+                .get_or_insert_with(|| candidate.canonicalize().ok())
+                .as_deref()
+                == Some(target)
+        };
         if let Some(b) = &self.binary
-            && path_matches(candidate, b)
+            && matches(b)
         {
             return Some(ProtectedKind::Binary);
         }
-        if self.configs.iter().any(|p| path_matches(candidate, p)) {
+        if self.configs.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::Config);
         }
-        if self.plugins.iter().any(|p| path_matches(candidate, p)) {
+        if self.plugins.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::Plugin);
         }
-        if self
-            .claude_settings
-            .iter()
-            .any(|p| path_matches(candidate, p))
-        {
+        if self.claude_settings.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::ClaudeSettings);
         }
-        if self
-            .codex_settings
-            .iter()
-            .any(|p| path_matches(candidate, p))
-        {
+        if self.codex_settings.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::CodexSettings);
         }
-        if self
-            .copilot_settings
-            .iter()
-            .any(|p| path_matches(candidate, p))
-        {
+        if self.copilot_settings.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::CopilotSettings);
         }
-        if self
-            .kiro_settings
-            .iter()
-            .any(|p| path_matches(candidate, p))
-        {
+        if self.kiro_settings.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::KiroSettings);
         }
-        if self.pi_settings.iter().any(|p| path_matches(candidate, p)) {
+        if self.pi_settings.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::PiSettings);
         }
-        if self
-            .opencode_settings
-            .iter()
-            .any(|p| path_matches(candidate, p))
-        {
+        if self.opencode_settings.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::OpencodeSettings);
         }
-        if self.hook_scripts.iter().any(|p| path_matches(candidate, p)) {
+        if self.hook_scripts.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::HookScript);
         }
         None
@@ -521,21 +514,6 @@ fn canonicalize_each(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         .into_iter()
         .map(|p| p.canonicalize().unwrap_or(p))
         .collect()
-}
-
-/// True when `candidate` refers to the same file as `target`. The
-/// caller guarantees that `target` was already passed through
-/// [`canonicalize_each`] at collect time, so we only canonicalise the
-/// candidate here. Falls back to byte equality so missing files still
-/// match when both sides spell the path identically.
-fn path_matches(candidate: &Path, target: &Path) -> bool {
-    if candidate == target {
-        return true;
-    }
-    match candidate.canonicalize() {
-        Ok(c) => c == target,
-        Err(_) => false,
-    }
 }
 
 fn candidate_targets<'a>(
