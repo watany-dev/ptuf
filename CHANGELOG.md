@@ -9,14 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`kiro-v2` agent token** — Kiro CLI の hook 仕様が v3 で変わるため、
-  現行 adapter を `ptuf init kiro-v2` / `ptuf hook kiro-v2` として明示的に
-  バージョン付けした。無印の `kiro` は別名として引き続き受理し、監査名
-  (`"kiro"`) と agent JSON に書き込む hook command (`ptuf hook kiro`) は
-  不変なので既存インストールへの影響はない。未知の `kiro-v3` は reject する。
+  adapter 世代ごとに versioned token を持たせた。現行 adapter は
+  `ptuf init kiro-v2` / `ptuf hook kiro-v2`。無印の `kiro` は
+  **最新 Kiro adapter を指す floating alias** で、v3 adapter が入れば
+  `ptuf init kiro` はそちらへ追従する (今日の契約に固定したい場合は
+  `kiro-v2` を明示する)。未知の `kiro-v3` は該当 adapter が入るまで reject する。
+  監査名は世代をまたいで `"kiro"` のまま。
 - **`ptuf audit`** — 監査 JSONL の read-only 閲覧 CLI (`--path` /
   `--decision` / `--rule` / `--tool` / `--since` / `--limit` / `--stats`)。
   書き込み経路は変更しない。`--json` の `records` は元 JSON object を保持し、
   text 出力は C0 / DEL / C1 / BiDi を escape する。
+
+### Changed
+- **Kiro agent JSON に書き込む hook command が `ptuf hook kiro-v2` になった。**
+  無印 `kiro` が最新版 alias になったため、`ptuf hook kiro` と書かれた既存の
+  hook 行は ptuf を upgrade した時点で v3 adapter へ黙って切り替わってしまう。
+  これを防ぐため書き込む形を versioned に pin し、旧 ptuf が書いた
+  `ptuf hook kiro` entry は次回 `ptuf init` で **その場で書き換える**
+  (重複 append はしない)。書き換えが走ったファイルは `AlreadyPresent` ではなく
+  `Installed` として報告される。
 
 ### Changed (BREAKING)
 - `cli::Command` に `Audit(AuditOptions)` variant を追加。

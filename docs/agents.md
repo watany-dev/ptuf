@@ -29,7 +29,7 @@ codes per agent, and the full payload contract, see the design notes:
 | OpenCode    | `<repo>/.opencode/` or `<repo>/opencode.json`     | `$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` (default global) or `<repo>/.opencode/plugins/ptuf.ts` |
 
 Pin to a single adapter with `ptuf init <agent>` (`claude-code` / `codex`
-/ `copilot` / `kiro` / `cline` / `cursor` / `pi`).
+/ `copilot` / `kiro` / `kiro-v2` / `cline` / `cursor` / `pi`).
 
 ## Common flags
 
@@ -95,19 +95,26 @@ ptuf init kiro-v2 --global          # patch only $HOME/.kiro/agents/*.json
 ptuf init kiro-v2 --new-agent       # legacy: create a single ptuf-guarded.json
 ```
 
-Kiro CLI's hook contract changes in v3, so this adapter carries the
-explicit `kiro-v2` token; `kiro` stays an accepted alias for it in both
-`init` and `hook`. The audit name (`kiro`) and the hook command written
-into agent JSON (`ptuf hook kiro`) are unchanged, so already installed
-hooks keep matching. A future `kiro-v3` token is rejected as an unknown
-agent until its own adapter lands.
+Kiro CLI's hook contract changes in v3, so each Kiro adapter carries its
+own versioned token; `kiro-v2` is the current one. The bare `kiro` token
+is a **floating alias for the newest Kiro adapter in this build** — it
+will resolve to v3 once that adapter lands, so pass `kiro-v2` explicitly
+to pin today's contract. A `kiro-v3` token is rejected as an unknown
+agent until that adapter exists.
+
+The audit name stays `kiro` across generations so audit records remain
+comparable. The `command` written into agent JSON, by contrast, is always
+the versioned `ptuf hook kiro-v2` — writing the alias would let an
+existing install silently change generation on a ptuf upgrade.
 
 The default mode reads every `*.json` directly under both
 `<repo>/.kiro/agents/` and `$HOME/.kiro/agents/`, appends a
-`hooks.preToolUse` entry that invokes `<ptuf> hook kiro`, and is
-idempotent (re-running detects existing entries by the `hook kiro`
-command tail). `.md` agents are skipped and reported under
-`skipped_non_json_agents` in the verify report.
+`hooks.preToolUse` entry that invokes `<ptuf> hook kiro-v2`, and is
+idempotent (re-running detects existing entries by the `hook kiro-v2`
+command tail). Entries left by earlier ptuf releases in the unversioned
+`hook kiro` form are recognized too and rewritten in place to the
+versioned form rather than duplicated. `.md` agents are skipped and
+reported under `skipped_non_json_agents` in the verify report.
 
 When neither scope contains any agent JSON, the installer falls back to
 creating `agents/default.json` (not `ptuf-guarded.json`) in the highest-

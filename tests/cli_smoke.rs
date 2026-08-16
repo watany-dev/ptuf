@@ -555,7 +555,35 @@ fn init_kiro_v2_token_matches_kiro_alias_end_to_end() {
     );
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
     assert!(stdout.contains("alpha.json"), "stdout: {stdout}");
-    assert!(stdout.contains("hook kiro"), "stdout: {stdout}");
+    assert!(stdout.contains("hook kiro-v2"), "stdout: {stdout}");
+}
+
+/// `init kiro` (the floating alias) must write the *versioned* token
+/// into the agent config. If it wrote the alias, the installed hook line
+/// would silently start dispatching to a future v3 adapter as soon as
+/// ptuf is upgraded.
+#[test]
+fn init_kiro_alias_writes_versioned_hook_command_into_agent_json() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
+    let agents_dir = cwd.join(".kiro").join("agents");
+    std::fs::create_dir_all(&agents_dir).expect("mkdir agents");
+    let alpha = agents_dir.join("alpha.json");
+    std::fs::write(&alpha, r#"{"name":"alpha"}"#).expect("write alpha");
+
+    let (code, stdout, stderr) =
+        run_in(&["init", "kiro", "--workspace-only"], cwd, Some(&home), "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+
+    let body = std::fs::read_to_string(&alpha).expect("read alpha");
+    assert!(body.contains("hook kiro-v2"), "body: {body}");
+    assert!(
+        !body.contains(r#"hook kiro""#),
+        "the unversioned alias must never be written: {body}"
+    );
 }
 
 #[test]

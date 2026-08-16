@@ -11,10 +11,17 @@
 //! Each patched agent file is a JSON document whose `hooks.preToolUse`
 //! array carries `{matcher, command, timeout_ms, cache_ttl_seconds}`
 //! entries. We append a single entry whose `command` invokes `<ptuf>
-//! hook kiro`, leaving every other field of the file untouched. A
+//! hook kiro-v2`, leaving every other field of the file untouched. A
 //! second invocation detects the existing entry by matching the
-//! trailing `["hook", "kiro"]` tokens of `command` and skips the
+//! trailing `["hook", "kiro-v2"]` tokens of `command` and skips the
 //! rewrite.
+//!
+//! The written token is deliberately the *versioned* one. On the command
+//! line `kiro` is a floating alias for the newest Kiro adapter, so an
+//! entry spelled `<ptuf> hook kiro` would change meaning under a future
+//! v3 adapter; entries in that legacy spelling (written by earlier ptuf
+//! releases) are rewritten in place on the next `ptuf init` instead of
+//! being duplicated.
 //!
 //! The function `read_default_agent` reads `<scope>/.kiro/settings/cli.json`
 //! and treats the *flat* top-level key `"chat.defaultAgent"` (as used in
@@ -69,9 +76,23 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 /// PreToolUse event is re-evaluated by ptuf.
 pub const DEFAULT_CACHE_TTL_SECONDS: u64 = 0;
 
-/// Trailing tokens (split on whitespace) that mark a `command` field as
-/// a ptuf Kiro `preToolUse` hook.
-pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "kiro"];
+/// Trailing tokens (split on whitespace) of the `command` this adapter
+/// *writes*, and the marker for an entry it already owns.
+///
+/// Pinned to the **versioned** `kiro-v2` token on purpose. On the
+/// command line the bare `kiro` token is a floating alias for the newest
+/// Kiro adapter (see `cli::parse::KIRO_LATEST_ALIAS`), so a hook line
+/// spelled `ptuf hook kiro` sitting in an agent config would silently
+/// start dispatching to a future v3 adapter the moment ptuf is upgraded.
+/// Writing the versioned form binds each installed entry to the adapter
+/// generation that wrote it.
+pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "kiro-v2"];
+
+/// Trailing tokens of the unversioned `command` written by earlier ptuf
+/// releases. Still recognized so a re-run never appends a duplicate
+/// entry, and [`install_one_file`] rewrites it in place to
+/// [`COMMAND_TAIL`] so old installs stop riding the floating alias.
+pub(crate) const LEGACY_COMMAND_TAIL: &[&str] = &["hook", "kiro"];
 
 /// Flat top-level key inside `<scope>/.kiro/settings/cli.json` that
 /// names the default agent. Kiro stores this as a dotted key on the
@@ -446,7 +467,7 @@ pub(crate) fn install_with_report(
     ptuf_binary: &str,
     dry_run: bool,
 ) -> Result<(InstallOutcome, KiroInstallExtras), InitError> {
-    let command = format!("{ptuf_binary} hook kiro");
+    let command = format!("{ptuf_binary} {}", COMMAND_TAIL.join(" "));
     let mut paths: Vec<InstallPath> = Vec::with_capacity(targets.agent_config_paths.len());
     let mut already_present_count = 0_usize;
 
@@ -494,12 +515,18 @@ struct PerFileResult {
 
 fn install_one_file(path: &Path, command: &str, dry_run: bool) -> Result<PerFileResult, InitError> {
     let mut root = read_agent_config(path)?;
-    if has_existing_hook(&root) {
+    if has_versioned_hook(&root) {
         return Ok(PerFileResult {
             already_present: true,
         });
     }
-    append_hook(&mut root, path, command)?;
+    // A legacy `… hook kiro` entry is this adapter's own earlier output,
+    // so rewrite it in place rather than appending a second entry: that
+    // both preserves idempotency and re-pins the install to the
+    // versioned token.
+    if !rewrite_legacy_hooks(&mut root, command) {
+        append_hook(&mut root, path, command)?;
+    }
     if !dry_run {
         write_json_atomically(path, &root)?;
     }
@@ -558,8 +585,16 @@ pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
     commands
 }
 
+/// Whether `cmd` is a ptuf Kiro hook entry in the versioned form this
+/// adapter writes today.
 pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
     super::command_invokes_ptuf_hook(cmd, COMMAND_TAIL)
+}
+
+/// Whether `cmd` is the unversioned `… hook kiro` form written by
+/// earlier ptuf releases.
+pub(crate) fn command_is_legacy_ptuf_hook(cmd: &str) -> bool {
+    super::command_invokes_ptuf_hook(cmd, LEGACY_COMMAND_TAIL)
 }
 
 /// Read the single `command` field on a Kiro `preToolUse` entry. The
@@ -572,13 +607,41 @@ pub(crate) fn entry_commands(entry: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn has_existing_hook(root: &Value) -> bool {
+/// Whether the config already carries an entry in the versioned form
+/// this adapter writes — the "nothing to do" case.
+fn has_versioned_hook(root: &Value) -> bool {
     root.pointer("/hooks/preToolUse")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .flat_map(entry_commands)
         .any(|cmd| command_invokes_ptuf_hook(&cmd))
+}
+
+/// Repoint every legacy `… hook kiro` entry at `command` — the same
+/// string a fresh install would write, so the entry also picks up the
+/// binary path of the ptuf running `init`. The entry's own `matcher` /
+/// `timeout_ms` / `cache_ttl_seconds` are preserved. Returns whether
+/// anything changed.
+fn rewrite_legacy_hooks(root: &mut Value, command: &str) -> bool {
+    let Some(arr) = root
+        .pointer_mut("/hooks/preToolUse")
+        .and_then(Value::as_array_mut)
+    else {
+        return false;
+    };
+    let mut rewrote = false;
+    for entry in arr {
+        let is_legacy = entry
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(command_is_legacy_ptuf_hook);
+        if is_legacy && let Some(map) = entry.as_object_mut() {
+            map.insert("command".to_string(), Value::String(command.to_string()));
+            rewrote = true;
+        }
+    }
+    rewrote
 }
 
 fn append_hook(root: &mut Value, agent_path: &Path, command: &str) -> Result<(), InitError> {
@@ -727,7 +790,7 @@ mod tests {
             "hooks": {
                 "preToolUse": [{
                     "matcher": "*",
-                    "command": "/x/ptuf hook kiro",
+                    "command": "/x/ptuf hook kiro-v2",
                     "timeout_ms": 10_000,
                     "cache_ttl_seconds": 0,
                 }],
@@ -740,6 +803,64 @@ mod tests {
         assert_eq!(outcome.status, InstallStatus::AlreadyPresent);
         assert_eq!(before, read(&path));
         assert_eq!(extras.already_present_count, 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// An entry written by an older ptuf carries the unversioned `hook
+    /// kiro` spelling, which on the command line is a floating alias for
+    /// the newest Kiro adapter. Re-running `init` must re-pin it to the
+    /// versioned token *in place* — neither leaving it to drift nor
+    /// appending a second, duplicate entry — while preserving the
+    /// entry's `matcher` / timeout / TTL fields.
+    #[test]
+    fn install_rewrites_legacy_unversioned_hook_entry_in_place() {
+        let dir = workdir("legacy-rewrite");
+        let path = dir.join(".kiro/agents/ptuf-guarded.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let preset = json!({
+            "name": "ptuf-guarded",
+            "tools": ["*"],
+            "hooks": {
+                "preToolUse": [{
+                    "matcher": "Shell",
+                    "command": "/x/ptuf hook kiro",
+                    "timeout_ms": 5_000,
+                    "cache_ttl_seconds": 7,
+                }],
+            },
+        });
+        fs::write(&path, serde_json::to_string_pretty(&preset).unwrap()).unwrap();
+        let targets = single_target(path.clone());
+        let (outcome, extras) = install_and_extras(&targets, "/y/ptuf", false);
+        assert_eq!(outcome.status, InstallStatus::Installed);
+        assert_eq!(extras.already_present_count, 0);
+
+        let parsed: Value = serde_json::from_str(&read(&path)).unwrap();
+        let arr = parsed
+            .pointer("/hooks/preToolUse")
+            .and_then(Value::as_array)
+            .expect("missing preToolUse");
+        assert_eq!(arr.len(), 1, "rewrite must not duplicate the entry");
+        assert_eq!(
+            arr[0].get("command").and_then(Value::as_str),
+            Some("/y/ptuf hook kiro-v2"),
+            "the rewrite must match what a fresh install would write",
+        );
+        assert_eq!(arr[0].get("matcher").and_then(Value::as_str), Some("Shell"));
+        assert_eq!(
+            arr[0].get("timeout_ms").and_then(Value::as_u64),
+            Some(5_000)
+        );
+        assert_eq!(
+            arr[0].get("cache_ttl_seconds").and_then(Value::as_u64),
+            Some(7)
+        );
+
+        // Second run over the rewritten file is a no-op.
+        let before = read(&path);
+        let (outcome, _) = install_and_extras(&targets, "/y/ptuf", false);
+        assert_eq!(outcome.status, InstallStatus::AlreadyPresent);
+        assert_eq!(before, read(&path));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -900,10 +1021,15 @@ mod tests {
 
     #[test]
     fn command_invokes_ptuf_hook_matches_trailing_tokens() {
-        assert!(command_invokes_ptuf_hook("/x/ptuf hook kiro"));
-        assert!(command_invokes_ptuf_hook("ptuf hook kiro   "));
+        assert!(command_invokes_ptuf_hook("/x/ptuf hook kiro-v2"));
+        assert!(command_invokes_ptuf_hook("ptuf hook kiro-v2   "));
         assert!(!command_invokes_ptuf_hook("ptuf hook codex"));
         assert!(!command_invokes_ptuf_hook("ptuf"));
+        // The unversioned spelling is *not* the form we write; it is
+        // recognized only as legacy output awaiting a rewrite.
+        assert!(!command_invokes_ptuf_hook("/x/ptuf hook kiro"));
+        assert!(command_is_legacy_ptuf_hook("/x/ptuf hook kiro"));
+        assert!(!command_is_legacy_ptuf_hook("/x/ptuf hook kiro-v2"));
     }
 
     #[test]
@@ -1067,7 +1193,7 @@ mod tests {
             assert_eq!(arr.len(), 1, "{agent_path:?}");
             assert_eq!(
                 arr[0].get("command").and_then(Value::as_str),
-                Some("/x/ptuf hook kiro"),
+                Some("/x/ptuf hook kiro-v2"),
             );
         }
         let _ = fs::remove_dir_all(&dir);

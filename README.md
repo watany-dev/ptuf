@@ -213,11 +213,17 @@ ptuf init kiro-v2 --global         # patch only $HOME/.kiro/agents/*.json
 ptuf init kiro-v2 --new-agent      # legacy: create a single ptuf-guarded.json
 ```
 
-Kiro CLI's hook contract changes in v3, so this adapter is pinned to the
-explicit `kiro-v2` name. The bare `kiro` token remains an accepted alias
-for it (`ptuf init kiro`, `ptuf hook kiro`), and the hook command written
-into agent JSON is still `ptuf hook kiro`, so existing installs keep
-working untouched.
+Kiro CLI's hook contract changes in v3, so every Kiro adapter carries a
+versioned token; `kiro-v2` is the current one. The bare `kiro` token is a
+**floating alias for the newest Kiro adapter ptuf ships**, so `ptuf init
+kiro` will follow ptuf forward to v3 once that adapter lands. Pass
+`kiro-v2` explicitly to stay on today's contract.
+
+The hook command written into agent JSON is always the *versioned* form
+(`ptuf hook kiro-v2`), never the alias — so an install made today keeps
+running the v2 adapter even after ptuf is upgraded. Entries written by
+earlier ptuf releases in the unversioned `ptuf hook kiro` form are
+rewritten in place (not duplicated) on the next `ptuf init`.
 
 If `chat.defaultAgent` in `settings/cli.json` points to an agent JSON
 that does not exist in the same scope, init fails closed. `.md` agent

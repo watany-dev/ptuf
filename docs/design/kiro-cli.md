@@ -15,20 +15,38 @@ Kiro CLI の `preToolUse` hook を ptuf に橋渡しする adapter (M6) の設�
 
 ## agent token のバージョニング
 
-Kiro CLI の hook 仕様は v3 で変更される予定のため、現行の
-`.kiro/agents/*.json` + `hooks.preToolUse` 契約を対象とする本 adapter は
-明示的に `kiro-v2` という token 名に固定する。v3 が来た際は別 adapter
-(別 `HookAgent` variant) として追加し、本 adapter は据え置く。
+Kiro CLI の hook 仕様は v3 で変更される予定のため、adapter 世代ごとに
+**versioned token** を持たせる。現行の `.kiro/agents/*.json` +
+`hooks.preToolUse` 契約を対象とする本 adapter は `kiro-v2`。v3 が来た際は
+別 `HookAgent` variant + `kiro-v3` token として追加し、本 adapter は据え置く。
 
-互換性のため、無印の `kiro` token は `kiro-v2` の別名として引き続き受理
-する。加えて以下は **変更しない**:
+無印の `kiro` は **floating alias** = 「その ptuf build における最新の Kiro
+adapter」を指す。`cli::parse` の 2 つの const がその意味論を担う:
 
-- `HookAgent::Kiro.audit_name()` → `"kiro"` (監査レコードの安定性)
-- agent JSON に書き込む hook command → `ptuf hook kiro`
-  (`COMMAND_TAIL = ["hook", "kiro"]` による冪等検出が既存インストールで
-  そのまま効き続ける)
+| const | 役割 |
+|---|---|
+| `KIRO_LATEST_ALIAS = "kiro"` | 無印 token の綴り |
+| `KIRO_LATEST_AGENT = HookAgent::Kiro` | alias の解決先。**v3 追加時はここだけ差し替える** |
 
-将来の `kiro-v3` token は現時点では未知 agent として reject する。
+`kiro-v2` 等の versioned token は自分の世代に固定され、alias には追従しない。
+`kiro-v3` は該当 adapter が入るまで未知 agent として reject する。
+
+### 書き込む command は versioned に pin する
+
+alias が最新に追従する以上、agent JSON に `ptuf hook kiro` と書いてしまうと
+**ptuf を upgrade した瞬間に既存インストールの hook 行が v3 へ黙って切り替わる**。
+これを避けるため、書き込む command は常に versioned 形:
+
+- `COMMAND_TAIL = ["hook", "kiro-v2"]` — 書き込む形かつ冪等検出のマーカー
+- `LEGACY_COMMAND_TAIL = ["hook", "kiro"]` — 旧 ptuf が書いた無印形。
+  検出のみ行い、次回 `ptuf init` で **その場で versioned 形に書き換える**
+  (`rewrite_legacy_hooks`)。entry を重複 append しないので冪等性は保たれ、
+  同時に旧インストールを floating alias から降ろせる。書き換えが走った
+  ファイルは `AlreadyPresent` ではなく `Installed` として報告される。
+
+一方 `HookAgent::Kiro.audit_name()` → `"kiro"` は **変更しない**。監査レコードは
+adapter 世代をまたいで比較可能であるべきなので、世代情報は audit name には
+載せない。
 
 中核 engine と他 3 adapter (Claude Code / Codex / Copilot) は不変。Kiro
 固有の揺れは `src/cli/kiro_input.rs`, `src/cli/output.rs::adapt_hook_decision`,
@@ -99,8 +117,10 @@ stdin が読めない、JSON parse 失敗、`hook_event_name != preToolUse` の
 
 default 動作は **既存 agent JSON への一括 patch**: 列挙対象の各 scope に
 ある `*.json` をすべて読み込み、`hooks.preToolUse` 配列に ptuf entry を
-append する。既に末尾 token が `["hook", "kiro"]` の `command` を持つ entry
-があれば `AlreadyPresent` で no-op (冪等)。
+append する。既に末尾 token が `["hook", "kiro-v2"]` の `command` を持つ entry
+があれば `AlreadyPresent` で no-op (冪等)。末尾が旧形の `["hook", "kiro"]` の
+entry はその場で versioned 形へ書き換える (上記「書き込む command は
+versioned に pin する」を参照)。
 
 scope:
 
@@ -149,7 +169,7 @@ skeleton:
     "preToolUse": [
       {
         "matcher": "*",
-        "command": "<absolute ptuf path> hook kiro",
+        "command": "<absolute ptuf path> hook kiro-v2",
         "timeout_ms": 10000,
         "cache_ttl_seconds": 0
       }
