@@ -202,16 +202,22 @@ ptuf init codex
 ptuf init copilot
 ```
 
-**Kiro CLI** — patches every existing agent JSON under
+**Kiro CLI (v2)** — patches every existing agent JSON under
 `<repo>/.kiro/agents/*.json` and `$HOME/.kiro/agents/*.json` so the
 PreToolUse hook fires for whichever agent the user actually selects:
 
 ```bash
-ptuf init kiro                  # patch all agents in both scopes
-ptuf init kiro --workspace-only # patch only <repo>/.kiro/agents/*.json
-ptuf init kiro --global         # patch only $HOME/.kiro/agents/*.json
-ptuf init kiro --new-agent      # legacy: create a single ptuf-guarded.json
+ptuf init kiro-v2                  # patch all agents in both scopes
+ptuf init kiro-v2 --workspace-only # patch only <repo>/.kiro/agents/*.json
+ptuf init kiro-v2 --global         # patch only $HOME/.kiro/agents/*.json
+ptuf init kiro-v2 --new-agent      # legacy: create a single ptuf-guarded.json
 ```
+
+Kiro CLI's hook contract changes in v3, so this adapter is pinned to the
+explicit `kiro-v2` name. The bare `kiro` token remains an accepted alias
+for it (`ptuf init kiro`, `ptuf hook kiro`), and the hook command written
+into agent JSON is still `ptuf hook kiro`, so existing installs keep
+working untouched.
 
 If `chat.defaultAgent` in `settings/cli.json` points to an agent JSON
 that does not exist in the same scope, init fails closed. `.md` agent

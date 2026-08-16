@@ -15,6 +15,15 @@ use crate::update::UpdateOptions;
 
 use super::{AuditOptions, Command, HookAgent, InitOptions, ParseError};
 
+/// Versioned agent token for the Kiro CLI adapter.
+///
+/// Kiro CLI's hook contract changes in v3, so the adapter that targets
+/// today's `.kiro/agents/*.json` + `hooks.preToolUse` shape is pinned to
+/// the explicit `kiro-v2` name. The unversioned `kiro` token remains an
+/// accepted alias for it, so existing invocations and installed hook
+/// commands (`ptuf hook kiro`) keep working unchanged.
+const KIRO_V2_AGENT: &str = "kiro-v2";
+
 pub(super) fn parse_init<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
     I: Iterator<Item = &'a String>,
@@ -46,8 +55,8 @@ where
                 "--new-agent" => new_agent = true,
                 "--workspace-only" => workspace_only = true,
                 "--global" => global = true,
-                "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" | "pi"
-                | "opencode" => {
+                "claude-code" | "codex" | "copilot" | "kiro" | KIRO_V2_AGENT | "cline"
+                | "cursor" | "pi" | "opencode" => {
                     if agent.is_some() {
                         return Err(ParseError::UnexpectedArgument(arg.to_string()));
                     }
@@ -68,7 +77,7 @@ where
     let kiro_only_flag_set = new_agent || workspace_only || global;
     if kiro_only_flag_set && agent != Some(HookAgent::Kiro) {
         return Err(ParseError::ConflictingFlags(
-            "Kiro-only flag requires `kiro` agent",
+            "Kiro-only flag requires `kiro-v2` (or its `kiro` alias) agent",
         ));
     }
     if cursor_hooks.is_some() && agent != Some(HookAgent::Cursor) {
@@ -227,7 +236,7 @@ fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
         "claude-code" => Ok(HookAgent::ClaudeCode),
         "codex" => Ok(HookAgent::Codex),
         "copilot" => Ok(HookAgent::Copilot),
-        "kiro" => Ok(HookAgent::Kiro),
+        "kiro" | KIRO_V2_AGENT => Ok(HookAgent::Kiro),
         "cline" => Ok(HookAgent::Cline),
         "cursor" => Ok(HookAgent::Cursor),
         "pi" => Ok(HookAgent::Pi),
@@ -459,6 +468,12 @@ mod tests {
             }
         );
         assert_eq!(
+            cmd(&["hook", "kiro-v2"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::Kiro
+            }
+        );
+        assert_eq!(
             cmd(&["hook", "cline"]),
             Command::HookPreToolUse {
                 agent: HookAgent::Cline
@@ -489,6 +504,20 @@ mod tests {
         assert!(matches!(
             parse(&s(&["hook", "other"])),
             Err(ParseError::UnknownAgent(_))
+        ));
+    }
+
+    /// `kiro-v3` is a future adapter with a different hook contract; it
+    /// must not silently resolve to the v2 adapter.
+    #[test]
+    fn rejects_kiro_v3_agent_token() {
+        assert!(matches!(
+            parse(&s(&["hook", "kiro-v3"])),
+            Err(ParseError::UnknownAgent(_))
+        ));
+        assert!(matches!(
+            parse(&s(&["init", "kiro-v3"])),
+            Err(ParseError::UnexpectedArgument(_))
         ));
     }
 
@@ -633,6 +662,7 @@ mod tests {
             ("codex", HookAgent::Codex),
             ("copilot", HookAgent::Copilot),
             ("kiro", HookAgent::Kiro),
+            ("kiro-v2", HookAgent::Kiro),
             ("cline", HookAgent::Cline),
             ("cursor", HookAgent::Cursor),
             ("pi", HookAgent::Pi),
@@ -758,6 +788,20 @@ mod tests {
                 opencode: OpencodeInitOptions::default(),
             })
         );
+    }
+
+    /// The `kiro-v2` token is the versioned spelling of the same
+    /// adapter, so every Kiro-only flag must be accepted against it and
+    /// produce byte-identical `KiroInitOptions`.
+    #[test]
+    fn parse_init_accepts_kiro_only_flags_with_kiro_v2_token() {
+        for flag in ["--new-agent", "--workspace-only", "--global"] {
+            assert_eq!(
+                cmd(&["init", "kiro-v2", flag]),
+                cmd(&["init", "kiro", flag]),
+                "`kiro-v2 {flag}` must match the `kiro` alias",
+            );
+        }
     }
 
     #[test]

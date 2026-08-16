@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`kiro-v2` agent token** — Kiro CLI の hook 仕様が v3 で変わるため、
+  現行 adapter を `ptuf init kiro-v2` / `ptuf hook kiro-v2` として明示的に
+  バージョン付けした。無印の `kiro` は別名として引き続き受理し、監査名
+  (`"kiro"`) と agent JSON に書き込む hook command (`ptuf hook kiro`) は
+  不変なので既存インストールへの影響はない。未知の `kiro-v3` は reject する。
 - **`ptuf audit`** — 監査 JSONL の read-only 閲覧 CLI (`--path` /
   `--decision` / `--rule` / `--tool` / `--since` / `--limit` / `--stats`)。
   書き込み経路は変更しない。`--json` の `records` は元 JSON object を保持し、

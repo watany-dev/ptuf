@@ -74,6 +74,11 @@ pub enum HookAgent {
     ClaudeCode,
     Codex,
     Copilot,
+    /// Kiro CLI v2 — the `.kiro/agents/*.json` + `hooks.preToolUse`
+    /// contract, selected on the command line as `kiro-v2` (alias:
+    /// `kiro`). Kiro CLI v3 changes that contract and will need its own
+    /// adapter; the audit / hook-command name stays `kiro` so already
+    /// installed hook entries keep matching.
     Kiro,
     Cline,
     Cursor,
@@ -106,7 +111,8 @@ impl HookAgent {
 /// confirm the unmodified disk state).
 ///
 /// `kiro` carries the Kiro-specific flags. These are accepted only
-/// when `agent == Some(HookAgent::Kiro)`; the parser rejects them
+/// when `agent == Some(HookAgent::Kiro)` — selected on the command
+/// line as `kiro-v2` or via its `kiro` alias; the parser rejects them
 /// against other agents (or against auto-detect) with
 /// `ParseError::ConflictingFlags`.
 ///
@@ -270,9 +276,12 @@ USAGE:
                        [--hooks <PATH>]
         (auto-detect every agent under cwd / $HOME and install the
          PreToolUse hook with verify enabled by default. AGENT pins
-         to a single adapter: claude-code | codex | copilot | kiro
+         to a single adapter: claude-code | codex | copilot | kiro-v2
          | cline | cursor | pi | opencode)
-        Kiro-only flags:
+        The Kiro CLI hook contract changes in v3, so the current
+        adapter is named `kiro-v2`; the bare `kiro` token stays an
+        accepted alias for it.
+        Kiro-v2-only flags:
           --new-agent       Create a dedicated ptuf-guarded.json agent
                             (legacy single-file behavior) instead of
                             patching every existing agent JSON.

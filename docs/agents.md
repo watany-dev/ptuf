@@ -84,16 +84,23 @@ adapter always exits `0` and emits a bare JSON envelope (no
 `hookSpecificOutput` wrapper). `Ask` decisions become `Deny` for the same
 non-interactive reason as Codex.
 
-## Kiro CLI
+## Kiro CLI (v2)
 
 ```bash
-ptuf init kiro                   # patches every <repo>/.kiro/agents/*.json and $HOME/.kiro/agents/*.json
-ptuf init kiro --dry-run
-ptuf init kiro --no-verify
-ptuf init kiro --workspace-only  # patch only <repo>/.kiro/agents/*.json
-ptuf init kiro --global          # patch only $HOME/.kiro/agents/*.json
-ptuf init kiro --new-agent       # legacy: create a single ptuf-guarded.json
+ptuf init kiro-v2                   # patches every <repo>/.kiro/agents/*.json and $HOME/.kiro/agents/*.json
+ptuf init kiro-v2 --dry-run
+ptuf init kiro-v2 --no-verify
+ptuf init kiro-v2 --workspace-only  # patch only <repo>/.kiro/agents/*.json
+ptuf init kiro-v2 --global          # patch only $HOME/.kiro/agents/*.json
+ptuf init kiro-v2 --new-agent       # legacy: create a single ptuf-guarded.json
 ```
+
+Kiro CLI's hook contract changes in v3, so this adapter carries the
+explicit `kiro-v2` token; `kiro` stays an accepted alias for it in both
+`init` and `hook`. The audit name (`kiro`) and the hook command written
+into agent JSON (`ptuf hook kiro`) are unchanged, so already installed
+hooks keep matching. A future `kiro-v3` token is rejected as an unknown
+agent until its own adapter lands.
 
 The default mode reads every `*.json` directly under both
 `<repo>/.kiro/agents/` and `$HOME/.kiro/agents/`, appends a

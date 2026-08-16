@@ -1,4 +1,4 @@
-# Kiro CLI adapter
+# Kiro CLI adapter (v2)
 
 Kiro CLI の `preToolUse` hook を ptuf に橋渡しする adapter (M6) の設計
 書。本書は Kiro 固有の payload 正規化・出力規約・fail-closed 経路・
@@ -10,8 +10,25 @@ Kiro CLI の `preToolUse` hook を ptuf に橋渡しする adapter (M6) の設�
 
 | サブコマンド | 役割 |
 | --- | --- |
-| `ptuf hook kiro` | stdin の Kiro `preToolUse` payload を canonical `HookInput` に正規化し、engine 判定結果を stderr + exit code で返す |
-| `ptuf init kiro` | `<repo>/.kiro/agents/*.json` と `~/.kiro/agents/*.json` の **既存 agent JSON すべて** に hook entry を idempotent に注入する (`--new-agent` で legacy single-file 動作) |
+| `ptuf hook kiro-v2` | stdin の Kiro `preToolUse` payload を canonical `HookInput` に正規化し、engine 判定結果を stderr + exit code で返す |
+| `ptuf init kiro-v2` | `<repo>/.kiro/agents/*.json` と `~/.kiro/agents/*.json` の **既存 agent JSON すべて** に hook entry を idempotent に注入する (`--new-agent` で legacy single-file 動作) |
+
+## agent token のバージョニング
+
+Kiro CLI の hook 仕様は v3 で変更される予定のため、現行の
+`.kiro/agents/*.json` + `hooks.preToolUse` 契約を対象とする本 adapter は
+明示的に `kiro-v2` という token 名に固定する。v3 が来た際は別 adapter
+(別 `HookAgent` variant) として追加し、本 adapter は据え置く。
+
+互換性のため、無印の `kiro` token は `kiro-v2` の別名として引き続き受理
+する。加えて以下は **変更しない**:
+
+- `HookAgent::Kiro.audit_name()` → `"kiro"` (監査レコードの安定性)
+- agent JSON に書き込む hook command → `ptuf hook kiro`
+  (`COMMAND_TAIL = ["hook", "kiro"]` による冪等検出が既存インストールで
+  そのまま効き続ける)
+
+将来の `kiro-v3` token は現時点では未知 agent として reject する。
 
 中核 engine と他 3 adapter (Claude Code / Codex / Copilot) は不変。Kiro
 固有の揺れは `src/cli/kiro_input.rs`, `src/cli/output.rs::adapt_hook_decision`,

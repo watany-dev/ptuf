@@ -533,6 +533,40 @@ fn init_kiro_new_agent_flag_preserves_legacy_path() {
     );
 }
 
+/// The versioned `kiro-v2` token drives the same adapter as the bare
+/// `kiro` alias, and the hook command it writes stays `hook kiro` so
+/// installs made under either spelling stay mutually idempotent.
+#[test]
+fn init_kiro_v2_token_matches_kiro_alias_end_to_end() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
+    let agents_dir = cwd.join(".kiro").join("agents");
+    std::fs::create_dir_all(&agents_dir).expect("mkdir agents");
+    std::fs::write(agents_dir.join("alpha.json"), r#"{"name":"alpha"}"#).expect("write alpha");
+
+    let (code, stdout, stderr) = run_in(
+        &["init", "kiro-v2", "--workspace-only", "--dry-run"],
+        cwd,
+        Some(&home),
+        "",
+    );
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(stdout.contains("alpha.json"), "stdout: {stdout}");
+    assert!(stdout.contains("hook kiro"), "stdout: {stdout}");
+}
+
+#[test]
+fn hook_kiro_v2_denies_destructive_rm_like_the_kiro_alias() {
+    let payload = r#"{"hook_event_name":"preToolUse","tool_name":"shell","tool_input":{"command":"rm -rf /"}}"#;
+    let (code, stdout, stderr) = run(&["hook", "kiro-v2"], payload);
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    assert!(stdout.is_empty(), "Kiro must not write stdout: {stdout}");
+    assert!(stderr.contains("core.filesystem.destructive-rm"));
+}
+
 #[test]
 fn init_post_subcommand_json_is_unexpected_argument() {
     let (code, _stdout, stderr) = run(&["init", "claude-code", "--json"], "");
