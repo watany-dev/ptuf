@@ -74,6 +74,15 @@ pub enum HookAgent {
     ClaudeCode,
     Codex,
     Copilot,
+    /// Kiro CLI v2 — the `.kiro/agents/*.json` + `hooks.preToolUse`
+    /// contract. Selected by the versioned token `kiro-v2`, or by the
+    /// unversioned `kiro`, which is a floating alias for whichever Kiro
+    /// adapter is newest (today, this one). Kiro CLI v3 changes that
+    /// contract and will get its own variant, at which point `kiro`
+    /// follows it forward while `kiro-v2` stays here.
+    ///
+    /// The audit name stays `"kiro"` regardless, so audit records remain
+    /// comparable across adapter generations.
     Kiro,
     Cline,
     Cursor,
@@ -106,7 +115,8 @@ impl HookAgent {
 /// confirm the unmodified disk state).
 ///
 /// `kiro` carries the Kiro-specific flags. These are accepted only
-/// when `agent == Some(HookAgent::Kiro)`; the parser rejects them
+/// when `agent == Some(HookAgent::Kiro)` — selected on the command
+/// line as `kiro-v2` or via the `kiro` alias; the parser rejects them
 /// against other agents (or against auto-detect) with
 /// `ParseError::ConflictingFlags`.
 ///
@@ -271,7 +281,14 @@ USAGE:
         (auto-detect every agent under cwd / $HOME and install the
          PreToolUse hook with verify enabled by default. AGENT pins
          to a single adapter: claude-code | codex | copilot | kiro
-         | cline | cursor | pi | opencode)
+         | kiro-v2 | cline | cursor | pi | opencode)
+        The Kiro CLI hook contract changes in v3, so each Kiro adapter
+        has a versioned token; `kiro-v2` is the current one. The bare
+        `kiro` token always means the newest Kiro adapter this ptuf
+        ships, so it will follow ptuf forward to v3. Pin `kiro-v2` to
+        stay on today's contract. Either way the hook command written
+        into agent configs is the versioned `ptuf hook kiro-v2`, so an
+        existing install never changes generation on its own.
         Kiro-only flags:
           --new-agent       Create a dedicated ptuf-guarded.json agent
                             (legacy single-file behavior) instead of

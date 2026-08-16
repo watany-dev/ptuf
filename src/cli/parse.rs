@@ -15,6 +15,33 @@ use crate::update::UpdateOptions;
 
 use super::{AuditOptions, Command, HookAgent, InitOptions, ParseError};
 
+/// Versioned agent token for the Kiro CLI **v2** adapter — the one that
+/// targets today's `.kiro/agents/*.json` + `hooks.preToolUse` contract.
+///
+/// Kiro CLI's hook contract changes in v3, so each adapter generation
+/// gets its own explicit token. A versioned token always resolves to
+/// that exact generation and never moves.
+const KIRO_V2_AGENT: &str = "kiro-v2";
+
+/// Unversioned Kiro token: a *floating* alias that resolves to whichever
+/// Kiro adapter is newest in this build of ptuf (see
+/// [`KIRO_LATEST_AGENT`]). Users who type `ptuf init kiro` are asking
+/// for "the current Kiro", so the alias follows ptuf forward across
+/// adapter generations.
+const KIRO_LATEST_ALIAS: &str = "kiro";
+
+/// The adapter [`KIRO_LATEST_ALIAS`] currently resolves to.
+///
+/// This is the single point of change when a newer Kiro adapter lands:
+/// add its versioned token (`kiro-v3`, …) and repoint this const, and
+/// `ptuf init kiro` follows automatically. Nothing else needs to move —
+/// in particular the `command` written into agent configs is pinned to a
+/// *versioned* token (`ptuf hook kiro-v2`, see
+/// [`crate::init::kiro::COMMAND_TAIL`]) so already-installed hook lines
+/// stay bound to the adapter that wrote them instead of drifting with
+/// the alias.
+const KIRO_LATEST_AGENT: HookAgent = HookAgent::Kiro;
+
 pub(super) fn parse_init<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
     I: Iterator<Item = &'a String>,
@@ -46,8 +73,8 @@ where
                 "--new-agent" => new_agent = true,
                 "--workspace-only" => workspace_only = true,
                 "--global" => global = true,
-                "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" | "pi"
-                | "opencode" => {
+                "claude-code" | "codex" | "copilot" | KIRO_LATEST_ALIAS | KIRO_V2_AGENT
+                | "cline" | "cursor" | "pi" | "opencode" => {
                     if agent.is_some() {
                         return Err(ParseError::UnexpectedArgument(arg.to_string()));
                     }
@@ -68,7 +95,7 @@ where
     let kiro_only_flag_set = new_agent || workspace_only || global;
     if kiro_only_flag_set && agent != Some(HookAgent::Kiro) {
         return Err(ParseError::ConflictingFlags(
-            "Kiro-only flag requires `kiro` agent",
+            "Kiro-only flag requires the `kiro` / `kiro-v2` agent",
         ));
     }
     if cursor_hooks.is_some() && agent != Some(HookAgent::Cursor) {
@@ -227,7 +254,8 @@ fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
         "claude-code" => Ok(HookAgent::ClaudeCode),
         "codex" => Ok(HookAgent::Codex),
         "copilot" => Ok(HookAgent::Copilot),
-        "kiro" => Ok(HookAgent::Kiro),
+        KIRO_LATEST_ALIAS => Ok(KIRO_LATEST_AGENT),
+        KIRO_V2_AGENT => Ok(HookAgent::Kiro),
         "cline" => Ok(HookAgent::Cline),
         "cursor" => Ok(HookAgent::Cursor),
         "pi" => Ok(HookAgent::Pi),
@@ -407,6 +435,7 @@ mod tests {
     use super::super::{
         AuditOptions, Command, GlobalFlags, HookAgent, InitOptions, ParseError, parse,
     };
+    use super::{KIRO_LATEST_AGENT, KIRO_LATEST_ALIAS, KIRO_V2_AGENT, parse_agent};
 
     fn ok(args: &[&str]) -> (GlobalFlags, Command) {
         parse(&s(args)).unwrap()
@@ -459,6 +488,12 @@ mod tests {
             }
         );
         assert_eq!(
+            cmd(&["hook", "kiro-v2"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::Kiro
+            }
+        );
+        assert_eq!(
             cmd(&["hook", "cline"]),
             Command::HookPreToolUse {
                 agent: HookAgent::Cline
@@ -489,6 +524,20 @@ mod tests {
         assert!(matches!(
             parse(&s(&["hook", "other"])),
             Err(ParseError::UnknownAgent(_))
+        ));
+    }
+
+    /// `kiro-v3` is a future adapter with a different hook contract; it
+    /// must not silently resolve to the v2 adapter.
+    #[test]
+    fn rejects_kiro_v3_agent_token() {
+        assert!(matches!(
+            parse(&s(&["hook", "kiro-v3"])),
+            Err(ParseError::UnknownAgent(_))
+        ));
+        assert!(matches!(
+            parse(&s(&["init", "kiro-v3"])),
+            Err(ParseError::UnexpectedArgument(_))
         ));
     }
 
@@ -633,6 +682,7 @@ mod tests {
             ("codex", HookAgent::Codex),
             ("copilot", HookAgent::Copilot),
             ("kiro", HookAgent::Kiro),
+            ("kiro-v2", HookAgent::Kiro),
             ("cline", HookAgent::Cline),
             ("cursor", HookAgent::Cursor),
             ("pi", HookAgent::Pi),
@@ -758,6 +808,45 @@ mod tests {
                 opencode: OpencodeInitOptions::default(),
             })
         );
+    }
+
+    /// The `kiro-v2` token is the versioned spelling of the adapter the
+    /// alias currently points at, so while `KIRO_LATEST_AGENT` is the v2
+    /// adapter every Kiro-only flag must produce byte-identical
+    /// `KiroInitOptions` under either spelling.
+    #[test]
+    fn parse_init_accepts_kiro_only_flags_with_kiro_v2_token() {
+        for flag in ["--new-agent", "--workspace-only", "--global"] {
+            assert_eq!(
+                cmd(&["init", "kiro-v2", flag]),
+                cmd(&["init", "kiro", flag]),
+                "`kiro-v2 {flag}` must match the `kiro` alias",
+            );
+        }
+    }
+
+    /// The unversioned `kiro` token is a *floating* alias: it resolves
+    /// to whichever Kiro adapter is newest in this build, not to a fixed
+    /// generation. Pinning the assertion to `KIRO_LATEST_AGENT` (rather
+    /// than to `HookAgent::Kiro`) is what makes this test keep guarding
+    /// the intent once a `kiro-v3` adapter lands — repointing the const
+    /// must carry the alias with it.
+    #[test]
+    fn bare_kiro_token_resolves_to_the_latest_kiro_adapter() {
+        assert_eq!(parse_agent(KIRO_LATEST_ALIAS), Ok(KIRO_LATEST_AGENT));
+        assert_eq!(
+            cmd(&["hook", KIRO_LATEST_ALIAS]),
+            Command::HookPreToolUse {
+                agent: KIRO_LATEST_AGENT
+            }
+        );
+    }
+
+    /// Versioned tokens are the opposite: each one is frozen to its own
+    /// adapter generation and must never follow the alias forward.
+    #[test]
+    fn kiro_v2_token_is_pinned_to_the_v2_adapter() {
+        assert_eq!(parse_agent(KIRO_V2_AGENT), Ok(HookAgent::Kiro));
     }
 
     #[test]

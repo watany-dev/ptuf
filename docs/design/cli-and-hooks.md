@@ -10,7 +10,8 @@ Kiro 固有の正規化や fail-closed 経路の詳細は [`kiro-cli.md`](kiro-c
 ptuf hook claude-code
 ptuf hook codex
 ptuf hook copilot
-ptuf hook kiro
+ptuf hook kiro           # kiro = その build の最新 Kiro adapter への floating alias
+ptuf hook kiro-v2
 ptuf hook cline
 ptuf hook cursor
 ptuf hook pi
@@ -222,7 +223,7 @@ scope:
     "preToolUse": [
       {
         "matcher": "*",
-        "command": "/usr/local/bin/ptuf hook kiro",
+        "command": "/usr/local/bin/ptuf hook kiro-v2",
         "timeout_ms": 10000,
         "cache_ttl_seconds": 0
       }
@@ -265,7 +266,9 @@ Kiro-only フラグを他 adapter / auto-detect に渡しても parse error。
   fallback の単一 path `agents/ptuf-guarded.json` を返す
 - ファイルは JSON object、新規生成時は default skeleton (`name`,
   `description`, `tools`, `includeMcpJson`, `hooks.preToolUse`) を書く
-- 既存 entry の検出は `hooks.preToolUse[].command` 末尾 `hook kiro` で行う
+- 既存 entry の検出は `hooks.preToolUse[].command` 末尾 `hook kiro-v2` で
+  行う。旧 ptuf が書いた無印形 (`hook kiro`) はその場で versioned 形へ
+  書き換える (`kiro-cli.md` 参照)
 - 既存ファイル中の未知 key (`model` / `temperature` / `prompt` /
   `allowedTools` / `resources` 等) は `serde_json::Value` のまま保持される
 - 書き込みは temp file + rename の原子的更新
