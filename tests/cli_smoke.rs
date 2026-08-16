@@ -534,8 +534,9 @@ fn init_kiro_new_agent_flag_preserves_legacy_path() {
 }
 
 /// The versioned `kiro-v2` token drives the same adapter as the bare
-/// `kiro` alias, and the hook command it writes stays `hook kiro` so
-/// installs made under either spelling stay mutually idempotent.
+/// `kiro` alias, and both spellings write the same versioned
+/// `hook kiro-v2` command so installs made under either stay mutually
+/// idempotent.
 #[test]
 fn init_kiro_v2_token_matches_kiro_alias_end_to_end() {
     let dir = tempfile::TempDir::new().expect("tempdir");

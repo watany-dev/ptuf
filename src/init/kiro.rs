@@ -772,7 +772,7 @@ mod tests {
         let body = read(&path);
         assert!(body.contains("\"name\": \"ptuf-guarded\""));
         assert!(body.contains("\"includeMcpJson\": true"));
-        assert!(body.contains("/usr/local/bin/ptuf hook kiro"));
+        assert!(body.contains("/usr/local/bin/ptuf hook kiro-v2"));
         assert!(body.contains("\"timeout_ms\": 10000"));
         assert!(body.contains("\"cache_ttl_seconds\": 0"));
         assert!(body.contains("\"matcher\": \"*\""));
