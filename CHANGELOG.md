@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`kiro-v2` agent token** — Kiro CLI の hook 仕様が v3 で変わるため、
+  adapter 世代ごとに versioned token を持たせた。現行 adapter は
+  `ptuf init kiro-v2` / `ptuf hook kiro-v2`。無印の `kiro` は
+  **最新 Kiro adapter を指す floating alias** で、v3 adapter が入れば
+  `ptuf init kiro` はそちらへ追従する (今日の契約に固定したい場合は
+  `kiro-v2` を明示する)。未知の `kiro-v3` は該当 adapter が入るまで reject する。
+  監査名は世代をまたいで `"kiro"` のまま。
+- **`ptuf audit`** — 監査 JSONL の read-only 閲覧 CLI (`--path` /
+  `--decision` / `--rule` / `--tool` / `--since` / `--limit` / `--stats`)。
+  書き込み経路は変更しない。`--json` の `records` は元 JSON object を保持し、
+  text 出力は C0 / DEL / C1 / BiDi を escape する。
+- `apply_patch` の added 行 (`+` prefix) を content lane で PEM スキャン
+  (`facts::patch::added_content`)。非機密 path 宛 patch への PEM 埋め込み bypass
+  (ADR 0001 known limitation) を解消。
+- Cline adapter が `patch` / `patchText` / `content` を `command` へ正規化
+  (OpenCode `reshape_patch` と同等)。Cline 経由 apply_patch の path / content
+  空振りを修正。
+
+### Changed
+- **Kiro agent JSON に書き込む hook command が `ptuf hook kiro-v2` になった。**
+  無印 `kiro` が最新版 alias になったため、`ptuf hook kiro` と書かれた既存の
+  hook 行は ptuf を upgrade した時点で v3 adapter へ黙って切り替わってしまう。
+  これを防ぐため書き込む形を versioned に pin し、旧 ptuf が書いた
+  `ptuf hook kiro` entry は次回 `ptuf init` で **その場で書き換える**
+  (重複 append はしない)。書き換えが走ったファイルは `AlreadyPresent` ではなく
+  `Installed` として報告される。
+
+### Changed (BREAKING)
+- `cli::Command` に `Audit(AuditOptions)` variant を追加。
+  `Command` は `#[non_exhaustive]` ではないため、この enum を網羅 `match`
+  している下流ライブラリ利用者は更新が必要。
+
+## [0.6.0] - 2026-08-12
+
+### Changed (BREAKING)
+- `facts::shell::Argv` に公開フィールド `subst_argv: Vec<Argv>` を追加
+  (ADR 0008)。既存の `Argv { … }` 構造体リテラルは更新が必要。
+- `PluginError` に `ReservedRuleId` / `DuplicateRuleId` variant を追加。
+  `PluginError` は `#[non_exhaustive]` ではないため、この enum を網羅 `match`
+  している下流ライブラリ利用者は更新が必要。
+
+### Changed
+- builtin rule の DSL 統合スライス 1 (ADR 0004): `core.network.remote-script-pipe`
+  を `src/rules/builtins.yaml` (plugin DSL) から提供するように変更。reason /
+  remediation / rule id / hardDeny / severity は旧 Rust 実装と wire 互換。旧
+  実装 (`rules::remote_pipe::RemoteScriptPipe`) はパリティ oracle として残置。
+
 ### Fixed
 - `core.secrets.sensitive-read` の書き込み本文スキャンを data-bearing shape
   (PEM blob) のみに限定 (`classify_content_into`)。手順書等のドキュメントが
@@ -15,47 +63,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   分類は従来どおり全 shape を対象とする。
 
 ### Added
-- `apply_patch` の added 行 (`+` prefix) を content lane で PEM スキャン
-  (`facts::patch::added_content`)。非機密 path 宛 patch への PEM 埋め込み bypass
-  (ADR 0001 known limitation) を解消。
-- Cline adapter が `patch` / `patchText` / `content` を `command` へ正規化
-  (OpenCode `reshape_patch` と同等)。Cline 経由 apply_patch の path / content
-  空振りを修正。
-
+- STRIDE 脅威モデル (`docs/design/threat-model.md`) と `SECURITY.md` の
+  No Telemetry / Threat Model 節。
+- CI MSRV job を `cargo check` から release build + test harness compile +
+  `cargo doc` に拡張 (公開 MSRV ピンが実ビルド可能であることを保証)。
 - Process substitution (`<(…)` / `>(…)`) 本体を `Argv.subst_argv` へ
   re-parse (ADR 0003 C / issue #162)。`bash <(curl …)` と
   `bash -c "$(curl …)"` を `remote-script-pipe` が Deny。subst 再帰は
   fresh `seen_from` で `echo <(curl) | bash` の漏洩 FP を防ぐ。
-
-## [0.6.0] - 2026-07-09
-
-### Changed (BREAKING)
-- `facts::shell::Argv` に公開フィールド `subst_argv: Vec<Argv>` を追加
-  (ADR 0008)。既存の `Argv { … }` 構造体リテラルは更新が必要。
-
-### Added
 - Command substitution (`$(…)` / backticks) 本体の bounded re-parse。
   `echo $(cat .env)` を `sensitive-bash-read` が Ask する (issue #161)。
   `Bash::commands()` は `subst_argv` も flatten する。悲観モードは
   budget 超過時の backstop として維持。
-
-## [0.5.1] - 2026-07-08
-
-### Changed (BREAKING)
-- `PluginError` に `ReservedRuleId` / `DuplicateRuleId` variant を追加。
-  `PluginError` は `#[non_exhaustive]` ではないため、この enum を網羅 `match`
-  している下流ライブラリ利用者にとっては厳密には破壊的変更（SemVer 上は
-  minor 相当）。CLI 利用者への実害はなく、機能追加＋セキュリティ強化が主目的
-  のため、オーナー判断でパッチ (0.5.1) として公開する。破壊性を隠さず本見出しに
-  明記する。
-
-### Changed
-- builtin rule の DSL 統合スライス 1 (ADR 0004): `core.network.remote-script-pipe`
-  を `src/rules/builtins.yaml` (plugin DSL) から提供するように変更。reason /
-  remediation / rule id / hardDeny / severity は旧 Rust 実装と wire 互換。旧
-  実装 (`rules::remote_pipe::RemoteScriptPipe`) はパリティ oracle として残置。
-
-### Added
 - 外部 plugin の rule id 検証: `core.` prefix の予約 (`ReservedRuleId`) と
   同一 plugin 内の id 重複 (`DuplicateRuleId`) を load 時に reject。
 - `builtins.yaml` のコンパイル失敗 (構造的に到達不能、テストで pin) 時は
@@ -434,8 +453,7 @@ Initial public release.
 - crates.io publication
 
 [Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.6.0...HEAD
-[0.6.0]: https://github.com/watany-dev/ptuf/compare/v0.5.1...v0.6.0
-[0.5.1]: https://github.com/watany-dev/ptuf/compare/v0.5.0...v0.5.1
+[0.6.0]: https://github.com/watany-dev/ptuf/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/watany-dev/ptuf/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/watany-dev/ptuf/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/watany-dev/ptuf/compare/v0.3.0...v0.4.0

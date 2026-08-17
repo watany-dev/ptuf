@@ -13,7 +13,34 @@ use crate::init::opencode::{OpencodeInitOptions, OpencodeScope};
 use crate::init::pi::{PiInitOptions, PiScope};
 use crate::update::UpdateOptions;
 
-use super::{Command, HookAgent, InitOptions, ParseError};
+use super::{AuditOptions, Command, HookAgent, InitOptions, ParseError};
+
+/// Versioned agent token for the Kiro CLI **v2** adapter — the one that
+/// targets today's `.kiro/agents/*.json` + `hooks.preToolUse` contract.
+///
+/// Kiro CLI's hook contract changes in v3, so each adapter generation
+/// gets its own explicit token. A versioned token always resolves to
+/// that exact generation and never moves.
+const KIRO_V2_AGENT: &str = "kiro-v2";
+
+/// Unversioned Kiro token: a *floating* alias that resolves to whichever
+/// Kiro adapter is newest in this build of ptuf (see
+/// [`KIRO_LATEST_AGENT`]). Users who type `ptuf init kiro` are asking
+/// for "the current Kiro", so the alias follows ptuf forward across
+/// adapter generations.
+const KIRO_LATEST_ALIAS: &str = "kiro";
+
+/// The adapter [`KIRO_LATEST_ALIAS`] currently resolves to.
+///
+/// This is the single point of change when a newer Kiro adapter lands:
+/// add its versioned token (`kiro-v3`, …) and repoint this const, and
+/// `ptuf init kiro` follows automatically. Nothing else needs to move —
+/// in particular the `command` written into agent configs is pinned to a
+/// *versioned* token (`ptuf hook kiro-v2`, see
+/// [`crate::init::kiro::COMMAND_TAIL`]) so already-installed hook lines
+/// stay bound to the adapter that wrote them instead of drifting with
+/// the alias.
+const KIRO_LATEST_AGENT: HookAgent = HookAgent::Kiro;
 
 pub(super) fn parse_init<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
@@ -46,8 +73,8 @@ where
                 "--new-agent" => new_agent = true,
                 "--workspace-only" => workspace_only = true,
                 "--global" => global = true,
-                "claude-code" | "codex" | "copilot" | "kiro" | "cline" | "cursor" | "pi"
-                | "opencode" => {
+                "claude-code" | "codex" | "copilot" | KIRO_LATEST_ALIAS | KIRO_V2_AGENT
+                | "cline" | "cursor" | "pi" | "opencode" => {
                     if agent.is_some() {
                         return Err(ParseError::UnexpectedArgument(arg.to_string()));
                     }
@@ -68,7 +95,7 @@ where
     let kiro_only_flag_set = new_agent || workspace_only || global;
     if kiro_only_flag_set && agent != Some(HookAgent::Kiro) {
         return Err(ParseError::ConflictingFlags(
-            "Kiro-only flag requires `kiro` agent",
+            "Kiro-only flag requires the `kiro` / `kiro-v2` agent",
         ));
     }
     if cursor_hooks.is_some() && agent != Some(HookAgent::Cursor) {
@@ -227,7 +254,8 @@ fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
         "claude-code" => Ok(HookAgent::ClaudeCode),
         "codex" => Ok(HookAgent::Codex),
         "copilot" => Ok(HookAgent::Copilot),
-        "kiro" => Ok(HookAgent::Kiro),
+        KIRO_LATEST_ALIAS => Ok(KIRO_LATEST_AGENT),
+        KIRO_V2_AGENT => Ok(HookAgent::Kiro),
         "cline" => Ok(HookAgent::Cline),
         "cursor" => Ok(HookAgent::Cursor),
         "pi" => Ok(HookAgent::Pi),
@@ -310,6 +338,71 @@ where
     }))
 }
 
+pub(super) fn parse_audit<'a, I>(iter: &mut I) -> Result<Command, ParseError>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let mut path = None;
+    let mut decision = None;
+    let mut rule_id = None;
+    let mut tool = None;
+    let mut since_secs = None;
+    let mut limit = None;
+    let mut stats = false;
+    while let Some(arg) = iter.next() {
+        let arg = arg.as_str();
+        if let Some(value) = value_flag(arg, "--path", iter)? {
+            path = Some(PathBuf::from(value));
+        } else if let Some(value) = value_flag(arg, "--decision", iter)? {
+            decision = Some(parse_audit_decision(&value)?);
+        } else if let Some(value) = value_flag(arg, "--rule", iter)? {
+            rule_id = Some(value);
+        } else if let Some(value) = value_flag(arg, "--tool", iter)? {
+            tool = Some(value);
+        } else if let Some(value) = value_flag(arg, "--since", iter)? {
+            since_secs = Some(parse_audit_since(&value)?);
+        } else if let Some(value) = value_flag(arg, "--limit", iter)? {
+            limit = Some(parse_audit_limit(&value)?);
+        } else if arg == "--stats" {
+            stats = true;
+        } else {
+            return Err(ParseError::UnexpectedArgument(arg.to_string()));
+        }
+    }
+    if stats && limit.is_some() {
+        return Err(ParseError::ConflictingFlags("--stats vs --limit"));
+    }
+    Ok(Command::Audit(AuditOptions {
+        path,
+        decision,
+        rule_id,
+        tool,
+        since_secs,
+        limit,
+        stats,
+    }))
+}
+
+fn parse_audit_decision(value: &str) -> Result<String, ParseError> {
+    match value {
+        "allow" | "monitor" | "ask" | "deny" => Ok(value.to_string()),
+        other => Err(ParseError::UnexpectedArgument(format!(
+            "--decision {other}"
+        ))),
+    }
+}
+
+fn parse_audit_since(value: &str) -> Result<u64, ParseError> {
+    crate::audit::read::parse_since(value, std::time::SystemTime::now())
+        .map_err(|_| ParseError::UnexpectedArgument(format!("--since {value}")))
+}
+
+fn parse_audit_limit(value: &str) -> Result<usize, ParseError> {
+    value
+        .parse::<usize>()
+        .map_err(|_| ParseError::UnexpectedArgument(format!("--limit {value}")))
+}
+
 pub(super) fn parse_plugin<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
     I: Iterator<Item = &'a String>,
@@ -339,7 +432,10 @@ mod tests {
     use crate::update::UpdateOptions;
 
     use super::super::test_support::s;
-    use super::super::{Command, GlobalFlags, HookAgent, InitOptions, ParseError, parse};
+    use super::super::{
+        AuditOptions, Command, GlobalFlags, HookAgent, InitOptions, ParseError, parse,
+    };
+    use super::{KIRO_LATEST_AGENT, KIRO_LATEST_ALIAS, KIRO_V2_AGENT, parse_agent};
 
     fn ok(args: &[&str]) -> (GlobalFlags, Command) {
         parse(&s(args)).unwrap()
@@ -392,6 +488,12 @@ mod tests {
             }
         );
         assert_eq!(
+            cmd(&["hook", "kiro-v2"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::Kiro
+            }
+        );
+        assert_eq!(
             cmd(&["hook", "cline"]),
             Command::HookPreToolUse {
                 agent: HookAgent::Cline
@@ -422,6 +524,20 @@ mod tests {
         assert!(matches!(
             parse(&s(&["hook", "other"])),
             Err(ParseError::UnknownAgent(_))
+        ));
+    }
+
+    /// `kiro-v3` is a future adapter with a different hook contract; it
+    /// must not silently resolve to the v2 adapter.
+    #[test]
+    fn rejects_kiro_v3_agent_token() {
+        assert!(matches!(
+            parse(&s(&["hook", "kiro-v3"])),
+            Err(ParseError::UnknownAgent(_))
+        ));
+        assert!(matches!(
+            parse(&s(&["init", "kiro-v3"])),
+            Err(ParseError::UnexpectedArgument(_))
         ));
     }
 
@@ -566,6 +682,7 @@ mod tests {
             ("codex", HookAgent::Codex),
             ("copilot", HookAgent::Copilot),
             ("kiro", HookAgent::Kiro),
+            ("kiro-v2", HookAgent::Kiro),
             ("cline", HookAgent::Cline),
             ("cursor", HookAgent::Cursor),
             ("pi", HookAgent::Pi),
@@ -691,6 +808,45 @@ mod tests {
                 opencode: OpencodeInitOptions::default(),
             })
         );
+    }
+
+    /// The `kiro-v2` token is the versioned spelling of the adapter the
+    /// alias currently points at, so while `KIRO_LATEST_AGENT` is the v2
+    /// adapter every Kiro-only flag must produce byte-identical
+    /// `KiroInitOptions` under either spelling.
+    #[test]
+    fn parse_init_accepts_kiro_only_flags_with_kiro_v2_token() {
+        for flag in ["--new-agent", "--workspace-only", "--global"] {
+            assert_eq!(
+                cmd(&["init", "kiro-v2", flag]),
+                cmd(&["init", "kiro", flag]),
+                "`kiro-v2 {flag}` must match the `kiro` alias",
+            );
+        }
+    }
+
+    /// The unversioned `kiro` token is a *floating* alias: it resolves
+    /// to whichever Kiro adapter is newest in this build, not to a fixed
+    /// generation. Pinning the assertion to `KIRO_LATEST_AGENT` (rather
+    /// than to `HookAgent::Kiro`) is what makes this test keep guarding
+    /// the intent once a `kiro-v3` adapter lands — repointing the const
+    /// must carry the alias with it.
+    #[test]
+    fn bare_kiro_token_resolves_to_the_latest_kiro_adapter() {
+        assert_eq!(parse_agent(KIRO_LATEST_ALIAS), Ok(KIRO_LATEST_AGENT));
+        assert_eq!(
+            cmd(&["hook", KIRO_LATEST_ALIAS]),
+            Command::HookPreToolUse {
+                agent: KIRO_LATEST_AGENT
+            }
+        );
+    }
+
+    /// Versioned tokens are the opposite: each one is frozen to its own
+    /// adapter generation and must never follow the alias forward.
+    #[test]
+    fn kiro_v2_token_is_pinned_to_the_v2_adapter() {
+        assert_eq!(parse_agent(KIRO_V2_AGENT), Ok(HookAgent::Kiro));
     }
 
     #[test]
@@ -1107,6 +1263,148 @@ mod tests {
             parse(&s(&["--json", "update"])),
             Err(ParseError::ConflictingFlags(_))
         ));
+    }
+
+    #[test]
+    fn parses_audit_defaults() {
+        assert_eq!(cmd(&["audit"]), Command::Audit(AuditOptions::default()));
+    }
+
+    #[test]
+    fn parses_audit_flags_and_equals_form() {
+        assert_eq!(
+            cmd(&[
+                "audit",
+                "--path",
+                "/tmp/a.jsonl",
+                "--decision=deny",
+                "--rule",
+                "core.x",
+                "--tool=Bash",
+                "--since=2024-01-01T00:00:00Z",
+                "--limit",
+                "5",
+            ]),
+            Command::Audit(AuditOptions {
+                path: Some(PathBuf::from("/tmp/a.jsonl")),
+                decision: Some("deny".into()),
+                rule_id: Some("core.x".into()),
+                tool: Some("Bash".into()),
+                since_secs: Some(1_704_067_200),
+                limit: Some(5),
+                stats: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_audit_stats_without_limit() {
+        assert_eq!(
+            cmd(&["audit", "--stats"]),
+            Command::Audit(AuditOptions {
+                stats: true,
+                ..AuditOptions::default()
+            })
+        );
+    }
+
+    #[test]
+    fn parses_audit_limit_zero() {
+        assert_eq!(
+            cmd(&["audit", "--limit", "0"]),
+            Command::Audit(AuditOptions {
+                limit: Some(0),
+                ..AuditOptions::default()
+            })
+        );
+    }
+
+    #[test]
+    fn parses_audit_accepts_global_json() {
+        let (g, c) = ok(&["--json", "audit"]);
+        assert!(g.json);
+        assert!(matches!(c, Command::Audit(_)));
+    }
+
+    #[test]
+    fn audit_rejects_invalid_decision() {
+        assert!(matches!(
+            parse(&s(&["audit", "--decision", "block"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn audit_rejects_non_numeric_limit() {
+        assert!(matches!(
+            parse(&s(&["audit", "--limit", "all"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn audit_rejects_stats_with_limit() {
+        assert!(matches!(
+            parse(&s(&["audit", "--stats", "--limit", "1"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+        assert!(matches!(
+            parse(&s(&["audit", "--limit=0", "--stats"])),
+            Err(ParseError::ConflictingFlags(_))
+        ));
+    }
+
+    #[test]
+    fn audit_rejects_bad_since() {
+        assert!(matches!(
+            parse(&s(&["audit", "--since", "yesterday"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn audit_rejects_unknown_flag() {
+        assert!(matches!(
+            parse(&s(&["audit", "--bogus"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn audit_requires_values_and_accepts_remaining_decisions() {
+        for flag in [
+            "--path",
+            "--decision",
+            "--rule",
+            "--tool",
+            "--since",
+            "--limit",
+        ] {
+            assert!(
+                matches!(
+                    parse(&s(&["audit", flag])),
+                    Err(ParseError::MissingValue(_))
+                ),
+                "{flag}"
+            );
+        }
+        for decision in ["allow", "monitor", "ask"] {
+            assert_eq!(
+                cmd(&["audit", "--decision", decision]),
+                Command::Audit(AuditOptions {
+                    decision: Some(decision.into()),
+                    ..AuditOptions::default()
+                })
+            );
+        }
+        assert!(matches!(
+            parse(&s(&["audit", "--since", "18446744073709551615m"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+        match cmd(&["audit", "--since", "1h"]) {
+            Command::Audit(opts) => assert!(opts.since_secs.is_some()),
+            other => panic!("expected audit, got {other:?}"),
+        }
     }
 
     #[test]

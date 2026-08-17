@@ -49,6 +49,28 @@ pub fn open_append(path: &Path) -> io::Result<File> {
     {
         std::fs::create_dir_all(parent)?;
     }
+    open_append_secure(path)
+}
+
+#[cfg(unix)]
+fn open_append_secure(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(path)?;
+    let mut perms = file.metadata()?.permissions();
+    if perms.mode() & 0o077 != 0 {
+        perms.set_mode(perms.mode() & !0o077);
+        file.set_permissions(perms)?;
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn open_append_secure(path: &Path) -> io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
 }
 
@@ -99,6 +121,33 @@ mod tests {
         let path = dir.path().join("audit.jsonl");
         let mut f = open_append(&path).expect("open");
         append_record(&mut f, &rec()).expect("write");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_append_creates_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let _file = open_append(&path).expect("open");
+        let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_append_tightens_existing_audit_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        std::fs::write(&path, b"").expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        let _file = open_append(&path).expect("open");
+        let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]

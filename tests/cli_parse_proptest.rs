@@ -25,6 +25,8 @@ const KNOWN_HEADS: &[&str] = &[
     "check",
     "plugin",
     "init",
+    "update",
+    "audit",
     "-h",
     "--help",
     "-V",
@@ -89,7 +91,7 @@ proptest! {
     #[test]
     fn pbt_parse_init_total(
         agent in proptest::option::of(
-            proptest::sample::select(&["claude-code", "codex", "copilot", "kiro"][..])
+            proptest::sample::select(&["claude-code", "codex", "copilot", "kiro", "kiro-v2"][..])
                 .prop_map(std::string::ToString::to_string)
         ),
         tail in argv_tokens(),

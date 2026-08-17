@@ -37,9 +37,9 @@ additional_cargo_args = ["--features", "testing"]
 # Loop-index arithmetic mutants in the shell parser can spin until the
 # per-mutant test timeout without signalling a real coverage gap.
 exclude_re = [
-    "replace \+= with \-= in unwrap_prefix_wrapper",
-    "replace \+= with \*= in unwrap_prefix_wrapper",
-    "replace \+= with \-= in tokenize",
-    "replace \+= with \*= in tokenize",
-    "replace Engine::builder -> EngineBuilder with Default::default\(\)",
+    'replace \+= with \-= in unwrap_prefix_wrapper',
+    'replace \+= with \*= in unwrap_prefix_wrapper',
+    'replace \+= with \-= in tokenize',
+    'replace \+= with \*= in tokenize',
+    'replace Engine::builder -> EngineBuilder with Default::default\(\)',
 ]

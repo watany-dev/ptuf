@@ -12,7 +12,7 @@
 //! - `adapter_parity`  — all 5 agents in their native payload shapes
 //! - `pathological_input` — malformed / oversized / deeply nested payloads
 //! - `latency_budget`  — per-call delay budget, warm / burst / parallel
-//! - `subcommand_robustness` — check / plugin check / init / update churn
+//! - `subcommand_robustness` — check / plugin check / init / update / audit churn
 //!
 //! The shared `common::spawn` helper kills and reaps the child once a
 //! timeout elapses, so a hung ptuf surfaces as a test *failure* rather
@@ -1360,8 +1360,9 @@ mod latency_budget {
 
 /// Exercises the non-`hook` subcommands under churn. The other axes
 /// only drive `hook` and `check`; this one keeps `plugin check`,
-/// `init`, and `update` honest under repetition, malformed input,
-/// refusal-and-rollback, and a hermetic (fake-`PATH`) network shell-out.
+/// `init`, `update`, and `audit` honest under repetition, malformed
+/// input, refusal-and-rollback, and a hermetic (fake-`PATH`) network
+/// shell-out.
 mod subcommand_robustness {
     use super::common::{SpawnConfig, SpawnOutcome, assert_clean_exit, spawn};
     use std::time::Duration;
@@ -1549,6 +1550,37 @@ rules:
                 "iter {i}: stdout={}",
                 r.stdout_string()
             );
+        }
+    }
+
+    #[test]
+    #[ignore = "heavy E2E; run via `make e2e`"]
+    fn audit_sequential_invocations() {
+        const N: usize = 50;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let rec = serde_json::json!({
+            "schemaVersion": 1,
+            "timestamp": "2026-08-15T09:12:03Z",
+            "event": "PreToolUse",
+            "tool": "Bash",
+            "decision": "deny",
+            "ruleId": "core.network.remote-script-pipe",
+            "severity": "high",
+            "commandRedacted": "ls",
+            "mode": "enforce",
+            "agent": "cli",
+        })
+        .to_string();
+        std::fs::write(&path, format!("{rec}\n")).expect("write jsonl");
+        let path_str = path.to_string_lossy().into_owned();
+        for i in 0..N {
+            let r = run(&["--json", "audit", "--path", &path_str]);
+            assert_clean_exit(&r);
+            assert_eq!(r.code, 0, "iter {i}: stderr={}", r.stderr_string());
+            let value: serde_json::Value =
+                serde_json::from_str(&r.stdout_string()).expect("audit json");
+            assert_eq!(value["returned"], 1, "iter {i}");
         }
     }
 

@@ -10,7 +10,8 @@ Kiro 固有の正規化や fail-closed 経路の詳細は [`kiro-cli.md`](kiro-c
 ptuf hook claude-code
 ptuf hook codex
 ptuf hook copilot
-ptuf hook kiro
+ptuf hook kiro           # kiro = その build の最新 Kiro adapter への floating alias
+ptuf hook kiro-v2
 ptuf hook cline
 ptuf hook cursor
 ptuf hook pi
@@ -22,6 +23,10 @@ ptuf [--json] init claude-code           # pin to one adapter
 ptuf [--json] init claude-code --no-verify
 ptuf [--json] init claude-code --dry-run
 ptuf update [--check] [--version <TAG>] [--force]
+ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
+                    [--rule <ID>] [--tool <NAME>]
+                    [--since <CANONICAL_RFC3339|<N>m|<N>h|<N>d>]
+                    [--limit <N>] [--stats]
 ```
 
 | サブコマンド | 用途 |
@@ -31,6 +36,7 @@ ptuf update [--check] [--version <TAG>] [--force]
 | `ptuf plugin check <path>` | plugin rule の `tests:` を実行 |
 | `ptuf init [<agent>] [--no-verify] [--dry-run]` | agent 側の hook 設定を配線 (verify は既定 ON、`--dry-run` 時は自動 OFF) |
 | `ptuf update [--check] [--version <TAG>] [--force]` | GitHub Releases から最新 tag を取得し、`cargo install --force` または cargo-dist 製 installer を auto-detect で起動して binary を差し替える |
+| `ptuf [--json] audit` | 監査 JSONL の閲覧。書き込み経路には触れない |
 | `ptuf --help`, `ptuf --version` | 情報表示 |
 
 `--json` はトップレベルの global flag で、サブコマンド **の前** にのみ
@@ -63,7 +69,7 @@ install になる。
 | `Allow` / `Monitor` / Claude Code・Cursor・Pi の `Ask` | `0` |
 | `Deny` (Claude Code / Codex / Kiro / Cursor / Pi) | `2` |
 | Copilot / Cline の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
-| 内部エラー、引数不正、plugin check fail、init verify fail、update 失敗 (curl 不在 / updater 非ゼロ) | `1` |
+| 内部エラー、引数不正、plugin check fail、init verify fail、update 失敗 (curl 不在 / updater 非ゼロ)、`audit` の I/O エラー / 引数不正 / default path 解決不能 | `1` |
 
 Codex / Kiro では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
 Cursor は Claude Code と同じく `Ask` channel を持つため `Ask` を降格せず、
@@ -217,7 +223,7 @@ scope:
     "preToolUse": [
       {
         "matcher": "*",
-        "command": "/usr/local/bin/ptuf hook kiro",
+        "command": "/usr/local/bin/ptuf hook kiro-v2",
         "timeout_ms": 10000,
         "cache_ttl_seconds": 0
       }
@@ -260,7 +266,9 @@ Kiro-only フラグを他 adapter / auto-detect に渡しても parse error。
   fallback の単一 path `agents/ptuf-guarded.json` を返す
 - ファイルは JSON object、新規生成時は default skeleton (`name`,
   `description`, `tools`, `includeMcpJson`, `hooks.preToolUse`) を書く
-- 既存 entry の検出は `hooks.preToolUse[].command` 末尾 `hook kiro` で行う
+- 既存 entry の検出は `hooks.preToolUse[].command` 末尾 `hook kiro-v2` で
+  行う。旧 ptuf が書いた無印形 (`hook kiro`) はその場で versioned 形へ
+  書き換える (`kiro-cli.md` 参照)
 - 既存ファイル中の未知 key (`model` / `temperature` / `prompt` /
   `allowedTools` / `resources` 等) は `serde_json::Value` のまま保持される
 - 書き込みは temp file + rename の原子的更新
@@ -796,3 +804,52 @@ update` の binary 差し替えは互いに干渉しない: 前者は **他プ�
 tool call を hook して block する経路で、後者は ptuf 自身が子プロセスを
 起動して updater に差し替えを委譲する経路だからである。同一バイナリを
 別ホスト経由で書こうとすれば self-protection が依然 deny する。
+
+## `ptuf audit`
+
+`ptuf audit` も Decision エンジンを **経由しない**。stdin は読まず、
+既存 JSONL を read-only で開く。`hook` / `check` の fail-closed 契約
+(`policy-load-failed`, `invalid-payload`) は適用しない。exit `2` は
+deny 専用なので使わない。
+
+```text
+ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
+                    [--rule <ID>] [--tool <NAME>]
+                    [--since <CANONICAL_RFC3339|<N>m|<N>h|<N>d>]
+                    [--limit <N>] [--stats]
+```
+
+parse (`src/cli/parse.rs` の `parse_audit`):
+
+- `--flag value` / `--flag=value` は既存 `parse_check` / `parse_update` と同型
+- `--decision` は `allow` / `monitor` / `ask` / `deny` 以外を
+  `ParseError::UnexpectedArgument` で reject (新 variant は足さない)
+- `--limit` は十進 `usize`。非数値は `UnexpectedArgument`
+- 明示 `--limit` と `--stats` は `ParseError::ConflictingFlags`
+- `limit: Option<usize>`。未指定は `None` (一覧モードで 20、`--stats` では使わない)
+- `--limit 0` は `Some(0)` (全件)
+- `--since` は `parse_since(value, SystemTime::now())`。grammar / overflow
+  失敗は `UnexpectedArgument`
+- `--json` は既存どおり subcommand **の前** のみ (`ptuf --json audit`)
+
+`Command::Audit(AuditOptions)` の追加は公開 enum の網羅 match を壊す
+breaking change。`AuditOptions` も公開になるが、`src/audit/read.rs` は
+`pub(crate)` のまま。
+
+run (`src/cli/run.rs` の `run_audit`):
+
+| 条件 | exit | stdout | stderr |
+| --- | --- | --- | --- |
+| 成功 (テキスト) | `0` | レコード行 or stats 行 | summary。`--json` では出さない |
+| 成功 (JSON) | `0` | pretty JSON (`init` と同型 `to_string_pretty`) | 成功 summary なし |
+| ファイル不在 | `0` | 空 / ゼロ件数 JSON | テキストなら summary のみ |
+| `audit.enabled: false` (`--path` なし) | `0` | 既存レコード (無ければ空) | `audit is currently disabled; showing existing records` |
+| 引数不正 | `1` | 空 | `ptuf: …` (`io_runner` の parse エラー経路) |
+| HOME unset で default path 不能 (`--path` なし) | `1` | 空 | `audit disabled` とは書かない |
+| `--path` なしで config load 失敗 | `1` | 空 | 既存 `ConfigError` |
+| I/O error (permission / 途中 Read 失敗 / ディレクトリを開いた) | `1` | 空 | エラー |
+
+`--path` があるときは config / `audit.enabled` / `$HOME` を見ない。
+reader 契約・JSON schema・control character escape は
+[`audit.md`](audit.md) を正本とする。
+

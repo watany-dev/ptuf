@@ -167,6 +167,11 @@
 - daemon 化時の plugin loader cache (`Arc<LoadedPlugin>` など)
 - `parse<'a>(&'a str) -> Bash<'a>` 形式の borrowed shell AST
 
+### 指定済み・未実装
+
+なし。`ptuf audit` 閲覧 CLI (issue #189) は実装済み。`Command::Audit`
+追加は公開 enum の breaking change。
+
 ## 設計原則
 
 - **deterministic first**  

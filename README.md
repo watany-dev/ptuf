@@ -101,6 +101,10 @@ Rule: core.filesystem.destructive-rm
 $ ptuf check --tool Bash 'ls'
 Decision: allow
 # exit 0
+
+$ ptuf audit --decision deny --since 1h
+# last matching records from the audit JSONL log
+# stderr: scanned N lines, … matched, … returned
 ```
 
 ## Install
@@ -198,16 +202,28 @@ ptuf init codex
 ptuf init copilot
 ```
 
-**Kiro CLI** — patches every existing agent JSON under
+**Kiro CLI (v2)** — patches every existing agent JSON under
 `<repo>/.kiro/agents/*.json` and `$HOME/.kiro/agents/*.json` so the
 PreToolUse hook fires for whichever agent the user actually selects:
 
 ```bash
-ptuf init kiro                  # patch all agents in both scopes
-ptuf init kiro --workspace-only # patch only <repo>/.kiro/agents/*.json
-ptuf init kiro --global         # patch only $HOME/.kiro/agents/*.json
-ptuf init kiro --new-agent      # legacy: create a single ptuf-guarded.json
+ptuf init kiro-v2                  # patch all agents in both scopes
+ptuf init kiro-v2 --workspace-only # patch only <repo>/.kiro/agents/*.json
+ptuf init kiro-v2 --global         # patch only $HOME/.kiro/agents/*.json
+ptuf init kiro-v2 --new-agent      # legacy: create a single ptuf-guarded.json
 ```
+
+Kiro CLI's hook contract changes in v3, so every Kiro adapter carries a
+versioned token; `kiro-v2` is the current one. The bare `kiro` token is a
+**floating alias for the newest Kiro adapter ptuf ships**, so `ptuf init
+kiro` will follow ptuf forward to v3 once that adapter lands. Pass
+`kiro-v2` explicitly to stay on today's contract.
+
+The hook command written into agent JSON is always the *versioned* form
+(`ptuf hook kiro-v2`), never the alias — so an install made today keeps
+running the v2 adapter even after ptuf is upgraded. Entries written by
+earlier ptuf releases in the unversioned `ptuf hook kiro` form are
+rewritten in place (not duplicated) on the next `ptuf init`.
 
 If `chat.defaultAgent` in `settings/cli.json` points to an agent JSON
 that does not exist in the same scope, init fails closed. `.md` agent
@@ -292,13 +308,18 @@ ptuf [--json] init [<agent>] [--no-verify] [--dry-run]
                    [--hooks <PATH>]  # cursor only
                    [--extension <PATH>]  # pi only
 ptuf update [--check] [--version <TAG>] [--force]
+ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
+                    [--rule <ID>] [--tool <NAME>]
+                    [--since <RFC3339|<N>m|<N>h|<N>d>] [--limit <N>] [--stats]
 ptuf --help
 ptuf --version
 ```
 
 `--json` is a global, top-level flag; it must appear *before* the
 subcommand. `hook` does not accept `--json` because the hook protocol
-output shape is fixed by the host. `init` runs the post-install verify
+output shape is fixed by the host. `audit` is a read-only viewer for the
+JSONL audit log (default last 20 matches; `--stats` prints counts).
+`init` runs the post-install verify
 by default; pass `--no-verify` to skip, or `--dry-run` to plan only
 (dry-run implicitly turns verify off because nothing is written).
 For the Claude Code adapter a `hook_event_name` other than `preToolUse`

@@ -20,6 +20,19 @@ use crate::reason;
 
 pub use crate::update::UpdateOptions;
 
+/// Parsed `ptuf audit` flags. `limit = None` means the list-mode
+/// default of 20; `Some(0)` means return every match.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AuditOptions {
+    pub path: Option<PathBuf>,
+    pub decision: Option<String>,
+    pub rule_id: Option<String>,
+    pub tool: Option<String>,
+    pub since_secs: Option<u64>,
+    pub limit: Option<usize>,
+    pub stats: bool,
+}
+
 mod cline_input;
 mod copilot_input;
 mod cursor_input;
@@ -61,6 +74,15 @@ pub enum HookAgent {
     ClaudeCode,
     Codex,
     Copilot,
+    /// Kiro CLI v2 — the `.kiro/agents/*.json` + `hooks.preToolUse`
+    /// contract. Selected by the versioned token `kiro-v2`, or by the
+    /// unversioned `kiro`, which is a floating alias for whichever Kiro
+    /// adapter is newest (today, this one). Kiro CLI v3 changes that
+    /// contract and will get its own variant, at which point `kiro`
+    /// follows it forward while `kiro-v2` stays here.
+    ///
+    /// The audit name stays `"kiro"` regardless, so audit records remain
+    /// comparable across adapter generations.
     Kiro,
     Cline,
     Cursor,
@@ -93,7 +115,8 @@ impl HookAgent {
 /// confirm the unmodified disk state).
 ///
 /// `kiro` carries the Kiro-specific flags. These are accepted only
-/// when `agent == Some(HookAgent::Kiro)`; the parser rejects them
+/// when `agent == Some(HookAgent::Kiro)` — selected on the command
+/// line as `kiro-v2` or via the `kiro` alias; the parser rejects them
 /// against other agents (or against auto-detect) with
 /// `ParseError::ConflictingFlags`.
 ///
@@ -176,6 +199,9 @@ pub enum Command {
     /// prebuilt installer, auto-detected from the running binary's
     /// location.
     Update(UpdateOptions),
+    /// `ptuf [--json] audit` — read-only JSONL viewer. Does not go
+    /// through the decision engine and does not read stdin.
+    Audit(AuditOptions),
     /// `--help` / `-h`.
     Help,
     /// `--version` / `-V`.
@@ -228,6 +254,7 @@ pub fn parse(args: &[String]) -> Result<(GlobalFlags, Command), ParseError> {
         "plugin" => parse::parse_plugin(&mut iter)?,
         "init" => parse::parse_init(&mut iter)?,
         "update" => parse::parse_update(&mut iter)?,
+        "audit" => parse::parse_audit(&mut iter)?,
         other => return Err(ParseError::UnknownCommand(other.to_string())),
     };
 
@@ -254,7 +281,14 @@ USAGE:
         (auto-detect every agent under cwd / $HOME and install the
          PreToolUse hook with verify enabled by default. AGENT pins
          to a single adapter: claude-code | codex | copilot | kiro
-         | cline | cursor | pi | opencode)
+         | kiro-v2 | cline | cursor | pi | opencode)
+        The Kiro CLI hook contract changes in v3, so each Kiro adapter
+        has a versioned token; `kiro-v2` is the current one. The bare
+        `kiro` token always means the newest Kiro adapter this ptuf
+        ships, so it will follow ptuf forward to v3. Pin `kiro-v2` to
+        stay on today's contract. Either way the hook command written
+        into agent configs is the versioned `ptuf hook kiro-v2`, so an
+        existing install never changes generation on its own.
         Kiro-only flags:
           --new-agent       Create a dedicated ptuf-guarded.json agent
                             (legacy single-file behavior) instead of
@@ -288,11 +322,16 @@ USAGE:
     ptuf update [--check] [--version <TAG>] [--force]
         (update the ptuf binary in-place from the latest GitHub
          release; auto-detects cargo install vs. prebuilt installer)
+    ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
+                        [--rule <ID>] [--tool <NAME>]
+                        [--since <YYYY-MM-DDTHH:MM:SSZ|+HH:MM|<N>m|<N>h|<N>d>]
+                        [--limit <N>] [--stats]
+        (read-only viewer for the audit JSONL log)
     ptuf --help | --version
 
 EXIT CODES:
     0   allow / monitor / ask / plugin tests pass / init succeeds
-    1   non-hook internal error (check / plugin / init / bad arguments)
+    1   non-hook internal error (check / plugin / init / audit / bad arguments)
         or plugin tests fail or verify fails
     2   deny — including hook initialisation failures (invalid stdin
         payload, policy load error)
@@ -313,6 +352,7 @@ pub fn run<R: Read, W1: Write, W2: Write>(
         Command::PluginCheck { path } => run::run_plugin_check(&path, stdout, stderr),
         Command::Init(options) => run::run_init(globals, options, stdout, stderr),
         Command::Update(options) => run::run_update(options, stdout, stderr),
+        Command::Audit(options) => run::run_audit(globals, options, stdout, stderr),
         Command::Help => {
             let _ = writeln!(stdout, "{HELP}");
             0

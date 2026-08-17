@@ -1,0 +1,11 @@
+[
+  "incompleteTail",
+  "linesRead",
+  "matched",
+  "path",
+  "records",
+  "returned",
+  "skippedInvalid",
+  "skippedUnsupportedSchema",
+  "validRecords"
+]

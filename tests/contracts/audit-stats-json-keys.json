@@ -1,0 +1,11 @@
+[
+  "byDecision",
+  "byRule",
+  "incompleteTail",
+  "linesRead",
+  "matched",
+  "path",
+  "skippedInvalid",
+  "skippedUnsupportedSchema",
+  "validRecords"
+]

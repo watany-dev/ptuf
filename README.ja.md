@@ -66,6 +66,9 @@ Rule: core.filesystem.destructive-rm
 
 $ ptuf check --tool Bash 'ls'
 Decision: allow
+
+$ ptuf audit --decision deny --since 1h
+# 監査 JSONL の該当レコード (既定は末尾 20 件)
 ```
 
 ## インストール
@@ -102,7 +105,7 @@ Windows (PowerShell) / `cargo binstall` / `cargo install` / mise / aqua、
 ptuf init claude-code   # ~/.claude/settings.json に hook を登録
 ptuf init codex         # <repo>/.codex/hooks.json + config.toml
 ptuf init copilot       # <repo>/.github/hooks/ptuf.json
-ptuf init kiro          # .kiro/agents/*.json を一括パッチ
+ptuf init kiro-v2       # .kiro/agents/*.json を一括パッチ (`kiro` は最新版 alias)
 ptuf init cline         # .clinerules/hooks/PreToolUse
 ptuf init cursor        # <repo>/.cursor/hooks.json
 ptuf init pi            # ~/.pi/agent/extensions/ptuf.ts

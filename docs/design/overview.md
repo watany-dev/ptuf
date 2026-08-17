@@ -5,13 +5,11 @@
 
 ## 現在の実装スコープ
 
-ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合)、`v0.1.0` (M5)、`v0.1.1` (M9) で
-次を実装済み:
+ptuf `v0.7.0` は次を実装済み:
 
 - `PreToolUse` 向け CLI とライブラリ
-- Claude Code / Codex / GitHub Copilot / Kiro CLI / Cline adapter (frozen)
-- Cursor adapter (MVP — hook 駆動の agent tool execution のみ)
-- Pi Coding Agent adapter (`ptuf hook pi` + `ptuf init pi` TypeScript extension)
+- Claude Code / Codex / GitHub Copilot / Kiro CLI / Cline / Cursor / Pi /
+  OpenCode adapter
 - built-in pack:
   `core.filesystem` / `core.network` / `core.secrets` / `core.git` /
   `core.self_protection` / `core.engine` / `core.injection` /
@@ -22,17 +20,18 @@ ptuf は `v0.0.1` (内部マイルストーン M1〜M4 を統合)、`v0.1.0` (M5
   wrapper inspection と、wrapped redirect を含む self-protection
 - layered YAML config, YAML plugin, allowlist, audit JSONL
 - `ptuf init [<agent>]` (auto-detect), `ptuf check`, `ptuf plugin check <path>`
+- `ptuf audit` (JSONL の read-only 閲覧。書き込み経路は変更しない)
 - `tests/contracts.rs` による hook / audit / `init --json` 契約の固定
 
 ## ビルド前提と依存
 
 - Rust edition は `2024`
 - MSRV は `1.93.0`
-- 実行時依存は `serde`, `serde_json`, `serde_yaml_ng`, `regex`, `time`,
-  `toml_edit`
+- 実行時依存は `serde`, `serde_json`, `serde_yaml_ng`, `memchr`, `regex`,
+  `time`, `toml_edit`
 - `time` は audit timestamp と allowlist `expiresAt` の RFC3339
   formatting / parsing に使う
-- dev 依存は `proptest` と `tempfile`
+- dev 依存は `proptest`, `tempfile`, `divan`
 
 ## 公開 API
 
@@ -70,12 +69,16 @@ CLI 経路はこれと異なり fail-closed で動作する。
 - `ptuf hook cline`
 - `ptuf hook cursor`
 - `ptuf hook pi`
+- `ptuf hook opencode`
 - `ptuf [--json] init pi` (および他 adapter)
 - `ptuf [--json] check --tool <name> <command>`
 - `ptuf [--json] plugin check <path>`
 - `ptuf [--json] init [<agent>] [--no-verify] [--dry-run]`
+- `ptuf [--json] audit`
 - `ptuf --help`
 - `ptuf --version`
+
+`ptuf [--json] audit` は監査 JSONL の閲覧。詳細は [`audit.md`](audit.md)。
 
 `init` は引数なしで `$HOME` / repo root を見て agent を auto-detect する。
 verify は既定で実行され、`--no-verify` で skip、`--dry-run` 時は書き込みも
@@ -109,8 +112,9 @@ verify も行わない。
 | [`config-and-plugins.md`](config-and-plugins.md) | config schema、plugin schema、allowlist |
 | [`cli-and-hooks.md`](cli-and-hooks.md) | `init` / `hook` / `check` と agent 統合 |
 | [`kiro-cli.md`](kiro-cli.md) | Kiro CLI adapter の正規化・fail-closed |
-| [`audit.md`](audit.md) | audit JSONL schema と redaction |
-| [`npm-distribution.md`](npm-distribution.md) | npm 配布 (platform-package 方式) の設計 — 未実装 |
+| [`audit.md`](audit.md) | audit JSONL schema、redaction、閲覧 CLI |
+| [`npm-distribution.md`](npm-distribution.md) | npm 配布 (platform-package 方式) の設計 |
+| [`threat-model.md`](threat-model.md) | STRIDE 脅威モデル・信頼境界・残存リスク |
 | [`testing.md`](testing.md) | example-based test と PBT の役割分担 |
 | [`roadmap.md`](roadmap.md) | 各マイルストーンの到達点と今後の候補 |
 
