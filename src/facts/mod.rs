@@ -15,6 +15,7 @@
 
 use crate::HookInput;
 
+pub mod patch;
 pub mod path;
 pub mod project;
 pub mod sensitive;
@@ -72,7 +73,13 @@ pub fn extract(input: &HookInput) -> Facts {
     let paths = path::extract_all(input);
     let path = paths.first().cloned();
     let url = event.urls.first().and_then(|url| url::parse(url));
-    let sensitive = collect_sensitive(&event, bash.as_ref(), &paths, url.as_ref());
+    let sensitive = collect_sensitive(
+        &event,
+        input.apply_patch_command(),
+        bash.as_ref(),
+        &paths,
+        url.as_ref(),
+    );
     let bash_redirects = path::from_bash_redirects(bash.as_ref(), None);
     Facts {
         bash,
@@ -89,6 +96,7 @@ pub fn extract(input: &HookInput) -> Facts {
 
 fn collect_sensitive(
     event: &crate::hook_input::Event<'_>,
+    patch_command: Option<&str>,
     bash: Option<&shell::Bash>,
     paths: &[path::FilePath],
     url: Option<&url::Url>,
@@ -138,6 +146,12 @@ fn collect_sensitive(
     // flagged (`docs/design/policy-packs.md` §`core.secrets`).
     if let Some(s) = event.content {
         sensitive::classify_content_into(s, &mut out);
+    }
+
+    if let Some(cmd) = patch_command
+        && let Some(body) = patch::added_content(cmd)
+    {
+        sensitive::classify_content_into(&body, &mut out);
     }
 
     out
@@ -221,6 +235,22 @@ mod tests {
             tool_input: serde_json::json!({
                 "file_path": "/tmp/key.pem",
                 "content": "-----BEGIN RSA PRIVATE KEY-----\n..."
+            }),
+        };
+        let f = extract(&i);
+        assert!(
+            f.sensitive
+                .iter()
+                .any(|s| s.kind == sensitive::SensitiveKind::PemBlob)
+        );
+    }
+
+    #[test]
+    fn extract_collects_sensitive_from_apply_patch_added_lines() {
+        let i = HookInput {
+            tool_name: "apply_patch".into(),
+            tool_input: serde_json::json!({
+                "command": "*** Begin Patch\n*** Add File: src/notes.md\n+-----BEGIN RSA PRIVATE KEY-----\n+X\n*** End Patch\n",
             }),
         };
         let f = extract(&i);

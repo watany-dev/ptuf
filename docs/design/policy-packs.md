@@ -62,7 +62,7 @@ head は `head_basename` で basename 化するため `/usr/bin/curl ... | /bin/
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
 | `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`nc`/`ncat`/`socat`/`telnet`/`scp`/`rsync`/`ftp`/`sftp`、および bash の `/dev/(tcp\|udp)/` への書き込み redirect) が共存。pipeline の redirect 先が機密 path の場合も対象。`ssh` は `ssh -i ~/.ssh/id_rsa host` 等の正当用途で偽陽性が多いため sink に含めない |
-| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする。書き込み本文 (`Write` content / `Edit` `new_string` / MCP `content`) は実データ shape (PEM blob) のみ対象で、`~/.aws/credentials` 等の path 言及 (手順書の記載など) では発火しない |
+| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする。書き込み本文 (`Write` content / `Edit` `new_string` / MCP `content` / `apply_patch` added 行) は実データ shape (PEM blob) のみ対象で、`~/.aws/credentials` 等の path 言及 (手順書の記載など) では発火しない |
 | `core.secrets.sensitive-bash-read` | ask | false | high | Bash の reader head (`cat`/`head`/`tail`/`source`/`.`/`grep`/`awk`/`sed`/`dd` 等) または `<` redirect が機密 path を読む |
 
 機密分類は `~/.ssh/**`, `~/.aws/**`, `~/.config/gcloud/**`, `~/.kube/config`,
@@ -82,8 +82,9 @@ engine レベルの `pbt_sensitive_path_parity_across_surfaces`
 絶対 `file_path` を渡す bypass 対策)。
 ファイルツール系分類器は 2 レーン構成: path / Bash token / URL には全 shape を
 適用する `classify_into`、書き込み本文 (`Write` content / `Edit` `new_string` /
-MCP `content`) には data-bearing shape (`SensitiveKind::applies_to_content` =
-`pem_blob` のみ) に絞った `classify_content_into` を使う。手順書等の散文が
+MCP `content` / `apply_patch` added 行) には data-bearing shape (`SensitiveKind::applies_to_content` =
+`pem_blob` のみ) に絞った `classify_content_into` を使う。`apply_patch` は
+`facts::patch::added_content` で `+` prefix 行のみ抽出し deletion/context 行は除外する。手順書等の散文が
 機密 path に言及しただけでは `facts.sensitive` に載らず、plugin DSL の
 `sensitive.pathKindAny:` にも content 由来の path kind は現れない。本文中の
 path 言及を実行に移す時点では Bash 系ルール (`sensitive-bash-read` /
@@ -112,9 +113,6 @@ bounded re-parse する (ADR 0008 / #162)。`sensitive-bash-read` は `subst_arg
 機密 (`echo $(cat .env)`) を Ask する。本体を surface できない場合
 (budget 超過等) の backstop として、従来の command-wide co-occurrence
 pessimistic 判定は維持する (`cat $(echo .env)` 型も引き続き cover)。
-`apply_patch` の patch body 内 PEM/credentials の内容スキャンも本
-イテレーション範囲外。
-
 `sensitive-bash-read` の reader head allowlist には `cat`/`head`/`tail`/
 `less`/`more`/`view`/`bat`/`xxd`/`od`/`hexdump`/`strings`/`base64`/`base32`/
 `grep`/`egrep`/`fgrep`/`awk`/`gawk`/`mawk`/`sed`/`cut`/`tr`/`sort`/`uniq`/

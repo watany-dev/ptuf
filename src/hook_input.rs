@@ -82,6 +82,14 @@ impl HookInput {
         }
     }
 
+    /// Raw Codex patch command for `apply_patch` tool calls.
+    pub fn apply_patch_command(&self) -> Option<&str> {
+        if self.tool_name != "apply_patch" {
+            return None;
+        }
+        self.tool_input.get("command")?.as_str()
+    }
+
     /// Body the agent intends to write: `Write::content` /
     /// `Edit::new_string`, or the generic `content` field for `mcp__*`
     /// tool calls. Returns `None` for tools that don't write.
@@ -343,6 +351,23 @@ mod tests {
         let raw = r#"{"tool_name":"Edit","tool_input":{"new_string":"world"}}"#;
         let parsed: HookInput = serde_json::from_str(raw).expect("parse");
         assert_eq!(parsed.write_payload(), Some("world"));
+    }
+
+    #[test]
+    fn apply_patch_command_returns_command_for_apply_patch() {
+        let raw = r#"{"tool_name":"apply_patch","tool_input":{"command":"*** Begin Patch\n*** End Patch\n"}}"#;
+        let parsed: HookInput = serde_json::from_str(raw).expect("parse");
+        assert_eq!(
+            parsed.apply_patch_command(),
+            Some("*** Begin Patch\n*** End Patch\n")
+        );
+    }
+
+    #[test]
+    fn apply_patch_command_is_none_for_other_tools() {
+        let raw = r#"{"tool_name":"Write","tool_input":{"command":"x"}}"#;
+        let parsed: HookInput = serde_json::from_str(raw).expect("parse");
+        assert!(parsed.apply_patch_command().is_none());
     }
 
     #[test]

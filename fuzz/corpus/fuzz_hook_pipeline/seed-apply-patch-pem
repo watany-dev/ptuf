@@ -1,0 +1,1 @@
+{"tool_name": "apply_patch", "tool_input": {"command": "*** Begin Patch\n*** Add File: src/notes.md\n+-----BEGIN RSA PRIVATE KEY-----\n+X\n*** End Patch\n"}}

@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--decision` / `--rule` / `--tool` / `--since` / `--limit` / `--stats`)。
   書き込み経路は変更しない。`--json` の `records` は元 JSON object を保持し、
   text 出力は C0 / DEL / C1 / BiDi を escape する。
+- `apply_patch` の added 行 (`+` prefix) を content lane で PEM スキャン
+  (`facts::patch::added_content`)。非機密 path 宛 patch への PEM 埋め込み bypass
+  (ADR 0001 known limitation) を解消。
+- Cline adapter が `patch` / `patchText` / `content` を `command` へ正規化
+  (OpenCode `reshape_patch` と同等)。Cline 経由 apply_patch の path / content
+  空振りを修正。
 
 ### Changed
 - **Kiro agent JSON に書き込む hook command が `ptuf hook kiro-v2` になった。**

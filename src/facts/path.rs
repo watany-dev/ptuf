@@ -121,7 +121,7 @@ pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathF
                 .tool_input
                 .get("command")
                 .and_then(serde_json::Value::as_str)
-                .map(collect_apply_patch_paths)
+                .map(crate::facts::patch::paths)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|raw| (raw, PathOrigin::ApplyPatch))
@@ -205,27 +205,6 @@ fn push_tagged(
     if let Some(s) = value.and_then(serde_json::Value::as_str) {
         out.push((s.to_owned(), origin));
     }
-}
-
-fn collect_apply_patch_paths(command: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in command.lines() {
-        for prefix in [
-            "*** Add File: ",
-            "*** Update File: ",
-            "*** Delete File: ",
-            "*** Move to: ",
-        ] {
-            if let Some(path) = line.strip_prefix(prefix) {
-                let trimmed = path.trim();
-                if !trimmed.is_empty() {
-                    out.push(trimmed.to_string());
-                }
-                break;
-            }
-        }
-    }
-    out
 }
 
 /// Resolve a [`PathFact`] to the form used by workspace-containment
