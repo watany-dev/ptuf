@@ -407,20 +407,21 @@ pub fn parse(command: &str) -> Bash {
 
 fn parse_with_depth(command: &str, nesting_budget: usize) -> Bash {
     let TokenizeOutput {
-        tokens,
+        mut tokens,
         has_command_substitution,
         has_redirect,
         has_heredoc,
         has_process_substitution,
     } = tokenize(command);
-    let segments = split_segments(tokens);
-    let pipelines: Vec<Pipeline> = segments
-        .into_iter()
-        .map(|segment| parse_pipeline(segment, nesting_budget))
-        .collect();
+    // Split in place: `split_mut` hands each `;` / `&&` / `||`-bounded
+    // run to the parser as a subslice of the token vector, so a command
+    // line with N words never holds two N-token buffers at once.
+    // `parse_pipeline` moves the payloads out of the slots it visits.
     Bash {
-        segments: pipelines
-            .into_iter()
+        segments: tokens
+            .split_mut(is_segment_separator)
+            .filter(|segment| !segment.is_empty())
+            .map(|segment| parse_pipeline(segment, nesting_budget))
             .filter(|p| !p.commands.is_empty() || !p.redirects.is_empty())
             .collect(),
         has_command_substitution,
@@ -434,7 +435,14 @@ fn parse_with_depth(command: &str, nesting_budget: usize) -> Bash {
 enum Token {
     Word {
         text: String,
-        subst_bodies: Vec<String>,
+        /// Command-substitution bodies found inside this word.
+        ///
+        /// Boxed, and `None` rather than an empty collection, because
+        /// the tokenizer materialises one `Token` per shell word: an
+        /// inline `Vec<String>` widens *every* token by 16 bytes to
+        /// carry a field that is empty for all but a handful of them.
+        /// See `token_stays_small`.
+        subst_bodies: SubstBodies,
     },
     Pipe,
     And,
@@ -442,6 +450,29 @@ enum Token {
     Semi,
     Redirect(RedirectOp),
     HeredocBody(String),
+}
+
+/// Substitution bodies attached to a [`Token::Word`].
+///
+/// The extra indirection is deliberate — it is what keeps `Token` at 40
+/// bytes instead of 56. See the field docs for why that matters.
+type SubstBodies = Option<Box<Vec<String>>>;
+
+/// Build a [`Token::Word`], dropping the substitution-body allocation
+/// entirely for the common case of a word without any `$(…)` / `` `…` ``.
+fn word_token(text: String, bodies: Vec<String>) -> Token {
+    Token::Word {
+        text,
+        subst_bodies: (!bodies.is_empty()).then(|| Box::new(bodies)),
+    }
+}
+
+/// Move `bodies` onto the substitution accumulator of the argv under
+/// construction.
+fn push_subst_bodies(dst: &mut Vec<String>, bodies: SubstBodies) {
+    if let Some(bodies) = bodies {
+        dst.extend(*bodies);
+    }
 }
 
 struct TokenizeOutput {
@@ -538,10 +569,7 @@ fn tokenize(s: &str) -> TokenizeOutput {
                     saw_command_substitution = true;
                 }
                 saw_process_substitution = true;
-                out.push(Token::Word {
-                    text: word,
-                    subst_bodies: bodies,
-                });
+                out.push(word_token(word, bodies));
                 i += advanced;
                 continue;
             }
@@ -558,10 +586,7 @@ fn tokenize(s: &str) -> TokenizeOutput {
                     saw_command_substitution = true;
                 }
                 saw_process_substitution = true;
-                out.push(Token::Word {
-                    text: word,
-                    subst_bodies: bodies,
-                });
+                out.push(word_token(word, bodies));
                 i += advanced;
                 continue;
             }
@@ -627,10 +652,7 @@ fn tokenize(s: &str) -> TokenizeOutput {
         if word_subst {
             saw_command_substitution = true;
         }
-        out.push(Token::Word {
-            text: word,
-            subst_bodies: bodies,
-        });
+        out.push(word_token(word, bodies));
         i += advanced;
     }
     TokenizeOutput {
@@ -929,51 +951,60 @@ fn latin1_slice(bytes: &[u8]) -> String {
     s
 }
 
-fn split_segments(tokens: Vec<Token>) -> Vec<Vec<Token>> {
-    let mut segments = Vec::new();
-    let mut current = Vec::new();
-    for tok in tokens {
-        match tok {
-            Token::And | Token::Or | Token::Semi => {
-                if !current.is_empty() {
-                    segments.push(std::mem::take(&mut current));
-                }
-            },
-            other => current.push(other),
-        }
-    }
-    if !current.is_empty() {
-        segments.push(current);
-    }
-    segments
+/// `;` / `&&` / `||` end the current pipeline. ptuf models neither the
+/// conditional semantics nor the ordering, so all three split alike.
+fn is_segment_separator(tok: &Token) -> bool {
+    matches!(tok, Token::And | Token::Or | Token::Semi)
 }
 
-fn parse_pipeline(tokens: Vec<Token>, nesting_budget: usize) -> Pipeline {
+/// Parse one `;` / `&&` / `||`-bounded run of tokens into a [`Pipeline`].
+///
+/// Takes `&mut [Token]` rather than an owned vector so the caller can
+/// slice the single token buffer in place. Each visited slot is emptied
+/// with [`std::mem::replace`], which both hands ownership of the payload
+/// to this function and releases the borrow before the redirect arm
+/// looks ahead at the following slot.
+fn parse_pipeline(tokens: &mut [Token], nesting_budget: usize) -> Pipeline {
     let mut commands = Vec::new();
     let mut redirects = Vec::new();
-    let mut current_words: Vec<(String, Vec<String>)> = Vec::new();
-    let mut iter = tokens.into_iter();
-    while let Some(tok) = iter.next() {
-        match tok {
-            Token::Word { text, subst_bodies } => current_words.push((text, subst_bodies)),
+    // `words` doubles as the argv buffer: `parse_argv` consumes it
+    // without copying, so a word's `String` is allocated once by the
+    // tokenizer and then only moved.
+    let mut words: Vec<String> = Vec::new();
+    let mut subst_bodies: Vec<String> = Vec::new();
+    let mut cursor = 0;
+    while cursor < tokens.len() {
+        match std::mem::replace(&mut tokens[cursor], Token::Semi) {
+            Token::Word {
+                text,
+                subst_bodies: bodies,
+            } => {
+                words.push(text);
+                push_subst_bodies(&mut subst_bodies, bodies);
+                cursor += 1;
+            },
             Token::Pipe => {
-                if !current_words.is_empty() {
+                if !words.is_empty() {
                     commands.push(parse_argv(
-                        std::mem::take(&mut current_words),
+                        std::mem::take(&mut words),
+                        std::mem::take(&mut subst_bodies),
                         nesting_budget,
                     ));
                 }
+                cursor += 1;
             },
             Token::Redirect(op) => {
-                let target = take_redirect_target(&mut iter, op, &mut current_words);
+                let target =
+                    take_redirect_target(tokens, &mut cursor, op, &mut words, &mut subst_bodies);
                 redirects.push(Redirect { op, target });
             },
-            Token::HeredocBody(_) => {},
-            Token::And | Token::Or | Token::Semi => {},
+            Token::HeredocBody(_) | Token::And | Token::Or | Token::Semi => {
+                cursor += 1;
+            },
         }
     }
-    if !current_words.is_empty() {
-        commands.push(parse_argv(current_words, nesting_budget));
+    if !words.is_empty() {
+        commands.push(parse_argv(words, subst_bodies, nesting_budget));
     }
     Pipeline {
         commands,
@@ -983,45 +1014,67 @@ fn parse_pipeline(tokens: Vec<Token>, nesting_budget: usize) -> Pipeline {
 
 /// Pull the word following a redirect operator. For `Heredoc`, expect a
 /// `HeredocBody` token; otherwise expect a `Word`. If the next token is
-/// something else (parser drift), put it back into `current_words` when
-/// it is a stray `Word` so we do not silently lose user input, and yield
-/// an empty target so the redirect itself is still surfaced.
+/// something else (parser drift), put it back into `words` when it is a
+/// stray `Word` so we do not silently lose user input, and yield an
+/// empty target so the redirect itself is still surfaced.
+///
+/// `cursor` enters pointing at the redirect operator and leaves pointing
+/// past whatever was examined — the lookahead token is consumed whether
+/// or not it turned out to be a usable target.
 fn take_redirect_target(
-    iter: &mut std::vec::IntoIter<Token>,
+    tokens: &mut [Token],
+    cursor: &mut usize,
     op: RedirectOp,
-    current_words: &mut Vec<(String, Vec<String>)>,
+    words: &mut Vec<String>,
+    subst_bodies: &mut Vec<String>,
 ) -> String {
-    let next = iter.next();
-    match (op, next) {
-        (RedirectOp::Heredoc, Some(Token::HeredocBody(b))) => b,
-        (_, Some(Token::Word { text, subst_bodies })) if op != RedirectOp::Heredoc => {
+    *cursor += 1;
+    let Some(slot) = tokens.get_mut(*cursor) else {
+        return String::new();
+    };
+    *cursor += 1;
+    match std::mem::replace(slot, Token::Semi) {
+        Token::HeredocBody(body) if op == RedirectOp::Heredoc => body,
+        Token::Word {
+            text,
+            subst_bodies: bodies,
+        } if op != RedirectOp::Heredoc => {
             // Redirect targets can carry $(…) too; fold bodies into the
-            // preceding argv so subst_argv still surfaces them.
-            current_words.extend(subst_bodies.into_iter().map(|b| (String::new(), vec![b])));
+            // preceding argv so subst_argv still surfaces them. Each one
+            // also contributes a placeholder word, which `parse_argv`
+            // filters out — it only has to keep the argv non-empty so a
+            // bare `> $(cmd)` still yields a command carrying the body.
+            if let Some(bodies) = bodies {
+                for body in *bodies {
+                    words.push(String::new());
+                    subst_bodies.push(body);
+                }
+            }
             text
         },
-        (_, Some(Token::Word { text, subst_bodies })) => {
-            current_words.push((text, subst_bodies));
+        Token::Word {
+            text,
+            subst_bodies: bodies,
+        } => {
+            words.push(text);
+            push_subst_bodies(subst_bodies, bodies);
             String::new()
         },
         _ => String::new(),
     }
 }
 
-fn parse_argv(words: Vec<(String, Vec<String>)>, nesting_budget: usize) -> Argv {
-    // Collect substitution bodies from every word that built this argv
-    // before stripping env assignments / head (ADR 0008).
-    let mut subst_bodies: Vec<String> = Vec::new();
-    for (_, bodies) in &words {
-        subst_bodies.extend(bodies.iter().cloned());
-    }
+/// Build an [`Argv`] from the words of one pipeline stage.
+///
+/// `words` is consumed in place — it becomes [`Argv::args`] without the
+/// elements being copied — and `subst_bodies` carries the command
+/// substitutions collected from those words (ADR 0008).
+fn parse_argv(mut words: Vec<String>, subst_bodies: Vec<String>, nesting_budget: usize) -> Argv {
+    words.retain(|word| !word.is_empty());
     // VecDeque so the head-stripping loop runs in O(N) overall instead
-    // of O(N²) — `Vec::remove(0)` shifts every remaining element.
-    let mut words: std::collections::VecDeque<String> = words
-        .into_iter()
-        .map(|(text, _)| text)
-        .filter(|t| !t.is_empty())
-        .collect();
+    // of O(N²) — `Vec::remove(0)` shifts every remaining element. The
+    // conversion re-uses the `Vec`'s buffer rather than copying.
+    let mut words: std::collections::VecDeque<String> = words.into();
     let mut env_assignments = Vec::new();
     while let Some(first) = words.front() {
         match split_env_assignment(first) {
@@ -1155,17 +1208,11 @@ fn extract_xargs_inner(argv: &Argv, nesting_budget: usize) -> Option<Argv> {
         return None;
     }
     let start = xargs_command_start(&argv.args)?;
-    let words: Vec<(String, Vec<String>)> = argv
-        .args
-        .iter()
-        .skip(start)
-        .cloned()
-        .map(|text| (text, Vec::new()))
-        .collect();
+    let words: Vec<String> = argv.args.iter().skip(start).cloned().collect();
     if words.is_empty() {
         return None;
     }
-    Some(parse_argv(words, nesting_budget))
+    Some(parse_argv(words, Vec::new(), nesting_budget))
 }
 
 fn xargs_command_start(args: &[String]) -> Option<usize> {
@@ -1225,19 +1272,18 @@ fn extract_find_exec_inner(argv: &Argv, nesting_budget: usize) -> Option<Argv> {
         .iter()
         .skip(start + 1)
         .position(|arg| arg == ";" || arg == "+")?;
-    let words: Vec<(String, Vec<String>)> = argv
+    let words: Vec<String> = argv
         .args
         .iter()
         .skip(start + 1)
         .take(end)
         .filter(|arg| arg.as_str() != "{}")
         .cloned()
-        .map(|text| (text, Vec::new()))
         .collect();
     if words.is_empty() {
         return None;
     }
-    Some(parse_argv(words, nesting_budget))
+    Some(parse_argv(words, Vec::new(), nesting_budget))
 }
 
 /// Reduce a command head to its basename for wrapper/interpreter
@@ -2125,6 +2171,22 @@ mod tests {
         assert_eq!(layer1.head, "doas");
         let layer2 = unwrap_prefix_wrapper(&layer1).expect("doas unwraps");
         assert_eq!(layer2, argv("rm", &["-rf", "/"]));
+    }
+
+    /// The tokenizer materialises one [`Token`] per shell word, so the
+    /// token vector — not the resulting [`Bash`] — dominates peak memory
+    /// on pathological command lines (a 6 MB command line is ~1.3M
+    /// tokens, so every inline byte costs ~1.3 MB of RSS). Boxing the
+    /// almost-always-absent substitution bodies keeps `Token` at 40
+    /// bytes; storing them as an inline `Vec<String>` made it 56.
+    #[test]
+    fn token_stays_small() {
+        let size = size_of::<Token>();
+        assert!(
+            size <= 40,
+            "Token grew to {size} bytes; the tokenizer allocates one per \
+             shell word, so widening it scales peak memory by the word count",
+        );
     }
 
     use crate::testing::proptest::{
