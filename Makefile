@@ -11,7 +11,7 @@ CARGO_DENY_VERSION ?= 0.19.2
 CARGO_TARPAULIN_VERSION ?= 0.35.1
 CARGO_FUZZ_VERSION ?= 0.13.1
 CARGO_MUTANTS_VERSION ?= 27.0.0
-CARGO_SEMVER_CHECKS_VERSION ?= 0.47.0
+CARGO_SEMVER_CHECKS_VERSION ?= 0.50.0
 
 # When set to a non-empty value, `tools` only verifies presence and exits
 # non-zero if a required binary is missing (no `cargo install`). Useful in CI
