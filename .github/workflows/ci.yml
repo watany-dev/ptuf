@@ -219,6 +219,20 @@ jobs:
       - name: Run actionlint
         run: ./actionlint -color
 
+  zghalint:
+    name: zghalint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: watany-dev/zghalint@71f0cfb98adee2edf33f84fb8bd1014008e25a6c # v0.0.1
+        with:
+          version: v0.0.1
+          paths: ".github/workflows/*.yml"
+          offline: "true"
+
   zizmor:
     name: zizmor
     runs-on: ubuntu-24.04

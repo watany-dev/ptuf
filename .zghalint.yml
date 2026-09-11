@@ -1,0 +1,10 @@
+# zghalint のルール上書き。意図的に suppress している項目のみ列挙する。
+# https://github.com/watany-dev/zghalint
+
+# release.yml は cargo-dist 生成物 + 手パッチ。npm 復旧用の
+# workflow_dispatch `inputs.tag` が SEC021 (untrusted checkout ref) に
+# 当たる。zizmor 側も同ファイルを per-file ignore している
+# (`.github/zizmor.yml`)。上流が `inputs.tag` なしで復旧できる形に
+# なったら本 ignore は撤去する。
+ignore:
+  - ".github/workflows/release.yml"
