@@ -1,7 +1,7 @@
 name: Nightly
 
 # Heavy QA that is too slow for the PR gate: coverage-guided fuzzing of
-# the four trust boundaries and full-scope mutation testing of the
+# `fuzz/fuzz_targets/` and full-scope mutation testing of the
 # decision core. Mirrors the `make fuzz` / `make mutants` local targets.
 # Runs on a schedule and on demand; never blocks a PR.
 on:
