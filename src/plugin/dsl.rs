@@ -366,15 +366,16 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
 }
 
 /// Component-wise prefix match against the resolved filesystem target.
-/// Both the file path and each prefix go through
-/// [`path::resolve_for_containment`] / [`path::resolve_path_for_containment`]
-/// so OS directory symlinks (`/tmp` → `/private/tmp` on macOS) still
-/// match. Partial-component matches are rejected because
+/// The file path goes through [`path::resolve_for_containment`]; each
+/// prefix through [`path::resolve_prefix_for_containment`] so OS
+/// directory aliases (`/tmp` → `/private/tmp` on macOS) still match
+/// without following a retargeting symlink that would expand an
+/// allowlist to `/`. Partial-component matches are rejected because
 /// [`std::path::Path::starts_with`] compares whole components.
 fn path_matches_any_prefix(path: &PathFact, prefixes: &[String]) -> bool {
     let resolved = path::resolve_for_containment(path);
     prefixes.iter().any(|prefix| {
-        let prefix = path::resolve_path_for_containment(std::path::Path::new(prefix));
+        let prefix = path::resolve_prefix_for_containment(std::path::Path::new(prefix));
         resolved.starts_with(prefix)
     })
 }
@@ -1094,11 +1095,13 @@ shell.pipeline:
 
     #[cfg(unix)]
     #[test]
-    fn evaluate_path_prefix_matches_through_directory_symlink() {
+    fn evaluate_path_prefix_matches_same_name_directory_alias() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let real = dir.path().join("real-root");
+        let real = dir.path().join("cache");
         std::fs::create_dir_all(real.join("nested")).expect("mkdir");
-        let link = dir.path().join("link-root");
+        let parent = dir.path().join("alias-parent");
+        std::fs::create_dir_all(&parent).expect("mkdir");
+        let link = parent.join("cache");
         std::os::unix::fs::symlink(&real, &link).expect("symlink");
         let file = link.join("nested/file.txt");
         let (input, facts) = read_path(&file.to_string_lossy());
@@ -1374,7 +1377,7 @@ all:
             let resolved = facts.paths.iter().chain(facts.path.as_ref()).next()
                 .map(crate::facts::path::resolve_for_containment);
             if let Some(resolved) = resolved {
-                let prefix_path = crate::facts::path::resolve_path_for_containment(std::path::Path::new(&prefix));
+                let prefix_path = crate::facts::path::resolve_prefix_for_containment(std::path::Path::new(&prefix));
                 prop_assert_eq!(evaluate(&node, &facts, &input), resolved.starts_with(&prefix_path));
             }
         }

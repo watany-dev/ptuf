@@ -31,8 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (issues #202)。
 - `path.filePathPrefixAny` が未正規化文字列 prefix 比較だったため `..` /
   symlink / 部分一致で allowlist を広げられた問題を、path と prefix の両方を
-  正規化 + `Path::starts_with` に変更して修正 (issue #203)。prefix 側も
-  同じ解決を通すので、OS の directory symlink 下でも Deny が外れない。
+  正規化 + `Path::starts_with` に変更して修正 (issue #203)。prefix の
+  祖先 alias (`/tmp` → `/private/tmp`) は辿るが、最終成分の張り替え
+  symlink は辿らず allowlist 拡大を防ぐ。
 - plugin 間 / plugin と builtin の rule id 衝突を load 時に reject。
   `is_hard_deny_rule_id` は同 id のどれかが `hardDeny` なら true にし、
   monitor 降格の first-wins 抜けを塞ぐ (issue #204)。
