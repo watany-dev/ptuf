@@ -1063,7 +1063,7 @@ rules:
         fn pbt_demote_never_increases_severity(d in decision(), mode in mode_strategy()) {
             let raw = d.clone();
             let out = demote_for_mode(d, mode, &PluginSet::new());
-            prop_assert!(out.rank() <= raw.rank());
+            prop_assert!(out.kind() <= raw.kind());
         }
 
         // The default-engine end-to-end pipeline must not panic.

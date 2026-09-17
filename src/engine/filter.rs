@@ -73,16 +73,7 @@ fn override_allowed(rule: &(dyn ConfigRule + Sync), from: DecisionKind, to: Deci
     if is_overridable(rule) {
         return true;
     }
-    decision_rank(to) >= decision_rank(from)
-}
-
-fn decision_rank(kind: DecisionKind) -> u8 {
-    match kind {
-        DecisionKind::Allow => 0,
-        DecisionKind::Monitor => 1,
-        DecisionKind::Ask => 2,
-        DecisionKind::Deny => 3,
-    }
+    to >= from
 }
 
 fn decision_with_kind(decision: Decision, kind: DecisionKind) -> Decision {

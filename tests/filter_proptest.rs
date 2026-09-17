@@ -162,8 +162,7 @@ proptest! {
 
     /// Decision overlays cannot weaken a hardDeny rule. The variant
     /// order on `DecisionKind` (`Allow < Monitor < Ask < Deny`) lets
-    /// us pick "weaker than Deny" without crossing the `pub(crate)`
-    /// boundary on `Decision::rank`. Default-Enforce mode keeps the
+    /// us pick "weaker than Deny" from `DecisionKind`'s derived `Ord`.
     /// outcome on the Deny side so we can match it directly.
     #[test]
     fn pbt_hard_deny_blocks_weakening_overrides(
