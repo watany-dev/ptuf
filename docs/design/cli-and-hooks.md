@@ -82,7 +82,11 @@ spawn する。すべての Decision で bare JSON envelope
 `Allow` / `Monitor` / `Ask` は exit `0`、`Deny` と reserved rule は exit `2`
 とする。Cursor と同じく `Ask` を降格しない。extension 側は exit `0` と
 `2` のみを有効とみなし、exit `1` や空 stdout は fail-closed deny として
-扱う。
+扱う。stdout / stderr は 64 KiB で打ち切り、timeout 後は abort に続いて
+SIGKILL する。stdout の `decision` と exit code の食い違い
+(`deny` なのに exit `0`、あるいはその逆) も fail-closed deny。`Ask` は
+exit `0` なので「exit `0` ⇒ permitted」ではない
+(`permitted = decision !== "deny"`)。
 
 Copilot は protocol 上 non-zero exit が hook failure として扱われ得るため、
 **すべての Decision で exit `0`** に固定する。Deny は bare JSON envelope

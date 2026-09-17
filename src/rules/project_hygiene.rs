@@ -130,7 +130,10 @@ impl ConfigRule for ProtectedBranchDestructiveGit {
             return None;
         }
         let bash = facts.bash.as_ref()?;
-        let triggered = bash.commands().into_iter().any(invokes_destructive_git);
+        let triggered = bash
+            .commands()
+            .into_iter()
+            .any(crate::rules::git::is_protected_branch_destructive);
         if !triggered {
             return None;
         }
@@ -184,10 +187,6 @@ fn is_pip_install(argv: &Argv) -> bool {
         return false;
     }
     is_install_subcommand(&argv, &["install"])
-}
-
-fn invokes_destructive_git(argv: &Argv) -> bool {
-    crate::rules::git::is_protected_branch_destructive(&unwrap_all_prefix_wrappers(argv))
 }
 
 fn is_install_subcommand(argv: &Argv, accepted: &[&str]) -> bool {

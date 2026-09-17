@@ -109,12 +109,14 @@ fn invokes_matcher(argv: &Argv, matcher: fn(&Argv) -> bool) -> bool {
 }
 
 /// True when `argv` is a git invocation that `core.project_hygiene`
-/// escalates to deny on a protected branch.
+/// escalates to deny on a protected branch. Nested prefix wrappers
+/// (`sudo env git …`) are peeled here so callers do not unwrap twice.
 pub(crate) fn is_protected_branch_destructive(argv: &Argv) -> bool {
-    reset::matches_reset_hard(argv)
-        || clean::matches_clean_fdx(argv)
-        || branch::matches_branch_delete_force(argv)
-        || stash::matches_stash_clear(argv)
+    let argv = crate::facts::shell::unwrap_all_prefix_wrappers(argv);
+    reset::matches_reset_hard(&argv)
+        || clean::matches_clean_fdx(&argv)
+        || branch::matches_branch_delete_force(&argv)
+        || stash::matches_stash_clear(&argv)
 }
 
 #[cfg(test)]

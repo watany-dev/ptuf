@@ -72,6 +72,9 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
   `full_path_command_keeps_head_intact` が保証)。`Argv::head_basename()` は
   `head.rsplit('/').next()` で比較用の basename を導出する委譲メソッドで、
   ルール側の head 判定はこれ経由に統一されている (ADR 0005)
+- `unwrap_prefix_wrapper` は prefix (`sudo` / `env` / `timeout` 等) を 1 層
+  peel し、`unwrap_all_prefix_wrappers` は inner head まで全層 peel する。
+  非 wrapper では clone (冪等)。rule / plugin DSL は後者を使う
 - tokenizer は 1 byte 以上前進する (forward-progress;
   `debug_assert!(advanced > 0)`)
 
@@ -299,12 +302,11 @@ config_with_filters) を集約し、
 `2:2:1` で混ぜ、Bash 偏重を緩和して Read / Write / WebFetch 系の
 fact カバレッジを確保する。
 
-## 本質的テストのギャップチェックリスト
+## 本質的テストのギャップ
 
-行カバレッジでは測れない「契約・統合・既知バイパス」の追加タスクは
-[substantive-test-checklist.md](../review/substantive-test-checklist.md)
-にテスト名と期待 assert 付きで整理している。新規 bypass や adapter 契約を
-足す前に該当行を確認する。
+行カバレッジでは測れない契約・統合・既知バイパスは
+`tests/contracts.rs` と版管理の `tests/bypass/corpus.jsonl` が担う。
+新規 bypass や adapter 契約は corpus / contracts に足してから実装する。
 
 ## 契約テスト
 

@@ -18,7 +18,9 @@ Run before every push:
 make check
 ```
 
-This runs the same gates that block CI:
+This runs the same gates that block CI. `make check` installs only
+`cargo-deny` when missing; `tarpaulin` / fuzz / mutants / semver-checks
+stay on their own Make targets.
 
 | Step | What it checks |
 | --- | --- |
