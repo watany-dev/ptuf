@@ -4,7 +4,7 @@
 `src/` 配下の実装と `.github/workflows/release.yml` / `dist-workspace.toml`
 であり、本書はその上に載せる配布層の契約と意図を整理する。
 
-ステータス: **実装中 (v0.5.0 npm publish 準備)**。`npm/` テンプレート、
+ステータス: **実装済み (v0.6.0 で npm publish)**。`npm/` テンプレート、
 shim、stamp/smoke scripts、CI smoke、release publish job は実装済み。
 残りは npm 側の package/org 予約、初回 bootstrap publish、Trusted
 Publishing 設定、実 release/PR 上の cargo-dist plan 検証である。

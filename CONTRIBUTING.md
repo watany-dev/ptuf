@@ -51,8 +51,8 @@ detection over 200 spawns, the 8 MiB stdin boundary, sequential and
 parallel hook spawns sharing one audit file under `flock`, and a full
 4-layer config + plugin + audit end-to-end build inside a tempdir. The
 last four regression-detect crashes, hangs, and delays: output-contract
-parity across all five adapters (claude-code / codex / copilot / kiro /
-cline), pathological input (non-UTF-8, NUL bytes, deeply nested JSON and
+parity across adapters under `src/init/` (claude-code / codex / copilot / kiro /
+cline / cursor / pi / opencode), pathological input (non-UTF-8, NUL bytes, deeply nested JSON and
 bash, truncated envelopes, huge secret runs) that must fail closed,
 per-call latency budgets, and repeated / adversarial `check`,
 `plugin check`, `init`, and `update` subcommand runs. The `spawn`
@@ -71,12 +71,11 @@ in parallel.
 These layers run outside the PR gate (the `Nightly` workflow / on
 demand) and are not part of `make check`:
 
-- **Fuzzing** — `make fuzz` drives the four trust boundaries (shell
-  parser, hook pipeline, config merge, plugin DSL) with coverage-guided
-  `cargo fuzz`. The `fuzz/` crate is a standalone workspace and needs a
-  nightly toolchain; `make fuzz-soak FUZZ_TARGET=<name>` runs one target
-  for longer. Crash reproducers land in `fuzz/artifacts/` and are
-  committed as permanent regression seeds.
+- **Fuzzing** — `make fuzz` drives the targets in `fuzz/fuzz_targets/`
+  with coverage-guided `cargo fuzz`. The `fuzz/` crate is a standalone
+  workspace and needs a nightly toolchain; `make fuzz-soak FUZZ_TARGET=<name>`
+  runs one target for longer. Crash reproducers belong in `fuzz/artifacts/`
+  when they exist.
 - **Mutation testing** — `make mutants` runs `cargo-mutants` over the
   decision core (`src/decision.rs`, `src/rules/**`, `src/engine/**`;
   scope in `.cargo/mutants.toml`). A surviving (`MISSED`) mutant marks a
@@ -102,10 +101,10 @@ as the PR `semver` job).
 
 - `unsafe_code` is forbidden project-wide via `[lints.rust]` in
   `Cargo.toml` and `#![forbid(unsafe_code)]` in `src/lib.rs`.
-- `unwrap()` / `expect()` are forbidden in non-test code (warned at lib
-  level; integration tests are exempt).
-- Public API needs rustdoc (`-D warnings` makes missing docs a build
-  failure).
+- `unwrap()` / `expect()` are forbidden in non-test code (`unwrap_used` /
+  `expect_used` are `deny` in `Cargo.toml` `[lints.clippy]`).
+- Lint policy lives in `Cargo.toml` `[lints]`; do not restate individual
+  lint levels here.
 
 ## Cross-Platform Code
 
@@ -114,28 +113,21 @@ platform-specific code:
 
 - Use `#[cfg(target_os = "windows")]` (or `unix`/`macos`) at the **module
   or file boundary**, not inline `cfg!(...)` checks.
-- Place Windows-only files using the suffix `_windows.rs` or prefix
-  `windows*.rs` so `cargo tarpaulin` can exclude them from the
-  Linux-only coverage measurement (see `Makefile` and `.github/workflows/ci.yml`).
 - Path handling must use `std::path::Path` / `PathBuf`. Never assume
   POSIX separators or case-sensitive comparisons.
-- When a test mutates `std::env`, isolate it (`serial_test` or process
-  spawn) so tarpaulin can eventually drop `--test-threads=1`.
+- When a test mutates `std::env`, isolate it in a subprocess so it cannot
+  leak into other tests.
 
 ## Releasing
 
-`ptuf` releases are managed by [`cargo-dist`](https://github.com/astral-sh/cargo-dist).
-
-### Release pipeline
+Release mechanics live in [`docs/RELEASING.md`](docs/RELEASING.md).
+The short version:
 
 1. Bump `version` in `Cargo.toml` and update `CHANGELOG.md`.
 2. `git tag vX.Y.Z && git push --tags`.
-3. The `Release` workflow runs `dist plan` → matrix builds across the 6
-   supported targets → publishes a GitHub Release with cargo-dist artifacts,
-   canonical verified-install archives, `SHA256SUMS`, an SPDX JSON SBOM, and
-   GitHub artifact attestations.
-4. The `Publish to crates.io` workflow then runs `cargo publish --dry-run --locked`,
-   followed by `cargo publish --locked` for non-prerelease tags.
+3. The `Release` workflow builds the targets listed in `dist-workspace.toml`
+   and publishes GitHub Release artifacts.
+4. The `Publish to crates.io` workflow then runs `cargo publish`.
 
 ### Regenerating `release.yml`
 

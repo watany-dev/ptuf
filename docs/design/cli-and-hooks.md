@@ -703,8 +703,7 @@ Cline の file hook payload は `hookName` envelope に包まれており、2 �
 - `use_mcp_tool` / `access_mcp_resource`: `arguments` (object もしくは
   JSON 文字列) を tool input へ flatten する。元の alias key は保持する
 
-正規化後、`_cline_tool_name` に元の tool 名を、SDK 形なら `_cline_tool_call_id`
-に `tool_call.id` を付与する。非 JSON / 非対応 `hookName` / `tool_call` も
+非 JSON / 非対応 `hookName` / `tool_call` も
 `preToolUse` も無い / tool 名が空 のいずれも `core.engine.invalid-payload`
 で fail-closed する。
 

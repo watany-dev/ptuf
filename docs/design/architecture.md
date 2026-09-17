@@ -154,8 +154,6 @@ legacy 形 (`preToolUse`) の両 envelope を正規化する。`tool_call` が�
 (`run_commands` / `execute_command` / `bash`→`Bash`、`read_files`→`Read`、
 `write_file`→`Write`、`use_mcp_tool`→`mcp__server__tool` 等) を適用し、
 alias キー (`command` / `file_path` / `content` 等) を非破壊的に正規化する。
-canonical 化した tool 名と `tool_call` の id は `_cline_tool_name` /
-`_cline_tool_call_id` として `tool_input` に保持する。
 
 Pi 入力は CLI 層の `src/cli/pi_input.rs` で Pi native tool 名を canonical
 形へ正規化する (`bash`→`Bash`, `grep`→`mcp__pi__grep`, unknown→`mcp__pi__*`,
@@ -251,5 +249,5 @@ fail-closed 契約を embed 利用側に提供する並立 API である。
 参照。閲覧 CLI (`ptuf audit`) は判定パイプラインの外で JSONL を
 read-only に開く。
 
-timestamp と allowlist expiry の RFC3339 処理は `time` crate に委譲する。
-自前の年月日計算は持たない。
+timestamp と allowlist expiry の RFC3339 処理は `src/audit/time.rs` の
+整数演算で行う (`YYYY-MM-DDTHH:MM:SSZ` / `±HH:MM`)。

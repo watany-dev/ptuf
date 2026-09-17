@@ -28,10 +28,10 @@ ptuf `v0.7.0` は次を実装済み:
 - Rust edition は `2024`
 - MSRV は `1.93.0`
 - 実行時依存は `serde`, `serde_json`, `serde_yaml_ng`, `memchr`, `regex`,
-  `time`, `toml_edit`
-- `time` は audit timestamp と allowlist `expiresAt` の RFC3339
-  formatting / parsing に使う
-- dev 依存は `proptest`, `tempfile`, `divan`
+  `toml_edit`
+- RFC3339 (audit timestamp / allowlist `expiresAt`) は
+  `src/audit/time.rs` の整数演算
+- dev 依存は `proptest`, `tempfile`
 
 ## 公開 API
 

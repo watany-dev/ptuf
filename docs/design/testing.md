@@ -31,7 +31,7 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 - `aggregate([d, d, …])` == `d` (冪等律)
 - `aggregate(xs ++ ys)` == `aggregate([aggregate(xs), aggregate(ys)])` (結合律)
 - 並べ替えに対し `severity` が不変 (交換律)
-- 任意の `x ∈ xs` について `aggregate(xs).rank() >= x.rank()` (上界)
+- 任意の `x ∈ xs` について `aggregate(xs).kind() >= x.kind()` (上界)
 
 ### `engine::demote_for_mode`
 
