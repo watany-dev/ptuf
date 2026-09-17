@@ -276,7 +276,7 @@ fn future_dated_allowlist_still_suppresses() {
 }
 
 #[test]
-fn malformed_expiry_is_treated_as_expired() {
+fn malformed_expiry_fails_closed_at_load() {
     let dir = repo();
     std::fs::write(
         dir.path().join(".ptuf.yaml"),
@@ -289,10 +289,10 @@ fn malformed_expiry_is_treated_as_expired() {
         &["check", "--tool", "Bash", "git reset --hard HEAD~3"],
         "",
     );
-    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
     assert!(
-        stdout.contains("Decision: ask"),
-        "a malformed expiresAt must fail closed (treated as expired); stdout: {stdout}",
+        stdout.contains("core.engine.policy-load-failed"),
+        "a malformed expiresAt must fail closed at load; stdout: {stdout}",
     );
 }
 
@@ -707,6 +707,98 @@ fn fail_closed_true_matches_cli_policy_load_failed() {
     assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
     assert!(stdout.contains("core.engine.policy-load-failed"));
     assert!(stderr.contains("could not load policy"), "stderr: {stderr}");
+}
+
+#[test]
+fn invalid_allowlist_when_fails_closed() {
+    let dir = repo();
+    std::fs::write(
+        dir.path().join(".ptuf.yaml"),
+        "allowlists:\n  - id: oops\n    appliesTo:\n      rules: [core.git.no-verify]\n    when:\n      path.filePathPrefix: [/tmp/build-]\n",
+    )
+    .expect("write yaml");
+    let (code, stdout, stderr) = run_in(
+        dir.path(),
+        &["check", "--tool", "Bash", "git commit --no-verify -m x"],
+        "",
+    );
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    assert!(stdout.contains("core.engine.policy-load-failed"));
+}
+
+#[test]
+fn invalid_allowlist_expires_at_fails_closed() {
+    let dir = repo();
+    std::fs::write(
+        dir.path().join(".ptuf.yaml"),
+        "allowlists:\n  - id: oops\n    appliesTo:\n      rules: [core.git.reset-hard]\n    expiresAt: \"2026-01-01T00:00:00.000Z\"\n",
+    )
+    .expect("write yaml");
+    let (code, stdout, stderr) = run_in(
+        dir.path(),
+        &["check", "--tool", "Bash", "git reset --hard HEAD~3"],
+        "",
+    );
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    assert!(stdout.contains("core.engine.policy-load-failed"));
+}
+
+#[test]
+fn unsupported_config_version_fails_closed() {
+    let dir = repo();
+    std::fs::write(dir.path().join(".ptuf.yaml"), "version: 2\n").expect("write yaml");
+    let (code, stdout, stderr) = run_in(dir.path(), &["check", "--tool", "Bash", "ls"], "");
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    assert!(stdout.contains("core.engine.policy-load-failed"));
+}
+
+#[test]
+fn user_layer_relative_plugin_path_resolves_against_config_dir() {
+    let fix = full_stack(LayerYaml::empty());
+    let plugin_dir = fix.config_dir.join("plugins");
+    std::fs::create_dir_all(&plugin_dir).expect("mkdir user plugins");
+    std::fs::write(plugin_dir.join("team.yaml"), NO_CURL_PLUGIN).expect("write plugin");
+    std::fs::write(
+        fix.config_dir.join("config.yaml"),
+        "version: 1\nplugins:\n  - path: plugins/team.yaml\n",
+    )
+    .expect("user yaml");
+    let decoy_dir = fix.repo_root.join("plugins");
+    std::fs::create_dir_all(&decoy_dir).expect("mkdir decoy");
+    std::fs::write(
+        decoy_dir.join("team.yaml"),
+        "apiVersion: ptuf.dev/v1\nkind: Plugin\nmetadata:\n  name: decoy\n",
+    )
+    .expect("write decoy");
+    let (code, stdout, stderr) = run_with_four_layers(
+        &fix,
+        &["check", "--tool", "Bash", "curl https://example.com"],
+        "",
+    );
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    assert!(
+        stdout.contains("pack.no-curl.block"),
+        "user-layer relative plugin path must load from the config directory, not cwd: {stdout}"
+    );
+}
+
+#[test]
+fn tilde_audit_path_expands_home() {
+    let fix = full_stack(LayerYaml::empty());
+    std::fs::write(
+        fix.repo_root.join(".ptuf.yaml"),
+        "version: 1\naudit:\n  path: ~/from-tilde.jsonl\n  enabled: true\n  includeDenied: true\n",
+    )
+    .expect("project yaml");
+    let (code, _stdout, stderr) = run_with_four_layers(
+        &fix,
+        &["hook", "claude-code"],
+        r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#,
+    );
+    assert_eq!(code, 2, "stderr: {stderr}");
+    let expanded = fix.root.path().join("from-tilde.jsonl");
+    let body = std::fs::read_to_string(&expanded).expect("tilde-expanded audit path");
+    assert!(!body.is_empty());
 }
 
 /// Return an audit path whose sink can never be opened: the parent is

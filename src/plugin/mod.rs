@@ -18,6 +18,8 @@ pub mod schema;
 
 use std::path::PathBuf;
 
+use crate::rules::ConfigRule;
+
 pub use loader::{LoadedPlugin, SUPPORTED_FACTS, load_path, load_str};
 pub use rule::PluginRule;
 
@@ -100,7 +102,7 @@ impl std::fmt::Display for PluginError {
             Self::DuplicateRuleId { path, rule_id } => {
                 write!(
                     f,
-                    "plugin {}: rule `{rule_id}`: duplicate rule id within the same plugin",
+                    "plugin {}: rule `{rule_id}`: duplicate rule id (must be unique across builtins and all plugins)",
                     path.display()
                 )
             },
@@ -141,6 +143,28 @@ impl PluginSet {
         self.plugins.push(plugin);
     }
 
+    /// Append `plugin` if none of its rule ids collide with builtins
+    /// or with plugins already in the set. Load-time uniqueness is the
+    /// fail-closed counterpart of id-keyed `hardDeny` / severity /
+    /// override lookup.
+    pub fn try_push(&mut self, plugin: LoadedPlugin) -> Result<(), PluginError> {
+        for rule in &plugin.rules {
+            let id = rule.id();
+            if self.has_rule_id(id) {
+                return Err(PluginError::DuplicateRuleId {
+                    path: plugin.source.clone(),
+                    rule_id: id.to_string(),
+                });
+            }
+        }
+        self.push(plugin);
+        Ok(())
+    }
+
+    fn has_rule_id(&self, id: &str) -> bool {
+        crate::rules::iter().any(|rule| rule.id() == id) || self.rules().any(|rule| rule.id() == id)
+    }
+
     pub fn rule_count(&self) -> usize {
         self.plugins.iter().map(LoadedPlugin::rule_count).sum()
     }
@@ -154,7 +178,7 @@ impl PluginSet {
     /// error encountered, if any.
     pub fn load_paths(&mut self, paths: &[PathBuf]) -> Result<(), PluginError> {
         for path in paths {
-            self.push(load_path(path)?);
+            self.try_push(load_path(path)?)?;
         }
         Ok(())
     }
@@ -199,6 +223,48 @@ rules:
         set.push(ok_plugin("b"));
         assert_eq!(set.rule_count(), 2);
         assert_eq!(set.rules().count(), 2);
+    }
+
+    #[test]
+    fn try_push_rejects_duplicate_rule_id_across_plugins() {
+        let mut set = PluginSet::new();
+        set.try_push(ok_plugin("a")).expect("first");
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: shadow
+rules:
+  - id: a.x
+    severity: low
+    defaultDecision: allow
+    when:
+      tool: Never
+    reason: shadow
+"#;
+        let shadow = load_str(Path::new("shadow.yaml"), yaml).expect("load");
+        let err = set.try_push(shadow).expect_err("duplicate id");
+        assert!(matches!(err, PluginError::DuplicateRuleId { .. }));
+        assert!(format!("{err}").contains("a.x"));
+    }
+
+    #[test]
+    fn try_push_rejects_id_that_collides_with_a_builtin() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: shadow
+rules:
+  - id: core.filesystem.destructive-rm
+    severity: low
+    defaultDecision: allow
+    when:
+      tool: Bash
+    reason: shadow
+"#;
+        let err = load_str(Path::new("shadow.yaml"), yaml).expect_err("core. reserved");
+        assert!(matches!(err, PluginError::ReservedRuleId { .. }));
     }
 
     #[test]

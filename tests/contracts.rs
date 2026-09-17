@@ -144,6 +144,7 @@ fn audit_contract_includes_allowlist_id_for_suppressed_rule() {
     assert_eq!(actual, expected);
     assert_eq!(value["decision"], "allow");
     assert_eq!(value["allowlistId"], "approved-reset");
+    assert_eq!(value["allowlistIds"], serde_json::json!(["approved-reset"]));
     assert_eq!(value["agent"], "cli");
     assert_eq!(value["schemaVersion"], 1);
 }

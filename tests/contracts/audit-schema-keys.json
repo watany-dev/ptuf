@@ -1,6 +1,7 @@
 [
   "agent",
   "allowlistId",
+  "allowlistIds",
   "commandRedacted",
   "decision",
   "event",

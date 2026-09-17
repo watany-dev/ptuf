@@ -18,12 +18,12 @@ use super::{Config, PackOverride, RuleOverride};
 
 /// Fold `layers` into a final [`Config`]. Layers are applied in the
 /// order they appear (so `layers[0]` is the lowest-priority scope).
-pub fn merge(layers: Vec<RawConfig>) -> Config {
+pub fn merge(layers: Vec<RawConfig>) -> Result<Config, super::ConfigError> {
     let mut acc = Config::default();
     for layer in layers {
-        apply(&mut acc, layer.into_merge_layer());
+        apply(&mut acc, layer.try_into_merge_layer()?);
     }
-    acc
+    Ok(acc)
 }
 
 fn apply(acc: &mut Config, layer: MergeLayer) {
@@ -93,6 +93,10 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+
+    fn merge(layers: Vec<RawConfig>) -> Config {
+        super::merge(layers).expect("test layers are valid")
+    }
 
     fn raw() -> RawConfig {
         RawConfig::default()
@@ -217,7 +221,10 @@ mod tests {
         ]);
         assert_eq!(
             cfg.allowlists,
-            vec![Allowlist::from(lower_entry), Allowlist::from(higher_entry)]
+            vec![
+                Allowlist::try_from(lower_entry).expect("lower"),
+                Allowlist::try_from(higher_entry).expect("higher"),
+            ]
         );
     }
 
@@ -355,6 +362,26 @@ mod tests {
         assert_eq!(cfg.audit.path, Some(PathBuf::from("/tmp/lower.jsonl")));
     }
 
+    #[test]
+    fn merge_rejects_allowlist_with_uncompilable_when() {
+        let lower = RawConfig {
+            allowlists: vec![RawAllowlist {
+                id: "oops".into(),
+                applies_to: RawAllowlistApplies {
+                    rules: vec!["core.git.reset-hard".into()],
+                },
+                when: Some(
+                    serde_yaml_ng::from_str("path.filePathPrefix: [/tmp/]\n").expect("yaml"),
+                ),
+                expires_at: None,
+                reason: None,
+            }],
+            ..raw()
+        };
+        let err = super::merge(vec![lower]).expect_err("invalid when");
+        assert!(matches!(err, crate::config::ConfigError::Allowlist { .. }));
+    }
+
     use proptest::collection::{btree_map, vec};
     use proptest::prelude::*;
 
@@ -472,7 +499,11 @@ mod tests {
             let cfg = merge(layers.clone());
             let expected: Vec<Allowlist> = layers
                 .into_iter()
-                .flat_map(|l| l.allowlists.into_iter().map(Allowlist::from))
+                .flat_map(|l| {
+                    l.allowlists
+                        .into_iter()
+                        .map(|a| Allowlist::try_from(a).expect("valid allowlist"))
+                })
                 .collect();
             prop_assert_eq!(cfg.allowlists, expected);
         }

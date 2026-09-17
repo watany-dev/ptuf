@@ -21,7 +21,7 @@ fuzz_target!(|data: &[u8]| {
     let source = String::from_utf8_lossy(data);
     let mut config = config::yaml::parse_str(Path::new("fuzz-policy.yaml"), &source)
         .ok()
-        .map(|raw| config::merge::merge(vec![raw]))
+        .map(|raw| config::merge::merge(vec![raw]).unwrap_or_default())
         .unwrap_or_default();
     config.plugin_paths.clear();
     if let Ok(engine) = Engine::with_config(config) {

@@ -320,6 +320,10 @@ allowlists:
     appliesTo:
       rules: [core.workspace.outside-access]
     when:
-      path.filePathPrefixAny: [/tmp/build-]
+      path.filePathPrefixAny: [/tmp/build-cache]
     reason: ビルドキャッシュは workspace 外 OK
 ```
+
+`filePathPrefixAny` は正規化済みパスに対する component 単位の prefix
+比較である。`/tmp/build-cache/../../…` や symlink、`/tmp/build-cache-other`
+のような部分一致では一致しない。

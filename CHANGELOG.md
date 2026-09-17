@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- audit record に `allowlistIds` (`string[]`) を追加。allowlist が rule を
+  抑止した全件を最終 decision に関わらず残す。`allowlistId` は後方互換のため
+  `Allow` 時の先頭 1 件のまま。
+- `ConfigError::Allowlist` / `ConfigError::Version`。allowlist `when` /
+  `expiresAt` と未対応 `version` の load 時検証失敗を表す。
+- `PluginSet::try_push` — rule id を builtin / 既存 plugin と照合してから追加。
+
+### Changed (BREAKING)
+- `config::merge::merge` が `Result<Config, ConfigError>` を返す。
+  allowlist / version の検証失敗を伝播する。
+- `AuditRecord` と `engine::Outcome` に `allowlist_ids: Vec<String>` フィールドを追加。
+  構造体リテラルを書いている下流は更新が必要。
+- `ConfigError` に `Allowlist` / `Version` variant を追加。網羅 `match` している
+  下流は更新が必要。
+
+### Fixed
+- allowlist `when` の DSL コンパイル失敗が無条件 allowlist に化ける fail-open
+  を解消。不正 `when` / 不正 `expiresAt` / `version != 1` は policy-load-failed
+  (issues #202)。
+- `path.filePathPrefixAny` が未正規化文字列 prefix 比較だったため `..` /
+  symlink / 部分一致で allowlist を広げられた問題を、正規化 +
+  `Path::starts_with` に変更して修正 (issue #203)。
+- plugin 間 / plugin と builtin の rule id 衝突を load 時に reject。
+  `is_hard_deny_rule_id` は同 id のどれかが `hardDeny` なら true にし、
+  monitor 降格の first-wins 抜けを塞ぐ (issue #204)。
+- config の `plugins[].path` / `audit.path` が home 展開も config ファイル基準の
+  相対解決もしなかった問題を修正 (issue #205)。
+- `overridable: false` の rule が `packs.<prefix>.enabled: false` で消えていた
+  非対称を、rule override と同じ `is_overridable` 判定に揃えて修正 (issue #206)。
+  allowlist ヒットは `includeAllowed: false` でも audit に残る。
+
+
+### Added
 - **`kiro-v2` agent token** — Kiro CLI の hook 仕様が v3 で変わるため、
   adapter 世代ごとに versioned token を持たせた。現行 adapter は
   `ptuf init kiro-v2` / `ptuf hook kiro-v2`。無印の `kiro` は

@@ -187,8 +187,23 @@ pub fn resolved_audit_path(config: &Config) -> Option<PathBuf> {
 /// Errors raised while loading the layered policy.
 #[derive(Debug)]
 pub enum ConfigError {
-    Io { path: PathBuf, source: io::Error },
-    Yaml { path: PathBuf, message: String },
+    Io {
+        path: PathBuf,
+        source: io::Error,
+    },
+    Yaml {
+        path: PathBuf,
+        message: String,
+    },
+    Allowlist {
+        path: PathBuf,
+        id: String,
+        message: String,
+    },
+    Version {
+        path: PathBuf,
+        found: u32,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -200,6 +215,20 @@ impl fmt::Display for ConfigError {
             Self::Yaml { path, message } => {
                 write!(f, "failed to parse {}: {}", path.display(), message)
             },
+            Self::Allowlist { path, id, message } => {
+                write!(
+                    f,
+                    "failed to parse {}: allowlist `{id}`: {message}",
+                    path.display()
+                )
+            },
+            Self::Version { path, found } => {
+                write!(
+                    f,
+                    "failed to parse {}: unsupported version {found} (expected 1)",
+                    path.display()
+                )
+            },
         }
     }
 }
@@ -208,7 +237,7 @@ impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
-            Self::Yaml { .. } => None,
+            Self::Yaml { .. } | Self::Allowlist { .. } | Self::Version { .. } => None,
         }
     }
 }
@@ -239,7 +268,7 @@ pub fn load_with_layout(layout: scope::Layout) -> Result<Config, ConfigError> {
         let raw = yaml::load_path(&path)?;
         layers.push(raw);
     }
-    Ok(merge::merge(layers))
+    merge::merge(layers)
 }
 
 #[cfg(test)]
@@ -284,6 +313,23 @@ mod tests {
         };
         let dyn_yaml: &dyn std::error::Error = &yaml_err;
         assert!(dyn_yaml.source().is_none());
+
+        let allow_err = ConfigError::Allowlist {
+            path: PathBuf::from("/x"),
+            id: "oops".into(),
+            message: "when: unknown key".into(),
+        };
+        let dyn_allow: &dyn std::error::Error = &allow_err;
+        assert!(dyn_allow.source().is_none());
+        assert!(format!("{allow_err}").contains("oops"));
+
+        let ver_err = ConfigError::Version {
+            path: PathBuf::from("/x"),
+            found: 2,
+        };
+        let dyn_ver: &dyn std::error::Error = &ver_err;
+        assert!(dyn_ver.source().is_none());
+        assert!(format!("{ver_err}").contains("version 2"));
     }
 
     #[test]

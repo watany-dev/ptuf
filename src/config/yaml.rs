@@ -7,6 +7,8 @@ use std::path::Path;
 
 use super::ConfigError;
 use super::schema::RawConfig;
+use crate::config::scope::SystemEnv;
+use crate::facts::path::resolve_with_env;
 
 /// Parse a YAML string into a [`RawConfig`].
 ///
@@ -17,13 +19,31 @@ pub fn parse_str(path: &Path, source: &str) -> Result<RawConfig, ConfigError> {
         path: path.to_path_buf(),
         message: e.to_string(),
     })?;
+    if let Some(version) = raw.version
+        && version != 1
+    {
+        return Err(ConfigError::Version {
+            path: path.to_path_buf(),
+            found: version,
+        });
+    }
     for entry in &raw.allowlists {
         if let Some(when) = &entry.when
             && let Err(err) = crate::plugin::dsl::compile(when)
         {
-            return Err(ConfigError::Yaml {
+            return Err(ConfigError::Allowlist {
                 path: path.to_path_buf(),
-                message: format!("invalid allowlist `{}` when: {err}", entry.id),
+                id: entry.id.clone(),
+                message: format!("when: {err}"),
+            });
+        }
+        if let Some(expires_at) = &entry.expires_at
+            && crate::audit::time::parse_rfc3339_to_secs(expires_at).is_none()
+        {
+            return Err(ConfigError::Allowlist {
+                path: path.to_path_buf(),
+                id: entry.id.clone(),
+                message: format!("expiresAt: invalid RFC3339 `{expires_at}`"),
             });
         }
     }
@@ -31,12 +51,31 @@ pub fn parse_str(path: &Path, source: &str) -> Result<RawConfig, ConfigError> {
 }
 
 /// Read the file at `path` and parse it into a [`RawConfig`].
+///
+/// Plugin and audit paths are home-expanded and, when relative, joined
+/// onto the directory that contains `path` so each config layer's
+/// references are independent of process cwd.
 pub fn load_path(path: &Path) -> Result<RawConfig, ConfigError> {
     let source = fs::read_to_string(path).map_err(|e| ConfigError::Io {
         path: path.to_path_buf(),
         source: e,
     })?;
-    parse_str(path, &source)
+    let mut raw = parse_str(path, &source)?;
+    resolve_layer_paths(&mut raw, path);
+    Ok(raw)
+}
+
+fn resolve_layer_paths(raw: &mut RawConfig, config_path: &Path) {
+    let config_dir = config_path.parent();
+    let env = SystemEnv;
+    for plugin in &mut raw.plugins {
+        let raw_path = plugin.path.to_string_lossy();
+        plugin.path = resolve_with_env(&raw_path, config_dir, &env);
+    }
+    if let Some(audit_path) = raw.audit.path.take() {
+        let raw_path = audit_path.to_string_lossy();
+        raw.audit.path = Some(resolve_with_env(&raw_path, config_dir, &env));
+    }
 }
 
 #[cfg(test)]
@@ -140,7 +179,8 @@ allowlists:
       shell.argv: 42
 "#;
         let err = parse_str(&p(), yaml).expect_err("invalid allowlist when");
-        assert!(matches!(err, ConfigError::Yaml { .. }));
+        assert!(matches!(err, ConfigError::Allowlist { .. }));
+        assert!(format!("{err}").contains("bad"));
     }
 
     #[test]
@@ -282,14 +322,94 @@ allowlists:
 ";
         let err = parse_str(&p(), yaml).expect_err("compile failure expected");
         match err {
-            ConfigError::Yaml { message, .. } => {
+            ConfigError::Allowlist { id, message, .. } => {
+                assert_eq!(id, "my-bad-id");
                 assert!(
-                    message.contains("my-bad-id"),
-                    "expected entry id in message: {message}"
+                    message.contains("when"),
+                    "expected when compile error: {message}"
                 );
             },
-            other => panic!("expected Yaml error, got {other:?}"),
+            other => panic!("expected Allowlist error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rejects_invalid_allowlist_expires_at() {
+        let yaml = r#"
+allowlists:
+  - id: stale-shape
+    appliesTo:
+      rules: [core.git.reset-hard]
+    expiresAt: "2026-01-01T00:00:00.000Z"
+"#;
+        let err = parse_str(&p(), yaml).expect_err("invalid expiresAt");
+        assert!(matches!(err, ConfigError::Allowlist { .. }));
+        assert!(format!("{err}").contains("stale-shape"));
+    }
+
+    #[test]
+    fn rejects_unsupported_config_version() {
+        let err = parse_str(&p(), "version: 2\n").expect_err("version 2");
+        assert!(matches!(err, ConfigError::Version { found: 2, .. }));
+    }
+
+    #[test]
+    fn accepts_omitted_version() {
+        let raw = parse_str(&p(), "mode: enforce\n").expect("parse");
+        assert_eq!(raw.version, None);
+        assert_eq!(raw.mode, Some(Mode::Enforce));
+    }
+
+    #[test]
+    fn load_path_resolves_relative_plugin_and_audit_paths() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-yaml-resolve-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("config.yaml");
+        std::fs::write(
+            &path,
+            "plugins:\n  - path: plugins/team.yaml\naudit:\n  path: logs/audit.jsonl\n",
+        )
+        .expect("write");
+
+        let raw = load_path(&path).expect("load");
+        assert_eq!(raw.plugins[0].path, dir.join("plugins/team.yaml"));
+        assert_eq!(
+            raw.audit.path.as_deref(),
+            Some(dir.join("logs/audit.jsonl").as_path())
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn load_path_expands_home_in_plugin_and_audit_paths() {
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return;
+        };
+        let dir =
+            std::env::temp_dir().join(format!("ptuf-yaml-home-{}-{}", std::process::id(), line!()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("config.yaml");
+        std::fs::write(
+            &path,
+            "plugins:\n  - path: ~/team.yaml\naudit:\n  path: $HOME/audit.jsonl\n",
+        )
+        .expect("write");
+
+        let raw = load_path(&path).expect("load");
+        assert_eq!(raw.plugins[0].path, home.join("team.yaml"));
+        assert_eq!(
+            raw.audit.path.as_deref(),
+            Some(home.join("audit.jsonl").as_path())
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     use proptest::prelude::*;

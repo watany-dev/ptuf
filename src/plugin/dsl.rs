@@ -11,6 +11,7 @@ use serde_yaml_ng::Value;
 
 use crate::HookInput;
 use crate::facts::Facts;
+use crate::facts::path::{self, PathFact};
 use crate::facts::shell::{Argv, unwrap_prefix_wrapper};
 
 /// Compiled boolean expression. The combinators (`All`, `Any`, `Not`)
@@ -344,26 +345,11 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
                 false
             }),
         },
-        WhenNode::PathFilePathPrefixAny(prefixes) => match facts.path.as_ref() {
-            None => facts.paths.iter().any(|path| {
-                let abs = path.absolute.to_string_lossy();
-                prefixes
-                    .iter()
-                    .any(|p| path.raw.starts_with(p) || abs.starts_with(p))
-            }),
-            Some(path) => {
-                let abs = path.absolute.to_string_lossy();
-                prefixes
-                    .iter()
-                    .any(|p| path.raw.starts_with(p) || abs.starts_with(p))
-                    || facts.paths.iter().any(|path| {
-                        let abs = path.absolute.to_string_lossy();
-                        prefixes
-                            .iter()
-                            .any(|p| path.raw.starts_with(p) || abs.starts_with(p))
-                    })
-            },
-        },
+        WhenNode::PathFilePathPrefixAny(prefixes) => facts
+            .path
+            .iter()
+            .chain(facts.paths.iter())
+            .any(|path| path_matches_any_prefix(path, prefixes)),
         WhenNode::UrlSchemeAny(schemes) => facts
             .url
             .as_ref()
@@ -377,6 +363,19 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
             kinds.iter().any(|k| k == tag)
         }),
     }
+}
+
+/// Component-wise prefix match against the resolved filesystem target.
+/// `..` is folded and existing symlinks are resolved via
+/// [`path::resolve_for_containment`]. Partial-component matches are
+/// rejected because [`std::path::Path::starts_with`] compares whole
+/// components.
+fn path_matches_any_prefix(path: &PathFact, prefixes: &[String]) -> bool {
+    let resolved = path::resolve_for_containment(path);
+    prefixes.iter().any(|prefix| {
+        let prefix = path::normalize_components(std::path::Path::new(prefix));
+        resolved.starts_with(prefix)
+    })
 }
 
 #[cfg(test)]
@@ -1048,6 +1047,50 @@ shell.pipeline:
         assert!(!evaluate(&node, &facts, &input));
     }
 
+    fn read_path(file_path: &str) -> (HookInput, crate::facts::Facts) {
+        let input = HookInput {
+            tool_name: "Read".into(),
+            tool_input: json!({ "file_path": file_path }),
+        };
+        let facts = facts::extract(&input);
+        (input, facts)
+    }
+
+    #[test]
+    fn evaluate_path_prefix_rejects_parent_dir_escape() {
+        let (input, facts) = read_path("/tmp/build-x/../../var/log/syslog");
+        let node = WhenNode::PathFilePathPrefixAny(vec!["/tmp/build-x".into()]);
+        assert!(!evaluate(&node, &facts, &input));
+    }
+
+    #[test]
+    fn evaluate_path_prefix_rejects_partial_component_match() {
+        let (input, facts) = read_path("/home/me/proj-extra/key");
+        let node = WhenNode::PathFilePathPrefixAny(vec!["/home/me/proj".into()]);
+        assert!(!evaluate(&node, &facts, &input));
+    }
+
+    #[test]
+    fn evaluate_path_prefix_uses_path_starts_with() {
+        let (input, facts) = read_path("/tmp/build-cache/out");
+        let node = WhenNode::PathFilePathPrefixAny(vec!["/tmp/build-cache".into()]);
+        assert!(evaluate(&node, &facts, &input));
+        let sibling = WhenNode::PathFilePathPrefixAny(vec!["/tmp/build-cache-other".into()]);
+        assert!(!evaluate(&sibling, &facts, &input));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn evaluate_path_prefix_rejects_symlink_escape() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let link = dir.path().join("build-link");
+        std::os::unix::fs::symlink("/", &link).expect("symlink");
+        let target = link.join("var/log/syslog");
+        let (input, facts) = read_path(&target.to_string_lossy());
+        let node = WhenNode::PathFilePathPrefixAny(vec![link.to_string_lossy().into_owned()]);
+        assert!(!evaluate(&node, &facts, &input));
+    }
+
     #[test]
     fn compiles_url_scheme_any_and_host_any() {
         let v = yaml(
@@ -1277,6 +1320,45 @@ all:
             if input.tool_name != "WebFetch" {
                 prop_assert!(!evaluate(&scheme, &facts, &input));
                 prop_assert!(!evaluate(&host, &facts, &input));
+            }
+        }
+
+        #[test]
+        fn pbt_path_prefix_parent_dir_does_not_match(
+            head in "[A-Za-z]{2,8}",
+            mid in "[A-Za-z]{2,8}",
+            tail in "[A-Za-z]{2,8}",
+        ) {
+            let prefix = format!("/{head}/{mid}");
+            let escaped = format!("{prefix}/../../{tail}");
+            let input = HookInput {
+                tool_name: "Read".into(),
+                tool_input: json!({ "file_path": escaped }),
+            };
+            let facts = facts::extract(&input);
+            let node = WhenNode::PathFilePathPrefixAny(vec![prefix]);
+            prop_assert!(!evaluate(&node, &facts, &input));
+        }
+
+        #[test]
+        fn pbt_path_prefix_matches_path_starts_with(
+            head in "[A-Za-z]{2,8}",
+            mid in "[A-Za-z]{2,8}",
+            child in "[A-Za-z]{2,8}",
+        ) {
+            let prefix = format!("/{head}/{mid}");
+            let inside = format!("{prefix}/{child}");
+            let input = HookInput {
+                tool_name: "Read".into(),
+                tool_input: json!({ "file_path": inside }),
+            };
+            let facts = facts::extract(&input);
+            let node = WhenNode::PathFilePathPrefixAny(vec![prefix.clone()]);
+            let resolved = facts.paths.iter().chain(facts.path.as_ref()).next()
+                .map(crate::facts::path::resolve_for_containment);
+            if let Some(resolved) = resolved {
+                let prefix_path = crate::facts::path::normalize_components(std::path::Path::new(&prefix));
+                prop_assert_eq!(evaluate(&node, &facts, &input), resolved.starts_with(&prefix_path));
             }
         }
     }

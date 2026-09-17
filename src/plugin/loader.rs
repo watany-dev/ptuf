@@ -12,6 +12,9 @@
 //! 6. per rule: the id is not reserved (`core.` prefix, external
 //!    plugins only), the id is unique within the plugin, and the
 //!    `when:` compiles into the AST.
+//!
+//! `PluginSet::load_paths` additionally rejects ids that collide with
+//! a builtin rule or with a plugin already in the set.
 
 use std::collections::HashSet;
 use std::fs;
