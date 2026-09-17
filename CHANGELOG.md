@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-17
+
 ### Added
 - audit record に `allowlistIds` (`string[]`) を追加。allowlist が rule を
   抑止した全件を最終 decision に関わらず残す。`allowlistId` は後方互換のため
@@ -28,8 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   を解消。不正 `when` / 不正 `expiresAt` / `version != 1` は policy-load-failed
   (issues #202)。
 - `path.filePathPrefixAny` が未正規化文字列 prefix 比較だったため `..` /
-  symlink / 部分一致で allowlist を広げられた問題を、正規化 +
-  `Path::starts_with` に変更して修正 (issue #203)。
+  symlink / 部分一致で allowlist を広げられた問題を、path と prefix の両方を
+  正規化 + `Path::starts_with` に変更して修正 (issue #203)。prefix 側も
+  同じ解決を通すので、OS の directory symlink 下でも Deny が外れない。
 - plugin 間 / plugin と builtin の rule id 衝突を load 時に reject。
   `is_hard_deny_rule_id` は同 id のどれかが `hardDeny` なら true にし、
   monitor 降格の first-wins 抜けを塞ぐ (issue #204)。
@@ -39,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   非対称を、rule override と同じ `is_overridable` 判定に揃えて修正 (issue #206)。
   allowlist ヒットは `includeAllowed: false` でも audit に残る。
 
+## [0.7.0] - 2026-08-16
 
 ### Added
 - **`kiro-v2` agent token** — Kiro CLI の hook 仕様が v3 で変わるため、

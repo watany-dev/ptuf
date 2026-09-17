@@ -366,14 +366,15 @@ pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
 }
 
 /// Component-wise prefix match against the resolved filesystem target.
-/// `..` is folded and existing symlinks are resolved via
-/// [`path::resolve_for_containment`]. Partial-component matches are
-/// rejected because [`std::path::Path::starts_with`] compares whole
-/// components.
+/// Both the file path and each prefix go through
+/// [`path::resolve_for_containment`] / [`path::resolve_path_for_containment`]
+/// so OS directory symlinks (`/tmp` → `/private/tmp` on macOS) still
+/// match. Partial-component matches are rejected because
+/// [`std::path::Path::starts_with`] compares whole components.
 fn path_matches_any_prefix(path: &PathFact, prefixes: &[String]) -> bool {
     let resolved = path::resolve_for_containment(path);
     prefixes.iter().any(|prefix| {
-        let prefix = path::normalize_components(std::path::Path::new(prefix));
+        let prefix = path::resolve_path_for_containment(std::path::Path::new(prefix));
         resolved.starts_with(prefix)
     })
 }
@@ -1091,6 +1092,22 @@ shell.pipeline:
         assert!(!evaluate(&node, &facts, &input));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn evaluate_path_prefix_matches_through_directory_symlink() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("real-root");
+        std::fs::create_dir_all(real.join("nested")).expect("mkdir");
+        let link = dir.path().join("link-root");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let file = link.join("nested/file.txt");
+        let (input, facts) = read_path(&file.to_string_lossy());
+        let via_link = WhenNode::PathFilePathPrefixAny(vec![link.to_string_lossy().into_owned()]);
+        assert!(evaluate(&via_link, &facts, &input));
+        let via_real = WhenNode::PathFilePathPrefixAny(vec![real.to_string_lossy().into_owned()]);
+        assert!(evaluate(&via_real, &facts, &input));
+    }
+
     #[test]
     fn compiles_url_scheme_any_and_host_any() {
         let v = yaml(
@@ -1357,7 +1374,7 @@ all:
             let resolved = facts.paths.iter().chain(facts.path.as_ref()).next()
                 .map(crate::facts::path::resolve_for_containment);
             if let Some(resolved) = resolved {
-                let prefix_path = crate::facts::path::normalize_components(std::path::Path::new(&prefix));
+                let prefix_path = crate::facts::path::resolve_path_for_containment(std::path::Path::new(&prefix));
                 prop_assert_eq!(evaluate(&node, &facts, &input), resolved.starts_with(&prefix_path));
             }
         }

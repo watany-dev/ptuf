@@ -324,6 +324,8 @@ allowlists:
     reason: ビルドキャッシュは workspace 外 OK
 ```
 
-`filePathPrefixAny` は正規化済みパスに対する component 単位の prefix
-比較である。`/tmp/build-cache/../../…` や symlink、`/tmp/build-cache-other`
-のような部分一致では一致しない。
+`filePathPrefixAny` は path と prefix の両方を正規化したうえでの
+component 単位の prefix 比較である。`/tmp/build-cache/../../…` や
+file 側の symlink escape、`/tmp/build-cache-other` のような部分一致では
+一致しない。OS が `/tmp` を別パスへ symlink している場合も、prefix 側を
+同じ解決に通すので一致する。

@@ -233,7 +233,7 @@ rules:
 | `shell.argv` | `{ headAny: [string] }` | command head がいずれかに一致。`bash -c`, `eval`, `xargs`, `find -exec` のような wrapper で surfaced した nested command も含む |
 | `shell.pipeline` | `{ from: { commandAny: [...] }, to: { commandAny: [...] } }` | pipeline に from→to の流れがある |
 | `shell.ast` | — | **未サポート** — `capabilities.requires` では宣言できるが `when:` leaf には使えない |
-| `path.filePathPrefixAny` | `string[]` | 抽出 path を正規化 (`..` 解決 + 可能な範囲で symlink 解決) したうえで、component 単位の `Path::starts_with` で prefix 配下か判定。文字列 prefix や部分一致 (`/home/me/proj` 対 `/home/me/proj-secrets`) では一致しない |
+| `path.filePathPrefixAny` | `string[]` | 抽出 path と prefix の両方を正規化 (`..` 解決 + 可能な範囲で symlink 解決) したうえで、component 単位の `Path::starts_with` で prefix 配下か判定。OS の directory symlink (`/tmp` → `/private/tmp`) でも一致する。文字列 prefix や部分一致 (`/home/me/proj` 対 `/home/me/proj-secrets`) では一致しない |
 | `url.schemeAny` | `string[]` | URL scheme が一致 |
 | `url.hostAny` | `string[]` | URL host が一致 |
 | `sensitive.pathKindAny` | `string[]` | 機密分類が一致 |

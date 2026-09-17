@@ -220,6 +220,13 @@ pub fn resolve_for_containment(fact: &PathFact) -> PathBuf {
     climb_and_canonicalize(&fact.absolute)
 }
 
+/// Same resolution as [`resolve_for_containment`] for a bare path
+/// (policy prefixes, extra workspace roots). Existing leaves
+/// canonicalise; missing tails climb to an ancestor that does.
+pub(crate) fn resolve_path_for_containment(path: &Path) -> PathBuf {
+    climb_and_canonicalize(path)
+}
+
 /// True iff `target` is identical to or a descendant (component-wise)
 /// of any path in `workspaces`. Both sides are expected to be canonical
 /// or normalised to the same form.
@@ -835,6 +842,18 @@ mod tests {
         };
         let resolved = resolve_for_containment(&fact);
         assert_eq!(resolved, PathBuf::from("/ptuf-nonexist/etc/passwd"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_path_for_containment_follows_directory_symlink() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("real-root");
+        std::fs::create_dir_all(&real).expect("mkdir");
+        let link = dir.path().join("link-root");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let resolved = resolve_path_for_containment(&link);
+        assert_eq!(resolved, real.canonicalize().expect("canon"));
     }
 
     use crate::testing::proptest::{file_path, richer_hook_input};
