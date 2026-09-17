@@ -1,10 +1,8 @@
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, Bash, Pipeline, Redirect, RedirectOp, unwrap_prefix_wrapper};
+use crate::facts::shell::{Argv, Bash, Pipeline, Redirect, RedirectOp, unwrap_all_prefix_wrappers};
 use crate::hook_input::HookInput;
 use crate::reason;
-use regex::Regex;
-use std::sync::LazyLock;
 
 use super::ConfigRule;
 use super::patterns::{argv_references_sensitive, matches_sensitive_path};
@@ -21,13 +19,6 @@ const RULE_ID: &str = "core.secrets.sensitive-path-to-network";
 const NETWORK_SINK_HEADS: &[&str] = &[
     "curl", "wget", "nc", "ncat", "socat", "telnet", "scp", "rsync", "ftp", "sftp",
 ];
-
-#[expect(
-    clippy::expect_used,
-    reason = "static pattern literal validated by tests"
-)]
-static DEVTCP_UDP: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i-u:^/dev/(?:tcp|udp)/)").expect("DEVTCP_UDP regex"));
 
 impl ConfigRule for SensitivePathToNetwork {
     fn id(&self) -> &str {
@@ -110,25 +101,19 @@ fn redirect_target_is_network(r: &Redirect) -> bool {
     matches!(
         r.op,
         RedirectOp::Stdout | RedirectOp::StdoutAppend | RedirectOp::Stderr | RedirectOp::Merge
-    )
-        // Cheap ASCII prefix gate so the regex is only compiled when the
-        // target can actually be a /dev/tcp//dev/udp pseudo-path — the
-        // regex itself stays authoritative for the match.
-        && r.target
-            .as_bytes()
-            .get(..5)
-            .is_some_and(|head| head.eq_ignore_ascii_case(b"/dev/"))
-        && DEVTCP_UDP.is_match(&r.target)
+    ) && is_dev_tcp_or_udp(&r.target)
+}
+
+fn is_dev_tcp_or_udp(target: &str) -> bool {
+    let bytes = target.as_bytes();
+    bytes.len() >= 9
+        && bytes[..5].eq_ignore_ascii_case(b"/dev/")
+        && (bytes[5..8].eq_ignore_ascii_case(b"tcp") || bytes[5..8].eq_ignore_ascii_case(b"udp"))
+        && bytes[8] == b'/'
 }
 
 fn invokes_network_sink(argv: &Argv) -> bool {
-    if NETWORK_SINK_HEADS.contains(&argv.head_basename()) {
-        return true;
-    }
-    if let Some(inner) = unwrap_prefix_wrapper(argv) {
-        return NETWORK_SINK_HEADS.contains(&inner.head_basename());
-    }
-    false
+    NETWORK_SINK_HEADS.contains(&unwrap_all_prefix_wrappers(argv).head_basename())
 }
 
 #[cfg(test)]
