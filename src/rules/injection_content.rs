@@ -162,14 +162,9 @@ fn is_content_reader(head: &str) -> bool {
 }
 
 fn collect_reader_args(argv: &Argv, out: &mut Vec<PathBuf>) {
+    let argv = crate::facts::shell::unwrap_all_prefix_wrappers(argv);
     if is_content_reader(argv.head_basename()) {
         out.extend(argv.positional().map(resolve_candidate));
-        return;
-    }
-    if let Some(inner) = crate::facts::shell::unwrap_prefix_wrapper(argv)
-        && is_content_reader(inner.head_basename())
-    {
-        out.extend(inner.positional().map(resolve_candidate));
     }
 }
 

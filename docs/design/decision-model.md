@@ -27,7 +27,8 @@ Rust の公開 enum:
 deny > ask > monitor > allow
 ```
 
-`aggregate([])` は `Allow`。
+これは `DecisionKind` の variant 順 (`Allow < Monitor < Ask < Deny`) と一致し、
+`aggregate` は `Decision::kind` の max を取る。`aggregate([])` は `Allow`。
 
 ## CLI / hook との対応
 

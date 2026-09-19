@@ -7,7 +7,7 @@
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, unwrap_prefix_wrapper};
+use crate::facts::shell::Argv;
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -102,27 +102,28 @@ impl ConfigRule for GitRule {
     }
 }
 
-/// Run `matcher` against `argv` directly; if `argv` is a privilege
-/// wrapper such as `sudo git ...` — including nested forms like
-/// `sudo doas git ...` — peel the wrappers one layer at a time and retry.
+/// Run `matcher` against the fully unwrapped argv so nested prefix
+/// wrappers (`sudo env git ...`) are judged by the command they run.
 fn invokes_matcher(argv: &Argv, matcher: fn(&Argv) -> bool) -> bool {
-    if matcher(argv) {
-        return true;
-    }
-    let mut current = unwrap_prefix_wrapper(argv);
-    while let Some(inner) = current {
-        if matcher(&inner) {
-            return true;
-        }
-        current = unwrap_prefix_wrapper(&inner);
-    }
-    false
+    matcher(&crate::facts::shell::unwrap_all_prefix_wrappers(argv))
+}
+
+/// True when `argv` is a git invocation that `core.project_hygiene`
+/// escalates to deny on a protected branch. Nested prefix wrappers
+/// (`sudo env git …`) are peeled here so callers do not unwrap twice.
+pub(crate) fn is_protected_branch_destructive(argv: &Argv) -> bool {
+    let argv = crate::facts::shell::unwrap_all_prefix_wrappers(argv);
+    reset::matches_reset_hard(&argv)
+        || clean::matches_clean_fdx(&argv)
+        || branch::matches_branch_delete_force(&argv)
+        || stash::matches_stash_clear(&argv)
 }
 
 #[cfg(test)]
 mod tests {
 
     use super::*;
+    use crate::facts::shell::unwrap_prefix_wrapper;
     use crate::hook_input::HookInput;
 
     fn bash(cmd: &str) -> HookInput {

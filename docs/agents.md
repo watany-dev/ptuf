@@ -222,7 +222,7 @@ Environment variables read by the extension:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PTUF_PI_ASK_MODE` | `confirm-if-ui-else-deny` | How to handle `ask` decisions |
-| `PTUF_PI_TIMEOUT_MS` | `10000` | Hook subprocess timeout |
+| `PTUF_PI_TIMEOUT_MS` | `10000` | Hook subprocess timeout; abort then SIGKILL |
 
 Patched extension paths are covered by
 `core.self_protection.pi-settings`, so a guarded session cannot rewrite

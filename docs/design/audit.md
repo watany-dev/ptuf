@@ -33,7 +33,7 @@ redaction を通してから書き込む。
 | フィールド | 型 | 説明 |
 | --- | --- | --- |
 | `schemaVersion` | `u32` | 現在は常に `1` |
-| `timestamp` | RFC3339 string | UTC 時刻。`time` crate で UTC 秒精度に format する |
+| `timestamp` | RFC3339 string | UTC 時刻。`src/audit/time.rs` が UTC 秒精度に format する |
 | `event` | string | 現在は常に `PreToolUse` |
 | `tool` | string | `HookInput.tool_name` |
 | `decision` | string | `allow` / `monitor` / `ask` / `deny` |

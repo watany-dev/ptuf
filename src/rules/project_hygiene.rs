@@ -22,7 +22,7 @@
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
 use crate::facts::project::LockKind;
-use crate::facts::shell::{Argv, unwrap_prefix_wrapper};
+use crate::facts::shell::{Argv, unwrap_all_prefix_wrappers};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -130,7 +130,10 @@ impl ConfigRule for ProtectedBranchDestructiveGit {
             return None;
         }
         let bash = facts.bash.as_ref()?;
-        let triggered = bash.commands().into_iter().any(invokes_destructive_git);
+        let triggered = bash
+            .commands()
+            .into_iter()
+            .any(crate::rules::git::is_protected_branch_destructive);
         if !triggered {
             return None;
         }
@@ -161,20 +164,17 @@ impl ConfigRule for ProtectedBranchDestructiveGit {
 const NPM_HEADS: &[&str] = &["npm"];
 const YARN_HEADS: &[&str] = &["yarn"];
 const PIP_HEADS: &[&str] = &["pip", "pip3"];
-const GIT_HEADS: &[&str] = &["git"];
 
 fn is_npm_or_yarn_install(argv: &Argv) -> bool {
-    if let Some(unwrapped) = unwrap_prefix_wrapper(argv) {
-        return is_npm_or_yarn_install(&unwrapped);
-    }
+    let argv = unwrap_all_prefix_wrappers(argv);
     let head = argv.head_basename();
     if NPM_HEADS.contains(&head) {
-        return is_install_subcommand(argv, &["install", "i", "ci", "add"]);
+        return is_install_subcommand(&argv, &["install", "i", "ci", "add"]);
     }
     if YARN_HEADS.contains(&head) {
         // `yarn` with no subcommand defaults to `yarn install`.
         return matches!(
-            first_positional(argv),
+            first_positional(&argv),
             None | Some("install" | "add" | "ci")
         );
     }
@@ -182,75 +182,11 @@ fn is_npm_or_yarn_install(argv: &Argv) -> bool {
 }
 
 fn is_pip_install(argv: &Argv) -> bool {
-    if let Some(unwrapped) = unwrap_prefix_wrapper(argv) {
-        return is_pip_install(&unwrapped);
-    }
+    let argv = unwrap_all_prefix_wrappers(argv);
     if !PIP_HEADS.contains(&argv.head_basename()) {
         return false;
     }
-    is_install_subcommand(argv, &["install"])
-}
-
-fn invokes_destructive_git(argv: &Argv) -> bool {
-    if let Some(unwrapped) = unwrap_prefix_wrapper(argv) {
-        return invokes_destructive_git(&unwrapped);
-    }
-    if !GIT_HEADS.contains(&argv.head_basename()) {
-        return false;
-    }
-    let sub = match first_positional(argv) {
-        Some(s) => s,
-        None => return false,
-    };
-    let rest: Vec<&str> = argv
-        .args
-        .iter()
-        .map(String::as_str)
-        .skip_while(|a| *a != sub)
-        .skip(1)
-        .collect();
-    match sub {
-        "reset" => rest.contains(&"--hard"),
-        "clean" => has_clean_fdx(&rest),
-        "branch" => rest.iter().any(|a| {
-            *a == "-D"
-                || (a.starts_with('-') && !a.starts_with("--") && a.contains('D'))
-                || *a == "--delete=force"
-        }),
-        "stash" => rest.contains(&"clear"),
-        _ => false,
-    }
-}
-
-fn has_clean_fdx(rest: &[&str]) -> bool {
-    let mut has_force = false;
-    let mut has_dir = false;
-    let mut has_ignored = false;
-    let mut has_dry_run = false;
-
-    for arg in rest {
-        if *arg == "--force" {
-            has_force = true;
-            continue;
-        }
-        if arg.starts_with("--") {
-            continue;
-        }
-        let Some(body) = arg.strip_prefix('-') else {
-            continue;
-        };
-        for flag in body.chars() {
-            if flag == 'e' {
-                break;
-            }
-            has_force |= flag == 'f';
-            has_dir |= flag == 'd';
-            has_ignored |= flag == 'x' || flag == 'X';
-            has_dry_run |= flag == 'n';
-        }
-    }
-
-    has_force && has_dir && has_ignored && !has_dry_run
+    is_install_subcommand(&argv, &["install"])
 }
 
 fn is_install_subcommand(argv: &Argv, accepted: &[&str]) -> bool {
@@ -455,6 +391,18 @@ mod tests {
     }
 
     #[test]
+    fn protected_git_denies_reset_hard_with_value_taking_global_flag() {
+        // `git -c key=val` used to be misread as the subcommand by the
+        // local first_positional copy. Delegate to `rules/git` instead.
+        let input = bash("git -c core.hooksPath=/dev/null reset --hard HEAD~1");
+        let facts = facts_with_project(&input, protected_branch());
+        assert!(matches!(
+            ProtectedBranchDestructiveGit.evaluate(&facts, &input),
+            Some(Decision::Deny { .. })
+        ));
+    }
+
+    #[test]
     fn protected_git_denies_reset_hard_via_sudo_user_option() {
         let input = bash("sudo -u root git reset --hard HEAD~1");
         let facts = facts_with_project(&input, protected_branch());
@@ -588,8 +536,8 @@ mod tests {
 
     #[test]
     fn protected_branch_rule_does_not_fire_for_git_with_no_subcommand() {
-        // `git` (just the bin) has no positional → first_positional()
-        // returns None and `invokes_destructive_git` short-circuits.
+        // `git` (just the bin) has no subcommand, so the shared git
+        // matchers stay silent.
         let input = bash("git");
         let facts = facts_with_project(&input, protected_branch());
         assert!(
@@ -601,9 +549,9 @@ mod tests {
 
     #[test]
     fn protected_branch_rule_fires_for_git_clean_with_long_force_flag() {
-        // `git clean --force -dx` exercises the `--force` long-flag arm
-        // of `has_clean_fdx` (the short-flag cluster path is covered
-        // separately by `clean_fdx_*` tests in `rules/git.rs`).
+        // `git clean --force -dx` is denied via the shared
+        // `matches_clean_fdx` helper (short-flag clusters are covered
+        // by `clean_fdx_*` tests in `rules/git`).
         let input = bash("git clean --force -dx");
         let facts = facts_with_project(&input, protected_branch());
         assert!(matches!(

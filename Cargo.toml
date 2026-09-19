@@ -63,19 +63,12 @@ serde_yaml_ng = "0.10"
 # directly (same feature set) adds no new crate to the build graph.
 memchr = { version = "2", default-features = false, features = ["std"] }
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl"] }
-time = { version = "0.3", features = ["formatting", "parsing"] }
 toml_edit = "0.25"
 proptest = { version = "1", default-features = false, features = ["std", "bit-set"], optional = true }
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std", "bit-set"] }
 tempfile = "3"
-divan = "0.1"
-
-[[bench]]
-name = "perf"
-path = "benches/perf.rs"
-harness = false
 
 [lints.rust]
 unsafe_code = "forbid"

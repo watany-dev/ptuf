@@ -212,6 +212,9 @@ mod tests {
         assert!(TEMPLATE.contains("decision"));
         assert!(TEMPLATE.contains("block: true"));
         assert!(TEMPLATE.contains("reason: result.reason"));
+        assert!(TEMPLATE.contains("MAX_CAPTURE_BYTES"));
+        assert!(TEMPLATE.contains("SIGKILL"));
+        assert!(TEMPLATE.contains("permitted !== (exitCode === 0)"));
         assert!(!TEMPLATE.contains("Bun.spawn"));
     }
 

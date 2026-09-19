@@ -64,7 +64,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (OpenCode `reshape_patch` と同等)。Cline 経由 apply_patch の path / content
   空振りを修正。
 
+### Fixed
+- Nested prefix wrappers (`sudo env …`) are unwrapped for every rule and
+  the plugin DSL, not only `core.git` / `destructive_rm`.
+- `core.project_hygiene` reuses `core.git` matchers, so
+  `git -c key=val reset --hard` is denied on a protected branch.
+- Pi hook template now caps captured output, SIGKILLs a hung hook, and
+  rejects decision/exit-code inconsistency (parity with OpenCode).
+- CI `msrv` job installs Rust 1.93.0 instead of rebuilding stable.
+
 ### Changed
+- RFC3339 formatting/parsing no longer depends on the `time` crate.
+- `make check` installs only `cargo-deny`; tarpaulin / fuzz / mutants /
+  semver-checks stay on their own targets.
+- Unused `benches/perf.rs` + `divan` removed.
 - **Kiro agent JSON に書き込む hook command が `ptuf hook kiro-v2` になった。**
   無印 `kiro` が最新版 alias になったため、`ptuf hook kiro` と書かれた既存の
   hook 行は ptuf を upgrade した時点で v3 adapter へ黙って切り替わってしまう。

@@ -11,7 +11,7 @@
 
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, Pipeline, head_basename, unwrap_prefix_wrapper};
+use crate::facts::shell::{Argv, Pipeline, head_basename, unwrap_all_prefix_wrappers};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -115,11 +115,10 @@ fn is_interpreter(head: &str) -> bool {
     INTERPRETERS.contains(&head_basename(head))
 }
 
-/// Test `matches` against `argv`'s head, or — failing that — the head one
-/// prefix-wrapper layer (`sudo`/`env`/...) down, so a wrapped invocation
-/// (`env curl ...`) is judged by the command it actually runs.
+/// Test `matches` against the fully unwrapped head so nested wrappers
+/// (`sudo env curl ...`) are judged by the command they actually run.
 fn matches_invocation(argv: &Argv, matches: impl Fn(&str) -> bool) -> bool {
-    matches(&argv.head) || unwrap_prefix_wrapper(argv).is_some_and(|inner| matches(&inner.head))
+    matches(&unwrap_all_prefix_wrappers(argv).head)
 }
 
 fn is_fetcher_invocation(argv: &Argv) -> bool {

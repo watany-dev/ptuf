@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PTUF_VERSION="${PTUF_VERSION:-v0.3.0}"
+PTUF_VERSION="${PTUF_VERSION:-v0.6.0}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CARGO_BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
 PROFILE_FILE="${HOME}/.profile"

@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants semver tools install-hooks
+.PHONY: build test lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants semver tools tools-deny install-hooks
 
 # Keep these aligned with .github/workflows/ci.yml and nightly.yml:
 # - CARGO_DENY_VERSION must match the cargo-deny pinned in
@@ -41,8 +41,6 @@ coverage: tools
 		--features testing \
 		--fail-under 95 \
 		--exclude-files "src/main.rs" \
-		--exclude-files "src/**/windows*.rs" \
-		--exclude-files "src/**/*_windows.rs" \
 		--exclude-files "src/testing/**" \
 		--timeout 300 \
 		-- --test-threads=1
@@ -89,8 +87,7 @@ bench: build
 e2e:
 	cargo test --locked --features testing --test e2e_heavy -- --ignored --test-threads=1
 
-# Coverage-guided fuzzing of the five trust boundaries (shell parser,
-# hook pipeline, config merge, plugin DSL, copilot payload parse).
+# Coverage-guided fuzzing of the targets in `fuzz/fuzz_targets/`.
 # `cargo fuzz` needs a nightly toolchain; the `fuzz/` crate is a
 # standalone workspace so it never touches `make check`. Not part of
 # `make check` — see nightly.yml.
@@ -150,7 +147,19 @@ else
 		exit 1; }
 endif
 
-check: tools fmt-check lint test doc deny
+# `make check` only needs cargo-deny. tarpaulin / fuzz / mutants /
+# semver-checks are pulled in by their own targets.
+tools-deny:
+ifeq ($(SKIP_TOOL_INSTALL),)
+	@command -v cargo-deny >/dev/null 2>&1 || \
+		cargo install --locked cargo-deny@$(CARGO_DENY_VERSION)
+else
+	@command -v cargo-deny >/dev/null 2>&1 || { \
+		echo "cargo-deny not found. Run 'make tools' (or unset SKIP_TOOL_INSTALL)." >&2; \
+		exit 1; }
+endif
+
+check: tools-deny fmt-check lint test doc deny
 
 install-hooks:
 	bash scripts/install-hooks.sh

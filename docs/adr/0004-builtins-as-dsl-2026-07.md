@@ -6,7 +6,7 @@ Accepted (2026-07-03). スライス 1 実装済み。
 
 ## Context
 
-`docs/review/open-issues.md` §1.1/§1.2 が指摘する技術負債: builtin rule は
+実装当時のレビュー (`docs/review/open-issues.md`、git 履歴に残置) が指摘した技術負債: builtin rule は
 手書き Rust (`src/rules/**`)、plugin rule は YAML + DSL コンパイラ
 (`src/plugin/dsl.rs`) と、同じ「条件 → Decision」を 2 系統で実装しており、
 
@@ -116,4 +116,4 @@ pin)。hook 応答・audit record の shape は変わらない。
 | 予約 id | `src/plugin/loader.rs`, `src/plugin/mod.rs` | `ReservedRuleId` / `DuplicateRuleId` |
 | oracle | `src/rules/remote_pipe.rs` | RULES から外し legacy oracle として残置 |
 | Tests | `src/rules/builtin_dsl.rs`, `tests/rules_iter_order.rs`, `tests/bypass/corpus.jsonl` | 片方向パリティ PBT / wire 同一 pin / 強化差分 must_catch 2 件 |
-| Doc | `docs/design/config-and-plugins.md`, `docs/design/policy-packs.md`, `docs/review/open-issues.md`, `docs/design/roadmap.md`, 本 ADR | 設計追従 |
+| Doc | `docs/design/config-and-plugins.md`, `docs/design/policy-packs.md`, `docs/design/roadmap.md`, 本 ADR | 設計追従 |

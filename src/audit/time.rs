@@ -1,22 +1,23 @@
 //! RFC3339 UTC timestamp helpers for audit records and allowlist expiry.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use time::format_description::well_known::Rfc3339;
-use time::{OffsetDateTime, UtcOffset};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Format the supplied [`SystemTime`] as an RFC3339 string in UTC with
 /// second precision (e.g. `2026-05-04T12:00:00Z`). Times before the
 /// Unix epoch are clamped to the epoch; they never occur in practice
 /// but a panic-free fallback keeps the audit pipeline lossless.
 pub fn rfc3339_utc(t: SystemTime) -> String {
-    let t = t
+    let secs = t
         .duration_since(UNIX_EPOCH)
-        .map(|duration| UNIX_EPOCH + Duration::from_secs(duration.as_secs()))
-        .unwrap_or(UNIX_EPOCH);
-    let dt = OffsetDateTime::from(t).to_offset(UtcOffset::UTC);
-    dt.format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX);
+    let rem = secs % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = rem / 3_600;
+    let minute = (rem % 3_600) / 60;
+    let second = rem % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 /// Parse a canonical RFC3339 timestamp (`YYYY-MM-DDTHH:MM:SS` followed
@@ -28,9 +29,95 @@ pub fn parse_rfc3339_to_secs(s: &str) -> Option<u64> {
     if !has_canonical_shape(s) {
         return None;
     }
-    let dt = OffsetDateTime::parse(s, &Rfc3339).ok()?;
-    let secs = dt.unix_timestamp();
-    if secs < 0 { None } else { Some(secs as u64) }
+    let bytes = s.as_bytes();
+    let year = i32::try_from(parse_digits(bytes, 0, 4)?).ok()?;
+    let month = parse_digits(bytes, 5, 2)?;
+    let day = parse_digits(bytes, 8, 2)?;
+    let hour = parse_digits(bytes, 11, 2)?;
+    let minute = parse_digits(bytes, 14, 2)?;
+    let second = parse_digits(bytes, 17, 2)?;
+    if !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let max_day = days_in_month(year, month)?;
+    if day < 1 || day > max_day {
+        return None;
+    }
+    let mut unix = days_from_civil(year, month, day)?
+        .checked_mul(86_400)?
+        .checked_add(i64::from(hour * 3_600 + minute * 60 + second))?;
+    if bytes.len() == 25 {
+        let sign: i64 = if bytes[19] == b'+' { 1 } else { -1 };
+        let off_h = parse_digits(bytes, 20, 2)?;
+        let off_m = parse_digits(bytes, 23, 2)?;
+        if off_h > 23 || off_m > 59 {
+            return None;
+        }
+        let offset = i64::from(off_h * 3_600 + off_m * 60) * sign;
+        unix = unix.checked_sub(offset)?;
+    }
+    u64::try_from(unix).ok()
+}
+
+fn parse_digits(bytes: &[u8], start: usize, len: usize) -> Option<u32> {
+    let slice = bytes.get(start..start + len)?;
+    let mut n = 0u32;
+    for b in slice {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        n = n.checked_mul(10)?.checked_add(u32::from(b - b'0'))?;
+    }
+    Some(n)
+}
+
+fn is_leap(year: i32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+fn days_in_month(year: i32, month: u32) -> Option<u32> {
+    Some(match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap(year) {
+                29
+            } else {
+                28
+            }
+        },
+        _ => return None,
+    })
+}
+
+/// Howard Hinnant `days_from_civil`: days since 1970-01-01.
+fn days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
+    let mut y = i64::from(year);
+    let m = i64::from(month);
+    let d = i64::from(day);
+    if m <= 2 {
+        y -= 1;
+    }
+    let era = if y >= 0 { y } else { y - 399 }.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+/// Howard Hinnant `civil_from_days`: inverse of [`days_from_civil`].
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = u32::try_from(z - era * 146_097).unwrap_or(0);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = i32::try_from(yoe).unwrap_or(i32::MAX) + i32::try_from(era).unwrap_or(0) * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 fn has_canonical_shape(s: &str) -> bool {
@@ -60,6 +147,7 @@ fn has_canonical_shape(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn from_secs(s: u64) -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(s)
@@ -256,9 +344,8 @@ mod tests {
 
     use proptest::prelude::*;
 
-    // Stay well inside the `time` crate's representable range (~year
-    // 3000) so generated instants never approach the year-9999 ceiling
-    // where the format would no longer be 20 characters wide.
+    // Stay well inside four-digit years so formatted timestamps remain
+    // 20 characters wide (`YYYY-MM-DDTHH:MM:SSZ`).
     const MAX_EPOCH_SECS: u64 = 32_503_680_000;
 
     proptest! {

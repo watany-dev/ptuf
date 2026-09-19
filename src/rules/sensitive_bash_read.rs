@@ -111,17 +111,12 @@ fn pipeline_reads_sensitive(pipe: &Pipeline) -> bool {
 /// invoked on a sensitive token. The wrapper recursion covers
 /// `bash -c '...'`, `xargs`, `find -exec`, and `eval`.
 fn argv_reads_sensitive(argv: &Argv) -> bool {
-    if invokes_reader(argv) && argv_has_sensitive_positional(argv) {
+    let effective = crate::facts::shell::unwrap_all_prefix_wrappers(argv);
+    if invokes_reader(&effective) && argv_has_sensitive_positional(&effective) {
         return true;
     }
-    if let Some(inner) = crate::facts::shell::unwrap_prefix_wrapper(argv)
-        && invokes_reader(&inner)
-        && argv_has_sensitive_positional(&inner)
-    {
-        return true;
-    }
-    // Heredoc/inner_redirects on this argv: a `< .env` inside a wrapped
-    // bash -c shows up there.
+    // Heredoc/inner_redirects on this argv: a stdin redirect inside a
+    // wrapped bash -c shows up there.
     if argv.inner_redirects.iter().any(stdin_target_is_sensitive) {
         return true;
     }
