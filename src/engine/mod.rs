@@ -79,8 +79,13 @@ pub struct Outcome {
     /// Allowlist `id` whose suppression caused the outcome to be
     /// `Allow` instead of a deny / ask / monitor. Only populated on
     /// `Allow` decisions; always `None` otherwise. When multiple
-    /// allowlists hit, the first one wins.
+    /// allowlists hit, the first one wins. Prefer [`Self::allowlist_ids`]
+    /// for the full suppression set.
     pub allowlist_id: Option<String>,
+    /// Every allowlist id that suppressed a rule during this
+    /// evaluation, in encounter order. Present even when the final
+    /// decision is not `Allow` (e.g. another rule still asked).
+    pub allowlist_ids: Vec<String>,
 }
 
 /// Errors raised while building an engine.
@@ -369,8 +374,10 @@ impl Engine {
         let demoted_decision = demote_for_mode(raw.clone(), self.config.mode, &self.plugins);
         let mode_demoted = matches!(raw, Decision::Deny { .. })
             && matches!(demoted_decision, Decision::Monitor { .. });
+        let allowlist_ids: Vec<String> =
+            allowlist_hits.iter().map(|id| (*id).to_string()).collect();
         let allowlist_id = if matches!(demoted_decision, Decision::Allow) {
-            allowlist_hits.first().map(|id| (*id).to_string())
+            allowlist_ids.first().cloned()
         } else {
             None
         };
@@ -379,6 +386,7 @@ impl Engine {
             mode: self.config.mode,
             mode_demoted,
             allowlist_id,
+            allowlist_ids,
         };
         self.record_audit(input, &outcome);
         outcome
@@ -407,7 +415,7 @@ impl Engine {
         if !self.audit_sink.is_active() {
             return;
         }
-        if !should_record(&outcome.decision, &self.config) {
+        if !should_record(&outcome.decision, &self.config) && outcome.allowlist_ids.is_empty() {
             return;
         }
         let raw_command = input
@@ -428,6 +436,7 @@ impl Engine {
             .project_root(self.repo_root.as_deref())
             .severity(severity)
             .allowlist_id(outcome.allowlist_id.clone())
+            .allowlist_ids(outcome.allowlist_ids.clone())
             .agent(self.agent)
             .plugin_versions(self.plugin_versions.clone())
             .build();

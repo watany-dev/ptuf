@@ -220,6 +220,31 @@ pub fn resolve_for_containment(fact: &PathFact) -> PathBuf {
     climb_and_canonicalize(&fact.absolute)
 }
 
+/// Resolve a policy prefix for [`Path::starts_with`] comparison.
+///
+/// Ancestor directory aliases (`/tmp` → `/private/tmp` on macOS) are
+/// followed so the same prefix works across OS layouts. A final-component
+/// symlink is followed only when the canonical last component still
+/// matches (`/etc` → `/private/etc`). Retargeting symlinks
+/// (`build-link` → `/`) stay lexical so replacing an allowlist prefix
+/// directory with a link to `/` cannot match every path.
+pub(crate) fn resolve_prefix_for_containment(prefix: &Path) -> PathBuf {
+    let normalized = normalize_components(prefix);
+    let Some(name) = normalized.file_name().map(std::ffi::OsStr::to_os_string) else {
+        return climb_and_canonicalize(&normalized);
+    };
+    let parent = normalized.parent().filter(|p| !p.as_os_str().is_empty());
+    let candidate = match parent {
+        Some(parent) => climb_and_canonicalize(parent).join(&name),
+        None => PathBuf::from(&name),
+    };
+    match std::fs::canonicalize(&candidate) {
+        Ok(canon) if canon.file_name() == Some(name.as_os_str()) => canon,
+        Ok(_) => candidate,
+        Err(_) => climb_and_canonicalize(&candidate),
+    }
+}
+
 /// True iff `target` is identical to or a descendant (component-wise)
 /// of any path in `workspaces`. Both sides are expected to be canonical
 /// or normalised to the same form.
@@ -835,6 +860,31 @@ mod tests {
         };
         let resolved = resolve_for_containment(&fact);
         assert_eq!(resolved, PathBuf::from("/ptuf-nonexist/etc/passwd"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_prefix_follows_same_name_directory_alias() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("cache");
+        std::fs::create_dir_all(&real).expect("mkdir");
+        let parent = dir.path().join("alias-parent");
+        std::fs::create_dir_all(&parent).expect("mkdir");
+        let link = parent.join("cache");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let resolved = resolve_prefix_for_containment(&link);
+        assert_eq!(resolved, real.canonicalize().expect("canon"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_prefix_keeps_retargeting_symlink_lexical() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let link = dir.path().join("build-link");
+        std::os::unix::fs::symlink("/", &link).expect("symlink");
+        let resolved = resolve_prefix_for_containment(&link);
+        assert_ne!(resolved, PathBuf::from("/"));
+        assert_eq!(resolved.file_name(), link.file_name());
     }
 
     use crate::testing::proptest::{file_path, richer_hook_input};

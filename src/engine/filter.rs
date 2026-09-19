@@ -29,7 +29,7 @@ fn is_overridable(rule: &(dyn ConfigRule + Sync)) -> bool {
 }
 
 pub(super) fn is_pack_disabled(rule: &(dyn ConfigRule + Sync), config: &Config) -> bool {
-    if rule.hard_deny() || config.pack_overrides.is_empty() {
+    if !is_overridable(rule) || config.pack_overrides.is_empty() {
         return false;
     }
     // A pack override applies when its key is `id` itself or a
@@ -248,6 +248,33 @@ rules:
         let outcome = engine_with(cfg).decide(&bash("ls"));
         assert_eq!(outcome.decision, Decision::Allow);
         assert!(!outcome.mode_demoted);
+    }
+
+    #[test]
+    fn pack_disable_is_ignored_for_non_overridable_rules() {
+        struct Locked(&'static str);
+        impl ConfigRule for Locked {
+            fn id(&self) -> &str {
+                self.0
+            }
+            fn overridable(&self) -> bool {
+                false
+            }
+            fn evaluate(&self, _facts: &Facts, _input: &HookInput) -> Option<Decision> {
+                None
+            }
+        }
+        let mut cfg = Config::default();
+        cfg.pack_overrides.insert(
+            "team.compliance".into(),
+            PackOverride {
+                enabled: Some(false),
+            },
+        );
+        assert!(!is_pack_disabled(
+            &Locked("team.compliance.no-force-push"),
+            &cfg
+        ));
     }
 
     #[test]
@@ -633,6 +660,162 @@ rules:
         let recs = captured.records();
         assert_eq!(recs[0].decision, "allow");
         assert_eq!(recs[0].allowlist_id.as_deref(), Some("approved-curl"));
+        assert_eq!(recs[0].allowlist_ids, vec!["approved-curl".to_string()]);
+    }
+
+    #[test]
+    fn audit_records_allowlist_hits_even_when_include_allowed_is_false() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+"#;
+        let plugin = load_str(std::path::Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.audit.include_allowed = false;
+        cfg.allowlists.push(Allowlist {
+            id: "approved-curl".into(),
+            rule_ids: vec!["pack.demo.no-curl".into()],
+            when: None,
+            expires_at: None,
+            reason: None,
+        });
+        let captured = Arc::new(MemorySink::new());
+        let engine = Engine::with_components(cfg, set)
+            .with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let _ = engine.decide(&bash("curl https://example.com"));
+        let recs = captured.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].decision, "allow");
+        assert_eq!(recs[0].allowlist_ids, vec!["approved-curl".to_string()]);
+    }
+
+    #[test]
+    fn audit_keeps_allowlist_hits_when_another_rule_asks() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: pack.demo
+rules:
+  - id: pack.demo.no-curl
+    severity: medium
+    defaultDecision: deny
+    when:
+      tool: Bash
+    reason: nope
+  - id: pack.demo.ask-bash
+    severity: low
+    defaultDecision: ask
+    when:
+      tool: Bash
+    reason: confirm
+"#;
+        let plugin = load_str(std::path::Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.allowlists.push(Allowlist {
+            id: "approved-curl".into(),
+            rule_ids: vec!["pack.demo.no-curl".into()],
+            when: None,
+            expires_at: None,
+            reason: None,
+        });
+        let captured = Arc::new(MemorySink::new());
+        let engine = Engine::with_components(cfg, set)
+            .with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert!(matches!(outcome.decision, Decision::Ask { .. }));
+        assert!(outcome.allowlist_id.is_none());
+        assert_eq!(outcome.allowlist_ids, vec!["approved-curl".to_string()]);
+        let recs = captured.records();
+        assert_eq!(recs[0].decision, "ask");
+        assert_eq!(recs[0].allowlist_ids, vec!["approved-curl".to_string()]);
+    }
+
+    #[test]
+    fn pack_disable_does_not_drop_non_overridable_plugin_rule() {
+        let yaml = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: team.compliance
+rules:
+  - id: team.compliance.no-curl
+    severity: high
+    defaultDecision: deny
+    overridable: false
+    when:
+      tool: Bash
+    reason: locked
+"#;
+        let plugin = load_str(std::path::Path::new("demo.yaml"), yaml).expect("load plugin");
+        let mut set = PluginSet::new();
+        set.push(plugin);
+        let mut cfg = Config::default();
+        cfg.pack_overrides.insert(
+            "team.compliance".into(),
+            PackOverride {
+                enabled: Some(false),
+            },
+        );
+        let engine = Engine::with_components(cfg, set);
+        let outcome = engine.decide(&bash("curl https://example.com"));
+        assert!(matches!(outcome.decision, Decision::Deny { .. }));
+    }
+
+    #[test]
+    fn monitor_mode_keeps_hard_deny_when_a_shadow_plugin_shares_the_id() {
+        let shadow = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: shadow
+rules:
+  - id: team.no-prod-deploy
+    severity: low
+    defaultDecision: allow
+    hardDeny: false
+    when:
+      tool: NeverMatchesTool
+    reason: shadow
+"#;
+        let team = r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: team
+rules:
+  - id: team.no-prod-deploy
+    severity: critical
+    defaultDecision: deny
+    hardDeny: true
+    when:
+      shell.argv:
+        headAny: [deploy]
+    reason: prod deploy forbidden
+"#;
+        let mut set = PluginSet::new();
+        set.push(load_str(std::path::Path::new("shadow.yaml"), shadow).expect("shadow"));
+        set.push(load_str(std::path::Path::new("team.yaml"), team).expect("team"));
+        let cfg = Config {
+            mode: Mode::Monitor,
+            ..Config::default()
+        };
+        let outcome = Engine::with_components(cfg, set).decide(&bash("deploy --prod"));
+        assert!(matches!(outcome.decision, Decision::Deny { .. }));
+        assert!(!outcome.mode_demoted);
     }
 
     #[test]

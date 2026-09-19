@@ -5,7 +5,7 @@
 
 ## 現在の実装スコープ
 
-ptuf `v0.7.0` は次を実装済み:
+ptuf `v0.8.0` は次を実装済み:
 
 - `PreToolUse` 向け CLI とライブラリ
 - Claude Code / Codex / GitHub Copilot / Kiro CLI / Cline / Cursor / Pi /

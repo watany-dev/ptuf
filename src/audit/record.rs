@@ -52,6 +52,11 @@ pub struct AuditRecord {
     /// wins (insertion order from the merged config).
     #[serde(rename = "allowlistId", skip_serializing_if = "Option::is_none")]
     pub allowlist_id: Option<String>,
+    /// Every allowlist id that suppressed a rule on this evaluation.
+    /// Emitted even when the final decision is not `Allow`. Empty vec
+    /// is omitted from the serialised form.
+    #[serde(rename = "allowlistIds", skip_serializing_if = "Vec::is_empty")]
+    pub allowlist_ids: Vec<String>,
     /// Adapter that produced the decision (`claude-code` / `cli`).
     /// `unknown` for direct library callers that never configured one.
     pub agent: &'static str,
@@ -87,6 +92,7 @@ impl AuditRecord {
             project_root: None,
             severity: None,
             allowlist_id: None,
+            allowlist_ids: Vec::new(),
             agent: "unknown",
             plugin_versions: Vec::new(),
         }
@@ -137,6 +143,7 @@ pub struct AuditRecordBuilder<'a> {
     project_root: Option<&'a Path>,
     severity: Option<Severity>,
     allowlist_id: Option<String>,
+    allowlist_ids: Vec<String>,
     agent: &'static str,
     plugin_versions: Vec<String>,
 }
@@ -175,6 +182,12 @@ impl<'a> AuditRecordBuilder<'a> {
     /// Set the allowlist id for suppressed `Allow` outcomes.
     pub fn allowlist_id(mut self, allowlist_id: Option<String>) -> Self {
         self.allowlist_id = allowlist_id;
+        self
+    }
+
+    /// Set every allowlist id that suppressed a rule on this evaluation.
+    pub fn allowlist_ids(mut self, allowlist_ids: Vec<String>) -> Self {
+        self.allowlist_ids = allowlist_ids;
         self
     }
 
@@ -221,6 +234,7 @@ impl<'a> AuditRecordBuilder<'a> {
             mode: mode_label(mode),
             mode_demoted: self.mode_demoted,
             allowlist_id: self.allowlist_id,
+            allowlist_ids: self.allowlist_ids,
             agent: self.agent,
             plugin_versions: self.plugin_versions,
         }
@@ -422,6 +436,24 @@ mod tests {
             .build();
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains("\"allowlistId\":\"approved-hotfix\""));
+    }
+
+    #[test]
+    fn allowlist_ids_are_serialised_when_set() {
+        let inp = input("Bash", "ls");
+        let r = test_builder(
+            &Decision::Ask {
+                rule_id: "r".into(),
+                reason: "?".into(),
+            },
+            &inp,
+            "ls",
+        )
+        .allowlist_ids(vec!["a".into(), "b".into()])
+        .agent("claude-code")
+        .build();
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains("\"allowlistIds\":[\"a\",\"b\"]"));
     }
 
     #[test]

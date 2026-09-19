@@ -88,6 +88,7 @@ block する。repository 側の `.ptuf.yaml` で `mode: monitor` を指定し�
   - 個別 disable による弱化も許さない
 - `overridable: false`
   - 下位 scope から `decision` / `severity` を変えられない
+  - `rules.<id>.enabled: false` でも `packs.<prefix>.enabled: false` でも無効化されない
 
 具体的な対象は [`policy-packs.md`](policy-packs.md) の各表に従う。
 

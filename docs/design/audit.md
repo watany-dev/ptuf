@@ -43,7 +43,8 @@ redaction を通してから書き込む。
 | `projectRoot` | string \| null | repo root が分かった場合 |
 | `mode` | string | `enforce` / `monitor` |
 | `modeDemoted` | bool | deny が monitor に降格された場合のみ `true` で出力 |
-| `allowlistId` | string \| null | allowlist suppression で `Allow` になった場合のみ |
+| `allowlistId` | string \| null | allowlist suppression で最終 decision が `Allow` になった場合の先頭 1 件 |
+| `allowlistIds` | string[] | この評価で rule を抑止した allowlist id の全件。空なら省略。最終 decision が `Allow` でなくても残る |
 | `agent` | string | `claude-code` / `codex` / `copilot` / `kiro` / `cline` / `cli` / `unknown` |
 | `pluginVersions` | string[] | 読み込んだ plugin の `name@version`。空なら省略 |
 
@@ -57,7 +58,8 @@ audit:
   redaction: strict
 ```
 
-- `Allow` は `includeAllowed: true` のときだけ記録
+- `Allow` は `includeAllowed: true` のときだけ記録。ただし allowlist
+  が 1 件以上ヒットした場合は `includeAllowed` に関わらず記録する
 - `Deny` は `includeDenied: true` のときだけ記録
 - `Monitor` と `Ask` は常に記録
 

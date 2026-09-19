@@ -65,7 +65,7 @@ audit:
 
 | key | 型 | 説明 |
 | --- | --- | --- |
-| `version` | `u32` | 現在は `1` |
+| `version` | `u32` | 現在は `1`。省略は互換のため許容。`1` 以外は load 失敗 |
 | `mode` | `enforce` / `monitor` | 実行 mode |
 | `failClosed` | `bool` | **予約フィールド** — `ptuf init --verify` の fail-closed チェックとスキーマ互換用。ランタイムの `Engine::for_cwd` / CLI hook は常に policy load 失敗で `core.engine.policy-load-failed` として fail-closed し、このフラグは読まれない |
 | `packs` | map | pack ごとの設定 |
@@ -80,7 +80,7 @@ audit:
 
 | key | 型 | 説明 |
 | --- | --- | --- |
-| `enabled` | `bool` | pack 全体の有効 / 無効 |
+| `enabled` | `bool` | pack 全体の有効 / 無効。`hardDeny` と `overridable: false` の rule は無効化されない |
 | `protectedBranches` | `string[]` | `core.project_hygiene` のみ使用 |
 | `additionalWorkspaces` | `string[]` | `core.workspace` のみ使用。`~` / `$HOME` を展開し、engine が canonical 化して `repo_root` と合わせて境界集合を作る |
 
@@ -100,12 +100,14 @@ deny される。詳細は `policy-packs.md#core-workspace` を参照。
 | `severity` | `info` / `low` / `medium` / `high` / `critical` | severity の上書き |
 
 `hardDeny` や `overridable: false` の rule は下位 scope から弱められない。
+`packs.<prefix>.enabled: false` も同じ免除を受ける (`overridable: false` は
+rule override の `enabled: false` と同様、pack disable では消えない)。
 
 ### `plugins`
 
 | key | 型 | 説明 |
 | --- | --- | --- |
-| `path` | path | plugin YAML |
+| `path` | path | plugin YAML。`~/` / `$HOME` / `${HOME}` を展開し、相対パスは **その config ファイルが置かれたディレクトリ** 基準で解決する。解決後の `plugin_paths` は絶対パス |
 | `enabled` | `bool` | `false` なら参照だけ残して load しない |
 
 ### `allowlists`
@@ -114,19 +116,18 @@ deny される。詳細は `policy-packs.md#core-workspace` を参照。
 | --- | --- | --- |
 | `id` | string | audit に出る識別子 |
 | `appliesTo.rules` | string[] | 適用対象 rule id |
-| `when` | mapping | plugin DSL と同じ条件式 |
-| `expiresAt` | RFC3339 string | 期限。過ぎると無効 |
+| `when` | mapping | plugin DSL と同じ条件式。**load 時にコンパイル**し、不正なら `policy-load-failed` で fail-closed (省略時のみ無条件) |
+| `expiresAt` | RFC3339 string | 期限。canonical 形 (`2026-01-01T00:00:00Z` または `±HH:MM` offset) のみ。不正なら load 失敗 |
 | `reason` | string | 人間向けメモ |
 
-allowlist は suppression できた場合だけ `allowlistId` として audit に残る。
-`hardDeny` rule には効かない。
+allowlist は suppression できた場合に `allowlistId` (最終 decision が `Allow` のときの先頭 1 件) と `allowlistIds` (抑止された全件) として audit に残る。`hardDeny` rule には効かない。`version` は `1` のみ (`None` は互換のため許容、それ以外は load 失敗)。
 
 ### `audit`
 
 | key | 型 | 説明 |
 | --- | --- | --- |
 | `enabled` | `bool` | 書き込みを有効化。閲覧 CLI (`ptuf audit`) は既存ファイルを読める。`--path` 未指定時は warning を出して表示する |
-| `path` | path | 出力先。省略時は既定パス |
+| `path` | path | 出力先。`~/` / `$HOME` 展開あり、相対パスは config ファイル基準。省略時は既定パス |
 | `includeAllowed` | `bool` | `Allow` を記録するか |
 | `includeDenied` | `bool` | `Deny` を記録するか |
 | `redaction` | `strict` / `off` | redaction mode |
@@ -216,8 +217,9 @@ rules:
   されており、外部 plugin が使うと `ReservedRuleId` エラーで load が
   失敗する (builtin なりすましの防止 — mode demotion の hardDeny 判定や
   audit 帰属が id で行われるため)。
-- 同一 plugin 内で id が重複すると `DuplicateRuleId` エラーで load が
-  失敗する。
+- rule id は builtin / 全 plugin を通して**グローバルに一意**。同一
+  plugin 内、plugin 間、plugin と builtin の衝突はいずれも
+  `DuplicateRuleId` で load が失敗する。
 
 ## `when:` DSL
 
@@ -231,7 +233,7 @@ rules:
 | `shell.argv` | `{ headAny: [string] }` | command head がいずれかに一致。`bash -c`, `eval`, `xargs`, `find -exec` のような wrapper で surfaced した nested command も含む |
 | `shell.pipeline` | `{ from: { commandAny: [...] }, to: { commandAny: [...] } }` | pipeline に from→to の流れがある |
 | `shell.ast` | — | **未サポート** — `capabilities.requires` では宣言できるが `when:` leaf には使えない |
-| `path.filePathPrefixAny` | `string[]` | 抽出 path が prefix に一致 |
+| `path.filePathPrefixAny` | `string[]` | 抽出 path を正規化し、prefix は祖先の directory alias (`/tmp` → `/private/tmp`) を辿ったうえで component 単位の `Path::starts_with` で判定。最終成分が別名へ飛ぶ symlink (`build-link` → `/`) は辿らない。文字列 prefix や部分一致 (`/home/me/proj` 対 `/home/me/proj-secrets`) では一致しない |
 | `url.schemeAny` | `string[]` | URL scheme が一致 |
 | `url.hostAny` | `string[]` | URL host が一致 |
 | `sensitive.pathKindAny` | `string[]` | 機密分類が一致 |

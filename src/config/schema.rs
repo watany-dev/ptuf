@@ -42,8 +42,16 @@ impl RawConfig {
     /// Move the YAML-shape RawConfig fields into the merge-shape
     /// fields used by [`merge::merge`](super::merge::merge). The two
     /// forms differ only in nesting; this conversion is purely a
-    /// rename.
-    pub(super) fn into_merge_layer(self) -> MergeLayer {
+    /// rename, plus fail-closed validation of `version` and allowlists.
+    pub(super) fn try_into_merge_layer(self) -> Result<MergeLayer, super::ConfigError> {
+        if let Some(version) = self.version
+            && version != 1
+        {
+            return Err(super::ConfigError::Version {
+                path: PathBuf::from("<merge>"),
+                found: version,
+            });
+        }
         let protected_branches = self
             .packs
             .get("core.project_hygiene")
@@ -52,7 +60,12 @@ impl RawConfig {
             .packs
             .get("core.workspace")
             .and_then(|p| p.additional_workspaces.clone());
-        MergeLayer {
+        let allowlists = self
+            .allowlists
+            .into_iter()
+            .map(Allowlist::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(MergeLayer {
             mode: self.mode,
             fail_closed: self.fail_closed,
             pack_overrides: self
@@ -61,7 +74,7 @@ impl RawConfig {
                 .map(|(k, v)| (k, PackOverride { enabled: v.enabled }))
                 .collect(),
             rule_overrides: self.rules.into_iter().map(|(k, v)| (k, v.into())).collect(),
-            allowlists: self.allowlists.into_iter().map(Into::into).collect(),
+            allowlists,
             plugin_paths: self
                 .plugins
                 .into_iter()
@@ -75,7 +88,7 @@ impl RawConfig {
             audit_redaction: self.audit.redaction,
             protected_branches,
             additional_workspaces,
-        }
+        })
     }
 }
 
@@ -168,18 +181,36 @@ pub struct RawAllowlistApplies {
     pub rules: Vec<String>,
 }
 
-impl From<RawAllowlist> for Allowlist {
-    fn from(value: RawAllowlist) -> Self {
-        Self {
+impl TryFrom<RawAllowlist> for Allowlist {
+    type Error = super::ConfigError;
+
+    fn try_from(value: RawAllowlist) -> Result<Self, Self::Error> {
+        let when = match value.when.as_ref() {
+            None => None,
+            Some(v) => Some(crate::plugin::dsl::compile(v).map_err(|err| {
+                super::ConfigError::Allowlist {
+                    path: PathBuf::from("<merge>"),
+                    id: value.id.clone(),
+                    message: format!("when: {err}"),
+                }
+            })?),
+        };
+        if let Some(expires_at) = &value.expires_at
+            && crate::audit::time::parse_rfc3339_to_secs(expires_at).is_none()
+        {
+            return Err(super::ConfigError::Allowlist {
+                path: PathBuf::from("<merge>"),
+                id: value.id,
+                message: format!("expiresAt: invalid RFC3339 `{expires_at}`"),
+            });
+        }
+        Ok(Self {
             id: value.id,
             rule_ids: value.applies_to.rules,
-            when: value
-                .when
-                .as_ref()
-                .and_then(|v| crate::plugin::dsl::compile(v).ok()),
+            when,
             expires_at: value.expires_at,
             reason: value.reason,
-        }
+        })
     }
 }
 
@@ -292,7 +323,7 @@ mod tests {
             expires_at: Some("2099-01-01T00:00:00Z".into()),
             reason: Some("ok".into()),
         };
-        let a: Allowlist = allow_raw.into();
+        let a: Allowlist = allow_raw.try_into().expect("valid allowlist");
         assert_eq!(a.id, "x");
         assert_eq!(a.rule_ids, vec!["r1".to_string(), "r2".to_string()]);
         assert_eq!(a.expires_at.as_deref(), Some("2099-01-01T00:00:00Z"));
@@ -338,11 +369,40 @@ mod tests {
             expires_at: Some("2099-01-01T00:00:00Z".into()),
             reason: Some("ok".into()),
         };
-        let a: Allowlist = raw.into();
+        let a: Allowlist = raw.try_into().expect("valid allowlist");
         assert_eq!(a.id, "x");
         assert_eq!(a.rule_ids, vec!["r1".to_string(), "r2".to_string()]);
         assert_eq!(a.expires_at.as_deref(), Some("2099-01-01T00:00:00Z"));
         assert_eq!(a.reason.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn try_from_raw_allowlist_rejects_invalid_when() {
+        let raw = RawAllowlist {
+            id: "oops".into(),
+            applies_to: RawAllowlistApplies {
+                rules: vec!["r1".into()],
+            },
+            when: Some(serde_yaml_ng::from_str("path.filePathPrefix: [/tmp/]\n").expect("yaml")),
+            expires_at: None,
+            reason: None,
+        };
+        let err = Allowlist::try_from(raw).expect_err("invalid when");
+        assert!(matches!(err, crate::config::ConfigError::Allowlist { .. }));
+        assert!(format!("{err}").contains("oops"));
+    }
+
+    #[test]
+    fn try_from_raw_allowlist_rejects_invalid_expires_at() {
+        let raw = RawAllowlist {
+            id: "oops".into(),
+            applies_to: RawAllowlistApplies::default(),
+            when: None,
+            expires_at: Some("2026-01-01T00:00:00.000Z".into()),
+            reason: None,
+        };
+        let err = Allowlist::try_from(raw).expect_err("invalid expiresAt");
+        assert!(matches!(err, crate::config::ConfigError::Allowlist { .. }));
     }
 
     #[test]
@@ -364,10 +424,23 @@ mod tests {
             ],
             ..Default::default()
         };
-        let layer = raw.into_merge_layer();
+        let layer = raw.try_into_merge_layer().expect("merge layer");
         assert_eq!(
             layer.plugin_paths,
             vec![PathBuf::from("/a.yaml"), PathBuf::from("/c.yaml")]
         );
+    }
+
+    #[test]
+    fn try_into_merge_layer_rejects_unsupported_version() {
+        let raw = RawConfig {
+            version: Some(2),
+            ..Default::default()
+        };
+        let err = raw.try_into_merge_layer().expect_err("version 2");
+        assert!(matches!(
+            err,
+            crate::config::ConfigError::Version { found: 2, .. }
+        ));
     }
 }

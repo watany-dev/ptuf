@@ -323,6 +323,13 @@ allowlists:
     appliesTo:
       rules: [core.workspace.outside-access]
     when:
-      path.filePathPrefixAny: [/tmp/build-]
+      path.filePathPrefixAny: [/tmp/build-cache]
     reason: ビルドキャッシュは workspace 外 OK
 ```
+
+`filePathPrefixAny` は path を正規化し、prefix は祖先の directory alias
+を辿ったうえでの component 単位の prefix 比較である。
+`/tmp/build-cache/../../…` や file 側の symlink escape、
+`/tmp/build-cache-other` のような部分一致では一致しない。OS が `/tmp` を
+別パスへ symlink していても一致する。prefix ディレクトリ自体を `/` へ
+張り替えた symlink は辿らない。

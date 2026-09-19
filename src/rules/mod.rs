@@ -110,17 +110,10 @@ pub fn iter() -> impl Iterator<Item = &'static (dyn ConfigRule + Sync)> {
 /// `hard_deny`. Used by mode demotion so repository `mode: monitor`
 /// cannot weaken critical safeguards.
 pub fn is_hard_deny_rule_id(rule_id: &str, plugins: &crate::plugin::PluginSet) -> bool {
-    for rule in iter() {
-        if rule.id() == rule_id {
-            return rule.hard_deny();
-        }
-    }
-    for rule in plugins.rules() {
-        if rule.id() == rule_id {
-            return rule.hard_deny();
-        }
-    }
-    false
+    iter().any(|rule| rule.id() == rule_id && rule.hard_deny())
+        || plugins
+            .rules()
+            .any(|rule| rule.id() == rule_id && rule.hard_deny())
 }
 
 #[cfg(test)]
