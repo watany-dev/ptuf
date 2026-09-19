@@ -336,8 +336,8 @@ const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
 ///
 /// `su` is handled elsewhere: its payload is shell code in `-c`, surfaced
 /// through `augment_inner_commands` as `inner_argv`. Chained wrappers
-/// (`sudo env curl`) unwrap one layer per call — callers that need to see
-/// through multiple layers loop (see `rules::git`).
+/// (`sudo env curl`) unwrap one layer per call; [`unwrap_all_prefix_wrappers`]
+/// peels every layer.
 pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
     let wrapper = PREFIX_WRAPPERS
         .iter()
@@ -388,6 +388,19 @@ pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
         inner_redirects: Vec::new(),
         subst_argv: Vec::new(),
     })
+}
+
+/// Peel every prefix wrapper (`sudo env timeout cmd`) and return the
+/// inner argv. If `argv` is not a wrapper this is a clone of `argv`.
+///
+/// Inner payloads (`inner_argv` / `subst_argv`) stay on the original
+/// argv — this only rewrites `head`/`args`.
+pub(crate) fn unwrap_all_prefix_wrappers(argv: &Argv) -> Argv {
+    let mut current = argv.clone();
+    while let Some(inner) = unwrap_prefix_wrapper(&current) {
+        current = inner;
+    }
+    current
 }
 
 fn is_flag(a: &str) -> bool {
@@ -1248,7 +1261,7 @@ pub(crate) fn head_basename(head: &str) -> &str {
     head.rsplit('/').next().unwrap_or(head)
 }
 
-fn short_flag_cluster_contains(arg: &str, flag: char) -> bool {
+pub(crate) fn short_flag_cluster_contains(arg: &str, flag: char) -> bool {
     let Some(rest) = arg.strip_prefix('-') else {
         return false;
     };
@@ -2125,6 +2138,7 @@ mod tests {
         assert_eq!(layer1.head, "doas");
         let layer2 = unwrap_prefix_wrapper(&layer1).expect("doas unwraps");
         assert_eq!(layer2, argv("rm", &["-rf", "/"]));
+        assert_eq!(unwrap_all_prefix_wrappers(outer), argv("rm", &["-rf", "/"]));
     }
 
     use crate::testing::proptest::{

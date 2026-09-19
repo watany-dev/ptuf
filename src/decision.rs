@@ -9,14 +9,6 @@ pub enum Decision {
     Deny { rule_id: String, reason: String },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum DecisionRank {
-    Allow,
-    Monitor,
-    Ask,
-    Deny,
-}
-
 /// Coarse risk grade attached to each rule. Used by plugin authors and
 /// future audit log fields (`docs/design/config-and-plugins.md` §rules).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -33,10 +25,9 @@ pub enum Severity {
 /// declare its `defaultDecision` independently from the per-call
 /// `rule_id` / `reason`.
 ///
-/// The variant order (`Allow < Monitor < Ask < Deny`) intentionally
-/// matches the internal `DecisionRank` so callers (and integration-test
-/// PBT) can compare strictness without crossing the `pub(crate)`
-/// boundary on `Decision::rank`.
+/// The variant order (`Allow < Monitor < Ask < Deny`) is the
+/// strictness lattice used by [`aggregate`] and by callers that compare
+/// `DecisionKind` directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DecisionKind {
@@ -47,16 +38,6 @@ pub enum DecisionKind {
 }
 
 impl Decision {
-    /// Strictness rank used by [`aggregate`].
-    pub(crate) fn rank(&self) -> DecisionRank {
-        match self {
-            Self::Allow => DecisionRank::Allow,
-            Self::Monitor { .. } => DecisionRank::Monitor,
-            Self::Ask { .. } => DecisionRank::Ask,
-            Self::Deny { .. } => DecisionRank::Deny,
-        }
-    }
-
     pub fn rule_id(&self) -> Option<&str> {
         match self {
             Self::Allow => None,
@@ -93,7 +74,7 @@ where
 {
     decisions
         .into_iter()
-        .max_by_key(Decision::rank)
+        .max_by_key(Decision::kind)
         .unwrap_or(Decision::Allow)
 }
 
@@ -162,9 +143,9 @@ mod tests {
 
     #[test]
     fn severity_is_monotonic() {
-        assert!(Decision::Allow.rank() < monitor("x").rank());
-        assert!(monitor("x").rank() < ask("x").rank());
-        assert!(ask("x").rank() < deny("x").rank());
+        assert!(Decision::Allow.kind() < monitor("x").kind());
+        assert!(monitor("x").kind() < ask("x").kind());
+        assert!(ask("x").kind() < deny("x").kind());
     }
 
     #[test]
@@ -256,7 +237,7 @@ mod tests {
         ) {
             let mut reversed = xs.clone();
             reversed.reverse();
-            prop_assert_eq!(aggregate(xs).rank(), aggregate(reversed).rank());
+            prop_assert_eq!(aggregate(xs).kind(), aggregate(reversed).kind());
         }
 
         // Upper bound: the aggregated severity dominates every input.
@@ -264,20 +245,8 @@ mod tests {
         fn pbt_aggregate_is_upper_bound(xs in decision_list()) {
             let agg = aggregate(xs.clone());
             for x in &xs {
-                prop_assert!(agg.rank() >= x.rank());
+                prop_assert!(agg.kind() >= x.kind());
             }
-        }
-
-        // Severity ordering matches the documented hierarchy.
-        #[test]
-        fn pbt_severity_matches_kind_order(d in decision()) {
-            let expected = match d.kind() {
-                DecisionKind::Allow => DecisionRank::Allow,
-                DecisionKind::Monitor => DecisionRank::Monitor,
-                DecisionKind::Ask => DecisionRank::Ask,
-                DecisionKind::Deny => DecisionRank::Deny,
-            };
-            prop_assert_eq!(d.rank(), expected);
         }
 
         // JSON round-trip stability for every variant.

@@ -9,6 +9,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 const PTUF_BINARY = __PTUF_BINARY__;
 const ASK_MODE = process.env.PTUF_PI_ASK_MODE ?? "confirm-if-ui-else-deny";
 const TIMEOUT_MS = Number(process.env.PTUF_PI_TIMEOUT_MS ?? "10000");
+const MAX_CAPTURE_BYTES = 65536;
+const KILL_GRACE_MS = 1000;
 
 type PtufDecision = {
   decision: "allow" | "monitor" | "ask" | "deny";
@@ -16,12 +18,16 @@ type PtufDecision = {
   reason?: string;
 };
 
-function readText(stream: NodeJS.ReadableStream): Promise<string> {
+function readText(stream: NodeJS.ReadableStream, maxBytes: number): Promise<string> {
   return new Promise((resolve, reject) => {
     let text = "";
     stream.setEncoding("utf8");
-    stream.on("data", (chunk) => {
-      text += chunk;
+    stream.on("data", (chunk: string) => {
+      if (text.length >= maxBytes) {
+        return;
+      }
+      const remaining = maxBytes - text.length;
+      text += chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
     });
     stream.on("error", reject);
     stream.on("end", () => {
@@ -33,11 +39,23 @@ function readText(stream: NodeJS.ReadableStream): Promise<string> {
 async function runPtufHook(payload: Record<string, unknown>): Promise<PtufDecision> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     const proc = spawn(PTUF_BINARY, ["hook", "pi"], {
       stdio: ["pipe", "pipe", "pipe"],
       signal: controller.signal,
     });
+
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        killTimer = setTimeout(() => {
+          proc.kill("SIGKILL");
+        }, KILL_GRACE_MS);
+      },
+      { once: true },
+    );
+
     proc.stdin.end(JSON.stringify(payload));
 
     const exited = new Promise<number | null>((resolve, reject) => {
@@ -48,8 +66,8 @@ async function runPtufHook(payload: Record<string, unknown>): Promise<PtufDecisi
     });
 
     const [stdout, stderr, exitCode] = await Promise.all([
-      readText(proc.stdout),
-      readText(proc.stderr),
+      readText(proc.stdout, MAX_CAPTURE_BYTES),
+      readText(proc.stderr, MAX_CAPTURE_BYTES),
       exited,
     ]);
 
@@ -60,7 +78,15 @@ async function runPtufHook(payload: Record<string, unknown>): Promise<PtufDecisi
     if (!line) {
       throw new Error("ptuf hook pi returned empty stdout");
     }
-    return JSON.parse(line) as PtufDecision;
+    const decision = JSON.parse(line) as PtufDecision;
+    // Pi preserves Ask on exit 0; deny is the only non-zero decision.
+    const permitted = decision.decision !== "deny";
+    if (permitted !== (exitCode === 0)) {
+      throw new Error(
+        `ptuf hook pi decision ${decision.decision} is inconsistent with exit ${exitCode}`,
+      );
+    }
+    return decision;
   } catch (err) {
     return {
       decision: "deny",
@@ -69,6 +95,9 @@ async function runPtufHook(payload: Record<string, unknown>): Promise<PtufDecisi
     };
   } finally {
     clearTimeout(timer);
+    if (killTimer !== undefined) {
+      clearTimeout(killTimer);
+    }
   }
 }
 

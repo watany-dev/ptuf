@@ -4,7 +4,7 @@
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, unwrap_prefix_wrapper};
+use crate::facts::shell::{Argv, short_flag_cluster_contains, unwrap_all_prefix_wrappers};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -85,13 +85,7 @@ impl ConfigRule for DynamicEval {
 }
 
 fn invokes_dynamic_eval(argv: &Argv) -> bool {
-    if matches_dynamic_eval(argv) {
-        return true;
-    }
-    if let Some(unwrapped) = unwrap_prefix_wrapper(argv) {
-        return matches_dynamic_eval(&unwrapped);
-    }
-    false
+    matches_dynamic_eval(&unwrap_all_prefix_wrappers(argv))
 }
 
 fn matches_dynamic_eval(argv: &Argv) -> bool {
@@ -134,16 +128,6 @@ fn has_flag_with_value(args: &[String], flag: &str) -> bool {
         }
     }
     false
-}
-
-fn short_flag_cluster_contains(arg: &str, flag: char) -> bool {
-    let Some(rest) = arg.strip_prefix('-') else {
-        return false;
-    };
-    if rest.starts_with('-') || rest.is_empty() {
-        return false;
-    }
-    rest.chars().any(|c| c == flag)
 }
 
 #[cfg(test)]

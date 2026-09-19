@@ -35,7 +35,6 @@ struct ClinePayload {
 
 #[derive(Debug, Deserialize)]
 struct ClineToolCall {
-    id: Option<String>,
     name: String,
     #[serde(default)]
     input: Value,
@@ -63,7 +62,7 @@ pub(super) fn parse(body: &str) -> Result<HookInput, ClineInputError> {
         if payload.hook_name.as_deref() != Some("tool_call") {
             return Err(ClineInputError::UnsupportedHookName(payload.hook_name));
         }
-        return build(&call.name, call.input, call.id.as_deref());
+        return build(&call.name, call.input);
     }
 
     if let Some(pre) = payload.pre_tool_use {
@@ -73,17 +72,17 @@ pub(super) fn parse(body: &str) -> Result<HookInput, ClineInputError> {
         ) {
             return Err(ClineInputError::UnsupportedHookName(payload.hook_name));
         }
-        return build(&pre.tool_name, pre.parameters, None);
+        return build(&pre.tool_name, pre.parameters);
     }
 
     Err(ClineInputError::MissingToolCall)
 }
 
-fn build(raw_name: &str, raw_input: Value, id: Option<&str>) -> Result<HookInput, ClineInputError> {
+fn build(raw_name: &str, raw_input: Value) -> Result<HookInput, ClineInputError> {
     if raw_name.trim().is_empty() {
         return Err(ClineInputError::EmptyToolName);
     }
-    Ok(normalize_call(raw_name, raw_input, id))
+    Ok(normalize_call(raw_name, raw_input))
 }
 
 /// Reasons a Cline payload failed to normalise. Every variant maps to
@@ -121,10 +120,7 @@ impl std::fmt::Display for ClineInputError {
 }
 
 /// Build a canonical [`HookInput`] from a raw Cline tool name + input.
-///
-/// The `id` is the SDK-form `tool_call.id`; the legacy `preToolUse` form
-/// has none, so `_cline_tool_call_id` is only attached for SDK payloads.
-fn normalize_call(raw_name: &str, raw_input: Value, id: Option<&str>) -> HookInput {
+fn normalize_call(raw_name: &str, raw_input: Value) -> HookInput {
     let mut args = to_args_map(raw_input);
 
     let tool_name = match raw_name {
@@ -156,14 +152,6 @@ fn normalize_call(raw_name: &str, raw_input: Value, id: Option<&str>) -> HookInp
         },
         other => normalize_by_fields(other, &mut args),
     };
-
-    args.insert(
-        "_cline_tool_name".into(),
-        Value::String(raw_name.to_string()),
-    );
-    if let Some(id) = id {
-        args.insert("_cline_tool_call_id".into(), Value::String(id.to_string()));
-    }
 
     HookInput {
         tool_name,
@@ -379,8 +367,8 @@ mod tests {
         let input = parse(body).unwrap();
         assert_eq!(input.tool_name, "Bash");
         assert_eq!(input.tool_input["command"], "rm -rf /");
-        assert_eq!(input.tool_input["_cline_tool_name"], "run_commands");
-        assert_eq!(input.tool_input["_cline_tool_call_id"], "c1");
+        assert!(input.tool_input.get("_cline_tool_name").is_none());
+        assert!(input.tool_input.get("_cline_tool_call_id").is_none());
     }
 
     #[test]
@@ -395,7 +383,7 @@ mod tests {
         let input = parse(body).unwrap();
         assert_eq!(input.tool_name, "Bash");
         assert_eq!(input.tool_input["command"], "rm -rf /");
-        assert_eq!(input.tool_input["_cline_tool_name"], "execute_command");
+        assert!(input.tool_input.get("_cline_tool_name").is_none());
         assert!(input.tool_input.get("_cline_tool_call_id").is_none());
     }
 
@@ -440,7 +428,6 @@ mod tests {
         assert_eq!(input.tool_input["path"], ".env");
         assert_eq!(input.tool_input["content"], "SECRET=...");
         assert!(input.tool_input.get("arguments").is_none());
-        assert!(input.tool_input.get("_cline_tool_call_id").is_none());
     }
 
     #[test]
@@ -563,7 +550,7 @@ mod tests {
         }"#;
         let input = parse(body).unwrap();
         assert_eq!(input.tool_name, "list_files");
-        assert_eq!(input.tool_input["_cline_tool_name"], "list_files");
+        assert!(input.tool_input.get("_cline_tool_name").is_none());
     }
 
     #[test]

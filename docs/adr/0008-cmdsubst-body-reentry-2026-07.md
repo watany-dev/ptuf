@@ -152,4 +152,3 @@ co-occurrence 悲観モードを backstop として残す。成功時もフラ�
 
 - Issue #161
 - ADR 0001 (A1 pessimistic + known gap)、ADR 0002 B5、ADR 0003 C
-- `docs/plans/161-cmdsubst-body-reentry.md`

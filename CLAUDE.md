@@ -13,7 +13,9 @@
 
 `make check` を必ずローカルで通すこと。これは CI と同じ 5 ステップ
 (fmt-check / clippy / test / `cargo doc` / cargo-deny) を実行する。手順の
-詳細は README "Develop" と `Makefile` を参照。
+詳細は `CONTRIBUTING.md` と `Makefile` を参照。`make check` は
+cargo-deny だけを必要に応じて install し、tarpaulin / fuzz / mutants /
+semver-checks はそれぞれの target 側で入れる。
 
 初回クローン後に `make install-hooks` を実行すれば、`scripts/hooks/pre-push`
 が `git push` 時に自動で `make check` を走らせ、CI ゲートが落ちる差分の

@@ -287,7 +287,8 @@ ptuf init pi --extension <path>  # exact extension file path
 
 The extension spawns `ptuf hook pi` on every `tool_call` event. Normalisation
 happens in Rust; the extension is a thin bridge. `Ask` is preserved for
-interactive Pi; non-interactive runs default to deny.
+interactive Pi; non-interactive runs default to deny. A hung hook is
+aborted then SIGKILL'd (`PTUF_PI_TIMEOUT_MS`, default 10000).
 
 `ptuf init` with no agent auto-detects every reachable host under cwd /
 `$HOME` and installs the `PreToolUse` hook into each. Pass `--dry-run`
