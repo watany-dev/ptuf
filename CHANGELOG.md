@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed (BREAKING)
+- `ProtectedPaths::classify_input_with_paths` /
+  `ProtectedPaths::classify_input_with_paths_pair` — 4 段あった
+  `classify_input` の wrapper 連鎖を、facts 抽出を自前で行う
+  `classify_input` と engine 向けの `classify_input_prepared` の 2 本に
+  集約した。中間 2 本はどこからも呼ばれていなかった。
+- `self_paths::discover_repo` — `config::repo::discover` の 1 行 wrapper。
+  本番の呼び出し元は全て `config::repo::discover` を直接使っている。
+
 ## [0.8.0] - 2026-09-17
 
 ### Added
