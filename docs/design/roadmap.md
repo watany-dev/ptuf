@@ -127,8 +127,8 @@
   重複を `DuplicateRuleId` で reject (`PluginError` variant 追加 =
   breaking、0.5.0)
 - 埋め込み YAML のコンパイル失敗時は deny-everything の fail-closed
-  sentinel に縮退。旧 Rust 実装はパリティ oracle として残置し、片方向
-  包含を PBT で恒久検証
+  sentinel に縮退。旧 Rust 実装 (パリティ oracle) は #209 で削除し、
+  振る舞いは DSL への直接アサーションと bypass corpus で pin
 
 ### M11 — CLI ゼロベース簡素化 (実装済み, `v0.1.0` 予定 / breaking)
 

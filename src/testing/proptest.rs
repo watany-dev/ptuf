@@ -633,8 +633,8 @@ pub fn bash_process_subst() -> impl Strategy<Value = String> {
 }
 
 /// Interpreter fed by a fetcher via process substitution
-/// (`bash <(curl …)`). Used to pin legacy/DSL remote-pipe parity for
-/// ADR 0003 hole C.
+/// (`bash <(curl …)`). Used to check the DSL remote-pipe rule on
+/// process-substitution fetches (ADR 0003 hole C).
 pub fn bash_process_subst_remote_pipe() -> impl Strategy<Value = String> {
     let interp = prop_oneof![Just("bash"), Just("sh"), Just("zsh"), Just("python3"),];
     let fetcher = prop_oneof![Just("curl"), Just("wget"), Just("fetch")];
