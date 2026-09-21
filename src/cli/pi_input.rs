@@ -7,57 +7,27 @@
 
 use serde_json::{Map, Value};
 
+use super::input_helpers::{
+    InputError, decode_args, hook_input, sanitize_tool_name, take_first_string,
+};
 use crate::hook_input::HookInput;
 
 /// Normalise a Pi stdin body into a [`HookInput`].
-pub(super) fn parse(body: &str) -> Result<HookInput, PiInputError> {
-    if body.trim().is_empty() {
-        return Err(PiInputError::Empty);
-    }
-    let value: Value = serde_json::from_str(body).map_err(PiInputError::Json)?;
-    let Value::Object(mut map) = value else {
-        return Err(PiInputError::NotAnObject);
-    };
+pub(super) fn parse(body: &str) -> Result<HookInput, InputError> {
+    let mut map = super::input_helpers::parse_object(body)?;
 
-    let raw_name = map
-        .remove("tool_name")
-        .or_else(|| map.remove("toolName"))
-        .or_else(|| map.remove("name"))
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .ok_or(PiInputError::MissingToolName)?;
+    let raw_name = take_first_string(&mut map, &["tool_name", "toolName", "name"])
+        .ok_or(InputError::MissingToolName)?;
 
     let raw_input = map
         .remove("tool_input")
         .or_else(|| map.remove("toolInput"))
         .unwrap_or(Value::Null);
-    let args = decode_args(raw_input);
+    let args = decode_args(raw_input, "text");
 
     let (tool_name, tool_input) = normalize(&raw_name, args);
 
-    Ok(HookInput {
-        tool_name,
-        tool_input,
-    })
-}
-
-/// Reasons a Pi payload failed to normalise.
-#[derive(Debug)]
-pub(super) enum PiInputError {
-    Empty,
-    Json(serde_json::Error),
-    NotAnObject,
-    MissingToolName,
-}
-
-impl std::fmt::Display for PiInputError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "hook payload is empty"),
-            Self::Json(err) => write!(f, "hook payload is not valid JSON ({err})"),
-            Self::NotAnObject => write!(f, "hook payload must be a JSON object"),
-            Self::MissingToolName => write!(f, "hook payload is missing tool_name field"),
-        }
-    }
+    Ok(hook_input(tool_name, tool_input))
 }
 
 fn normalize(raw_name: &str, mut args: Map<String, Value>) -> (String, Value) {
@@ -73,46 +43,6 @@ fn normalize(raw_name: &str, mut args: Map<String, Value>) -> (String, Value) {
         other => {
             let sanitized = sanitize_tool_name(other);
             (format!("mcp__pi__{sanitized}"), Value::Object(args))
-        },
-    }
-}
-
-/// Mirror Pi extension `sanitizeToolName`: non-alphanumeric → `_`, trim `_`,
-/// empty → `unknown`.
-fn sanitize_tool_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            out.push(ch);
-        } else {
-            out.push('_');
-        }
-    }
-    let trimmed = out.trim_matches('_');
-    if trimmed.is_empty() {
-        "unknown".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-fn decode_args(raw: Value) -> Map<String, Value> {
-    match raw {
-        Value::Object(map) => map,
-        Value::String(s) => {
-            if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&s) {
-                map
-            } else {
-                let mut m = Map::new();
-                m.insert("text".into(), Value::String(s));
-                m
-            }
-        },
-        Value::Null => Map::new(),
-        other => {
-            let mut m = Map::new();
-            m.insert("text".into(), other);
-            m
         },
     }
 }
@@ -193,27 +123,13 @@ mod tests {
     }
 
     #[test]
-    fn pi_input_error_display_covers_all_variants() {
-        assert!(format!("{}", PiInputError::Empty).contains("empty"));
-        assert!(
-            format!(
-                "{}",
-                PiInputError::Json(serde_json::from_str::<Value>("x").unwrap_err())
-            )
-            .contains("JSON")
-        );
-        assert!(format!("{}", PiInputError::NotAnObject).contains("JSON object"));
-        assert!(format!("{}", PiInputError::MissingToolName).contains("tool_name"));
-    }
-
-    #[test]
     fn pi_fail_closed_on_empty_invalid_and_missing_fields() {
-        assert!(matches!(parse(""), Err(PiInputError::Empty)));
-        assert!(matches!(parse("{"), Err(PiInputError::Json(_))));
-        assert!(matches!(parse("[]"), Err(PiInputError::NotAnObject)));
+        assert!(matches!(parse(""), Err(InputError::Empty)));
+        assert!(matches!(parse("{"), Err(InputError::Json(_))));
+        assert!(matches!(parse("[]"), Err(InputError::NotAnObject)));
         assert!(matches!(
             parse(r#"{"tool_input":{}}"#),
-            Err(PiInputError::MissingToolName)
+            Err(InputError::MissingToolName)
         ));
     }
 
@@ -329,10 +245,10 @@ mod tests {
         ) {
             match parse(&body) {
                 Err(
-                    PiInputError::Empty
-                    | PiInputError::NotAnObject
-                    | PiInputError::MissingToolName
-                    | PiInputError::Json(_),
+                    InputError::Empty
+                    | InputError::NotAnObject
+                    | InputError::MissingToolName
+                    | InputError::Json(_),
                 ) => {},
                 other => prop_assert!(
                     false,
