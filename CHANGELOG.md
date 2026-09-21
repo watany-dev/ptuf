@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- テスト用の環境変数ダブルを `config::scope::MapEnv`
+  (`#[cfg(test)] pub(crate)`) 1 個に集約。`facts::path` / `self_paths` /
+  `config::scope` / `update::exe` / `init::opencode` に散っていた同型の
+  `MapEnv` 5 定義と、`init` の `EmptyEnv` / `XdgEnv` を削除した。公開 API に
+  影響はない。
+
 ## [0.8.0] - 2026-09-17
 
 ### Added

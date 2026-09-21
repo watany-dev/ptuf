@@ -203,31 +203,8 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::ffi::OsString;
-
     use super::*;
-    use crate::config::scope::EnvLookup;
-
-    struct MapEnv {
-        vars: HashMap<String, OsString>,
-    }
-
-    impl MapEnv {
-        fn new(pairs: &[(&str, &str)]) -> Self {
-            let mut vars = HashMap::new();
-            for (k, v) in pairs {
-                vars.insert((*k).to_string(), OsString::from(*v));
-            }
-            Self { vars }
-        }
-    }
-
-    impl EnvLookup for MapEnv {
-        fn var_os(&self, key: &str) -> Option<OsString> {
-            self.vars.get(key).cloned()
-        }
-    }
+    use crate::config::scope::MapEnv;
 
     fn workdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

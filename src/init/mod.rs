@@ -446,6 +446,7 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
 mod tests {
 
     use super::*;
+    use crate::config::scope::MapEnv;
 
     #[test]
     fn init_error_display_covers_all_variants() {
@@ -820,13 +821,7 @@ mod tests {
     /// Hermetic wrapper for detect tests: an empty env so results never
     /// depend on the host's real `XDG_CONFIG_HOME`.
     fn detect_hermetic(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> {
-        struct EmptyEnv;
-        impl EnvLookup for EmptyEnv {
-            fn var_os(&self, _key: &str) -> Option<std::ffi::OsString> {
-                None
-            }
-        }
-        detect_agents_with_env(cwd, home, &EmptyEnv)
+        detect_agents_with_env(cwd, home, &MapEnv::empty())
     }
 
     #[test]
@@ -1035,11 +1030,8 @@ mod tests {
 
     #[test]
     fn detect_agents_finds_opencode_via_injected_xdg_config_home() {
-        struct XdgEnv(PathBuf);
-        impl EnvLookup for XdgEnv {
-            fn var_os(&self, key: &str) -> Option<std::ffi::OsString> {
-                (key == "XDG_CONFIG_HOME").then(|| self.0.clone().into_os_string())
-            }
+        fn xdg_env(dir: &Path) -> MapEnv {
+            MapEnv::new(&[("XDG_CONFIG_HOME", dir.to_str().expect("utf-8 path"))])
         }
 
         let dir = workdir("detect-opencode-xdg");
@@ -1048,11 +1040,8 @@ mod tests {
         fs::create_dir_all(xdg.join("opencode")).expect("mkdir xdg/opencode");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
-        let found = detect_agents_with_env(
-            Some(dir.as_path()),
-            Some(home.as_path()),
-            &XdgEnv(xdg.clone()),
-        );
+        let found =
+            detect_agents_with_env(Some(dir.as_path()), Some(home.as_path()), &xdg_env(&xdg));
         assert_eq!(found, vec![HookAgent::Opencode]);
 
         // Same env but the XDG dir has no opencode/ → not detected.
@@ -1061,7 +1050,7 @@ mod tests {
         let found = detect_agents_with_env(
             Some(dir.as_path()),
             Some(home.as_path()),
-            &XdgEnv(empty_xdg),
+            &xdg_env(&empty_xdg),
         );
         assert!(found.is_empty());
         let _ = fs::remove_dir_all(&dir);
