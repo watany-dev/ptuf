@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed (BREAKING)
+- crate 外から参照されていない非テスト `pub` 項目を一掃した。トップレベルの
+  `pub` 宣言は 332 → 104 件になり、`cargo-semver-checks` が守る公開 API は
+  `src/lib.rs` の re-export (`Decision` / `aggregate` / `Engine` /
+  `EngineError` / `Outcome` / `Facts` / `HookInput` / `decide` /
+  `try_decide`)、`fuzz/` が叩く信頼境界 (`config::yaml::parse_str` /
+  `config::merge::merge` / `plugin::load_str` / `facts::shell::parse` /
+  `cli::fuzz_copilot_parse` / `cli::fuzz_opencode_parse`)、および
+  `tests/` / `benches/` が使う範囲に縮小した。
+- `AuditRecord::build` — 0.6.0 から deprecated だった builder shim。
+  `AuditRecord::builder` を使う。
+- `InitError::UnknownAgent` — 構築箇所が無い variant。agent 名の検証は
+  `cli::ParseError::UnknownAgent` が担う。
+- `facts::path::extract` の production 版 — 単一パス形は test だけが使うため
+  `#[cfg(test)]` に落とした。production は `extract_all` を通る。
+
+### Changed
+- `unreachable_pub = "warn"` を有効化 (`Cargo.toml [lints.rust]`)。内部項目に
+  付いた inert な `pub` が再び増えるのを止める。`unreachable_pub` と方向が
+  衝突する `clippy::redundant_pub_crate` (nursery) は `allow` にした。
+- `plugin::runner::run_str` / `LoadedPlugin::rule_count` /
+  `PluginSet::rule_count` を `#[cfg(test)]` に移した。production 経路は
+  `run_path` と rule の走査を使う。
+
 ## [0.8.0] - 2026-09-17
 
 ### Added

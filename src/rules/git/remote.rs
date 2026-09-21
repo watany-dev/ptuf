@@ -31,6 +31,6 @@ const REMOTE_SET_URL: RuleSpec = RuleSpec {
     ],
 };
 
-pub static REMOTE_SET_URL_RULE: GitRule = GitRule {
+pub(crate) static REMOTE_SET_URL_RULE: GitRule = GitRule {
     spec: &REMOTE_SET_URL,
 };

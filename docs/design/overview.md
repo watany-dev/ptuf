@@ -57,6 +57,15 @@ CLI 経路はこれと異なり fail-closed で動作する。
 `try_decide(&HookInput) -> Result<Decision, EngineError>` は失敗を握り潰さ
 ない並立 API。embed 利用側で CLI と同じ fail-closed 契約が欲しい場合に使う。
 
+公開するのはこのリストと、別 crate である `fuzz/` が叩く信頼境界
+(`config::yaml::parse_str` / `config::merge::merge` / `plugin::load_str` /
+`facts::shell::parse` / `cli::fuzz_copilot_parse` / `cli::fuzz_opencode_parse`)、
+および `tests/` / `benches/` が参照する範囲だけに限る。それ以外は
+`pub(crate)` に留める。`Cargo.toml` の `unreachable_pub = "warn"` が
+crate 外から到達できない `pub` を機械的に弾く。公開 API は PR CI の
+`cargo-semver-checks` が守る対象でもあるため、内部項目に `pub` を付けると
+ただのリファクタが SemVer 破壊として弾かれる。
+
 ## CLI の現在形
 
 実装済みサブコマンドは次のとおり。`--json` はトップレベルの global flag

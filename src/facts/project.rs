@@ -39,7 +39,7 @@ pub struct ProjectFacts {
 /// Build [`ProjectFacts`] for `repo_root`. Returns an empty
 /// `ProjectFacts` when `repo_root` is `None` so callers can wire the
 /// engine without conditionals.
-pub fn collect(repo_root: Option<&Path>, protected_patterns: &[String]) -> ProjectFacts {
+pub(crate) fn collect(repo_root: Option<&Path>, protected_patterns: &[String]) -> ProjectFacts {
     let Some(root) = repo_root else {
         return ProjectFacts::default();
     };

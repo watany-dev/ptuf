@@ -18,7 +18,7 @@ use super::{Allowlist, Mode, PackOverride, RedactionMode, RuleOverride};
 /// missing fields defer to the layer below.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawConfig {
+pub(crate) struct RawConfig {
     /// Currently always `1`. Reserved for future incompatible breaks.
     #[serde(default)]
     pub version: Option<u32>,
@@ -100,7 +100,7 @@ impl RawConfig {
 /// flat (one entry per pack) without a per-pack subtype.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawPack {
+pub(crate) struct RawPack {
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
@@ -112,7 +112,7 @@ pub struct RawPack {
 /// Per-rule override parsed from `rules: { <rule-id>: { ... } }`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawRuleOverride {
+pub(crate) struct RawRuleOverride {
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
@@ -136,7 +136,7 @@ impl From<RawRuleOverride> for RuleOverride {
 /// load.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawPluginRef {
+pub(crate) struct RawPluginRef {
     pub path: PathBuf,
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -145,7 +145,7 @@ pub struct RawPluginRef {
 /// Layer-local audit overlay.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawAudit {
+pub(crate) struct RawAudit {
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
@@ -162,7 +162,7 @@ pub struct RawAudit {
 /// ids the entry applies to.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawAllowlist {
+pub(crate) struct RawAllowlist {
     pub id: String,
     #[serde(default)]
     pub applies_to: RawAllowlistApplies,
@@ -176,7 +176,7 @@ pub struct RawAllowlist {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RawAllowlistApplies {
+pub(crate) struct RawAllowlistApplies {
     #[serde(default)]
     pub rules: Vec<String>,
 }

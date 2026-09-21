@@ -29,10 +29,10 @@ const MANAGED_MARKER: &str = "ptuf-managed: cline PreToolUse";
 /// Matcher recorded in [`InstallOutcome`] for the rendered summary.
 /// Cline file hooks do not use a regex matcher — the hook fires for
 /// every `PreToolUse` event — so this is purely descriptive.
-pub const DEFAULT_MATCHER: &str = "PreToolUse";
+pub(crate) const DEFAULT_MATCHER: &str = "PreToolUse";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TargetPaths {
+pub(crate) struct TargetPaths {
     /// Absolute path of the `PreToolUse` wrapper script to install.
     pub hook_path: PathBuf,
     /// `true` when the target is the `~/Documents/Cline/Hooks` global
@@ -41,7 +41,7 @@ pub struct TargetPaths {
 }
 
 /// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub fn detect_binary() -> String {
+pub(crate) fn detect_binary() -> String {
     super::detect_binary_impl()
 }
 
@@ -62,7 +62,7 @@ fn cline_hook_file_name() -> &'static str {
 /// global `~/Documents/Cline/Hooks/PreToolUse`. Returns
 /// [`InitError::HomeNotSet`] when neither a repo root nor `$HOME` is
 /// available.
-pub fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
+pub(crate) fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
     let file_name = cline_hook_file_name();
     if let Some(root) = start.and_then(crate::config::repo::discover) {
         return Ok(TargetPaths {
@@ -79,7 +79,7 @@ pub fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
     })
 }
 
-pub fn install(
+pub(crate) fn install(
     targets: &TargetPaths,
     ptuf_binary: &str,
     dry_run: bool,

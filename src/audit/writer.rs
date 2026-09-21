@@ -1,4 +1,4 @@
-//! JSONL writer used by [`super::JsonlSink`].
+//! JSONL writer used by `super::JsonlSink`.
 //!
 //! Serialises one [`AuditRecord`] to a single line and appends it to
 //! a file opened with `O_APPEND`. Cross-process atomicity is
@@ -43,7 +43,7 @@ impl std::error::Error for WriteError {
 
 /// Open `path` for append, creating it (and any missing parent
 /// directories) if needed.
-pub fn open_append(path: &Path) -> io::Result<File> {
+pub(crate) fn open_append(path: &Path) -> io::Result<File> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -77,7 +77,7 @@ fn open_append_secure(path: &Path) -> io::Result<File> {
 /// Encode one record as a JSON line and append it to `dst`. The
 /// newline is appended to the JSON before the single `write_all` call
 /// so the line and its terminator hit the underlying file together.
-pub fn append_record<W: Write>(dst: &mut W, record: &AuditRecord) -> Result<(), WriteError> {
+pub(crate) fn append_record<W: Write>(dst: &mut W, record: &AuditRecord) -> Result<(), WriteError> {
     let mut line =
         serde_json::to_string(record).map_err(|e| WriteError::Serialize(e.to_string()))?;
     line.push('\n');

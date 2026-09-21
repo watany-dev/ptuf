@@ -35,7 +35,7 @@ impl PluginRule {
     /// the caller keeps ownership of `raw` (including the heavy `tests`
     /// metadata) so it can be stashed for the `plugin test` runner
     /// without a second deep copy.
-    pub fn from_raw(raw: &RawRule, when: WhenNode) -> Self {
+    pub(crate) fn from_raw(raw: &RawRule, when: WhenNode) -> Self {
         Self {
             id: raw.id.clone(),
             severity: raw.severity,

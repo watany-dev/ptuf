@@ -134,7 +134,7 @@ impl ProtectedPaths {
 
     /// Hermetic variant used by tests; collapses to [`Self::collect`]
     /// in production via the [`SystemEnv`] lookup.
-    pub fn collect_with_env(
+    pub(crate) fn collect_with_env(
         repo_root: Option<&Path>,
         config: &Config,
         env: &dyn EnvLookup,
@@ -328,7 +328,7 @@ impl ProtectedPaths {
 
     /// Variant used by the engine after it has already extracted path
     /// facts, avoiding a second scan of large `apply_patch` payloads.
-    pub fn classify_input_with_paths(
+    pub(crate) fn classify_input_with_paths(
         &self,
         input: &HookInput,
         paths: &[crate::facts::path::FilePath],
@@ -339,7 +339,7 @@ impl ProtectedPaths {
     /// Variant that classifies the union of `paths` (tool-input
     /// derived) and `extra` (engine-supplied, e.g. Bash redirect
     /// targets) without forcing the caller to allocate a merged `Vec`.
-    pub fn classify_input_with_paths_pair(
+    pub(crate) fn classify_input_with_paths_pair(
         &self,
         input: &HookInput,
         paths: &[crate::facts::path::FilePath],
@@ -352,7 +352,7 @@ impl ProtectedPaths {
     /// (`facts.bash`), so the engine's hot path never parses the same
     /// command line twice. Pass `None` to fall back to parsing the
     /// payload's `command` string internally.
-    pub fn classify_input_prepared(
+    pub(crate) fn classify_input_prepared(
         &self,
         input: &HookInput,
         paths: &[crate::facts::path::FilePath],
@@ -578,7 +578,7 @@ fn candidate_targets<'a>(
 }
 
 /// Discover the repo root for the given start directory. Thin wrapper
-/// over [`crate::config::repo::discover`] so callers don't need to
+/// over `crate::config::repo::discover` so callers don't need to
 /// import the submodule directly.
 pub fn discover_repo(start: &Path) -> Option<PathBuf> {
     repo::discover(start)

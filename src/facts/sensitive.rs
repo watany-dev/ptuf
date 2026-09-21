@@ -1,7 +1,7 @@
 //! Classify a string against the protected-credentials shapes defined in
 //! `docs/design/policy-packs.md` §`core.secrets`.
 //!
-//! The legacy [`crate::rules::patterns::SENSITIVE_PATH`] regex remains
+//! The legacy `crate::rules::patterns::SENSITIVE_PATH` regex remains
 //! the source of truth for the existing `core.secrets.sensitive-path-to-network`
 //! rule. This module adds an *additive* per-variant view so other tools
 //! (`Read`, `Edit`, `Write`, plugin DSL) can match a typed

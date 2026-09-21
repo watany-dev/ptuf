@@ -2,7 +2,7 @@
 //!
 //! Covers force-push variants, history rewrites, hook / signing / credential
 //! bypasses, and env-var redirection. The authoritative rule list lives in
-//! `docs/design/policy-packs.md`. Each rule shares the [`GitRule`] adapter
+//! `docs/design/policy-packs.md`. Each rule shares the `GitRule` adapter
 //! so the [`crate::rules::ConfigRule`] trait is implemented exactly once.
 
 use crate::decision::{Decision, DecisionKind, Severity};
@@ -24,18 +24,20 @@ mod remote;
 mod reset;
 mod stash;
 
-pub use branch::BRANCH_DELETE_FORCE_RULE;
-pub use bypass::{CONFIG_OVERRIDE_BYPASS_RULE, ENV_BYPASS_RULE, NO_GPG_SIGN_RULE, NO_VERIFY_RULE};
-pub use clean::CLEAN_FDX_RULE;
-pub use env_redirect::{ENV_CREDENTIAL_HIJACK_RULE, ENV_PATH_REDIRECT_RULE};
-pub use history::{GC_PRUNE_NOW_RULE, REFLOG_EXPIRE_RULE, UPDATE_REF_DELETE_RULE};
-pub use push::{
+pub(crate) use branch::BRANCH_DELETE_FORCE_RULE;
+pub(crate) use bypass::{
+    CONFIG_OVERRIDE_BYPASS_RULE, ENV_BYPASS_RULE, NO_GPG_SIGN_RULE, NO_VERIFY_RULE,
+};
+pub(crate) use clean::CLEAN_FDX_RULE;
+pub(crate) use env_redirect::{ENV_CREDENTIAL_HIJACK_RULE, ENV_PATH_REDIRECT_RULE};
+pub(crate) use history::{GC_PRUNE_NOW_RULE, REFLOG_EXPIRE_RULE, UPDATE_REF_DELETE_RULE};
+pub(crate) use push::{
     FORCE_IF_INCLUDES_RULE, FORCE_PUSH_RULE, FORCE_PUSH_WITH_LEASE_RULE, PUSH_DELETE_REMOTE_RULE,
     PUSH_MIRROR_RULE,
 };
-pub use remote::REMOTE_SET_URL_RULE;
-pub use reset::RESET_HARD_RULE;
-pub use stash::STASH_CLEAR_RULE;
+pub(crate) use remote::REMOTE_SET_URL_RULE;
+pub(crate) use reset::RESET_HARD_RULE;
+pub(crate) use stash::STASH_CLEAR_RULE;
 
 /// Per-rule wiring: matcher predicate + decision shape + reason text.
 ///
@@ -53,7 +55,7 @@ pub(super) struct RuleSpec {
     pub(super) alternatives: &'static [&'static str],
 }
 
-pub struct GitRule {
+pub(crate) struct GitRule {
     pub(super) spec: &'static RuleSpec,
 }
 

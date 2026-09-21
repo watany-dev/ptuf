@@ -1,8 +1,8 @@
 //! `Read` / `Edit` / `Write` `file_path` extraction with `~` expansion.
 //!
-//! Expansion uses the [`crate::config::scope::EnvLookup`] trait so tests
+//! Expansion uses the `crate::config::scope::EnvLookup` trait so tests
 //! can inject a hermetic `HOME` (and the production path delegates to
-//! [`crate::config::scope::SystemEnv`]).
+//! `crate::config::scope::SystemEnv`).
 
 use std::path::{Component, Path, PathBuf};
 
@@ -40,7 +40,7 @@ pub enum PathOrigin {
     /// `apply_patch` `*** Add/Update/Delete/Move` lines.
     ApplyPatch,
     /// Bash redirect operand (`>`, `>>`, `<`, `2>`, `&>`). Surfaced
-    /// only by the engine — never emitted by [`extract_all_with_env`]
+    /// only by the engine — never emitted by `extract_all_with_env`
     /// because Bash inputs do not carry a tool-level `file_path`.
     BashRedirect,
 }
@@ -75,7 +75,7 @@ pub struct PathFact {
 /// Backward-compatible alias kept so call sites that reference the
 /// historical `FilePath` name continue to compile. New code should
 /// prefer [`PathFact`].
-pub type FilePath = PathFact;
+pub(crate) type FilePath = PathFact;
 
 /// Expand `~` / `$HOME` forms and, when requested, resolve a relative
 /// path against `base_dir`.
@@ -99,7 +99,7 @@ pub(crate) fn resolve_with_env(raw: &str, base_dir: Option<&Path>, env: &dyn Env
 /// `file`, `filepath`, `target`, `target_file`, `dest`, `destination`,
 /// `src`, `source`, `from`, `to`, `location`, `uri`) plus the nested
 /// shapes `paths[]`, `files[].path`, and `items[].path`.
-pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathFact> {
+pub(crate) fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathFact> {
     let (tool, tagged): (PathTool, Vec<(String, PathOrigin)>) = match input.tool_name.as_str() {
         "Read" | "Edit" | "Write" => {
             let tool = match input.tool_name.as_str() {
@@ -137,19 +137,23 @@ pub fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathF
         .collect()
 }
 
+// Only the tests inject an env; production goes through `extract`.
+#[cfg(test)]
 /// Compatibility helper: extract the first visible path with the supplied env.
-pub fn extract_with_env(input: &HookInput, env: &dyn EnvLookup) -> Option<FilePath> {
+pub(crate) fn extract_with_env(input: &HookInput, env: &dyn EnvLookup) -> Option<FilePath> {
     extract_all_with_env(input, env).into_iter().next()
 }
 
 /// Convenience: extract the first visible path using the production
-/// environment.
-pub fn extract(input: &HookInput) -> Option<FilePath> {
+/// environment. Only the tests need the single-path shape; production
+/// consumes the full list.
+#[cfg(test)]
+pub(crate) fn extract(input: &HookInput) -> Option<FilePath> {
     extract_all_with_env(input, &SystemEnv).into_iter().next()
 }
 
 /// Convenience: extract every visible path using the production environment.
-pub fn extract_all(input: &HookInput) -> Vec<FilePath> {
+pub(crate) fn extract_all(input: &HookInput) -> Vec<FilePath> {
     extract_all_with_env(input, &SystemEnv)
 }
 
@@ -213,7 +217,7 @@ fn push_tagged(
 /// already resolved); otherwise we climb the path until an existing
 /// ancestor canonicalises, reattach the missing tail, and resolve any
 /// remaining `..` components manually.
-pub fn resolve_for_containment(fact: &PathFact) -> PathBuf {
+pub(crate) fn resolve_for_containment(fact: &PathFact) -> PathBuf {
     if fact.canonical_or_raw != fact.absolute {
         return fact.canonical_or_raw.clone();
     }
@@ -248,7 +252,7 @@ pub(crate) fn resolve_prefix_for_containment(prefix: &Path) -> PathBuf {
 /// True iff `target` is identical to or a descendant (component-wise)
 /// of any path in `workspaces`. Both sides are expected to be canonical
 /// or normalised to the same form.
-pub fn is_within_workspace(target: &Path, workspaces: &[PathBuf]) -> bool {
+pub(crate) fn is_within_workspace(target: &Path, workspaces: &[PathBuf]) -> bool {
     workspaces.iter().any(|w| target.starts_with(w))
 }
 
@@ -286,7 +290,7 @@ fn push_canonical(path: PathBuf, out: &mut Vec<PathBuf>) {
 /// therefore cannot be canonicalised by the OS. `..` at the root or in
 /// front of a `RootDir` component is a no-op (`PathBuf::pop` returns
 /// false), matching POSIX semantics.
-pub fn normalize_components(path: &Path) -> PathBuf {
+pub(crate) fn normalize_components(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for comp in path.components() {
         match comp {
@@ -327,7 +331,7 @@ impl PathFact {
     /// metadata. Resolves expansion, absolutisation, and a best-effort
     /// canonicalisation in one pass. Public so the engine can produce
     /// [`PathOrigin::BashRedirect`] facts from parsed Bash pipelines.
-    pub fn from_raw(
+    pub(crate) fn from_raw(
         raw: String,
         tool: PathTool,
         origin: PathOrigin,
@@ -359,7 +363,7 @@ impl PathFact {
 /// is known; `~` and `$HOME` are expanded against the production
 /// environment so `> ~/.claude/settings.json` hits the `ClaudeSettings`
 /// guardrail.
-pub fn from_bash_redirects(bash: Option<&Bash>, repo_root: Option<&Path>) -> Vec<PathFact> {
+pub(crate) fn from_bash_redirects(bash: Option<&Bash>, repo_root: Option<&Path>) -> Vec<PathFact> {
     let Some(bash) = bash else {
         return Vec::new();
     };

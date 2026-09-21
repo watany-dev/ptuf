@@ -19,15 +19,16 @@ use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 /// Cursor matches the agent tool name against this regex before invoking
 /// the hook; the alternation covers ptuf's canonical tool vocabulary plus
 /// the `mcp__*` family.
-pub const DEFAULT_MATCHER: &str = "Shell|Bash|Read|ReadFile|Write|Edit|MCP|WebFetch|Fetch|mcp__.*";
+pub(crate) const DEFAULT_MATCHER: &str =
+    "Shell|Bash|Read|ReadFile|Write|Edit|MCP|WebFetch|Fetch|mcp__.*";
 
 /// Default repo-relative (and home-relative) path for the Cursor hook
 /// file.
-pub const DEFAULT_HOOKS_PATH: &str = ".cursor/hooks.json";
+pub(crate) const DEFAULT_HOOKS_PATH: &str = ".cursor/hooks.json";
 
 /// Default timeout we record on the hook entry. Cursor may abort the
 /// tool call if the hook does not respond within this many seconds.
-pub const DEFAULT_TIMEOUT_SEC: u64 = 10;
+pub(crate) const DEFAULT_TIMEOUT_SEC: u64 = 10;
 
 /// Trailing tokens (split on whitespace) that mark a `command` field as
 /// a ptuf Cursor `preToolUse` hook.
@@ -57,13 +58,13 @@ pub struct CursorInitOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TargetPaths {
+pub(crate) struct TargetPaths {
     pub root: PathBuf,
     pub hooks_path: PathBuf,
 }
 
 /// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub fn detect_binary() -> String {
+pub(crate) fn detect_binary() -> String {
     super::detect_binary_impl()
 }
 
@@ -72,7 +73,7 @@ pub fn detect_binary() -> String {
 /// Reads `$HOME` from the environment and delegates to
 /// `resolve_paths_with` so the resolution logic stays testable without
 /// touching the real environment.
-pub fn resolve_paths(
+pub(crate) fn resolve_paths(
     start: Option<&Path>,
     options: &CursorInitOptions,
 ) -> Result<TargetPaths, InitError> {
@@ -114,7 +115,7 @@ fn resolve_paths_with(
     }
 }
 
-pub fn install(
+pub(crate) fn install(
     targets: &TargetPaths,
     ptuf_binary: &str,
     dry_run: bool,

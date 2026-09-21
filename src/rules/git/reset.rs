@@ -29,4 +29,4 @@ const RESET_HARD: RuleSpec = RuleSpec {
     ],
 };
 
-pub static RESET_HARD_RULE: GitRule = GitRule { spec: &RESET_HARD };
+pub(crate) static RESET_HARD_RULE: GitRule = GitRule { spec: &RESET_HARD };

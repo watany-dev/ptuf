@@ -5,7 +5,7 @@
 //! [`PluginRule`]s the [`crate::Engine`] evaluates alongside the
 //! built-ins. Plugins cannot reach raw shell strings; they describe
 //! conditions in terms of the facts ptuf already extracts (see
-//! [`SUPPORTED_FACTS`]).
+//! `SUPPORTED_FACTS`).
 //!
 //! See `docs/design/config-and-plugins.md:91-214` for the YAML schema
 //! and `docs/design/decision-model.md` for how rule outputs aggregate.
@@ -20,8 +20,9 @@ use std::path::PathBuf;
 
 use crate::rules::ConfigRule;
 
-pub use loader::{LoadedPlugin, SUPPORTED_FACTS, load_path, load_str};
-pub use rule::PluginRule;
+pub use loader::load_str;
+pub(crate) use loader::{LoadedPlugin, load_path};
+pub(crate) use rule::PluginRule;
 
 /// Errors raised while loading or compiling a plugin.
 #[derive(Debug)]
@@ -165,12 +166,14 @@ impl PluginSet {
         crate::rules::iter().any(|rule| rule.id() == id) || self.rules().any(|rule| rule.id() == id)
     }
 
+    // Assertion helper: production iterates the rules instead of counting them.
+    #[cfg(test)]
     pub fn rule_count(&self) -> usize {
         self.plugins.iter().map(LoadedPlugin::rule_count).sum()
     }
 
     /// Iterate over every rule contributed by every loaded plugin.
-    pub fn rules(&self) -> impl Iterator<Item = &PluginRule> {
+    pub(crate) fn rules(&self) -> impl Iterator<Item = &PluginRule> {
         self.plugins.iter().flat_map(|p| p.rules.iter())
     }
 

@@ -301,7 +301,7 @@ fn walk_argv_for_pipeline_from_to(
 const PRE_TOOL_USE: &str = "PreToolUse";
 
 /// Evaluate a compiled AST against the hook context.
-pub fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
+pub(crate) fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> bool {
     match node {
         WhenNode::All(children) => children.iter().all(|c| evaluate(c, facts, input)),
         WhenNode::Any(children) => children.iter().any(|c| evaluate(c, facts, input)),

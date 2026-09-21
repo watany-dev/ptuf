@@ -1,4 +1,4 @@
-//! Scope merge: fold a vector of [`RawConfig`] layers (lowest first)
+//! Scope merge: fold a vector of `RawConfig` layers (lowest first)
 //! into a single [`Config`].
 //!
 //! Merge rules:
@@ -18,7 +18,7 @@ use super::{Config, PackOverride, RuleOverride};
 
 /// Fold `layers` into a final [`Config`]. Layers are applied in the
 /// order they appear (so `layers[0]` is the lowest-priority scope).
-pub fn merge(layers: Vec<RawConfig>) -> Result<Config, super::ConfigError> {
+pub(crate) fn merge(layers: Vec<RawConfig>) -> Result<Config, super::ConfigError> {
     let mut acc = Config::default();
     for layer in layers {
         apply(&mut acc, layer.try_into_merge_layer()?);

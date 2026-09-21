@@ -14,34 +14,34 @@ use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 /// the matching is implicit via tool name passed in stdin — but we
 /// surface a stable string here so the `render_install_outcome`
 /// formatter has something descriptive to show.
-pub const DEFAULT_MATCHER: &str = "*";
+pub(crate) const DEFAULT_MATCHER: &str = "*";
 
 /// Default repo-relative path for the Copilot hook file.
-pub const DEFAULT_HOOKS_PATH: &str = ".github/hooks/ptuf.json";
+pub(crate) const DEFAULT_HOOKS_PATH: &str = ".github/hooks/ptuf.json";
 
 /// Default timeout we record on the hook entry. Copilot may abort the
 /// tool call if the hook does not respond within this many seconds.
-pub const DEFAULT_TIMEOUT_SEC: u64 = 10;
+pub(crate) const DEFAULT_TIMEOUT_SEC: u64 = 10;
 
 /// Trailing tokens (split on whitespace) that mark a `bash` /
 /// `powershell` command field as a ptuf Copilot `preToolUse` hook.
 pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "copilot"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TargetPaths {
+pub(crate) struct TargetPaths {
     pub root: PathBuf,
     pub hooks_path: PathBuf,
 }
 
 /// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub fn detect_binary() -> String {
+pub(crate) fn detect_binary() -> String {
     super::detect_binary_impl()
 }
 
 /// Resolve `<repo>/.github/hooks/ptuf.json` from the discovered repo
 /// root. Returns [`InitError::RepoRootNotFound`] when the caller is not
 /// inside a git working tree.
-pub fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
+pub(crate) fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
     let root = start
         .and_then(crate::config::repo::discover)
         .ok_or(InitError::RepoRootNotFound)?;
@@ -49,7 +49,7 @@ pub fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
     Ok(TargetPaths { root, hooks_path })
 }
 
-pub fn install(
+pub(crate) fn install(
     targets: &TargetPaths,
     ptuf_binary: &str,
     dry_run: bool,

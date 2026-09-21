@@ -32,9 +32,9 @@ const PNPM_RULE_ID: &str = "core.project_hygiene.lock-mismatch-pnpm";
 const UV_RULE_ID: &str = "core.project_hygiene.lock-mismatch-uv";
 const PROTECTED_GIT_RULE_ID: &str = "core.project_hygiene.protected-branch-destructive-git";
 
-pub struct LockMismatchPnpm;
-pub struct LockMismatchUv;
-pub struct ProtectedBranchDestructiveGit;
+pub(crate) struct LockMismatchPnpm;
+pub(crate) struct LockMismatchUv;
+pub(crate) struct ProtectedBranchDestructiveGit;
 
 impl ConfigRule for LockMismatchPnpm {
     fn id(&self) -> &str {

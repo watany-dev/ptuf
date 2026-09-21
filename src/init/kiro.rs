@@ -213,7 +213,7 @@ pub fn detect_binary() -> String {
 /// `resolve_paths_with`. Tests use `resolve_paths_with` directly so
 /// they can inject a tempdir without mutating process env (forbidden
 /// by `unsafe_code = "forbid"`).
-pub fn resolve_paths(
+pub(crate) fn resolve_paths(
     start: Option<&Path>,
     opts: &KiroInitOptions,
 ) -> Result<TargetPaths, InitError> {

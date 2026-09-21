@@ -28,7 +28,7 @@ use super::schema::{RawPlugin, RawRule};
 /// Facts that can be referenced from a plugin's
 /// `capabilities.requires`. Must stay in sync with the supported
 /// `when:` leaves in [`super::dsl`].
-pub const SUPPORTED_FACTS: &[&str] = &[
+pub(crate) const SUPPORTED_FACTS: &[&str] = &[
     "shell.ast",
     "shell.argv",
     "shell.pipeline",
@@ -50,6 +50,8 @@ pub struct LoadedPlugin {
 }
 
 impl LoadedPlugin {
+    // Assertion helper: production iterates the rules instead of counting them.
+    #[cfg(test)]
     /// Number of rules the plugin contributed.
     pub fn rule_count(&self) -> usize {
         self.rules.len()
@@ -57,7 +59,7 @@ impl LoadedPlugin {
 }
 
 /// Load a single plugin file from disk.
-pub fn load_path(path: &Path) -> Result<LoadedPlugin, PluginError> {
+pub(crate) fn load_path(path: &Path) -> Result<LoadedPlugin, PluginError> {
     let source = fs::read_to_string(path).map_err(|e| PluginError::Io {
         path: path.to_path_buf(),
         source: e,

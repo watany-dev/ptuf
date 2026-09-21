@@ -20,7 +20,7 @@ use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
 /// Matcher we install in the new entry — covers every tool ptuf can
 /// actually evaluate plus all MCP tools.
-pub const DEFAULT_MATCHER: &str = "Bash|Read|Edit|Write|WebFetch|mcp__.*";
+pub(crate) const DEFAULT_MATCHER: &str = "Bash|Read|Edit|Write|WebFetch|mcp__.*";
 
 /// Stable marker written into hook payloads so future command-line flag
 /// changes do not affect idempotency detection.
@@ -35,20 +35,20 @@ pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "claude-code"];
 /// Default settings file path (`$HOME/.claude/settings.json`). Returns
 /// `None` when `$HOME` is unset; callers should map that to
 /// [`InitError::HomeNotSet`].
-pub fn default_settings_path() -> Option<PathBuf> {
+pub(crate) fn default_settings_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/settings.json"))
 }
 
 /// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`
 /// so the resulting hook entry is still useful when invoked from a
 /// CI container without a stable absolute path.
-pub fn detect_binary() -> String {
+pub(crate) fn detect_binary() -> String {
     super::detect_binary_impl()
 }
 
 /// Install (or report a planned install for `dry_run = true`) the
 /// Claude Code PreToolUse hook entry.
-pub fn install(
+pub(crate) fn install(
     settings_path: &Path,
     ptuf_binary: &str,
     dry_run: bool,

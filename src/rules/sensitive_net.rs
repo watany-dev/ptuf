@@ -7,7 +7,7 @@ use crate::reason;
 use super::ConfigRule;
 use super::patterns::{argv_references_sensitive, matches_sensitive_path};
 
-pub struct SensitivePathToNetwork;
+pub(crate) struct SensitivePathToNetwork;
 
 const RULE_ID: &str = "core.secrets.sensitive-path-to-network";
 

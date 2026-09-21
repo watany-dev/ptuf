@@ -9,13 +9,13 @@ use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 const TEMPLATE: &str = include_str!("templates/pi_extension.ts");
 
 /// Managed-marker lines embedded in every ptuf-generated extension.
-pub const MANAGED_MARKER: &str = "Managed by ptuf. Do not edit manually.";
-pub const AGENT_MARKER: &str = "ptuf-agent: pi";
-pub const BINARY_PLACEHOLDER: &str = "__PTUF_BINARY__";
-pub const VERSION_PLACEHOLDER: &str = "__PTUF_VERSION__";
+pub(crate) const MANAGED_MARKER: &str = "Managed by ptuf. Do not edit manually.";
+pub(crate) const AGENT_MARKER: &str = "ptuf-agent: pi";
+pub(crate) const BINARY_PLACEHOLDER: &str = "__PTUF_BINARY__";
+pub(crate) const VERSION_PLACEHOLDER: &str = "__PTUF_VERSION__";
 
-pub const DEFAULT_EXTENSION_NAME: &str = "ptuf.ts";
-pub const DEFAULT_MATCHER: &str = "Pi tool_call extension";
+pub(crate) const DEFAULT_EXTENSION_NAME: &str = "ptuf.ts";
+pub(crate) const DEFAULT_MATCHER: &str = "Pi tool_call extension";
 
 /// Which Pi extension directory `ptuf init pi` should write into.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -36,17 +36,17 @@ pub struct PiInitOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TargetPaths {
+pub(crate) struct TargetPaths {
     pub root: PathBuf,
     pub extension_path: PathBuf,
 }
 
 /// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub fn detect_binary() -> String {
+pub(crate) fn detect_binary() -> String {
     super::detect_binary_impl()
 }
 
-pub fn resolve_paths(
+pub(crate) fn resolve_paths(
     start: Option<&Path>,
     options: &PiInitOptions,
 ) -> Result<TargetPaths, InitError> {
@@ -95,7 +95,7 @@ fn resolve_paths_with(
     }
 }
 
-pub fn install(
+pub(crate) fn install(
     targets: &TargetPaths,
     ptuf_binary: &str,
     dry_run: bool,
@@ -143,7 +143,7 @@ fn apply(path: &Path, desired: &[u8], dry_run: bool) -> Result<InstallStatus, In
 }
 
 /// Render the Pi extension template with the resolved binary path and version.
-pub fn render_extension(ptuf_binary: &str, version: &str) -> Vec<u8> {
+pub(crate) fn render_extension(ptuf_binary: &str, version: &str) -> Vec<u8> {
     let ptuf_binary = serde_json::to_string(ptuf_binary).unwrap_or_else(|_| "\"ptuf\"".into());
     TEMPLATE
         .replace(BINARY_PLACEHOLDER, &ptuf_binary)

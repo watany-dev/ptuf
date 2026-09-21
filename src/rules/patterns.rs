@@ -13,7 +13,7 @@ use crate::facts::shell::Argv;
     clippy::expect_used,
     reason = "static pattern literal validated by tests"
 )]
-pub static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static SENSITIVE_PATH: LazyLock<Regex> = LazyLock::new(|| {
     // ASCII case-insensitive matching is scoped to each literal path
     // fragment via `(?i-u:…)` so case-variant filesystems still classify.
     // The `-u` selects ASCII case folding so the regex compiles without

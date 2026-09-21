@@ -38,7 +38,7 @@ pub fn detect_binary() -> String {
     super::detect_binary_impl()
 }
 
-pub fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
+pub(crate) fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     resolve_paths_with(start, home.as_deref())
 }
@@ -62,7 +62,7 @@ pub(crate) fn resolve_paths_with(
     })
 }
 
-pub fn install(
+pub(crate) fn install(
     targets: &TargetPaths,
     ptuf_binary: &str,
     dry_run: bool,

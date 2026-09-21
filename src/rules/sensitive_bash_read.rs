@@ -29,7 +29,7 @@ use crate::reason;
 use super::ConfigRule;
 use super::patterns::{argv_references_sensitive, matches_sensitive_path};
 
-pub struct SensitiveBashRead;
+pub(crate) struct SensitiveBashRead;
 
 const RULE_ID: &str = "core.secrets.sensitive-bash-read";
 

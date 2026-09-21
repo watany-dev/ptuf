@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct RawHookInput {
+pub(crate) struct RawHookInput {
     pub tool_name: String,
     #[serde(default)]
     pub tool_input: serde_json::Value,
@@ -15,7 +15,11 @@ pub struct HookInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Event<'a> {
+#[expect(
+    clippy::struct_field_names,
+    reason = "`event` is the plugin-DSL fact name; renaming it would change the DSL surface"
+)]
+pub(crate) struct Event<'a> {
     pub agent: Option<&'a str>,
     pub event: &'static str,
     pub tool: &'a str,
@@ -36,7 +40,7 @@ impl From<RawHookInput> for HookInput {
 }
 
 impl HookInput {
-    pub fn event(&self) -> Event<'_> {
+    pub(crate) fn event(&self) -> Event<'_> {
         Event {
             agent: None,
             event: "PreToolUse",
@@ -61,7 +65,7 @@ impl HookInput {
     /// generic top-level `path` field for `mcp__*` tool calls.
     ///
     /// Nested MCP path arrays (`files[].path`, `items[].path`, `paths[]`)
-    /// are collected by [`Self::event`] for fact extraction, but this
+    /// are collected by `Self::event` for fact extraction, but this
     /// compatibility accessor intentionally keeps the older top-level-only
     /// behavior.
     pub fn file_path(&self) -> Option<&str> {

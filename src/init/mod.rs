@@ -41,14 +41,14 @@ pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
 /// Returns agents in a stable order so callers can install / report
 /// deterministically. Production callers pass `std::env::var_os("HOME")`
 /// for `home`; tests inject deterministic paths.
-pub fn detect_agents(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> {
+pub(crate) fn detect_agents(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> {
     detect_agents_with_env(cwd, home, &SystemEnv)
 }
 
 /// Hermetic variant of [`detect_agents`]; `env` supplies
 /// `XDG_CONFIG_HOME` for the OpenCode probe so tests never observe the
 /// real process environment.
-pub fn detect_agents_with_env(
+pub(crate) fn detect_agents_with_env(
     cwd: Option<&Path>,
     home: Option<&Path>,
     env: &dyn EnvLookup,
@@ -112,8 +112,6 @@ fn env_opencode_config_dir(home: Option<&Path>, env: &dyn EnvLookup) -> Option<P
 /// Errors surfaced by every `init` adapter.
 #[derive(Debug)]
 pub enum InitError {
-    /// Agent name not recognised.
-    UnknownAgent(String),
     /// Settings file or its parent directory could not be read / written.
     Io {
         path: PathBuf,
@@ -139,7 +137,6 @@ pub enum InitError {
 impl std::fmt::Display for InitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownAgent(a) => write!(f, "unknown agent: {a}"),
             Self::Io { path, source } => {
                 write!(f, "io error at {}: {source}", path.display())
             },
@@ -449,7 +446,6 @@ mod tests {
 
     #[test]
     fn init_error_display_covers_all_variants() {
-        assert!(format!("{}", InitError::UnknownAgent("x".into())).contains("unknown agent"));
         assert!(
             format!(
                 "{}",

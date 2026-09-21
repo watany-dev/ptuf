@@ -10,7 +10,7 @@ use crate::reason;
 
 use super::ConfigRule;
 
-pub struct DynamicEval;
+pub(crate) struct DynamicEval;
 
 const RULE_ID: &str = "core.engine.dynamic-eval";
 

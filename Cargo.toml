@@ -1,6 +1,6 @@
 [package]
 name = "ptuf"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.93.0"
 license = "Apache-2.0"
@@ -84,14 +84,24 @@ meta_variable_misuse = "warn"
 # the former would require ~700 doc additions across struct fields/variants,
 # the latter flags ~240 deliberate `let _ = writeln!(...)` discards.
 # `unused_qualifications`, `trivial_casts`, `missing_debug_implementations`,
-# `missing_copy_implementations`, `single_use_lifetimes`, and `unreachable_pub`
-# are also out — each would require broad mechanical churn for marginal benefit.
+# `missing_copy_implementations`, and `single_use_lifetimes` are also out —
+# each would require broad mechanical churn for marginal benefit.
+# `unreachable_pub` is on: the public surface is what `cargo-semver-checks`
+# guards on every PR, so an inert `pub` on a crate-internal item turns an
+# ordinary refactor into a SemVer break for no caller's benefit.
+unreachable_pub = "warn"
 
 [lints.clippy]
 # Group lints (lower priority so individual deny-overrides below win).
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 cargo = { level = "warn", priority = -1 }
+
+# `redundant_pub_crate` (nursery) and `unreachable_pub` (rustc) pull in
+# opposite directions: the first wants `pub` on items inside a private
+# module, the second wants `pub(crate)`. `unreachable_pub` is the one
+# that keeps the `cargo-semver-checks` surface honest, so it wins.
+redundant_pub_crate = "allow"
 
 # Hand-picked restriction lints — promote unwrap/expect/panic etc. to deny.
 unwrap_used = "deny"

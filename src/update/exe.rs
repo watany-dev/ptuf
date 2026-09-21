@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use crate::config::scope::{EnvLookup, SystemEnv};
 
-pub trait ExeLocator {
+pub(crate) trait ExeLocator {
     fn current_exe(&self) -> io::Result<PathBuf>;
     fn cargo_home(&self) -> Option<PathBuf>;
 }
@@ -21,7 +21,7 @@ pub trait ExeLocator {
 /// Threads the shared `EnvLookup` seam (also used by
 /// `crate::config::scope` and `crate::self_paths`) so tests can drive
 /// every branch with an in-memory env without mutating global state.
-pub fn compute_cargo_home(env: &dyn EnvLookup) -> Option<PathBuf> {
+pub(crate) fn compute_cargo_home(env: &dyn EnvLookup) -> Option<PathBuf> {
     if let Some(value) = env.var_os("CARGO_HOME")
         && !value.is_empty()
     {
@@ -31,7 +31,7 @@ pub fn compute_cargo_home(env: &dyn EnvLookup) -> Option<PathBuf> {
 }
 
 #[derive(Debug, Default)]
-pub struct RealExeLocator;
+pub(crate) struct RealExeLocator;
 
 impl ExeLocator for RealExeLocator {
     fn current_exe(&self) -> io::Result<PathBuf> {
@@ -44,7 +44,7 @@ impl ExeLocator for RealExeLocator {
 }
 
 #[cfg(test)]
-pub struct FakeExeLocator {
+pub(crate) struct FakeExeLocator {
     pub exe: PathBuf,
     pub cargo_home: Option<PathBuf>,
 }

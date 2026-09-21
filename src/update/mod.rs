@@ -9,8 +9,8 @@
 //! verification and atomic file replacement are the installer's
 //! responsibility.
 
-pub mod exe;
-pub mod spawn;
+pub(crate) mod exe;
+pub(crate) mod spawn;
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -42,19 +42,19 @@ pub struct UpdateOptions {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Strategy {
+pub(crate) enum Strategy {
     CargoInstall,
     PrebuiltInstaller,
     ExternallyManaged(PackageManager),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PackageManager {
+pub(crate) enum PackageManager {
     Npm,
 }
 
 impl Strategy {
-    pub const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::CargoInstall => "cargo install",
             Self::PrebuiltInstaller => "prebuilt installer",
@@ -64,13 +64,13 @@ impl Strategy {
 }
 
 impl PackageManager {
-    pub const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Npm => "npm",
         }
     }
 
-    pub const fn update_hint(self) -> &'static str {
+    pub(crate) const fn update_hint(self) -> &'static str {
         match self {
             Self::Npm => {
                 "npm update -g @watany-dev/ptuf (or `npm update ptuf` for a project-local install)"
@@ -80,13 +80,13 @@ impl PackageManager {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Platform {
+pub(crate) enum Platform {
     Unix,
     Windows,
 }
 
 impl Platform {
-    pub const fn host() -> Self {
+    pub(crate) const fn host() -> Self {
         if cfg!(target_os = "windows") {
             Self::Windows
         } else {
@@ -96,7 +96,7 @@ impl Platform {
 }
 
 #[derive(Debug)]
-pub enum UpdateError {
+pub(crate) enum UpdateError {
     CurlMissing,
     LatestTagFetch {
         exit_code: i32,
@@ -208,7 +208,7 @@ impl std::error::Error for UpdateError {
 /// not on PATH, in which case we fall back to the prebuilt installer
 /// (which will replace the cargo-managed copy with one cargo no longer
 /// tracks).
-pub fn select_strategy<S, E>(spawner: &S, locator: &E) -> (Strategy, Option<String>)
+pub(crate) fn select_strategy<S, E>(spawner: &S, locator: &E) -> (Strategy, Option<String>)
 where
     S: Spawner,
     E: ExeLocator,
@@ -274,7 +274,7 @@ fn cargo_is_available<S: Spawner>(spawner: &S) -> bool {
 /// `curl -fsSLI` response. The `latest` URL redirects to
 /// `.../releases/tag/<TAG>`, so we look for the last `Location:` header
 /// (curl prints one per hop) and strip the prefix.
-pub fn parse_redirect_tag(headers: &str) -> Result<String, UpdateError> {
+pub(crate) fn parse_redirect_tag(headers: &str) -> Result<String, UpdateError> {
     let mut last_location: Option<&str> = None;
     for raw_line in headers.lines() {
         let line = raw_line.trim_end_matches('\r');
@@ -348,7 +348,7 @@ fn version_lt(lhs: &str, rhs: &str) -> Option<std::cmp::Ordering> {
 }
 
 #[derive(Debug)]
-pub struct InstallerCommand {
+pub(crate) struct InstallerCommand {
     pub program: String,
     pub args: Vec<String>,
 }
@@ -364,7 +364,7 @@ pub struct InstallerCommand {
 /// success and leaves it on disk for any failure so the user can
 /// re-verify or inspect it.
 #[derive(Debug)]
-pub struct PrebuiltPlan {
+pub(crate) struct PrebuiltPlan {
     pub download: InstallerCommand,
     pub verify: Option<InstallerCommand>,
     pub execute: InstallerCommand,
@@ -378,7 +378,7 @@ pub struct PrebuiltPlan {
 /// asserted from unit tests on any host. Prebuilt installers go
 /// through `build_prebuilt_plan` instead because they need a
 /// download → verify → execute pipeline.
-pub fn build_installer_command(
+pub(crate) fn build_installer_command(
     strategy: Strategy,
     tag: &str,
     pinned: bool,
@@ -424,7 +424,7 @@ pub fn build_installer_command(
 /// `tmp_path`, `gh attestation verify` (omitted when
 /// `skip_attestation`), then execute the downloaded script. Pure
 /// function so unit tests can assert each step's argv on any host.
-pub fn build_prebuilt_plan(
+pub(crate) fn build_prebuilt_plan(
     tag: &str,
     platform: Platform,
     tmp_path: &std::path::Path,
@@ -517,7 +517,7 @@ fn installer_tmp_path(platform: Platform) -> std::path::PathBuf {
 /// Reads `PTUF_UPDATE_SKIP_ATTESTATION` here (rather than in
 /// `run_with_platform`) so the test seam stays deterministic: tests
 /// pass `skip_attestation` explicitly through `UpdateOptions`.
-pub fn run<S, E, W1, W2>(
+pub(crate) fn run<S, E, W1, W2>(
     mut opts: UpdateOptions,
     spawner: &S,
     locator: &E,
@@ -551,7 +551,7 @@ fn env_truthy(name: &str) -> bool {
     clippy::too_many_arguments,
     reason = "test seam — Platform is the only extra param vs. run()"
 )]
-pub fn run_with_platform<S, E, W1, W2>(
+pub(crate) fn run_with_platform<S, E, W1, W2>(
     opts: UpdateOptions,
     spawner: &S,
     locator: &E,

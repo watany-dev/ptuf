@@ -10,7 +10,7 @@
 //! Path resolution applies `canonicalize` to both candidate and
 //! boundary so symlinks and `..` traversals are collapsed before the
 //! prefix check; non-existent leaves fall back to climbing the ancestor
-//! chain (see [`crate::facts::path::resolve_for_containment`]). Prefix
+//! chain (see `crate::facts::path::resolve_for_containment`). Prefix
 //! matching uses [`std::path::Path::starts_with`] (component-wise) so `/work-evil`
 //! cannot impersonate `/work`.
 //!
@@ -29,9 +29,9 @@ use super::ConfigRule;
 
 const RULE_ID: &str = "core.workspace.outside-access";
 
-pub struct OutsideAccessRule;
+pub(crate) struct OutsideAccessRule;
 
-pub static OUTSIDE_ACCESS_RULE: OutsideAccessRule = OutsideAccessRule;
+pub(crate) static OUTSIDE_ACCESS_RULE: OutsideAccessRule = OutsideAccessRule;
 
 impl ConfigRule for OutsideAccessRule {
     fn id(&self) -> &str {

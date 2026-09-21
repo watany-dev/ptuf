@@ -25,16 +25,16 @@ use tempfile::TempDir;
 /// (`MAX_HOOK_STDIN_BYTES = 8 * 1024 * 1024`). Mirrored here because
 /// that constant is `pub(super)` and not reachable from integration
 /// tests.
-pub const MAX_STDIN: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_STDIN: usize = 8 * 1024 * 1024;
 
-pub struct SpawnConfig<'a> {
+pub(crate) struct SpawnConfig<'a> {
     pub args: &'a [&'a str],
     pub stdin: &'a [u8],
     pub cwd: Option<&'a Path>,
     pub envs: &'a [(&'a str, &'a OsStr)],
 }
 
-pub struct SpawnOutcome {
+pub(crate) struct SpawnOutcome {
     /// Exit code, or `-1` when the process was killed by a signal.
     /// Kept as a plain `i32` so the existing cases that match on
     /// `code` compile unchanged; inspect `code_opt` / `signal` to tell
@@ -52,15 +52,15 @@ pub struct SpawnOutcome {
 }
 
 impl SpawnOutcome {
-    pub fn stdout_string(&self) -> String {
+    pub(crate) fn stdout_string(&self) -> String {
         String::from_utf8_lossy(&self.stdout).into_owned()
     }
-    pub fn stderr_string(&self) -> String {
+    pub(crate) fn stderr_string(&self) -> String {
         String::from_utf8_lossy(&self.stderr).into_owned()
     }
 }
 
-pub fn binary() -> Command {
+pub(crate) fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ptuf"))
 }
 
@@ -68,12 +68,12 @@ pub fn binary() -> Command {
 /// (even the 8 MiB stdin case under a debug build) finishes
 /// comfortably, short enough that a genuine hang surfaces as a test
 /// failure instead of wedging `make e2e` forever.
-pub const DEFAULT_SPAWN_TIMEOUT: Duration = Duration::from_mins(1);
+pub(crate) const DEFAULT_SPAWN_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Spawn ptuf with [`DEFAULT_SPAWN_TIMEOUT`]. Thin wrapper over
 /// [`spawn_with_timeout`] kept signature-compatible with the original
 /// helper so existing cases need no change.
-pub fn spawn(cfg: &SpawnConfig) -> SpawnOutcome {
+pub(crate) fn spawn(cfg: &SpawnConfig) -> SpawnOutcome {
     spawn_with_timeout(cfg, DEFAULT_SPAWN_TIMEOUT)
 }
 
@@ -89,7 +89,7 @@ pub fn spawn(cfg: &SpawnConfig) -> SpawnOutcome {
 /// child cannot deadlock by filling a pipe buffer while we are blocked
 /// writing stdin (or vice versa). stdin borrows `cfg.stdin` directly
 /// so the 8 MiB ceiling case does not double-allocate.
-pub fn spawn_with_timeout(cfg: &SpawnConfig, timeout: Duration) -> SpawnOutcome {
+pub(crate) fn spawn_with_timeout(cfg: &SpawnConfig, timeout: Duration) -> SpawnOutcome {
     let mut cmd = binary();
     cmd.args(cfg.args)
         .stdin(Stdio::piped())
@@ -171,7 +171,7 @@ fn exit_signal(_status: &std::process::ExitStatus) -> Option<i32> {
 /// signal). The shared "no crash, no hang" check every heavy E2E case
 /// applies before inspecting decision output.
 #[track_caller]
-pub fn assert_clean_exit(outcome: &SpawnOutcome) {
+pub(crate) fn assert_clean_exit(outcome: &SpawnOutcome) {
     assert!(
         !outcome.timed_out,
         "ptuf hung: no exit within timeout (elapsed {:?})",
@@ -186,7 +186,7 @@ pub fn assert_clean_exit(outcome: &SpawnOutcome) {
     );
 }
 
-pub struct LayerYaml {
+pub(crate) struct LayerYaml {
     pub system: Option<String>,
     pub user: Option<String>,
     pub project: Option<String>,
@@ -195,7 +195,7 @@ pub struct LayerYaml {
 }
 
 impl LayerYaml {
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             system: None,
             user: None,
@@ -206,7 +206,7 @@ impl LayerYaml {
     }
 }
 
-pub struct FullStackFixture {
+pub(crate) struct FullStackFixture {
     pub root: TempDir,
     pub etc_dir: PathBuf,
     pub config_dir: PathBuf,
@@ -215,7 +215,7 @@ pub struct FullStackFixture {
     pub audit_path: PathBuf,
 }
 
-pub fn full_stack(layers: LayerYaml) -> FullStackFixture {
+pub(crate) fn full_stack(layers: LayerYaml) -> FullStackFixture {
     let root = tempfile::tempdir().expect("tempdir");
     let etc_dir = root.path().join("etc");
     let config_dir = root.path().join("userconf");
@@ -258,14 +258,14 @@ pub fn full_stack(layers: LayerYaml) -> FullStackFixture {
 /// Project-layer YAML that enables `enforce` mode and routes audit
 /// output to `audit_path` with `includeDenied`. Used by every test
 /// that needs to inspect the audit file after running deny payloads.
-pub fn enforce_audit_yaml(audit_path: &Path) -> String {
+pub(crate) fn enforce_audit_yaml(audit_path: &Path) -> String {
     format!(
         "version: 1\nmode: enforce\naudit:\n  path: {audit}\n  enabled: true\n  includeAllowed: false\n  includeDenied: true\n",
         audit = audit_path.display()
     )
 }
 
-pub fn envs_for(fix: &FullStackFixture) -> Vec<(&'static str, OsString)> {
+pub(crate) fn envs_for(fix: &FullStackFixture) -> Vec<(&'static str, OsString)> {
     vec![
         ("PTUF_ETC_DIR", fix.etc_dir.as_os_str().to_os_string()),
         ("PTUF_CONFIG_DIR", fix.config_dir.as_os_str().to_os_string()),
@@ -280,12 +280,12 @@ pub fn envs_for(fix: &FullStackFixture) -> Vec<(&'static str, OsString)> {
 /// `SpawnConfig::envs` takes `&[(&str, &OsStr)]`; this borrows from
 /// the owned `OsString` vec returned by `envs_for` to satisfy that
 /// lifetime without cloning the values again.
-pub fn as_env_refs<'a>(envs: &'a [(&'static str, OsString)]) -> Vec<(&'a str, &'a OsStr)> {
+pub(crate) fn as_env_refs<'a>(envs: &'a [(&'static str, OsString)]) -> Vec<(&'a str, &'a OsStr)> {
     envs.iter().map(|(k, v)| (*k, v.as_os_str())).collect()
 }
 
 #[cfg(target_os = "linux")]
-pub fn open_fd_count() -> std::io::Result<usize> {
+pub(crate) fn open_fd_count() -> std::io::Result<usize> {
     let mut n = 0usize;
     for entry in std::fs::read_dir("/proc/self/fd")? {
         let _ = entry?;
@@ -298,7 +298,7 @@ pub fn open_fd_count() -> std::io::Result<usize> {
 /// build a hermetic `PATH` for `update`-style subcommand tests so they
 /// never reach the real network or system binaries.
 #[cfg(unix)]
-pub fn write_fake_executable(path: &Path, body: &str) {
+pub(crate) fn write_fake_executable(path: &Path, body: &str) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::write(path, body).expect("write fake executable");
     let mut perms = std::fs::metadata(path)

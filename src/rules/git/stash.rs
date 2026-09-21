@@ -29,4 +29,4 @@ const STASH_CLEAR: RuleSpec = RuleSpec {
     ],
 };
 
-pub static STASH_CLEAR_RULE: GitRule = GitRule { spec: &STASH_CLEAR };
+pub(crate) static STASH_CLEAR_RULE: GitRule = GitRule { spec: &STASH_CLEAR };

@@ -129,12 +129,12 @@ pub struct EnvAssignment {
 
 impl Argv {
     /// Iterate over arguments that look like flags (`-r`, `--recursive`).
-    pub fn flags(&self) -> impl Iterator<Item = &str> {
+    pub(crate) fn flags(&self) -> impl Iterator<Item = &str> {
         self.args.iter().filter(|a| is_flag(a)).map(String::as_str)
     }
 
     /// Iterate over positional (non-flag) arguments.
-    pub fn positional(&self) -> impl Iterator<Item = &str> {
+    pub(crate) fn positional(&self) -> impl Iterator<Item = &str> {
         self.args.iter().filter(|a| !is_flag(a)).map(String::as_str)
     }
 
@@ -160,7 +160,7 @@ impl Bash {
     /// All surfaced commands, including nested wrapper payloads such as
     /// `bash -c`, `xargs`, `find -exec`, and substitution bodies
     /// (`$(…)` / backticks / `<(…)` / `>(…)`) in [`Argv::subst_argv`].
-    pub fn commands(&self) -> Vec<&Argv> {
+    pub(crate) fn commands(&self) -> Vec<&Argv> {
         let mut out = Vec::new();
         for pipe in &self.segments {
             for command in &pipe.commands {
@@ -409,7 +409,7 @@ fn is_flag(a: &str) -> bool {
 
 /// Maximum depth for unrolling `bash -c` / `su -c` / `eval` / `xargs` /
 /// `find -exec` inner payloads. See ADR 0002 (B3).
-pub const NESTING_BUDGET: usize = 3;
+pub(crate) const NESTING_BUDGET: usize = 3;
 
 /// Parse a raw Bash command string into a [`Bash`] structure.
 ///

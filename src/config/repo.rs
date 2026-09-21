@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 /// Search from `start` upwards for the first ancestor that contains a
 /// `.git` entry. Returns `None` if no such ancestor exists.
-pub fn discover(start: &Path) -> Option<PathBuf> {
+pub(crate) fn discover(start: &Path) -> Option<PathBuf> {
     let mut current: Option<&Path> = Some(start);
     while let Some(dir) = current {
         if dir.join(".git").exists() {
