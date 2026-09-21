@@ -2,11 +2,11 @@
 //! GitHub Copilot's repo-local `.github/hooks/ptuf.json` file.
 
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
+use super::json;
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
 /// Matcher recorded in [`InstallOutcome`] for the rendered summary.
@@ -33,11 +33,6 @@ pub struct TargetPaths {
     pub hooks_path: PathBuf,
 }
 
-/// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub fn detect_binary() -> String {
-    super::detect_binary_impl()
-}
-
 /// Resolve `<repo>/.github/hooks/ptuf.json` from the discovered repo
 /// root. Returns [`InitError::RepoRootNotFound`] when the caller is not
 /// inside a git working tree.
@@ -55,13 +50,13 @@ pub fn install(
     dry_run: bool,
 ) -> Result<InstallOutcome, InitError> {
     let command = format!("{ptuf_binary} hook copilot");
-    let mut root = read_hooks(&targets.hooks_path)?;
+    let mut root = json::read_object(&targets.hooks_path)?;
 
     let already_present = has_existing_hook(&root);
     let status = if already_present {
         InstallStatus::AlreadyPresent
     } else {
-        ensure_version(&mut root, &targets.hooks_path)?;
+        json::ensure_version(&mut root, &targets.hooks_path)?;
         append_hook(&mut root, &targets.hooks_path, &command)?;
         if dry_run {
             InstallStatus::WouldInstall
@@ -81,21 +76,6 @@ pub fn install(
         matcher: DEFAULT_MATCHER.to_string(),
         command,
     })
-}
-
-fn read_hooks(path: &Path) -> Result<Value, InitError> {
-    match fs::read_to_string(path) {
-        Ok(s) if s.trim().is_empty() => Ok(json!({})),
-        Ok(s) => serde_json::from_str(&s).map_err(|e| InitError::Json {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        }),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(json!({})),
-        Err(e) => Err(InitError::Io {
-            path: path.to_path_buf(),
-            source: e,
-        }),
-    }
 }
 
 pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
@@ -133,63 +113,13 @@ fn has_existing_hook(root: &Value) -> bool {
         .any(|cmd| command_invokes_ptuf_hook(cmd))
 }
 
-fn ensure_version(root: &mut Value, hooks_path: &Path) -> Result<(), InitError> {
-    let Some(map) = root.as_object_mut() else {
-        return Err(InitError::Schema {
-            path: hooks_path.to_path_buf(),
-            message: "top-level value must be a JSON object".into(),
-        });
-    };
-    match map.get("version") {
-        None => {
-            map.insert("version".to_string(), json!(1));
-            Ok(())
-        },
-        Some(v) if v == &json!(1) => Ok(()),
-        Some(other) => Err(InitError::Schema {
-            path: hooks_path.to_path_buf(),
-            message: format!("`version` must be 1 (found {other})"),
-        }),
-    }
-}
-
 fn append_hook(root: &mut Value, hooks_path: &Path, command: &str) -> Result<(), InitError> {
-    let map = root.as_object_mut().ok_or_else(|| InitError::Schema {
-        path: hooks_path.to_path_buf(),
-        message: "top-level value must be a JSON object".into(),
-    })?;
-
-    let hooks = ensure_object(map, "hooks").ok_or_else(|| InitError::Schema {
-        path: hooks_path.to_path_buf(),
-        message: "`hooks` must be an object".into(),
-    })?;
-
-    let pre_tool_use = ensure_array(hooks, "preToolUse").ok_or_else(|| InitError::Schema {
-        path: hooks_path.to_path_buf(),
-        message: "`hooks.preToolUse` must be an array".into(),
-    })?;
-
-    pre_tool_use.push(json!({
+    json::hook_array(root, hooks_path, "preToolUse")?.push(json!({
         "bash": command,
         "powershell": command,
         "timeoutSec": DEFAULT_TIMEOUT_SEC,
     }));
     Ok(())
-}
-
-fn ensure_object<'a>(
-    map: &'a mut Map<String, Value>,
-    key: &str,
-) -> Option<&'a mut Map<String, Value>> {
-    map.entry(key.to_string())
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-}
-
-fn ensure_array<'a>(map: &'a mut Map<String, Value>, key: &str) -> Option<&'a mut Vec<Value>> {
-    map.entry(key.to_string())
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
 }
 
 fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
@@ -242,11 +172,6 @@ mod tests {
 
     fn read(path: &Path) -> String {
         fs::read_to_string(path).unwrap()
-    }
-
-    #[test]
-    fn detect_binary_delegates_to_shared_impl() {
-        assert!(!detect_binary().is_empty());
     }
 
     #[test]

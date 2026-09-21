@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, Item, Table, value};
 
+use super::json;
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
 /// Matcher we install for the first-class Codex adapter.
@@ -31,11 +32,6 @@ pub fn default_home_hooks_path() -> Option<PathBuf> {
 /// Default user-level Codex config path (`$HOME/.codex/config.toml`).
 pub fn default_home_config_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex/config.toml"))
-}
-
-/// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub fn detect_binary() -> String {
-    super::detect_binary_impl()
 }
 
 pub fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
@@ -68,7 +64,7 @@ pub fn install(
     dry_run: bool,
 ) -> Result<InstallOutcome, InitError> {
     let command = format!("{ptuf_binary} hook codex");
-    let mut hooks_root = read_hooks(&targets.hooks_path)?;
+    let mut hooks_root = json::read_object(&targets.hooks_path)?;
     let mut config = read_config(&targets.config_path)?;
 
     let mut hooks_changed = false;
@@ -108,21 +104,6 @@ pub fn install(
         matcher: DEFAULT_MATCHER.to_string(),
         command,
     })
-}
-
-fn read_hooks(path: &Path) -> Result<Value, InitError> {
-    match fs::read_to_string(path) {
-        Ok(s) if s.trim().is_empty() => Ok(json!({})),
-        Ok(s) => serde_json::from_str(&s).map_err(|e| InitError::Json {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        }),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(json!({})),
-        Err(e) => Err(InitError::Io {
-            path: path.to_path_buf(),
-            source: e,
-        }),
-    }
 }
 
 fn read_config(path: &Path) -> Result<DocumentMut, InitError> {
@@ -175,35 +156,7 @@ fn has_existing_hook(root: &Value) -> bool {
 }
 
 fn append_hook(root: &mut Value, hooks_path: &Path, command: &str) -> Result<(), InitError> {
-    if !root.is_object() {
-        return Err(InitError::Schema {
-            path: hooks_path.to_path_buf(),
-            message: "top-level value must be a JSON object".into(),
-        });
-    }
-
-    let hooks = root
-        .as_object_mut()
-        .and_then(|m| {
-            m.entry("hooks")
-                .or_insert_with(|| json!({}))
-                .as_object_mut()
-        })
-        .ok_or_else(|| InitError::Schema {
-            path: hooks_path.to_path_buf(),
-            message: "`hooks` must be an object".into(),
-        })?;
-
-    let pre_tool_use = hooks
-        .entry("PreToolUse")
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
-        .ok_or_else(|| InitError::Schema {
-            path: hooks_path.to_path_buf(),
-            message: "`hooks.PreToolUse` must be an array".into(),
-        })?;
-
-    pre_tool_use.push(json!({
+    json::hook_array(root, hooks_path, "PreToolUse")?.push(json!({
         "matcher": DEFAULT_MATCHER,
         "hooks": [{
             "type": "command",
@@ -581,11 +534,6 @@ mod tests {
         if let Some(path) = default_home_hooks_path() {
             assert!(path.ends_with(".codex/hooks.json"));
         }
-    }
-
-    #[test]
-    fn detect_binary_delegates_to_shared_impl() {
-        assert!(!detect_binary().is_empty());
     }
 
     #[test]

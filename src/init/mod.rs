@@ -13,6 +13,7 @@ pub mod cline;
 pub mod codex;
 pub mod copilot;
 pub mod cursor;
+pub(crate) mod json;
 pub mod kiro;
 pub mod opencode;
 pub mod pi;
@@ -399,12 +400,12 @@ pub(crate) fn command_invokes_ptuf_hook(cmd: &str, tail: &[&str]) -> bool {
     tokens[n - tail.len()..] == *tail
 }
 
-/// Shared backing for every adapter's `detect_binary`: prefer
-/// `std::env::current_exe()` so the rendered hook command points at
-/// the same binary that ran `ptuf init`, falling back to the literal
-/// `"ptuf"` so the entry remains useful when `current_exe` is
-/// unavailable (e.g. a CI container without a stable absolute path).
-pub(crate) fn detect_binary_impl() -> String {
+/// The binary path rendered into every installed hook command: prefer
+/// `std::env::current_exe()` so the entry points at the same binary
+/// that ran `ptuf init`, falling back to the literal `"ptuf"` so the
+/// entry remains useful when `current_exe` is unavailable (e.g. a CI
+/// container without a stable absolute path).
+pub fn detect_binary() -> String {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.into_os_string().into_string().ok())
@@ -695,10 +696,10 @@ mod tests {
     }
 
     #[test]
-    fn detect_binary_impl_returns_a_non_empty_string() {
-        // Every adapter's `detect_binary` delegates here; a non-empty
+    fn detect_binary_returns_a_non_empty_string() {
+        // Every adapter renders this into its hook command; a non-empty
         // string is the contract the host config writers depend on.
-        assert!(!detect_binary_impl().is_empty());
+        assert!(!detect_binary().is_empty());
     }
 
     #[test]

@@ -11,11 +11,11 @@
 //! `settings.json`.
 
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use super::json;
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
 /// Matcher we install in the new entry — covers every tool ptuf can
@@ -39,13 +39,6 @@ pub fn default_settings_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/settings.json"))
 }
 
-/// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`
-/// so the resulting hook entry is still useful when invoked from a
-/// CI container without a stable absolute path.
-pub fn detect_binary() -> String {
-    super::detect_binary_impl()
-}
-
 /// Install (or report a planned install for `dry_run = true`) the
 /// Claude Code PreToolUse hook entry.
 pub fn install(
@@ -54,7 +47,7 @@ pub fn install(
     dry_run: bool,
 ) -> Result<InstallOutcome, InitError> {
     let command = format!("{ptuf_binary} hook claude-code");
-    let mut root = read_settings(settings_path)?;
+    let mut root = json::read_object(settings_path)?;
 
     if has_existing_hook(&root) {
         return Ok(InstallOutcome {
@@ -96,21 +89,6 @@ pub fn install(
         matcher: DEFAULT_MATCHER.to_string(),
         command,
     })
-}
-
-fn read_settings(path: &Path) -> Result<Value, InitError> {
-    match fs::read_to_string(path) {
-        Ok(s) if s.trim().is_empty() => Ok(json!({})),
-        Ok(s) => serde_json::from_str(&s).map_err(|e| InitError::Json {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        }),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(json!({})),
-        Err(e) => Err(InitError::Io {
-            path: path.to_path_buf(),
-            source: e,
-        }),
-    }
 }
 
 fn has_existing_hook(root: &Value) -> bool {
@@ -156,35 +134,7 @@ pub(crate) fn entry_hooks(entry: &Value) -> Vec<&Value> {
 }
 
 fn append_hook(root: &mut Value, settings_path: &Path, command: &str) -> Result<(), InitError> {
-    if !root.is_object() {
-        return Err(InitError::Schema {
-            path: settings_path.to_path_buf(),
-            message: "top-level value must be a JSON object".into(),
-        });
-    }
-
-    let hooks = root
-        .as_object_mut()
-        .and_then(|m| {
-            m.entry("hooks")
-                .or_insert_with(|| json!({}))
-                .as_object_mut()
-        })
-        .ok_or_else(|| InitError::Schema {
-            path: settings_path.to_path_buf(),
-            message: "`hooks` must be an object".into(),
-        })?;
-
-    let pre_tool_use = hooks
-        .entry("PreToolUse")
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
-        .ok_or_else(|| InitError::Schema {
-            path: settings_path.to_path_buf(),
-            message: "`hooks.PreToolUse` must be an array".into(),
-        })?;
-
-    pre_tool_use.push(json!({
+    json::hook_array(root, settings_path, "PreToolUse")?.push(json!({
         "matcher": DEFAULT_MATCHER,
         "hooks": [{
             "name": HOOK_NAME,
@@ -565,11 +515,6 @@ mod tests {
         let err = install(&path, "/x/ptuf", false).unwrap_err();
         assert!(matches!(err, InitError::Io { .. }));
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn detect_binary_delegates_to_shared_impl() {
-        assert!(!detect_binary().is_empty());
     }
 
     #[test]

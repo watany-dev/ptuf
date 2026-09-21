@@ -718,7 +718,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![path],
                     install: Box::new(move |dry_run| {
-                        let binary = init::claude_code::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::claude_code::install(&install_path, &binary, dry_run)?;
                         Ok(init::AdapterRunReport {
                             outcome,
@@ -732,7 +732,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.hooks_path.clone(), targets.config_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::codex::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::codex::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport {
                             outcome,
@@ -746,7 +746,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.hooks_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::copilot::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::copilot::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport {
                             outcome,
@@ -765,7 +765,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths,
                     install: Box::new(move |dry_run| {
-                        let binary = init::kiro::detect_binary();
+                        let binary = init::detect_binary();
                         let (outcome, extras) =
                             init::kiro::install_with_report(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport {
@@ -780,7 +780,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.hook_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::cline::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::cline::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport {
                             outcome,
@@ -794,7 +794,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.hooks_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::cursor::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::cursor::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport {
                             outcome,
@@ -808,7 +808,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.extension_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::pi::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::pi::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport {
                             outcome,
@@ -822,7 +822,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.plugin_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::opencode::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::opencode::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport {
                             outcome,
