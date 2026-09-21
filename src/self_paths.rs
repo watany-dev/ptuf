@@ -8,8 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io::ErrorKind};
 
+use crate::config::Config;
 use crate::config::scope::{EnvLookup, SystemEnv, layout_for};
-use crate::config::{Config, repo};
 use crate::hook_input::HookInput;
 use serde_json::Value;
 
@@ -577,13 +577,6 @@ fn candidate_targets<'a>(
     out
 }
 
-/// Discover the repo root for the given start directory. Thin wrapper
-/// over `crate::config::repo::discover` so callers don't need to
-/// import the submodule directly.
-pub fn discover_repo(start: &Path) -> Option<PathBuf> {
-    repo::discover(start)
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -934,7 +927,7 @@ mod tests {
 
     #[test]
     fn discover_repo_returns_none_for_non_repo_path() {
-        assert!(discover_repo(Path::new("/")).is_none());
+        assert!(crate::config::repo::discover(Path::new("/")).is_none());
     }
 
     #[test]

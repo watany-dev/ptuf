@@ -16,26 +16,31 @@ use super::{Allowlist, Mode, PackOverride, RedactionMode, RuleOverride};
 
 /// Single-scope view of the user's policy. All scalars are optional;
 /// missing fields defer to the layer below.
+///
+/// The type itself is `pub` only because it is the value that travels
+/// between the two trust boundaries `fuzz/` drives (`yaml::parse_str`
+/// into `merge::merge`). Its fields stay `pub(crate)` so the shape of
+/// the YAML schema is not frozen into the SemVer surface.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct RawConfig {
+pub struct RawConfig {
     /// Currently always `1`. Reserved for future incompatible breaks.
     #[serde(default)]
-    pub version: Option<u32>,
+    pub(crate) version: Option<u32>,
     #[serde(default)]
-    pub mode: Option<Mode>,
+    pub(crate) mode: Option<Mode>,
     #[serde(default)]
-    pub fail_closed: Option<bool>,
+    pub(crate) fail_closed: Option<bool>,
     #[serde(default)]
-    pub packs: BTreeMap<String, RawPack>,
+    pub(crate) packs: BTreeMap<String, RawPack>,
     #[serde(default)]
-    pub rules: BTreeMap<String, RawRuleOverride>,
+    pub(crate) rules: BTreeMap<String, RawRuleOverride>,
     #[serde(default)]
-    pub allowlists: Vec<RawAllowlist>,
+    pub(crate) allowlists: Vec<RawAllowlist>,
     #[serde(default)]
-    pub plugins: Vec<RawPluginRef>,
+    pub(crate) plugins: Vec<RawPluginRef>,
     #[serde(default)]
-    pub audit: RawAudit,
+    pub(crate) audit: RawAudit,
 }
 
 impl RawConfig {

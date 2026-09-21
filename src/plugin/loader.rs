@@ -49,15 +49,6 @@ pub struct LoadedPlugin {
     pub source: PathBuf,
 }
 
-impl LoadedPlugin {
-    // Assertion helper: production iterates the rules instead of counting them.
-    #[cfg(test)]
-    /// Number of rules the plugin contributed.
-    pub fn rule_count(&self) -> usize {
-        self.rules.len()
-    }
-}
-
 /// Load a single plugin file from disk.
 pub(crate) fn load_path(path: &Path) -> Result<LoadedPlugin, PluginError> {
     let source = fs::read_to_string(path).map_err(|e| PluginError::Io {
@@ -189,7 +180,7 @@ metadata:
         let loaded = load_str(&p(), yaml).expect("load");
         assert_eq!(loaded.name, "example");
         assert_eq!(loaded.version, "0.1.0");
-        assert_eq!(loaded.rule_count(), 0);
+        assert_eq!(loaded.rules.len(), 0);
     }
 
     #[test]
@@ -256,7 +247,7 @@ rules:
       - try delete-only-this-dir
 "#;
         let loaded = load_str(&p(), yaml).expect("load");
-        assert_eq!(loaded.rule_count(), 1);
+        assert_eq!(loaded.rules.len(), 1);
         assert_eq!(loaded.rules[0].id(), "pack.demo.block-rm");
     }
 
@@ -351,7 +342,7 @@ rules:
     reason: r
 "#;
         let loaded = load_str(&p(), yaml).expect("corex/mycore are not reserved");
-        assert_eq!(loaded.rule_count(), 2);
+        assert_eq!(loaded.rules.len(), 2);
     }
 
     #[test]

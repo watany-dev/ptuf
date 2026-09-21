@@ -4,14 +4,14 @@ pub mod config;
 pub mod decision;
 pub mod engine;
 pub mod facts;
-pub mod hook_input;
+pub(crate) mod hook_input;
 pub mod hook_output;
-pub mod init;
+pub(crate) mod init;
 pub mod io_runner;
 pub mod plugin;
-pub mod reason;
+pub(crate) mod reason;
 pub mod rules;
-pub mod self_paths;
+pub(crate) mod self_paths;
 pub(crate) mod update;
 
 #[cfg(any(test, feature = "testing"))]
@@ -29,7 +29,7 @@ pub use hook_input::HookInput;
 /// pick up project policy when one exists. On failure (config / plugin
 /// load error) falls back to an [`Engine::builder`]-built engine tagged
 /// `embed-fallback`. The builder-built engine still populates
-/// [`crate::self_paths::ProtectedPaths`] (binary + HOME-rooted claude
+/// `ProtectedPaths` (binary + HOME-rooted claude
 /// settings), so self-protection is preserved even when configuration
 /// discovery fails — closing the gap that an empty `ProtectedPaths`
 /// fallback used to leave open. CLI entry points instead route through

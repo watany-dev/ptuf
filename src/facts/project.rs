@@ -13,6 +13,12 @@ use std::path::Path;
 /// new manager only requires extending this enum and the `(filename,
 /// kind)` table in `detect_lock_files`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "each variant names the real lock file it detects (`pnpm-lock.yaml`, \
+              `uv.lock`, …); dropping the shared `Lock` suffix would make the \
+              variants read as package managers rather than lock files"
+)]
 pub enum LockKind {
     NpmPackageLock,
     PnpmLock,

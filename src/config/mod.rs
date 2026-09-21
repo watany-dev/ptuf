@@ -20,9 +20,14 @@ use crate::decision::{DecisionKind, Severity};
 use crate::plugin::dsl::WhenNode;
 
 pub mod merge;
-pub mod repo;
-pub mod schema;
-pub mod scope;
+pub(crate) mod repo;
+pub(crate) mod schema;
+
+// `schema` itself is internal; `RawConfig` is re-exported because it
+// is the value `yaml::parse_str` hands to `merge::merge`, the pair of
+// trust boundaries the `fuzz/` workspace drives.
+pub use schema::RawConfig;
+pub(crate) mod scope;
 pub mod yaml;
 
 /// Operating mode for the engine.

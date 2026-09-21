@@ -270,7 +270,7 @@ pub fn mode() -> impl Strategy<Value = Mode> {
     prop_oneof![Just(Mode::Enforce), Just(Mode::Monitor)]
 }
 
-/// All nine [`ProtectedKind`] variants drawn uniformly.
+/// All nine `ProtectedKind` variants drawn uniformly.
 pub fn protected_kind() -> impl Strategy<Value = ProtectedKind> {
     prop_oneof![
         Just(ProtectedKind::Binary),
@@ -286,7 +286,7 @@ pub fn protected_kind() -> impl Strategy<Value = ProtectedKind> {
     ]
 }
 
-/// All eleven [`SensitiveKind`] variants drawn uniformly.
+/// All eleven `SensitiveKind` variants drawn uniformly.
 pub fn sensitive_kind() -> impl Strategy<Value = SensitiveKind> {
     prop_oneof![
         Just(SensitiveKind::SshDir),
@@ -546,7 +546,7 @@ fn argv_token() -> impl Strategy<Value = String> {
 }
 
 /// Argv vector for `crate::cli::parse` PBT: 0 to 6 tokens drawn from
-/// [`argv_token`]. The empty vector exercises the "missing subcommand"
+/// `argv_token`. The empty vector exercises the "missing subcommand"
 /// error branch; longer vectors stress the per-subcommand parsers.
 pub fn argv_tokens() -> impl Strategy<Value = Vec<String>> {
     vec(argv_token(), 0..=6)

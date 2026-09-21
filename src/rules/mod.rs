@@ -3,18 +3,22 @@ use crate::facts::Facts;
 use crate::{Decision, HookInput};
 
 pub(crate) mod builtin_dsl;
-pub mod destructive_rm;
-pub mod dynamic_eval;
-pub mod git;
-pub mod injection_content;
-pub mod patterns;
-pub mod project_hygiene;
-pub mod remote_pipe;
-pub mod self_protection;
-pub mod sensitive_bash_read;
-pub mod sensitive_net;
-pub mod sensitive_read;
-pub mod workspace;
+pub(crate) mod destructive_rm;
+pub(crate) mod dynamic_eval;
+pub(crate) mod git;
+pub(crate) mod injection_content;
+pub(crate) mod patterns;
+pub(crate) mod project_hygiene;
+// Legacy Rust oracle for `core.network.remote-script-pipe`. The engine
+// serves the rule from `builtins.yaml`; this implementation only backs the
+// parity tests in `builtin_dsl`, so it is not compiled into production.
+#[cfg(test)]
+pub(crate) mod remote_pipe;
+pub(crate) mod self_protection;
+pub(crate) mod sensitive_bash_read;
+pub(crate) mod sensitive_net;
+pub(crate) mod sensitive_read;
+pub(crate) mod workspace;
 
 /// Trait implemented by every rule that the engine evaluates, both
 /// builtin and (eventually) plugin-loaded.

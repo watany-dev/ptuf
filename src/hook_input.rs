@@ -15,13 +15,12 @@ pub struct HookInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "`event` is the plugin-DSL fact name; renaming it would change the DSL surface"
-)]
 pub(crate) struct Event<'a> {
     pub agent: Option<&'a str>,
-    pub event: &'static str,
+    /// Hook phase this payload came from. The plugin DSL's `event:` key
+    /// is matched against `dsl::PRE_TOOL_USE`, not against this field,
+    /// so the name here is free.
+    pub kind: &'static str,
     pub tool: &'a str,
     pub inputs: &'a serde_json::Value,
     pub command: Option<&'a str>,
@@ -43,7 +42,7 @@ impl HookInput {
     pub(crate) fn event(&self) -> Event<'_> {
         Event {
             agent: None,
-            event: "PreToolUse",
+            kind: "PreToolUse",
             tool: &self.tool_name,
             inputs: &self.tool_input,
             command: self.bash_command(),
@@ -490,7 +489,7 @@ mod tests {
         .expect("parse");
         let event = parsed.event();
         assert_eq!(event.tool, "mcp__github__push_files");
-        assert_eq!(event.event, "PreToolUse");
+        assert_eq!(event.kind, "PreToolUse");
         assert_eq!(event.paths, vec!["/tmp/a", "/tmp/b"]);
     }
 

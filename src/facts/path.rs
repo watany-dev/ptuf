@@ -149,7 +149,7 @@ pub(crate) fn extract_with_env(input: &HookInput, env: &dyn EnvLookup) -> Option
 /// consumes the full list.
 #[cfg(test)]
 pub(crate) fn extract(input: &HookInput) -> Option<FilePath> {
-    extract_all_with_env(input, &SystemEnv).into_iter().next()
+    extract_with_env(input, &SystemEnv)
 }
 
 /// Convenience: extract every visible path using the production environment.

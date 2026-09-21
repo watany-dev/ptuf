@@ -15,12 +15,12 @@
 
 use crate::HookInput;
 
-pub mod patch;
-pub mod path;
-pub mod project;
-pub mod sensitive;
+pub(crate) mod patch;
+pub(crate) mod path;
+pub(crate) mod project;
+pub(crate) mod sensitive;
 pub mod shell;
-pub mod url;
+pub(crate) mod url;
 
 /// Aggregated facts derived from a single hook payload.
 ///

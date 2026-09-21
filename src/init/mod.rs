@@ -8,15 +8,15 @@ use std::path::{Path, PathBuf};
 use crate::cli::HookAgent;
 use crate::config::scope::{EnvLookup, SystemEnv};
 
-pub mod claude_code;
-pub mod cline;
-pub mod codex;
-pub mod copilot;
-pub mod cursor;
-pub mod kiro;
-pub mod opencode;
-pub mod pi;
-pub mod verify;
+pub(crate) mod claude_code;
+pub(crate) mod cline;
+pub(crate) mod codex;
+pub(crate) mod copilot;
+pub(crate) mod cursor;
+pub(crate) mod kiro;
+pub(crate) mod opencode;
+pub(crate) mod pi;
+pub(crate) mod verify;
 
 /// Return the first whitespace-delimited token of `cmd`, which is the
 /// executable path/name. Used by path-collection callers to extract the
@@ -111,7 +111,7 @@ fn env_opencode_config_dir(home: Option<&Path>, env: &dyn EnvLookup) -> Option<P
 
 /// Errors surfaced by every `init` adapter.
 #[derive(Debug)]
-pub enum InitError {
+pub(crate) enum InitError {
     /// Settings file or its parent directory could not be read / written.
     Io {
         path: PathBuf,
@@ -183,7 +183,7 @@ impl std::error::Error for InitError {
 /// the `dry_run` flag passed in determines whether [`InstallStatus`]
 /// uses the `Would*` variants.
 #[derive(Debug, PartialEq, Eq)]
-pub struct InstallOutcome {
+pub(crate) struct InstallOutcome {
     pub status: InstallStatus,
     pub agent: &'static str,
     pub paths: Vec<InstallPath>,
@@ -205,13 +205,13 @@ pub(crate) struct AdapterRunReport {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct InstallPath {
+pub(crate) struct InstallPath {
     pub label: &'static str,
     pub path: PathBuf,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum InstallStatus {
+pub(crate) enum InstallStatus {
     /// File already contains a hook entry pointing at our binary; no
     /// change required.
     AlreadyPresent,

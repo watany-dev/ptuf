@@ -86,10 +86,12 @@ meta_variable_misuse = "warn"
 # `unused_qualifications`, `trivial_casts`, `missing_debug_implementations`,
 # `missing_copy_implementations`, and `single_use_lifetimes` are also out —
 # each would require broad mechanical churn for marginal benefit.
-# `unreachable_pub` is on: the public surface is what `cargo-semver-checks`
+# `unreachable_pub` is denied: the public surface is what `cargo-semver-checks`
 # guards on every PR, so an inert `pub` on a crate-internal item turns an
-# ordinary refactor into a SemVer break for no caller's benefit.
-unreachable_pub = "warn"
+# ordinary refactor into a SemVer break for no caller's benefit. The lint only
+# sees items whose *module chain* is crate-internal, so module declarations are
+# `pub(crate) mod` unless the module is genuinely part of the public API.
+unreachable_pub = "deny"
 
 [lints.clippy]
 # Group lints (lower priority so individual deny-overrides below win).

@@ -2,7 +2,7 @@
 //!
 //! v0.2 introduces a small but real plugin system: an
 //! `apiVersion: ptuf.dev/v1, kind: Plugin` document yields zero or more
-//! [`PluginRule`]s the [`crate::Engine`] evaluates alongside the
+//! `PluginRule`s the [`crate::Engine`] evaluates alongside the
 //! built-ins. Plugins cannot reach raw shell strings; they describe
 //! conditions in terms of the facts ptuf already extracts (see
 //! `SUPPORTED_FACTS`).
@@ -11,10 +11,10 @@
 //! and `docs/design/decision-model.md` for how rule outputs aggregate.
 
 pub mod dsl;
-pub mod loader;
-pub mod rule;
-pub mod runner;
-pub mod schema;
+pub(crate) mod loader;
+pub(crate) mod rule;
+pub(crate) mod runner;
+pub(crate) mod schema;
 
 use std::path::PathBuf;
 
@@ -166,12 +166,6 @@ impl PluginSet {
         crate::rules::iter().any(|rule| rule.id() == id) || self.rules().any(|rule| rule.id() == id)
     }
 
-    // Assertion helper: production iterates the rules instead of counting them.
-    #[cfg(test)]
-    pub fn rule_count(&self) -> usize {
-        self.plugins.iter().map(LoadedPlugin::rule_count).sum()
-    }
-
     /// Iterate over every rule contributed by every loaded plugin.
     pub(crate) fn rules(&self) -> impl Iterator<Item = &PluginRule> {
         self.plugins.iter().flat_map(|p| p.rules.iter())
@@ -215,7 +209,6 @@ rules:
     #[test]
     fn empty_plugin_set_iterates_no_rules() {
         let set = PluginSet::new();
-        assert_eq!(set.rule_count(), 0);
         assert_eq!(set.rules().count(), 0);
     }
 
@@ -224,7 +217,6 @@ rules:
         let mut set = PluginSet::new();
         set.push(ok_plugin("a"));
         set.push(ok_plugin("b"));
-        assert_eq!(set.rule_count(), 2);
         assert_eq!(set.rules().count(), 2);
     }
 

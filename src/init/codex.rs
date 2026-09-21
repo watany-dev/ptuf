@@ -11,30 +11,20 @@ use toml_edit::{DocumentMut, Item, Table, value};
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
 /// Matcher we install for the first-class Codex adapter.
-pub const DEFAULT_MATCHER: &str = "Bash|apply_patch|mcp__.*";
+pub(crate) const DEFAULT_MATCHER: &str = "Bash|apply_patch|mcp__.*";
 
 /// Trailing tokens that identify a ptuf Codex `PreToolUse` hook.
 pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "codex"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TargetPaths {
+pub(crate) struct TargetPaths {
     pub root: Option<PathBuf>,
     pub hooks_path: PathBuf,
     pub config_path: PathBuf,
 }
 
-/// Default user-level Codex hooks path (`$HOME/.codex/hooks.json`).
-pub fn default_home_hooks_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex/hooks.json"))
-}
-
-/// Default user-level Codex config path (`$HOME/.codex/config.toml`).
-pub fn default_home_config_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex/config.toml"))
-}
-
 /// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub fn detect_binary() -> String {
+pub(crate) fn detect_binary() -> String {
     super::detect_binary_impl()
 }
 
@@ -577,22 +567,8 @@ mod tests {
     }
 
     #[test]
-    fn default_home_hooks_path_ends_with_codex_when_home_is_set() {
-        if let Some(path) = default_home_hooks_path() {
-            assert!(path.ends_with(".codex/hooks.json"));
-        }
-    }
-
-    #[test]
     fn detect_binary_delegates_to_shared_impl() {
         assert!(!detect_binary().is_empty());
-    }
-
-    #[test]
-    fn default_home_config_path_ends_with_codex_when_home_is_set() {
-        if let Some(path) = default_home_config_path() {
-            assert!(path.ends_with(".codex/config.toml"));
-        }
     }
 
     #[test]

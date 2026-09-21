@@ -8,9 +8,9 @@
 
 pub(crate) mod read;
 pub mod record;
-pub mod redaction;
-pub mod time;
-pub mod writer;
+pub(crate) mod redaction;
+pub(crate) mod time;
+pub(crate) mod writer;
 
 use std::fs::File;
 use std::path::PathBuf;

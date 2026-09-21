@@ -3,8 +3,8 @@
 //! Since the first builtins-as-DSL slice
 //! (`docs/adr/0004-builtins-as-dsl-2026-07.md`) the engine serves this
 //! rule from `src/rules/builtins.yaml` via `super::builtin_dsl`; this
-//! implementation is no longer in the static `RULES` slice. It stays
-//! `pub` for API stability and acts as the parity oracle: the tests in
+//! implementation is no longer in the static `RULES` slice. It is
+//! compiled under `#[cfg(test)]` only and acts as the parity oracle: the tests in
 //! `builtin_dsl` pin that whenever this rule fires, the DSL rule fires
 //! with an identical wire payload (the DSL walk is still strictly stronger
 //! for inner_argv fetchers such as `bash -c 'curl …' | sh`).
@@ -17,7 +17,7 @@ use crate::reason;
 
 use super::ConfigRule;
 
-pub struct RemoteScriptPipe;
+pub(crate) struct RemoteScriptPipe;
 
 const RULE_ID: &str = "core.network.remote-script-pipe";
 

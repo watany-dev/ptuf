@@ -14,7 +14,7 @@ use crate::facts::path::resolve_with_env;
 ///
 /// `path` is supplied only for error context; the parser itself does
 /// not touch the filesystem.
-pub(crate) fn parse_str(path: &Path, source: &str) -> Result<RawConfig, ConfigError> {
+pub fn parse_str(path: &Path, source: &str) -> Result<RawConfig, ConfigError> {
     let raw = serde_yaml_ng::from_str::<RawConfig>(source).map_err(|e| ConfigError::Yaml {
         path: path.to_path_buf(),
         message: e.to_string(),

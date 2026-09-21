@@ -23,7 +23,9 @@ use crate::rules::ConfigRule;
 
 use super::PluginError;
 use super::dsl::{WhenNode, compile};
-use super::loader::load_path;
+#[cfg(test)]
+use super::loader::load_str;
+use super::loader::{LoadedPlugin, load_path};
 use super::rule::PluginRule;
 use super::schema::{RawRule, RawTestCase};
 
@@ -96,9 +98,8 @@ impl RunReport {
     }
 }
 
-/// Run every plugin test case from `path`.
-pub(crate) fn run(path: &Path) -> Result<RunReport, PluginError> {
-    let loaded = load_path(path)?;
+/// Execute every test case of an already-loaded plugin.
+fn run_loaded(path: &Path, loaded: LoadedPlugin) -> Result<RunReport, PluginError> {
     let cases = build_cases(path, &loaded.raw_rules)?;
     let outcomes = cases.into_iter().map(execute_case).collect();
     Ok(RunReport {
@@ -108,23 +109,17 @@ pub(crate) fn run(path: &Path) -> Result<RunReport, PluginError> {
     })
 }
 
-// In-memory variant of `run_path`, used only to drive the tests.
+/// Run every plugin test case from `path`.
+pub(crate) fn run(path: &Path) -> Result<RunReport, PluginError> {
+    run_loaded(path, load_path(path)?)
+}
+
+// In-memory variant of `run`, used only to drive the tests. Goes through
+// the same `load_str` validation as production so a fixture that the CLI
+// would reject cannot quietly pass here.
 #[cfg(test)]
-/// Run from an in-memory YAML string. Mostly handy for tests of the
-/// runner itself; the public CLI path always reads from disk.
 pub(crate) fn run_str(path: &Path, source: &str) -> Result<RunReport, PluginError> {
-    let raw: super::schema::RawPlugin =
-        serde_yaml_ng::from_str(source).map_err(|e| PluginError::Yaml {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        })?;
-    let cases = build_cases(path, &raw.rules)?;
-    let outcomes = cases.into_iter().map(execute_case).collect();
-    Ok(RunReport {
-        source: path.to_path_buf(),
-        plugin_name: raw.metadata.name,
-        cases: outcomes,
-    })
+    run_loaded(path, load_str(path, source)?)
 }
 
 struct PreparedCase {
