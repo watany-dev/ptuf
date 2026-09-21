@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed (BREAKING)
+- feature `testing` と公開モジュール `ptuf::testing` を削除。proptest の
+  strategy 群 (`src/testing/proptest.rs`) は `#[cfg(test)]` の crate 内
+  モジュールになり、公開 API からも出荷バイナリからも消えた。
+- `proptest` は optional dependency をやめ dev-dependency のみになった。
+- 未参照の strategy `bash_with_quoting` を削除。
+
+### Changed
+- `tests/{engine,rules,cli_parse,filter}_proptest.rs` を
+  `src/testing/{engine,rules,cli_parse,filter}_pbt.rs` に移動し unit test 化。
+  `[[test]] required-features = ["testing"]` の付け忘れでテストが黙って
+  skip される状態を解消した。Makefile / CI / docs の `--features testing`
+  指定 (10 箇所) も削除。
+
 ## [0.8.0] - 2026-09-17
 
 ### Added

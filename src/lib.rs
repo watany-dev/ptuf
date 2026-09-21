@@ -14,9 +14,8 @@ pub mod rules;
 pub mod self_paths;
 pub(crate) mod update;
 
-#[cfg(any(test, feature = "testing"))]
-#[doc(hidden)]
-pub mod testing;
+#[cfg(test)]
+mod testing;
 
 pub use decision::{Decision, aggregate};
 pub use engine::{Engine, EngineError, Outcome};

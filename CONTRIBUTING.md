@@ -25,8 +25,8 @@ stay on their own Make targets.
 | Step | What it checks |
 | --- | --- |
 | `fmt-check` | `cargo fmt -- --check` |
-| `lint` | `cargo clippy --all-targets --locked --features testing -- -D warnings` |
-| `test` | `cargo test --locked --features testing` |
+| `lint` | `cargo clippy --all-targets --locked -- -D warnings` |
+| `test` | `cargo test --locked` |
 | `doc` | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked` |
 | `deny` | `cargo deny check advisories licenses bans sources` |
 

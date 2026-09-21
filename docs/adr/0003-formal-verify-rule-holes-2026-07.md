@@ -119,6 +119,6 @@ fresh `seen_from` で outer pipeline への漏洩 FP を防ぐ。
 | C | `src/facts/shell.rs`, `src/plugin/dsl.rs`, `src/rules/remote_pipe.rs`, corpus | Resolved (#162): subst_argv + walk |
 | P1 | `src/rules/patterns.rs`, `src/testing/proptest.rs` | 分類器パリティ property + generator |
 | P2 | `src/facts/sensitive.rs` | SSH 鍵ファミリ網羅 property |
-| P3 | `tests/engine_proptest.rs` | ルール横断挙動パリティ property |
+| P3 | `src/testing/engine_pbt.rs` | ルール横断挙動パリティ property |
 | Tests | `tests/bypass/corpus.jsonl` | must_catch (C 含む) — known_gap C は解消 |
 | Doc | `docs/design/policy-packs.md`, 本 ADR | 設計追従 |

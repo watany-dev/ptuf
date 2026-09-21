@@ -78,7 +78,7 @@ head は `head_basename` で basename 化するため `/usr/bin/curl ... | /bin/
 のような lookalike は除外する。2 系統の一致は
 `pbt_sensitive_path_matches_classify` property (`src/rules/patterns.rs`) と
 engine レベルの `pbt_sensitive_path_parity_across_surfaces`
-(`tests/engine_proptest.rs`) が恒久的に縛る。
+(`src/testing/engine_pbt.rs`) が恒久的に縛る。
 `~` / `$HOME` 展開済みの絶対パス (`/home/user/.ssh/config`,
 `/root/.aws/credentials` 等) も同一 regex で分類する (Claude Code の Read が
 絶対 `file_path` を渡す bypass 対策)。
