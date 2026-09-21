@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- init adapter 9 種に複製されていた atomic write ヘルパ (`mkdir -p` →
+  temp file → `rename`) を `init::write_atomically_at` 1 箇所に集約。
+  各 adapter の `write_atomically` / `write_json_atomically` /
+  `write_toml_atomically` / `write_executable_atomically` と
+  `sibling_temp_path` ラッパを削除し、`write_install_bytes` /
+  `write_install_json` を直接呼ぶ。
+- 権限ビットだけが違った `write_secure` (0600) / `write_executable` (0700)
+  を `FileMode` を取る単一の writer に統合。書き込まれるモードは従来と同一。
+
 ## [0.8.0] - 2026-09-17
 
 ### Added

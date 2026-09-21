@@ -8,7 +8,12 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, Item, Table, value};
 
-use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
+use super::{FileMode, InitError, InstallOutcome, InstallPath, InstallStatus};
+
+/// Basename used for the sibling temp file when the destination path
+/// carries no file name of its own (see
+/// [`sibling_install_tmp_path`](super::sibling_install_tmp_path)).
+const TMP_BASENAME: &str = "hooks.json";
 
 /// Matcher we install for the first-class Codex adapter.
 pub const DEFAULT_MATCHER: &str = "Bash|apply_patch|mcp__.*";
@@ -84,10 +89,15 @@ pub fn install(
         InstallStatus::WouldInstall
     } else {
         if hooks_changed {
-            write_json_atomically(&targets.hooks_path, &hooks_root)?;
+            super::write_install_json(&targets.hooks_path, &hooks_root, TMP_BASENAME)?;
         }
         if config_changed {
-            write_toml_atomically(&targets.config_path, &config)?;
+            super::write_install_bytes(
+                &targets.config_path,
+                config.to_string().as_bytes(),
+                TMP_BASENAME,
+                FileMode::Secure,
+            )?;
         }
         InstallStatus::Installed
     };
@@ -232,62 +242,6 @@ fn ensure_hooks_enabled(doc: &mut DocumentMut) -> bool {
         }
     }
     changed
-}
-
-fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-
-    // `serde_json::Value` is always serializable (numbers exclude NaN/Inf,
-    // maps are string-keyed), so `to_string_pretty` cannot fail here.
-    #[expect(
-        clippy::expect_used,
-        reason = "serde_json::Value serialization is infallible"
-    )]
-    let mut body =
-        serde_json::to_string_pretty(value).expect("serde_json::Value always serializes");
-    body.push('\n');
-
-    let tmp = sibling_temp_path(path);
-    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-fn write_toml_atomically(path: &Path, doc: &DocumentMut) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-
-    let tmp = sibling_temp_path(path);
-    crate::init::write_secure(&tmp, doc.to_string().as_bytes()).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-fn sibling_temp_path(path: &Path) -> PathBuf {
-    super::sibling_install_tmp_path(path, "hooks.json")
 }
 
 #[cfg(test)]
@@ -861,85 +815,6 @@ mod tests {
             Some(true)
         );
         assert!(!features.contains_key("codex_hooks"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_json_atomically_returns_io_err_when_parent_is_a_regular_file() {
-        let dir = workdir("write-json-blocker");
-        let blocker = dir.join("blocker");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(&blocker, b"x").unwrap();
-        let path = blocker.join("sub/hooks.json");
-        let err = write_json_atomically(&path, &json!({})).unwrap_err();
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_toml_atomically_returns_io_err_when_parent_is_a_regular_file() {
-        let dir = workdir("write-toml-blocker");
-        let blocker = dir.join("blocker");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(&blocker, b"x").unwrap();
-        let path = blocker.join("sub/config.toml");
-        let err = write_toml_atomically(&path, &DocumentMut::new()).unwrap_err();
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
-        let p = Path::new("/");
-        let tmp = sibling_temp_path(p);
-        assert!(
-            tmp.to_string_lossy().contains("hooks.json.ptuf."),
-            "missing file_name must default to hooks.json: {tmp:?}"
-        );
-    }
-
-    #[test]
-    fn write_json_atomically_propagates_rename_error_when_target_is_a_directory() {
-        let dir = workdir("write-json-rename-dir");
-        let target = dir.join("hooks.json");
-        fs::create_dir_all(&target).unwrap();
-        let err =
-            write_json_atomically(&target, &json!({})).expect_err("rename onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_json_atomically_propagates_write_error_when_temp_path_is_a_directory() {
-        let dir = workdir("write-json-tmp-collision");
-        let target = dir.join("hooks.json");
-        let collision = dir.join(format!("hooks.json.ptuf.{}.tmp", std::process::id()));
-        fs::create_dir_all(&collision).unwrap();
-        let err = write_json_atomically(&target, &json!({})).expect_err("write onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_toml_atomically_propagates_rename_error_when_target_is_a_directory() {
-        let dir = workdir("write-toml-rename-dir");
-        let target = dir.join("config.toml");
-        fs::create_dir_all(&target).unwrap();
-        let err = write_toml_atomically(&target, &DocumentMut::new())
-            .expect_err("rename onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_toml_atomically_propagates_write_error_when_temp_path_is_a_directory() {
-        let dir = workdir("write-toml-tmp-collision");
-        let target = dir.join("config.toml");
-        let collision = dir.join(format!("config.toml.ptuf.{}.tmp", std::process::id()));
-        fs::create_dir_all(&collision).unwrap();
-        let err = write_toml_atomically(&target, &DocumentMut::new())
-            .expect_err("write onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 

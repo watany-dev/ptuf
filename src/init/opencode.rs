@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::scope::{EnvLookup, SystemEnv};
 
-use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
+use super::{FileMode, InitError, InstallOutcome, InstallPath, InstallStatus};
 
 const TEMPLATE: &str = include_str!("templates/opencode_plugin.ts");
 
@@ -161,7 +161,7 @@ fn apply(path: &Path, desired: &[u8], dry_run: bool) -> Result<InstallStatus, In
     if dry_run {
         return Ok(InstallStatus::WouldInstall);
     }
-    write_atomically(path, desired)?;
+    super::write_install_bytes(path, desired, DEFAULT_PLUGIN_NAME, FileMode::Secure)?;
     Ok(InstallStatus::Installed)
 }
 
@@ -179,26 +179,6 @@ pub(crate) fn is_ptuf_managed(bytes: &[u8]) -> bool {
         && text.contains(AGENT_MARKER)
         && text.contains("hook")
         && text.contains("opencode")
-}
-
-fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-    let tmp = super::sibling_install_tmp_path(path, DEFAULT_PLUGIN_NAME);
-    super::write_secure(&tmp, bytes).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
 }
 
 #[cfg(test)]
@@ -530,38 +510,6 @@ mod tests {
         install(&targets, "/bin/ptuf", false).unwrap();
         let mode = fs::metadata(&plugin).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_atomically_propagates_create_dir_all_error_when_parent_is_a_regular_file() {
-        let dir = workdir("write-mkdir-fail");
-        let blocker = dir.join("blocker");
-        fs::write(&blocker, b"x").unwrap();
-        let target = blocker.join("nested").join("ptuf.ts");
-        let err = write_atomically(&target, b"data").expect_err("create_dir_all must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_atomically_propagates_write_error_when_temp_path_is_a_directory() {
-        let dir = workdir("write-tmp-collision");
-        let target = dir.join("ptuf.ts");
-        let collision = dir.join(format!("ptuf.ts.ptuf.{}.tmp", std::process::id()));
-        fs::create_dir_all(&collision).unwrap();
-        let err = write_atomically(&target, b"data").expect_err("write onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_atomically_propagates_rename_error_when_target_is_a_directory() {
-        let dir = workdir("write-rename-fail");
-        let target = dir.join("ptuf.ts");
-        fs::create_dir_all(&target).unwrap();
-        let err = write_atomically(&target, b"data").expect_err("rename onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 

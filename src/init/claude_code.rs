@@ -18,6 +18,11 @@ use serde_json::{Value, json};
 
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
+/// Basename used for the sibling temp file when the destination path
+/// carries no file name of its own (see
+/// [`sibling_install_tmp_path`](super::sibling_install_tmp_path)).
+const TMP_BASENAME: &str = "settings.json";
+
 /// Matcher we install in the new entry — covers every tool ptuf can
 /// actually evaluate plus all MCP tools.
 pub const DEFAULT_MATCHER: &str = "Bash|Read|Edit|Write|WebFetch|mcp__.*";
@@ -84,7 +89,7 @@ pub fn install(
         });
     }
 
-    write_atomically(settings_path, &root)?;
+    super::write_install_json(settings_path, &root, TMP_BASENAME)?;
 
     Ok(InstallOutcome {
         status: InstallStatus::Installed,
@@ -193,37 +198,6 @@ fn append_hook(root: &mut Value, settings_path: &Path, command: &str) -> Result<
         }],
     }));
     Ok(())
-}
-
-fn write_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-
-    let mut body = serde_json::to_string_pretty(value).map_err(|e| InitError::Schema {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
-    body.push('\n');
-
-    let tmp = sibling_temp_path(path);
-    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-fn sibling_temp_path(path: &Path) -> PathBuf {
-    super::sibling_install_tmp_path(path, "settings.json")
 }
 
 #[cfg(test)]
@@ -547,15 +521,6 @@ mod tests {
     }
 
     #[test]
-    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
-        let tmp = sibling_temp_path(Path::new(""));
-        assert!(
-            tmp.to_string_lossy().starts_with("settings.json.ptuf."),
-            "got {tmp:?}",
-        );
-    }
-
-    #[test]
     fn install_returns_io_err_when_parent_is_a_regular_file() {
         let dir = workdir("parent-blocker");
         let blocker = dir.join("blocker");
@@ -570,38 +535,6 @@ mod tests {
     #[test]
     fn detect_binary_delegates_to_shared_impl() {
         assert!(!detect_binary().is_empty());
-    }
-
-    #[test]
-    fn write_atomically_propagates_rename_error_when_target_is_a_directory() {
-        let dir = workdir("write-rename-dir");
-        let target = dir.join("target");
-        fs::create_dir_all(&target).unwrap();
-        let err = write_atomically(&target, &json!({})).expect_err("rename onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_atomically_propagates_write_error_when_temp_path_is_a_directory() {
-        let dir = workdir("write-tmp-collision");
-        let target = dir.join("settings.json");
-        let collision = dir.join(format!("settings.json.ptuf.{}.tmp", std::process::id()));
-        fs::create_dir_all(&collision).unwrap();
-        let err = write_atomically(&target, &json!({})).expect_err("write onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_atomically_propagates_create_dir_all_error_when_parent_is_a_regular_file() {
-        let dir = workdir("write-mkdir-fail");
-        let blocker = dir.join("blocker");
-        fs::write(&blocker, b"x").unwrap();
-        let target = blocker.join("nested").join("settings.json");
-        let err = write_atomically(&target, &json!({})).expect_err("create_dir_all must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
