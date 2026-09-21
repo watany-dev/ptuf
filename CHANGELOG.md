@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- ラベル無しの PKCS#8 PEM ヘッダ `-----BEGIN PRIVATE KEY-----` が機密分類器を
+  すり抜けていた問題を修正。audit redactor 側 (ラベル任意) と分類器側
+  (ラベル必須) でパターンが食い違っていたのが原因で、分類器統合に伴い
+  `PEM_PRIVATE_KEY_{BEGIN,END}` の単一定義へ収斂させた。(#210)
+
+### Changed
+- 機密 path 分類器を `facts::sensitive` の `PROBES` 1 系統に統合。
+  `rules::patterns` の `SENSITIVE_PATH` / `SENSITIVE_NEEDLES` を削除し、
+  `matches_sensitive_path` は新設の短絡版 `sensitive::matches` へ委譲する
+  薄い adapter になった。2 実装の等価性を縛っていた PBT 群は、実装が 1 つに
+  なったため削除 (engine レベルの surface 間パリティ検証は継続)。(#210)
+
 ## [0.8.0] - 2026-09-17
 
 ### Added
