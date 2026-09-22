@@ -29,11 +29,6 @@ examine_globs = [
     "src/config/merge.rs",
 ]
 
-# The proptest-backed integration tests are gated behind the `testing`
-# feature; build and run the suite with it enabled so mutation runs see
-# the same coverage `make check` does.
-additional_cargo_args = ["--features", "testing"]
-
 # Loop-index arithmetic mutants in the shell parser can spin until the
 # per-mutant test timeout without signalling a real coverage gap.
 exclude_re = [

@@ -552,31 +552,6 @@ pub fn argv_tokens() -> impl Strategy<Value = Vec<String>> {
     vec(argv_token(), 0..=6)
 }
 
-/// Bash command words mixing single-quoted, double-quoted, and
-/// backslash-escaped tokens. Used by `facts::shell::parse` PBT to
-/// stress quote handling and to keep flags/positional invariants
-/// intact across quoting forms.
-pub fn bash_with_quoting() -> impl Strategy<Value = String> {
-    let head = bash_head();
-    let single = "[ a-zA-Z0-9_./-]{0,8}".prop_map(|s| format!("'{s}'"));
-    let double = "[ a-zA-Z0-9_./-]{0,8}".prop_map(|s| format!("\"{s}\""));
-    let escaped = "[a-zA-Z0-9_./-]{1,4}".prop_map(|s| format!("\\ {s}"));
-    let plain = "[a-zA-Z0-9_./-]{1,8}".prop_map(|s| s.to_string());
-    let word = prop_oneof![
-        2 => plain,
-        2 => single,
-        2 => double,
-        1 => escaped,
-    ];
-    (head, vec(word, 0..4)).prop_map(|(h, args)| {
-        if args.is_empty() {
-            h
-        } else {
-            format!("{h} {}", args.join(" "))
-        }
-    })
-}
-
 /// One-pipeline command containing at least one redirect operator
 /// drawn from `>`, `>>`, `<`, `2>`, `&>`. The redirect target is a
 /// short safe filename. Used to verify that every emitted operator

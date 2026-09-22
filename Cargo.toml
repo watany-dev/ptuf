@@ -1,6 +1,6 @@
 [package]
 name = "ptuf"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2024"
 rust-version = "1.93.0"
 license = "Apache-2.0"
@@ -27,33 +27,12 @@ path = "src/lib.rs"
 name = "ptuf"
 path = "src/main.rs"
 
-[[test]]
-name = "engine_proptest"
-path = "tests/engine_proptest.rs"
-required-features = ["testing"]
-
-[[test]]
-name = "cli_parse_proptest"
-path = "tests/cli_parse_proptest.rs"
-required-features = ["testing"]
-
-[[test]]
-name = "rules_proptest"
-path = "tests/rules_proptest.rs"
-required-features = ["testing"]
-
-[[test]]
-name = "filter_proptest"
-path = "tests/filter_proptest.rs"
-required-features = ["testing"]
-
 [[bench]]
 name = "hot_path"
 harness = false
 
 [features]
 default = []
-testing = ["dep:proptest"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -64,7 +43,6 @@ serde_yaml_ng = "0.10"
 memchr = { version = "2", default-features = false, features = ["std"] }
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl"] }
 toml_edit = "0.25"
-proptest = { version = "1", default-features = false, features = ["std", "bit-set"], optional = true }
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std", "bit-set"] }

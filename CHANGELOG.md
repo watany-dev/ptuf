@@ -96,6 +96,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `init::claude_code::install` が同一の `InstallOutcome` literal を 3 回
   構築していたのを 1 箇所に集約。(#221)
 
+### Removed (BREAKING)
+- feature `testing` と公開モジュール `ptuf::testing` を削除。proptest の
+  strategy 群 (`src/testing/proptest.rs`) は `#[cfg(test)]` の crate 内
+  モジュールになり、公開 API からも出荷バイナリからも消えた。
+- `proptest` は optional dependency をやめ dev-dependency のみになった。
+- 未参照の strategy `bash_with_quoting` を削除。
+- 上記の公開 API 削除にあたるため 0.14.0 へ bump。(#215)
+
+### Changed
+- `tests/{engine,rules,cli_parse,filter}_proptest.rs` を
+  `src/testing/{engine,rules,cli_parse,filter}_pbt.rs` に移動し unit test 化。
+  `[[test]] required-features = ["testing"]` の付け忘れでテストが黙って
+  skip される状態を解消した。Makefile / CI / docs の `--features testing`
+  指定 (10 箇所) も削除。(#215)
+- lib テストの CWD 競合を解消: プロセス CWD を読むテストも `CwdGuard` と
+  同じ `CWD_LOCK` を取るようにした (PBT が同一バイナリに移り並列度が
+  上がったことで顕在化した flake)。(#215)
+
 ## [0.8.0] - 2026-09-17
 
 ### Added

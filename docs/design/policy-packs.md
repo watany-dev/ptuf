@@ -78,9 +78,10 @@ header / footer パターンは `PEM_PRIVATE_KEY_{BEGIN,END}` として audit re
 (`src/audit/redaction.rs`) とも共有する。
 `.npmrc` / `.pypirc` は `~/.npmrc` のようにパス境界 (`^` / `/` / 空白 /
 `~`・`$HOME`・`${HOME}` + `/`) に接する場合のみ機密とみなし、`data.npmrc`
-のような lookalike は除外する。surface をまたいだ最終判定の一致は engine
-レベルの `pbt_sensitive_path_parity_across_surfaces`
-(`tests/engine_proptest.rs`) が縛る。
+のような lookalike は除外する。2 系統の一致は
+`pbt_sensitive_path_matches_classify` property (`src/rules/patterns.rs`) と
+engine レベルの `pbt_sensitive_path_parity_across_surfaces`
+(`src/testing/engine_pbt.rs`) が恒久的に縛る。
 `~` / `$HOME` 展開済みの絶対パス (`/home/user/.ssh/config`,
 `/root/.aws/credentials` 等) も同一 regex で分類する (Claude Code の Read が
 絶対 `file_path` を渡す bypass 対策)。

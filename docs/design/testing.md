@@ -17,11 +17,12 @@ example-based テストは `src/<module>.rs` の `#[cfg(test)] mod tests` と
 `tests/cli_smoke.rs` に存在し続ける。PBT は **同じテストモジュール内** に
 `proptest!` ブロックとして追記する形を取り、各モジュールが自分の不変条件を
 所有する Tidy First 方針に従う。複数モジュールにまたがる統合層の PBT のみ
-`tests/` 配下に独立して置く: engine end-to-end は `tests/engine_proptest.rs`、
-全 rule にまたがる否定空間は `tests/rules_proptest.rs`、CLI argv 解析は
-`tests/cli_parse_proptest.rs`、`engine::filter` の合成則
+`src/testing/` 配下に独立した `#[cfg(test)]` モジュールとして置く:
+engine end-to-end は `src/testing/engine_pbt.rs`、全 rule にまたがる否定空間は
+`src/testing/rules_pbt.rs`、CLI argv 解析は `src/testing/cli_parse_pbt.rs`、
+`engine::filter` の合成則
 (`hard_deny` × `allowlist` × `rule_override` × `pack_override` × Mode demote)
-は `tests/filter_proptest.rs`。
+は `src/testing/filter_pbt.rs`。
 
 ## 主要な不変条件
 
@@ -206,7 +207,7 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   `PROPTEST_CASES=1024` を明示し、proptest デフォルトの 256 ケースより
   4 倍深く property を回す。`make pbt-quick` がローカル等価コマンド。
   失敗ケースは `proptest-regressions/` に固定化される。
-- **`make check` (ローカル)**: `cargo test --features testing` は
+- **`make check` (ローカル)**: `cargo test` は
   proptest をデフォルト 256 ケースで実行。Tidy First の最短ループ用。
 - **深掘り (`pbt`)**: `make pbt` (デフォルト 10000 ケース、`PBT_CASES=N` で
   上書き可) をローカル / 夜間 / リリース直前に手動実行。同じ 10000 ケース
@@ -282,16 +283,16 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
 ## 戦略 (Strategy) の置き場所
 
 `src/testing/proptest.rs` に共通戦略 (Decision / Severity / HookInput /
-bash_command / bash_with_quoting / bash_redirects / bash_heredoc /
+bash_command / bash_redirects / bash_heredoc /
 bash_process_subst / bash_process_subst_remote_pipe / combined_short_opts / bash_wrapper_nested /
 mcp_nested_input / arbitrary_utf8_bytes / safe_command_string /
 safe_heads / pack_override / rule_override / allowlist_entry /
 config_with_filters) を集約し、
-`#[cfg(any(test, feature = "testing"))] pub mod testing` で各モジュールの
-テストブロックと `tests/` 配下の統合 PBT (`engine_proptest.rs` /
-`rules_proptest.rs` / `cli_parse_proptest.rs` / `filter_proptest.rs`) の
-両方から参照する。`testing` feature は optional `proptest` 依存だけを
-有効化し、通常の `cargo build --release` では出荷バイナリに含まれない。
+`#[cfg(test)] mod testing` で各モジュールのテストブロックと統合 PBT
+(`engine_pbt.rs` / `rules_pbt.rs` / `cli_parse_pbt.rs` / `filter_pbt.rs`) の
+両方から参照する。モジュール全体が `#[cfg(test)]` なので、`proptest` は
+dev-dependency のみで足り、通常の `cargo build --release` では出荷バイナリにも
+公開 API にも一切含まれない。
 
 `arbitrary_command()` は ASCII printable / Unicode (`\PC`) / 制御文字
 (NUL 含む) / `String::from_utf8_lossy` 経由の lossy ASCII の 4 領域を

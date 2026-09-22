@@ -22,10 +22,10 @@ build:
 	cargo build --release --locked
 
 test:
-	cargo test --locked --features testing
+	cargo test --locked
 
 lint:
-	cargo clippy --all-targets --locked --features testing -- -D warnings
+	cargo clippy --all-targets --locked -- -D warnings
 
 fmt:
 	cargo fmt
@@ -36,9 +36,7 @@ fmt-check:
 coverage: tools
 	cargo tarpaulin --out html --out json \
 		--locked \
-		--features testing \
 		--skip-clean \
-		--features testing \
 		--fail-under 95 \
 		--exclude-files "src/main.rs" \
 		--exclude-files "src/testing/**" \
@@ -60,15 +58,15 @@ doc:
 # Override per-tier with `make pbt-deep PBT_DEEP_CASES=N` etc.
 PBT_QUICK_CASES ?= 1024
 pbt-quick:
-	PROPTEST_CASES=$(PBT_QUICK_CASES) cargo test --locked --features testing
+	PROPTEST_CASES=$(PBT_QUICK_CASES) cargo test --locked
 
 PBT_CASES ?= 10000
 pbt:
-	PROPTEST_CASES=$(PBT_CASES) cargo test --locked --features testing
+	PROPTEST_CASES=$(PBT_CASES) cargo test --locked
 
 PBT_DEEP_CASES ?= 100000
 pbt-deep:
-	PROPTEST_CASES=$(PBT_DEEP_CASES) cargo test --locked --features testing
+	PROPTEST_CASES=$(PBT_DEEP_CASES) cargo test --locked
 
 # Hook hot-path benchmarks (benches/hot_path.rs, harness-free / no
 # extra dependencies). Builds the release binary first so the e2e tier
@@ -85,7 +83,7 @@ bench: build
 # required: the fd-leak axis and the shared-audit axis interfere if
 # run in parallel.
 e2e:
-	cargo test --locked --features testing --test e2e_heavy -- --ignored --test-threads=1
+	cargo test --locked --test e2e_heavy -- --ignored --test-threads=1
 
 # Coverage-guided fuzzing of the targets in `fuzz/fuzz_targets/`.
 # `cargo fuzz` needs a nightly toolchain; the `fuzz/` crate is a

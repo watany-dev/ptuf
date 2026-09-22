@@ -46,7 +46,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Clippy
-        run: cargo clippy --all-targets --locked --features testing -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
       - name: Doc warnings
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
 
@@ -95,7 +95,7 @@ jobs:
       - name: Test (PR-tier PBT, PROPTEST_CASES=1024)
         env:
           PROPTEST_CASES: 1024
-        run: cargo nextest run --locked --all-targets --features testing
+        run: cargo nextest run --locked --all-targets
       - name: Doctests
         run: cargo test --locked --doc
 
@@ -120,7 +120,7 @@ jobs:
       - name: PBT deep
         env:
           PROPTEST_CASES: 10000
-        run: cargo nextest run --locked --all-targets --features testing
+        run: cargo nextest run --locked --all-targets
 
   coverage:
     name: Coverage (tarpaulin)
@@ -139,9 +139,7 @@ jobs:
         run: |
           cargo tarpaulin --out json --out html \
             --locked \
-            --features testing \
             --skip-clean \
-            --features testing \
             --fail-under 95 \
             --exclude-files "src/main.rs" \
             --exclude-files "src/testing/**" \
@@ -177,11 +175,11 @@ jobs:
           toolchain: 1.93.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: MSRV build (release profile, locked)
-        run: cargo build --release --all-targets --locked --features testing
+        run: cargo build --release --all-targets --locked
       - name: MSRV test compile (harness must build, but do not run)
-        run: cargo test --no-run --all-targets --locked --features testing
+        run: cargo test --no-run --all-targets --locked
       - name: MSRV doc build (lints kept as warnings — strict deny lives in `lint` job)
-        run: cargo doc --no-deps --locked --features testing
+        run: cargo doc --no-deps --locked
 
   npm-smoke:
     name: npm smoke
