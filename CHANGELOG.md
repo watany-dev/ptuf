@@ -45,6 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   本番の呼び出し元は全て `config::repo::discover` を直接使っている。(#216)
 - 上記の公開 API 削除にあたるため 0.11.0 へ bump。
 
+### Changed
+- 6 つの agent adapter (`copilot` / `kiro` / `cline` / `cursor` / `pi` /
+  `opencode`) の入力正規化を `src/cli/input_helpers.rs` に集約。個別の
+  `*InputError` enum 6 種を単一の `InputError` に統合し、`sanitize_tool_name` /
+  `normalize_at_mcp` / `decode_args` / `first_string` の重複実装を共有化した
+  (crate 内部のみ、公開 API 変更なし)。空 tool name のメッセージは
+  `hook payload tool_name must not be empty` に統一。cline / kiro の
+  `tool_input` も共有 `decode_args` 経由となり、JSON 文字列として渡された
+  object を展開するようになった (従来は `raw` キーに素通し)。(#222)
+
 ## [0.8.0] - 2026-09-17
 
 ### Added

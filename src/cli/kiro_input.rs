@@ -22,74 +22,33 @@
 
 use serde_json::{Map, Value};
 
-use super::input_helpers::take_first_string;
+use super::input_helpers::{
+    InputError, decode_args, hook_input, normalize_at_mcp, take_first_string,
+};
 use crate::hook_input::HookInput;
 
-/// Normalise a Kiro stdin body into a [`HookInput`].
-pub(super) fn parse(body: &str) -> Result<HookInput, KiroInputError> {
-    if body.trim().is_empty() {
-        return Err(KiroInputError::Empty);
-    }
-    let value: Value = serde_json::from_str(body).map_err(KiroInputError::Json)?;
-    let Value::Object(mut map) = value else {
-        return Err(KiroInputError::NotAnObject);
-    };
+/// Normalise a Kiro stdin body into a [`HookInput`]. Every failure maps
+/// to `core.engine.invalid-payload` at the CLI boundary so Kiro stays
+/// fail-closed (exit 2 + stderr reason).
+pub(super) fn parse(body: &str) -> Result<HookInput, InputError> {
+    let mut map = super::input_helpers::parse_object(body)?;
 
     if let Some(event) = map.get("hook_event_name").and_then(Value::as_str)
         && event != "preToolUse"
     {
-        return Err(KiroInputError::UnsupportedEvent(event.to_string()));
+        return Err(InputError::UnsupportedEvent {
+            field: "hook_event_name",
+            name: Some(event.to_string()),
+            expected: "preToolUse",
+        });
     }
 
-    let raw_name = map
-        .remove("tool_name")
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .ok_or(KiroInputError::MissingToolName)?;
-    let raw_input = map.remove("tool_input").unwrap_or(Value::Null);
-    let args = match raw_input {
-        Value::Object(m) => m,
-        Value::Null => Map::new(),
-        other => {
-            let mut m = Map::new();
-            m.insert("raw".into(), other);
-            m
-        },
-    };
+    let raw_name =
+        take_first_string(&mut map, &["tool_name"]).ok_or(InputError::MissingToolName)?;
+    let args = decode_args(map.remove("tool_input").unwrap_or(Value::Null), "raw");
 
     let (tool_name, tool_input) = normalize(raw_name, args);
-    Ok(HookInput {
-        tool_name,
-        tool_input,
-    })
-}
-
-/// Reasons a Kiro payload failed to normalise. Every variant maps to
-/// `core.engine.invalid-payload` at the CLI boundary so Kiro stays
-/// fail-closed (exit 2 + stderr reason).
-#[derive(Debug)]
-pub(super) enum KiroInputError {
-    Empty,
-    Json(serde_json::Error),
-    NotAnObject,
-    MissingToolName,
-    UnsupportedEvent(String),
-}
-
-impl std::fmt::Display for KiroInputError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "hook payload is empty"),
-            Self::Json(err) => write!(f, "hook payload is not valid JSON ({err})"),
-            Self::NotAnObject => write!(f, "hook payload must be a JSON object"),
-            Self::MissingToolName => write!(f, "hook payload is missing tool_name field"),
-            Self::UnsupportedEvent(name) => {
-                write!(
-                    f,
-                    "unsupported hook_event_name: {name} (expected preToolUse)"
-                )
-            },
-        }
-    }
+    Ok(hook_input(tool_name, tool_input))
 }
 
 fn normalize(raw_name: String, args: Map<String, Value>) -> (String, Value) {
@@ -106,29 +65,6 @@ fn normalize(raw_name: String, args: Map<String, Value>) -> (String, Value) {
             }
         },
     }
-}
-
-/// `@server/tool` → `mcp__server__tool`. Three or more segments collapse
-/// extra slashes into underscores: `@a/b/c` → `mcp__a__b_c`. Empty
-/// segments cause this helper to return `None` so the caller keeps the
-/// raw name.
-fn normalize_at_mcp(name: &str) -> Option<String> {
-    let rest = name.strip_prefix('@')?;
-    let mut parts = rest.split('/');
-    let server = parts.next()?;
-    let tool = parts.next()?;
-    if server.is_empty() || tool.is_empty() {
-        return None;
-    }
-    let mut tool_full = String::from(tool);
-    for extra in parts {
-        if extra.is_empty() {
-            return None;
-        }
-        tool_full.push('_');
-        tool_full.push_str(extra);
-    }
-    Some(format!("mcp__{server}__{tool_full}"))
 }
 
 fn reshape_bash(mut args: Map<String, Value>) -> Value {
@@ -340,31 +276,31 @@ mod tests {
         let body = r#"{"hook_event_name":"postToolUse","tool_name":"shell","tool_input":{}}"#;
         assert!(matches!(
             parse(body),
-            Err(KiroInputError::UnsupportedEvent(_))
+            Err(InputError::UnsupportedEvent { .. })
         ));
     }
 
     #[test]
     fn kiro_invalid_json_is_rejected() {
-        assert!(matches!(parse("not-json"), Err(KiroInputError::Json(_))));
+        assert!(matches!(parse("not-json"), Err(InputError::Json(_))));
     }
 
     #[test]
     fn kiro_empty_body_is_rejected() {
-        assert!(matches!(parse(""), Err(KiroInputError::Empty)));
-        assert!(matches!(parse("   \n"), Err(KiroInputError::Empty)));
+        assert!(matches!(parse(""), Err(InputError::Empty)));
+        assert!(matches!(parse("   \n"), Err(InputError::Empty)));
     }
 
     #[test]
     fn kiro_array_payload_is_rejected() {
-        assert!(matches!(parse("[]"), Err(KiroInputError::NotAnObject)));
+        assert!(matches!(parse("[]"), Err(InputError::NotAnObject)));
     }
 
     #[test]
     fn kiro_missing_tool_name_is_rejected() {
         assert!(matches!(
             parse(r#"{"tool_input":{}}"#),
-            Err(KiroInputError::MissingToolName)
+            Err(InputError::MissingToolName)
         ));
     }
 
@@ -394,25 +330,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn kiro_input_error_display_covers_all_variants() {
-        let bad = serde_json::from_str::<Value>("nope").unwrap_err();
-        assert!(format!("{}", KiroInputError::Empty).contains("empty"));
-        assert!(format!("{}", KiroInputError::Json(bad)).contains("not valid JSON"));
-        assert!(format!("{}", KiroInputError::NotAnObject).contains("JSON object"));
-        assert!(format!("{}", KiroInputError::MissingToolName).contains("tool_name"));
-        assert!(
-            format!("{}", KiroInputError::UnsupportedEvent("postToolUse".into()))
-                .contains("postToolUse")
-        );
-    }
-
     use crate::testing::proptest::arbitrary_utf8_bytes;
     use proptest::prelude::*;
 
     proptest! {
         // parse() is total over arbitrary input strings: it returns
-        // Ok(HookInput) or one of the structured KiroInputError variants
+        // Ok(HookInput) or one of the structured InputError variants
         // and never panics. Drives the fail-closed contract at the
         // adapter boundary.
         #[test]
@@ -444,9 +367,9 @@ mod tests {
         ) {
             match parse(&body) {
                 Err(
-                    KiroInputError::NotAnObject
-                    | KiroInputError::MissingToolName
-                    | KiroInputError::UnsupportedEvent(_),
+                    InputError::NotAnObject
+                    | InputError::MissingToolName
+                    | InputError::UnsupportedEvent { .. },
                 ) => {},
                 other => prop_assert!(
                     false,

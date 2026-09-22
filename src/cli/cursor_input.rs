@@ -33,80 +33,52 @@
 
 use serde_json::{Map, Value};
 
+use super::input_helpers::{
+    InputError, decode_args, first_non_empty, hook_input, normalize_at_mcp, take_first_string,
+};
 use crate::hook_input::HookInput;
 
-/// Normalise a Cursor stdin body into a [`HookInput`].
-pub(super) fn parse(body: &str) -> Result<HookInput, CursorInputError> {
-    if body.trim().is_empty() {
-        return Err(CursorInputError::Empty);
-    }
-    let value: Value = serde_json::from_str(body).map_err(CursorInputError::Json)?;
-    let Value::Object(mut map) = value else {
-        return Err(CursorInputError::NotAnObject);
-    };
+/// Hook events this adapter understands, quoted verbatim in
+/// [`InputError::UnsupportedEvent`].
+const CURSOR_EVENTS: &str =
+    "preToolUse / beforeShellExecution / beforeReadFile / beforeMCPExecution";
 
-    let event = map
-        .remove("hook_event_name")
-        .or_else(|| map.remove("hookEventName"))
-        .and_then(|v| v.as_str().map(str::to_owned));
+/// Normalise a Cursor stdin body into a [`HookInput`]. Every failure
+/// maps to `core.engine.invalid-payload` at the CLI boundary so Cursor
+/// stays fail-closed (exit 2 + `permission:deny` JSON).
+pub(super) fn parse(body: &str) -> Result<HookInput, InputError> {
+    let mut map = super::input_helpers::parse_object(body)?;
+
+    let event = take_first_string(&mut map, &["hook_event_name", "hookEventName"]);
 
     let raw_input = map
         .remove("tool_input")
         .or_else(|| map.remove("toolInput"))
         .unwrap_or(Value::Null);
-    let args = decode_args(raw_input);
+    let args = decode_args(raw_input, "text");
 
     let (tool_name, tool_input) = match event.as_deref().unwrap_or("preToolUse") {
         "preToolUse" => {
-            let raw_name = map
-                .remove("tool_name")
-                .or_else(|| map.remove("toolName"))
-                .and_then(|v| v.as_str().map(str::to_owned))
-                .ok_or(CursorInputError::MissingToolName)?;
+            let raw_name = take_first_string(&mut map, &["tool_name", "toolName"])
+                .ok_or(InputError::MissingToolName)?;
             normalize(&raw_name, args, &map)
         },
         "beforeShellExecution" => ("Bash".to_string(), reshape_bash(args, &map)),
         "beforeReadFile" => ("Read".to_string(), reshape_path(args, &map)),
         "beforeMCPExecution" => {
-            let name = mcp_name(&map, &args).ok_or(CursorInputError::MissingToolName)?;
+            let name = mcp_name(&map, &args).ok_or(InputError::MissingToolName)?;
             (name, Value::Object(args))
         },
-        other => return Err(CursorInputError::UnsupportedEvent(other.to_string())),
+        other => {
+            return Err(InputError::UnsupportedEvent {
+                field: "hook_event_name",
+                name: Some(other.to_string()),
+                expected: CURSOR_EVENTS,
+            });
+        },
     };
 
-    Ok(HookInput {
-        tool_name,
-        tool_input,
-    })
-}
-
-/// Reasons a Cursor payload failed to normalise. Every variant maps to
-/// `core.engine.invalid-payload` at the CLI boundary so Cursor stays
-/// fail-closed (exit 2 + `permission:deny` JSON). The enum only exists
-/// to make stderr messages actionable.
-#[derive(Debug)]
-pub(super) enum CursorInputError {
-    Empty,
-    Json(serde_json::Error),
-    NotAnObject,
-    MissingToolName,
-    UnsupportedEvent(String),
-}
-
-impl std::fmt::Display for CursorInputError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "hook payload is empty"),
-            Self::Json(err) => write!(f, "hook payload is not valid JSON ({err})"),
-            Self::NotAnObject => write!(f, "hook payload must be a JSON object"),
-            Self::MissingToolName => write!(f, "hook payload is missing tool_name field"),
-            Self::UnsupportedEvent(name) => write!(
-                f,
-                "unsupported hook_event_name: {name} (expected preToolUse / \
-                 beforeShellExecution / beforeReadFile / beforeMCPExecution)"
-            ),
-        }
-    }
+    Ok(hook_input(tool_name, tool_input))
 }
 
 fn normalize(
@@ -134,63 +106,14 @@ fn normalize(
     }
 }
 
-/// Decode the `tool_input` field. Object → object; JSON-encoded object
-/// string → re-parsed object; any other string → `{"text": "<raw>"}`;
-/// null → empty object; anything else → `{"text": <value>}`. We never
-/// panic or surface a parse error here — invalid args degrade to a
-/// generic input the engine evaluates best-effort.
-fn decode_args(raw: Value) -> Map<String, Value> {
-    match raw {
-        Value::Object(map) => map,
-        Value::String(s) => {
-            if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&s) {
-                map
-            } else {
-                let mut m = Map::new();
-                m.insert("text".into(), Value::String(s));
-                m
-            }
-        },
-        Value::Null => Map::new(),
-        other => {
-            let mut m = Map::new();
-            m.insert("text".into(), other);
-            m
-        },
-    }
-}
-
-/// `@server/tool` → `mcp__server__tool`. Mirrors
-/// `kiro_input::normalize_at_mcp`: three or more segments collapse extra
-/// slashes into underscores (`@a/b/c` → `mcp__a__b_c`); empty segments
-/// return `None` so the caller keeps the raw name.
-fn normalize_at_mcp(name: &str) -> Option<String> {
-    let rest = name.strip_prefix('@')?;
-    let mut parts = rest.split('/');
-    let server = parts.next()?;
-    let tool = parts.next()?;
-    if server.is_empty() || tool.is_empty() {
-        return None;
-    }
-    let mut tool_full = String::from(tool);
-    for extra in parts {
-        if extra.is_empty() {
-            return None;
-        }
-        tool_full.push('_');
-        tool_full.push_str(extra);
-    }
-    Some(format!("mcp__{server}__{tool_full}"))
-}
-
 /// Build `mcp__<server>__<tool>` from `metadata.server` / `tool_name`
 /// (or their root / args fallbacks). Whitespace, `/`, and `.` in either
 /// segment are normalised to `_` so the result is a valid MCP name.
 fn mcp_name(root: &Map<String, Value>, args: &Map<String, Value>) -> Option<String> {
     let metadata = root.get("metadata").and_then(Value::as_object);
     let candidates = [metadata, Some(root), Some(args)];
-    let server = find_str(&candidates, &["server", "server_name", "serverName"])?;
-    let tool = find_str(&candidates, &["tool_name", "toolName", "tool", "name"])?;
+    let server = first_non_empty(&candidates, &["server", "server_name", "serverName"])?;
+    let tool = first_non_empty(&candidates, &["tool_name", "toolName", "tool", "name"])?;
     Some(format!(
         "mcp__{}__{}",
         sanitize_mcp_segment(&server),
@@ -209,42 +132,6 @@ fn sanitize_mcp_segment(segment: &str) -> String {
             }
         })
         .collect()
-}
-
-/// First non-empty string value for any of `keys`, scanning each map in
-/// `maps` order. `None` entries (e.g. a missing `metadata` object) are
-/// skipped.
-fn find_str(maps: &[Option<&Map<String, Value>>], keys: &[&str]) -> Option<String> {
-    for map in maps.iter().flatten() {
-        for key in keys {
-            if let Some(s) = map.get(*key).and_then(Value::as_str)
-                && !s.is_empty()
-            {
-                return Some(s.to_string());
-            }
-        }
-    }
-    None
-}
-
-/// First non-empty string for any of `keys`, scanning `args` then
-/// `root`. Used for the scalar `command` / `content` fallbacks where the
-/// canonical key may live in `tool_input` or on the root payload.
-fn first_string(
-    args: &Map<String, Value>,
-    root: &Map<String, Value>,
-    keys: &[&str],
-) -> Option<String> {
-    for map in [args, root] {
-        for key in keys {
-            if let Some(s) = map.get(*key).and_then(Value::as_str)
-                && !s.is_empty()
-            {
-                return Some(s.to_string());
-            }
-        }
-    }
-    None
 }
 
 /// Path lookup priority across `args` then `root`: `file_path` → `path`
@@ -295,7 +182,8 @@ fn needs_fill(args: &Map<String, Value>, key: &str, treat_empty_as_missing: bool
 
 fn reshape_bash(mut args: Map<String, Value>, root: &Map<String, Value>) -> Value {
     if needs_fill(&args, "command", true)
-        && let Some(cmd) = first_string(&args, root, &["command", "cmd", "script"])
+        && let Some(cmd) =
+            first_non_empty(&[Some(&args), Some(root)], &["command", "cmd", "script"])
     {
         args.insert("command".into(), Value::String(cmd));
     }
@@ -318,7 +206,10 @@ fn reshape_write(mut args: Map<String, Value>, root: &Map<String, Value>) -> Val
         args.insert("file_path".into(), Value::String(path));
     }
     if needs_fill(&args, "content", false)
-        && let Some(content) = first_string(&args, root, &["content", "text", "new_content"])
+        && let Some(content) = first_non_empty(
+            &[Some(&args), Some(root)],
+            &["content", "text", "new_content"],
+        )
     {
         args.insert("content".into(), Value::String(content));
     }
@@ -332,12 +223,18 @@ fn reshape_edit(mut args: Map<String, Value>, root: &Map<String, Value>) -> Valu
         args.insert("file_path".into(), Value::String(path));
     }
     if needs_fill(&args, "old_string", false)
-        && let Some(old) = first_string(&args, root, &["old_string", "oldText", "old"])
+        && let Some(old) = first_non_empty(
+            &[Some(&args), Some(root)],
+            &["old_string", "oldText", "old"],
+        )
     {
         args.insert("old_string".into(), Value::String(old));
     }
     if needs_fill(&args, "new_string", false)
-        && let Some(new) = first_string(&args, root, &["new_string", "newText", "new"])
+        && let Some(new) = first_non_empty(
+            &[Some(&args), Some(root)],
+            &["new_string", "newText", "new"],
+        )
     {
         args.insert("new_string".into(), Value::String(new));
     }
@@ -494,41 +391,38 @@ mod tests {
         let body = r#"{"hook_event_name":"afterFileEdit","tool_name":"Write","tool_input":{}}"#;
         assert!(matches!(
             parse(body),
-            Err(CursorInputError::UnsupportedEvent(_))
+            Err(InputError::UnsupportedEvent { .. })
         ));
     }
 
     #[test]
     fn cursor_empty_body_is_rejected() {
-        assert!(matches!(parse(""), Err(CursorInputError::Empty)));
-        assert!(matches!(parse("   \n"), Err(CursorInputError::Empty)));
+        assert!(matches!(parse(""), Err(InputError::Empty)));
+        assert!(matches!(parse("   \n"), Err(InputError::Empty)));
     }
 
     #[test]
     fn cursor_invalid_json_is_rejected() {
-        assert!(matches!(parse("not-json"), Err(CursorInputError::Json(_))));
+        assert!(matches!(parse("not-json"), Err(InputError::Json(_))));
     }
 
     #[test]
     fn cursor_array_payload_is_rejected() {
-        assert!(matches!(parse("[]"), Err(CursorInputError::NotAnObject)));
+        assert!(matches!(parse("[]"), Err(InputError::NotAnObject)));
     }
 
     #[test]
     fn cursor_pretooluse_missing_tool_name_is_rejected() {
         assert!(matches!(
             parse(r#"{"tool_input":{}}"#),
-            Err(CursorInputError::MissingToolName)
+            Err(InputError::MissingToolName)
         ));
     }
 
     #[test]
     fn cursor_before_mcp_execution_missing_server_is_rejected() {
         let body = r#"{"hook_event_name":"beforeMCPExecution","tool_input":{}}"#;
-        assert!(matches!(
-            parse(body),
-            Err(CursorInputError::MissingToolName)
-        ));
+        assert!(matches!(parse(body), Err(InputError::MissingToolName)));
     }
 
     #[test]
@@ -581,28 +475,12 @@ mod tests {
         assert_eq!(input.tool_name, "mcp__acme__pkg_sub_tool");
     }
 
-    #[test]
-    fn cursor_input_error_display_covers_all_variants() {
-        let bad = serde_json::from_str::<Value>("nope").unwrap_err();
-        assert!(format!("{}", CursorInputError::Empty).contains("empty"));
-        assert!(format!("{}", CursorInputError::Json(bad)).contains("not valid JSON"));
-        assert!(format!("{}", CursorInputError::NotAnObject).contains("JSON object"));
-        assert!(format!("{}", CursorInputError::MissingToolName).contains("tool_name"));
-        assert!(
-            format!(
-                "{}",
-                CursorInputError::UnsupportedEvent("afterFileEdit".into())
-            )
-            .contains("afterFileEdit")
-        );
-    }
-
     use crate::testing::proptest::arbitrary_utf8_bytes;
     use proptest::prelude::*;
 
     proptest! {
         // parse() is total over arbitrary input strings: it returns
-        // Ok(HookInput) or one of the structured CursorInputError
+        // Ok(HookInput) or one of the structured InputError
         // variants and never panics. Drives the fail-closed contract at
         // the adapter boundary.
         #[test]
@@ -629,9 +507,9 @@ mod tests {
         ) {
             match parse(&body) {
                 Err(
-                    CursorInputError::NotAnObject
-                    | CursorInputError::MissingToolName
-                    | CursorInputError::UnsupportedEvent(_),
+                    InputError::NotAnObject
+                    | InputError::MissingToolName
+                    | InputError::UnsupportedEvent { .. },
                 ) => {},
                 other => prop_assert!(
                     false,
