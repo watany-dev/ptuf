@@ -110,6 +110,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[[test]] required-features = ["testing"]` の付け忘れでテストが黙って
   skip される状態を解消した。Makefile / CI / docs の `--features testing`
   指定 (10 箇所) も削除。(#215)
+- lib テストの CWD 競合を解消: プロセス CWD を読むテストも `CwdGuard` と
+  同じ `CWD_LOCK` を取るようにした (PBT が同一バイナリに移り並列度が
+  上がったことで顕在化した flake)。(#215)
 
 ## [0.8.0] - 2026-09-17
 
