@@ -9,11 +9,6 @@ pub(crate) mod git;
 pub(crate) mod injection_content;
 pub(crate) mod patterns;
 pub(crate) mod project_hygiene;
-// Legacy Rust oracle for `core.network.remote-script-pipe`. The engine
-// serves the rule from `builtins.yaml`; this implementation only backs the
-// parity tests in `builtin_dsl`, so it is not compiled into production.
-#[cfg(test)]
-pub(crate) mod remote_pipe;
 pub(crate) mod self_protection;
 pub(crate) mod sensitive_bash_read;
 pub(crate) mod sensitive_net;

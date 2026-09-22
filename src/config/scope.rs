@@ -61,6 +61,45 @@ impl EnvLookup for SystemEnv {
     }
 }
 
+/// In-memory [`EnvLookup`] for tests, so they never read the host's
+/// real environment. This is the crate's single env test double: every
+/// module needing a hermetic env builds one of these rather than
+/// redefining its own.
+#[cfg(test)]
+pub(crate) struct MapEnv {
+    vars: std::collections::HashMap<String, OsString>,
+}
+
+#[cfg(test)]
+impl MapEnv {
+    /// Env holding exactly `pairs` and nothing else.
+    pub(crate) fn new(pairs: &[(&str, &str)]) -> Self {
+        Self {
+            vars: pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), OsString::from(*v)))
+                .collect(),
+        }
+    }
+
+    /// Env where every lookup misses.
+    pub(crate) fn empty() -> Self {
+        Self::new(&[])
+    }
+
+    /// Env holding only `HOME`.
+    pub(crate) fn with_home(home: &str) -> Self {
+        Self::new(&[("HOME", home)])
+    }
+}
+
+#[cfg(test)]
+impl EnvLookup for MapEnv {
+    fn var_os(&self, key: &str) -> Option<OsString> {
+        self.vars.get(key).cloned()
+    }
+}
+
 /// Build the default layout for the current process's environment.
 pub(crate) fn default_layout(repo_root: Option<&Path>) -> Layout {
     layout_for(repo_root, &SystemEnv)
@@ -98,29 +137,7 @@ fn user_config_path(env: &dyn EnvLookup) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use std::path::PathBuf;
-
-    /// In-memory env used by tests so they never touch real env vars.
-    struct MapEnv {
-        vars: HashMap<String, OsString>,
-    }
-
-    impl MapEnv {
-        fn new(pairs: &[(&str, &str)]) -> Self {
-            let mut vars = HashMap::new();
-            for (k, v) in pairs {
-                vars.insert((*k).to_string(), OsString::from(*v));
-            }
-            MapEnv { vars }
-        }
-    }
-
-    impl EnvLookup for MapEnv {
-        fn var_os(&self, key: &str) -> Option<OsString> {
-            self.vars.get(key).cloned()
-        }
-    }
 
     #[test]
     fn ordered_paths_skips_none_and_preserves_priority() {

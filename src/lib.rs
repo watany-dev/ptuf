@@ -14,9 +14,8 @@ pub mod rules;
 pub(crate) mod self_paths;
 pub(crate) mod update;
 
-#[cfg(any(test, feature = "testing"))]
-#[doc(hidden)]
-pub mod testing;
+#[cfg(test)]
+mod testing;
 
 pub use decision::{Decision, aggregate};
 pub use engine::{Engine, EngineError, Outcome};
@@ -75,6 +74,13 @@ mod tests {
 
     static CWD_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Serializes tests that read the process CWD against the ones that
+    /// change it via [`CwdGuard`]; without it a concurrent `chdir` into a
+    /// fixture repo makes a CWD-reading test observe foreign config.
+    fn lock_cwd() -> std::sync::MutexGuard<'static, ()> {
+        CWD_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     struct CwdGuard {
         original: PathBuf,
         _lock: std::sync::MutexGuard<'static, ()>,
@@ -82,7 +88,7 @@ mod tests {
 
     impl CwdGuard {
         fn change_to(target: &std::path::Path) -> std::io::Result<Self> {
-            let lock = CWD_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let lock = lock_cwd();
             let original = std::env::current_dir()?;
             std::env::set_current_dir(target)?;
             Ok(Self {
@@ -118,6 +124,7 @@ mod tests {
 
     #[test]
     fn decide_returns_allow_by_default() {
+        let _lock = lock_cwd();
         assert_eq!(decide(&sample("Bash")), Decision::Allow);
         assert_eq!(decide(&sample("Read")), Decision::Allow);
     }
@@ -128,6 +135,7 @@ mod tests {
         // `Engine::for_cwd` / `Engine::new` tests in `engine.rs`; we
         // avoid replicating those here because changing the process
         // CWD is racy under cargo's parallel test execution.
+        let _lock = lock_cwd();
         let outcome = try_decide(&sample("Bash"));
         assert!(matches!(outcome, Ok(Decision::Allow)));
     }

@@ -7,13 +7,17 @@
 //! (`$HOME/.cursor/hooks.json`). The `--scope` / `--root` / `--hooks`
 //! flags select between them; see [`CursorInitOptions`].
 
-use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
+use super::json;
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
+
+/// Basename used for the sibling temp file when the destination path
+/// carries no file name of its own (see
+/// [`sibling_install_tmp_path`](super::sibling_install_tmp_path)).
+const TMP_BASENAME: &str = "hooks.json";
 
 /// Matcher recorded in [`InstallOutcome`] and written to the hook entry.
 /// Cursor matches the agent tool name against this regex before invoking
@@ -61,11 +65,6 @@ pub struct CursorInitOptions {
 pub(crate) struct TargetPaths {
     pub root: PathBuf,
     pub hooks_path: PathBuf,
-}
-
-/// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub(crate) fn detect_binary() -> String {
-    super::detect_binary_impl()
 }
 
 /// Resolve the `.cursor/hooks.json` target for the requested scope.
@@ -121,10 +120,10 @@ pub(crate) fn install(
     dry_run: bool,
 ) -> Result<InstallOutcome, InitError> {
     let command = format!("{ptuf_binary} hook cursor");
-    let mut root = read_hooks(&targets.hooks_path)?;
+    let mut root = json::read_object(&targets.hooks_path)?;
     let before = root.clone();
 
-    ensure_version(&mut root, &targets.hooks_path)?;
+    json::ensure_version(&mut root, &targets.hooks_path)?;
     let had_existing = normalise_existing_hooks(&mut root, &command);
     if !had_existing {
         append_hook(&mut root, &targets.hooks_path, &command)?;
@@ -135,7 +134,7 @@ pub(crate) fn install(
     } else if dry_run {
         InstallStatus::WouldInstall
     } else {
-        write_json_atomically(&targets.hooks_path, &root)?;
+        super::write_install_json(&targets.hooks_path, &root, TMP_BASENAME)?;
         InstallStatus::Installed
     };
 
@@ -149,21 +148,6 @@ pub(crate) fn install(
         matcher: DEFAULT_MATCHER.to_string(),
         command,
     })
-}
-
-fn read_hooks(path: &Path) -> Result<Value, InitError> {
-    match fs::read_to_string(path) {
-        Ok(s) if s.trim().is_empty() => Ok(json!({})),
-        Ok(s) => serde_json::from_str(&s).map_err(|e| InitError::Json {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        }),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(json!({})),
-        Err(e) => Err(InitError::Io {
-            path: path.to_path_buf(),
-            source: e,
-        }),
-    }
 }
 
 pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
@@ -220,43 +204,8 @@ fn normalise_existing_hooks(root: &mut Value, command: &str) -> bool {
     found
 }
 
-fn ensure_version(root: &mut Value, hooks_path: &Path) -> Result<(), InitError> {
-    let Some(map) = root.as_object_mut() else {
-        return Err(InitError::Schema {
-            path: hooks_path.to_path_buf(),
-            message: "top-level value must be a JSON object".into(),
-        });
-    };
-    match map.get("version") {
-        None => {
-            map.insert("version".to_string(), json!(1));
-            Ok(())
-        },
-        Some(v) if v == &json!(1) => Ok(()),
-        Some(other) => Err(InitError::Schema {
-            path: hooks_path.to_path_buf(),
-            message: format!("`version` must be 1 (found {other})"),
-        }),
-    }
-}
-
 fn append_hook(root: &mut Value, hooks_path: &Path, command: &str) -> Result<(), InitError> {
-    let map = root.as_object_mut().ok_or_else(|| InitError::Schema {
-        path: hooks_path.to_path_buf(),
-        message: "top-level value must be a JSON object".into(),
-    })?;
-
-    let hooks = ensure_object(map, "hooks").ok_or_else(|| InitError::Schema {
-        path: hooks_path.to_path_buf(),
-        message: "`hooks` must be an object".into(),
-    })?;
-
-    let pre_tool_use = ensure_array(hooks, "preToolUse").ok_or_else(|| InitError::Schema {
-        path: hooks_path.to_path_buf(),
-        message: "`hooks.preToolUse` must be an array".into(),
-    })?;
-
-    pre_tool_use.push(json!({
+    json::hook_array(root, hooks_path, "preToolUse")?.push(json!({
         "type": "command",
         "command": command,
         "matcher": DEFAULT_MATCHER,
@@ -266,56 +215,11 @@ fn append_hook(root: &mut Value, hooks_path: &Path, command: &str) -> Result<(),
     Ok(())
 }
 
-fn ensure_object<'a>(
-    map: &'a mut Map<String, Value>,
-    key: &str,
-) -> Option<&'a mut Map<String, Value>> {
-    map.entry(key.to_string())
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-}
-
-fn ensure_array<'a>(map: &'a mut Map<String, Value>, key: &str) -> Option<&'a mut Vec<Value>> {
-    map.entry(key.to_string())
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
-}
-
-fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-
-    let mut body = serde_json::to_string_pretty(value).map_err(|e| InitError::Schema {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
-    body.push('\n');
-
-    let tmp = sibling_temp_path(path);
-    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-fn sibling_temp_path(path: &Path) -> PathBuf {
-    super::sibling_install_tmp_path(path, "hooks.json")
-}
-
 #[cfg(test)]
 mod tests {
 
     use super::*;
+    use std::fs;
 
     fn workdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -331,11 +235,6 @@ mod tests {
 
     fn read(path: &Path) -> String {
         fs::read_to_string(path).unwrap()
-    }
-
-    #[test]
-    fn detect_binary_delegates_to_shared_impl() {
-        assert!(!detect_binary().is_empty());
     }
 
     #[test]

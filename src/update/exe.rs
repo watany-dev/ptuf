@@ -63,27 +63,7 @@ impl ExeLocator for FakeExeLocator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::ffi::OsString;
-
-    struct MapEnv(HashMap<String, OsString>);
-
-    impl MapEnv {
-        fn new(pairs: &[(&str, &str)]) -> Self {
-            Self(
-                pairs
-                    .iter()
-                    .map(|(k, v)| ((*k).to_string(), OsString::from(*v)))
-                    .collect(),
-            )
-        }
-    }
-
-    impl EnvLookup for MapEnv {
-        fn var_os(&self, key: &str) -> Option<OsString> {
-            self.0.get(key).cloned()
-        }
-    }
+    use crate::config::scope::MapEnv;
 
     #[test]
     fn compute_cargo_home_prefers_env_var_when_set() {

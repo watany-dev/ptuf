@@ -13,6 +13,7 @@ pub(crate) mod cline;
 pub(crate) mod codex;
 pub(crate) mod copilot;
 pub(crate) mod cursor;
+pub(crate) mod json;
 pub(crate) mod kiro;
 pub(crate) mod opencode;
 pub(crate) mod pi;
@@ -191,17 +192,41 @@ pub(crate) struct InstallOutcome {
     pub command: String,
 }
 
-/// Adapter-specific install reporting carried back to the CLI
-/// dispatcher and renderer. `kiro` is populated only by the Kiro
-/// adapter, whose default mode patches an unbounded set of agent JSON
-/// files. Other adapters install into a single fixed file and have no
-/// per-file breakdown to surface. Kept `pub(crate)` so it does not
-/// inflate the lib crate's public surface — embedded `kiro::install`
-/// callers receive only the bare [`InstallOutcome`].
+/// Install reporting carried back to the CLI dispatcher and renderer.
+///
+/// Every adapter produces an [`InstallOutcome`]; the Kiro adapter's
+/// default mode additionally patches an unbounded set of agent JSON
+/// files and has a per-file breakdown to surface. Modelling that as a
+/// second variant keeps the kiro-only payload off the shape the other
+/// eight adapters return. Kept `pub(crate)` so it does not inflate the
+/// lib crate's public surface — embedded `kiro::install_with_report`
+/// callers receive the pair directly.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct AdapterRunReport {
-    pub outcome: InstallOutcome,
-    pub kiro: Option<kiro::KiroInstallExtras>,
+pub(crate) enum AdapterRunReport {
+    /// An adapter that installs into a fixed set of files and has no
+    /// extra reporting.
+    Simple(InstallOutcome),
+    /// The Kiro adapter, which also reports per-file and per-scope
+    /// details.
+    Kiro {
+        outcome: InstallOutcome,
+        extras: kiro::KiroInstallExtras,
+    },
+}
+
+impl AdapterRunReport {
+    pub(crate) const fn outcome(&self) -> &InstallOutcome {
+        match self {
+            Self::Simple(outcome) | Self::Kiro { outcome, .. } => outcome,
+        }
+    }
+
+    pub(crate) const fn kiro(&self) -> Option<&kiro::KiroInstallExtras> {
+        match self {
+            Self::Simple(_) => None,
+            Self::Kiro { extras, .. } => Some(extras),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -290,6 +315,32 @@ fn restore_one(snap: &PathSnapshot) -> Result<(), InitError> {
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
+    write_atomically_at(path, &sibling_temp_path(path), bytes, FileMode::Secure)
+}
+
+/// Permission bits an atomically written install artefact is created
+/// with. One knob instead of two near-identical writer functions.
+#[derive(Clone, Copy)]
+pub(crate) enum FileMode {
+    /// 0600 — config artefacts (`settings.json`, `hooks.json`,
+    /// `config.toml`): never world-readable on shared hosts.
+    Secure,
+    /// 0700 — hook wrapper scripts the host execs directly.
+    Executable,
+}
+
+/// The crate's single atomic-write primitive: `mkdir -p` the parent,
+/// create `tmp` with `mode` and fill it, then rename it over `path`.
+/// Every init adapter writes through here (via
+/// [`write_install_bytes`] / [`write_install_json`]) so a half-written
+/// settings file is never observable, and so the temp file never exists
+/// with looser permissions than the final one.
+pub(crate) fn write_atomically_at(
+    path: &Path,
+    tmp: &Path,
+    bytes: &[u8],
+    mode: FileMode,
+) -> Result<(), InitError> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -298,37 +349,70 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
             source: e,
         })?;
     }
-    let tmp = sibling_temp_path(path);
-    write_secure(&tmp, bytes).map_err(|e| InitError::Io {
-        path: tmp.clone(),
+    write_with_mode(tmp, bytes, mode).map_err(|e| InitError::Io {
+        path: tmp.to_path_buf(),
         source: e,
     })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
+    fs::rename(tmp, path).map_err(|e| InitError::Io {
         path: path.to_path_buf(),
         source: e,
     })
 }
 
-/// Create `tmp` with mode 0600 on Unix and write `bytes` to it. Used by
-/// every host adapter so freshly installed `settings.json` / `hooks.json`
-/// / `config.toml` files are not world-readable on shared hosts.
+/// Atomically install `bytes` at `path`, writing through the adapter
+/// temp path (`<file_name>.ptuf.{pid}.tmp`, or `<default_name>…` when
+/// `path` has no file name).
+pub(crate) fn write_install_bytes(
+    path: &Path,
+    bytes: &[u8],
+    default_name: &str,
+    mode: FileMode,
+) -> Result<(), InitError> {
+    let tmp = sibling_install_tmp_path(path, default_name);
+    write_atomically_at(path, &tmp, bytes, mode)
+}
+
+/// [`write_install_bytes`] for a JSON document: pretty-printed with a
+/// trailing newline, mode 0600. A serialization failure surfaces as
+/// [`InitError::Schema`] — structurally unreachable for a
+/// [`serde_json::Value`] (no NaN/Inf, string-keyed maps), but cheaper to
+/// propagate than to prove away at each call site.
+pub(crate) fn write_install_json(
+    path: &Path,
+    value: &serde_json::Value,
+    default_name: &str,
+) -> Result<(), InitError> {
+    let mut body = serde_json::to_string_pretty(value).map_err(|e| InitError::Schema {
+        path: path.to_path_buf(),
+        message: e.to_string(),
+    })?;
+    body.push('\n');
+    write_install_bytes(path, body.as_bytes(), default_name, FileMode::Secure)
+}
+
+/// Create `tmp` with `mode`'s permission bits on Unix and write
+/// `bytes` to it.
 ///
-/// Falls back to `fs::write` on non-Unix where mode bits don't apply
+/// Falls back to `fs::write` on non-Unix, where mode bits don't apply
 /// (NTFS ACLs are inherited from the parent directory).
 ///
 /// `create_new` is used so a stale tmp from a previous run can't smuggle
 /// in a looser mode; if one is present we drop it once and retry — same-
 /// pid collisions are possible in tests that re-enter `install` rapidly.
 #[cfg(unix)]
-pub(crate) fn write_secure(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+fn write_with_mode(tmp: &Path, bytes: &[u8], mode: FileMode) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
+    let bits = match mode {
+        FileMode::Secure => 0o600,
+        FileMode::Executable => 0o700,
+    };
     let open = || {
         std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o600)
+            .mode(bits)
             .open(tmp)
     };
     let mut file = match open() {
@@ -344,42 +428,7 @@ pub(crate) fn write_secure(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
-pub(crate) fn write_secure(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    std::fs::write(tmp, bytes)
-}
-
-/// Like [`write_secure`], but creates `tmp` with mode 0700 so the file
-/// is owner-only *executable* — used by the Cline adapter, whose hook is
-/// a wrapper script the host runs directly rather than a config entry.
-///
-/// On non-Unix the mode bits don't apply; NTFS ACLs are inherited from
-/// the parent directory just as with [`write_secure`].
-#[cfg(unix)]
-pub(crate) fn write_executable(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let open = || {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o700)
-            .open(tmp)
-    };
-    let mut file = match open() {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            std::fs::remove_file(tmp)?;
-            open()?
-        },
-        Err(e) => return Err(e),
-    };
-    file.write_all(bytes)?;
-    file.sync_all()
-}
-
-#[cfg(not(unix))]
-pub(crate) fn write_executable(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+fn write_with_mode(tmp: &Path, bytes: &[u8], _mode: FileMode) -> std::io::Result<()> {
     std::fs::write(tmp, bytes)
 }
 
@@ -396,12 +445,12 @@ pub(crate) fn command_invokes_ptuf_hook(cmd: &str, tail: &[&str]) -> bool {
     tokens[n - tail.len()..] == *tail
 }
 
-/// Shared backing for every adapter's `detect_binary`: prefer
-/// `std::env::current_exe()` so the rendered hook command points at
-/// the same binary that ran `ptuf init`, falling back to the literal
-/// `"ptuf"` so the entry remains useful when `current_exe` is
-/// unavailable (e.g. a CI container without a stable absolute path).
-pub(crate) fn detect_binary_impl() -> String {
+/// The binary path rendered into every installed hook command: prefer
+/// `std::env::current_exe()` so the entry points at the same binary
+/// that ran `ptuf init`, falling back to the literal `"ptuf"` so the
+/// entry remains useful when `current_exe` is unavailable (e.g. a CI
+/// container without a stable absolute path).
+pub(crate) fn detect_binary() -> String {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.into_os_string().into_string().ok())
@@ -443,6 +492,7 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
 mod tests {
 
     use super::*;
+    use crate::config::scope::MapEnv;
 
     #[test]
     fn init_error_display_covers_all_variants() {
@@ -691,10 +741,10 @@ mod tests {
     }
 
     #[test]
-    fn detect_binary_impl_returns_a_non_empty_string() {
-        // Every adapter's `detect_binary` delegates here; a non-empty
+    fn detect_binary_returns_a_non_empty_string() {
+        // Every adapter renders this into its hook command; a non-empty
         // string is the contract the host config writers depend on.
-        assert!(!detect_binary_impl().is_empty());
+        assert!(!detect_binary().is_empty());
     }
 
     #[test]
@@ -747,59 +797,84 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn write_secure_surfaces_non_already_exists_open_errors() {
+    fn write_with_mode_surfaces_non_already_exists_open_errors() {
         use std::io::ErrorKind;
-        let dir = workdir("write-secure-open-fail");
-        let blocker = dir.join("blocker");
-        fs::write(&blocker, b"x").unwrap();
-        let tmp = blocker.join("child.tmp");
-        let err = write_secure(&tmp, b"x").expect_err("open on file parent must fail");
-        assert_ne!(err.kind(), ErrorKind::AlreadyExists);
-        let _ = fs::remove_dir_all(&dir);
+        for (label, mode) in [("secure", FileMode::Secure), ("exec", FileMode::Executable)] {
+            let dir = workdir(&format!("write-mode-open-fail-{label}"));
+            let blocker = dir.join("blocker");
+            fs::write(&blocker, b"x").unwrap();
+            let tmp = blocker.join("child.tmp");
+            let err = write_with_mode(&tmp, b"x", mode).expect_err("open on file parent must fail");
+            assert_ne!(err.kind(), ErrorKind::AlreadyExists, "{label}");
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 
     #[cfg(unix)]
     #[test]
-    fn write_executable_surfaces_non_already_exists_open_errors() {
-        use std::io::ErrorKind;
-        let dir = workdir("write-exec-open-fail");
-        let blocker = dir.join("blocker");
-        fs::write(&blocker, b"x").unwrap();
-        let tmp = blocker.join("child.tmp");
-        let err = write_executable(&tmp, b"x").expect_err("open on file parent must fail");
-        assert_ne!(err.kind(), ErrorKind::AlreadyExists);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_secure_retries_when_temp_path_already_exists_as_file() {
-        // `write_secure` opens the temp path with `create_new`, so a
+    fn write_with_mode_retries_when_temp_path_already_exists_as_file() {
+        // `write_with_mode` opens the temp path with `create_new`, so a
         // stale file from a prior crashed run would block the second
         // call. The `AlreadyExists` arm must remove the stale file and
-        // retry; this test pins that retry path.
-        let dir = workdir("write-secure-retry");
-        let tmp = dir.join("payload.tmp");
-        fs::write(&tmp, b"stale").expect("seed stale tmp");
+        // retry; this test pins that retry path for both modes.
+        for (label, mode, bits) in [
+            ("secure", FileMode::Secure, 0o600),
+            ("exec", FileMode::Executable, 0o700),
+        ] {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = workdir(&format!("write-mode-retry-{label}"));
+            let tmp = dir.join("payload.tmp");
+            fs::write(&tmp, b"stale").expect("seed stale tmp");
 
-        write_secure(&tmp, b"fresh").expect("retry must succeed");
-        assert_eq!(fs::read(&tmp).unwrap(), b"fresh");
+            write_with_mode(&tmp, b"fresh", mode).expect("retry must succeed");
+            assert_eq!(fs::read(&tmp).unwrap(), b"fresh", "{label}");
+            let got = fs::metadata(&tmp).unwrap().permissions().mode() & 0o777;
+            assert_eq!(got, bits, "{label} mode");
 
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn write_install_bytes_writes_through_the_adapter_temp_name() {
+        let dir = workdir("write-install-bytes");
+        let target = dir.join("settings.json");
+        write_install_bytes(&target, b"body", "fallback", FileMode::Secure)
+            .expect("install write must succeed");
+        assert_eq!(fs::read(&target).unwrap(), b"body");
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[cfg(unix)]
     #[test]
-    fn write_executable_retries_when_temp_path_already_exists_as_file() {
-        // Mirror of the `write_secure` retry test for the 0700 variant
-        // used by the Cline adapter's wrapper-script installer.
-        let dir = workdir("write-exec-retry");
-        let tmp = dir.join("payload.tmp");
-        fs::write(&tmp, b"stale").expect("seed stale tmp");
+    fn write_install_json_pretty_prints_with_a_trailing_newline() {
+        let dir = workdir("write-install-json");
+        let target = dir.join("hooks.json");
+        write_install_json(&target, &serde_json::json!({"a": 1}), "fallback")
+            .expect("json install write must succeed");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "{\n  \"a\": 1\n}\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
-        write_executable(&tmp, b"fresh").expect("retry must succeed");
-        assert_eq!(fs::read(&tmp).unwrap(), b"fresh");
+    #[test]
+    fn write_install_bytes_propagates_create_dir_all_error() {
+        let dir = workdir("write-install-parent-is-file");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, b"x").unwrap();
+        let target = blocker.join("nested/settings.json");
+        let err = write_install_bytes(&target, b"body", "fallback", FileMode::Secure)
+            .expect_err("create_dir_all must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
+    #[test]
+    fn write_install_bytes_propagates_rename_error_when_target_is_a_directory() {
+        let dir = workdir("write-install-target-is-dir");
+        let target = dir.join("settings.json");
+        fs::create_dir_all(&target).expect("mkdir target");
+        let err = write_install_bytes(&target, b"body", "fallback", FileMode::Secure)
+            .expect_err("rename onto dir must fail");
+        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -816,13 +891,7 @@ mod tests {
     /// Hermetic wrapper for detect tests: an empty env so results never
     /// depend on the host's real `XDG_CONFIG_HOME`.
     fn detect_hermetic(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> {
-        struct EmptyEnv;
-        impl EnvLookup for EmptyEnv {
-            fn var_os(&self, _key: &str) -> Option<std::ffi::OsString> {
-                None
-            }
-        }
-        detect_agents_with_env(cwd, home, &EmptyEnv)
+        detect_agents_with_env(cwd, home, &MapEnv::empty())
     }
 
     #[test]
@@ -1031,11 +1100,8 @@ mod tests {
 
     #[test]
     fn detect_agents_finds_opencode_via_injected_xdg_config_home() {
-        struct XdgEnv(PathBuf);
-        impl EnvLookup for XdgEnv {
-            fn var_os(&self, key: &str) -> Option<std::ffi::OsString> {
-                (key == "XDG_CONFIG_HOME").then(|| self.0.clone().into_os_string())
-            }
+        fn xdg_env(dir: &Path) -> MapEnv {
+            MapEnv::new(&[("XDG_CONFIG_HOME", dir.to_str().expect("utf-8 path"))])
         }
 
         let dir = workdir("detect-opencode-xdg");
@@ -1044,11 +1110,8 @@ mod tests {
         fs::create_dir_all(xdg.join("opencode")).expect("mkdir xdg/opencode");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
-        let found = detect_agents_with_env(
-            Some(dir.as_path()),
-            Some(home.as_path()),
-            &XdgEnv(xdg.clone()),
-        );
+        let found =
+            detect_agents_with_env(Some(dir.as_path()), Some(home.as_path()), &xdg_env(&xdg));
         assert_eq!(found, vec![HookAgent::Opencode]);
 
         // Same env but the XDG dir has no opencode/ → not detected.
@@ -1057,7 +1120,7 @@ mod tests {
         let found = detect_agents_with_env(
             Some(dir.as_path()),
             Some(home.as_path()),
-            &XdgEnv(empty_xdg),
+            &xdg_env(&empty_xdg),
         );
         assert!(found.is_empty());
         let _ = fs::remove_dir_all(&dir);

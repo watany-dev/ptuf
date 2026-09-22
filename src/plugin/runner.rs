@@ -122,6 +122,14 @@ pub(crate) fn run_str(path: &Path, source: &str) -> Result<RunReport, PluginErro
     run_loaded(path, load_str(path, source)?)
 }
 
+// Same, for the embedded `builtins.yaml`, which legitimately owns the
+// reserved `core.` rule-id namespace that `load_str` rejects. Uses the
+// very loader production builds the builtin rule set with.
+#[cfg(test)]
+pub(crate) fn run_builtin_str(path: &Path, source: &str) -> Result<RunReport, PluginError> {
+    run_loaded(path, super::loader::load_builtin_str(path, source)?)
+}
+
 struct PreparedCase {
     rule: PluginRule,
     raw_case: RawTestCase,

@@ -1,4 +1,4 @@
-//! Property tests for [`ptuf::engine`]'s filter pipeline.
+//! Property tests for [`crate::engine`]'s filter pipeline.
 //!
 //! The functions under test live in `src/engine/filter.rs`
 //! (`is_pack_disabled`, `apply_rule_override`, `effective_severity`,
@@ -15,24 +15,22 @@
 //! See `docs/design/testing.md` (§ "engine_proptest" cluster) for the
 //! place this file occupies in the PBT layering.
 
-#![allow(clippy::expect_used)]
-
 use std::sync::Arc;
 
 use proptest::prelude::*;
 
-use ptuf::audit::MemorySink;
-use ptuf::audit::record::AuditRecord;
-use ptuf::audit::{AuditError, AuditSink};
-use ptuf::config::{Allowlist, Config, Mode, RuleOverride};
-use ptuf::decision::DecisionKind;
-use ptuf::plugin::dsl::compile;
-use ptuf::plugin::{PluginSet, load_str};
-use ptuf::testing::proptest::{
+use crate::audit::MemorySink;
+use crate::audit::record::AuditRecord;
+use crate::audit::{AuditError, AuditSink};
+use crate::config::{Allowlist, Config, Mode, RuleOverride};
+use crate::decision::DecisionKind;
+use crate::plugin::dsl::compile;
+use crate::plugin::{PluginSet, load_str};
+use crate::testing::proptest::{
     arbitrary_command, config_with_filters, decision_kind, pack_override, rule_override,
     safe_command_string, severity,
 };
-use ptuf::{Decision, Engine, HookInput};
+use crate::{Decision, Engine, HookInput};
 
 const HARD_DENY_RULE_ID: &str = "core.filesystem.destructive-rm";
 const PLUGIN_RULE_ID: &str = "pack.demo.no-curl";

@@ -447,27 +447,7 @@ fn expand_home(raw: &str, env: &dyn EnvLookup) -> PathBuf {
 mod tests {
 
     use super::*;
-    use std::collections::HashMap;
-    use std::ffi::OsString;
-
-    struct MapEnv(HashMap<String, OsString>);
-
-    impl MapEnv {
-        fn with_home(home: &str) -> Self {
-            let mut m = HashMap::new();
-            m.insert("HOME".to_string(), OsString::from(home));
-            Self(m)
-        }
-        fn empty() -> Self {
-            Self(HashMap::new())
-        }
-    }
-
-    impl EnvLookup for MapEnv {
-        fn var_os(&self, key: &str) -> Option<OsString> {
-            self.0.get(key).cloned()
-        }
-    }
+    use crate::config::scope::MapEnv;
 
     fn input(tool: &str, file_path: serde_json::Value) -> HookInput {
         HookInput {

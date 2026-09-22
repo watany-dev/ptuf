@@ -1,11 +1,13 @@
 //! Classify a string against the protected-credentials shapes defined in
 //! `docs/design/policy-packs.md` §`core.secrets`.
 //!
-//! The legacy `crate::rules::patterns::SENSITIVE_PATH` regex remains
-//! the source of truth for the existing `core.secrets.sensitive-path-to-network`
-//! rule. This module adds an *additive* per-variant view so other tools
-//! (`Read`, `Edit`, `Write`, plugin DSL) can match a typed
-//! [`SensitiveKind`] without disturbing the existing rule's tests.
+//! This is the single classifier for the whole crate. Bash-side rules
+//! (`sensitive-path-to-network`, `sensitive-bash-read`) reach it through
+//! [`matches()`]; file-tool and MCP surfaces use [`classify`] /
+//! [`classify_into`] for the typed [`SensitiveKind`] view; the audit
+//! redactor shares this module's PEM header fragment. Keeping one
+//! implementation is what stops the two surfaces from drifting — a
+//! divergence means one of them lets a secret shape through.
 
 use regex::Regex;
 use std::borrow::Cow;
@@ -131,6 +133,15 @@ fn build(pat: &str) -> Regex {
 // `ls`-grade input. Keep each needle in sync with its pattern literal;
 // the `pbt_classify_matches_ungated_probes` property test pins the
 // equivalence.
+/// Canonical PEM private-key header / footer patterns. The audit
+/// redactor (`crate::audit::redaction`) builds its blob regex from the
+/// same two fragments, so "what counts as a private key block" has one
+/// definition. `(?:[A-Z]+\s+)*` makes the type label optional, so bare
+/// PKCS#8 (`-----BEGIN PRIVATE KEY-----`) classifies alongside the
+/// labelled RSA / EC / OPENSSH forms.
+pub(crate) const PEM_PRIVATE_KEY_BEGIN: &str = r"-----BEGIN\s+(?:[A-Z]+\s+)*PRIVATE\s+KEY-----";
+pub(crate) const PEM_PRIVATE_KEY_END: &str = r"-----END\s+(?:[A-Z]+\s+)*PRIVATE\s+KEY-----";
+
 const PROBES: &[(SensitiveKind, &str, &str)] = &[
     (
         SensitiveKind::SshDir,
@@ -178,11 +189,7 @@ const PROBES: &[(SensitiveKind, &str, &str)] = &[
         r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.pypirc)\b",
     ),
     (SensitiveKind::Tfstate, ".tfstate", r"\S+(?i-u:\.tfstate)\b"),
-    (
-        SensitiveKind::PemBlob,
-        "-----begin",
-        r"-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----",
-    ),
+    (SensitiveKind::PemBlob, "-----begin", PEM_PRIVATE_KEY_BEGIN),
 ];
 
 /// Per-variant regexes, indexed parallel to [`PROBES`]. Each slot
@@ -247,6 +254,25 @@ fn fold_char(c: char) -> char {
         '\u{03B7}' | '\u{0397}' => 'h',
         _ => c,
     }
+}
+
+/// True when `token` matches any sensitive shape. Short-circuits on the
+/// first hit and allocates nothing, so rules that only need the yes/no
+/// answer (`sensitive-path-to-network`, `sensitive-bash-read`) do not
+/// pay for the [`classify`] result vector.
+pub(crate) fn matches(token: &str) -> bool {
+    let folded = fold_sensitive_homoglyphs(token);
+    let token = folded.as_ref();
+    let mask = needle_mask(token.as_bytes());
+    if mask == 0 {
+        return false;
+    }
+    PROBES.iter().enumerate().any(|(idx, (_, _, pat))| {
+        mask & (1_u16 << idx) != 0
+            && SENSITIVE_REGEXES[idx]
+                .get_or_init(|| build(pat))
+                .is_match(token)
+    })
 }
 
 /// Inspect a single string token and return every sensitive shape it
@@ -532,10 +558,21 @@ mod tests {
 
     #[test]
     fn classifies_pem_blob() {
-        assert!(
-            kinds("-----BEGIN RSA PRIVATE KEY-----").contains(&SensitiveKind::PemBlob),
-            "PEM header should classify"
-        );
+        // The type label is optional: bare PKCS#8 is the most common
+        // modern form and used to slip past the classifier while the
+        // audit redactor (which required no label) caught it — the
+        // divergence that having two patterns produced.
+        for header in [
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "-----BEGIN EC PRIVATE KEY-----",
+            "-----BEGIN OPENSSH PRIVATE KEY-----",
+            "-----BEGIN PRIVATE KEY-----",
+        ] {
+            assert!(
+                kinds(header).contains(&SensitiveKind::PemBlob),
+                "PEM header should classify: {header:?}"
+            );
+        }
     }
 
     #[test]
@@ -741,15 +778,36 @@ mod tests {
             );
         }
 
-        // Every B2-anchored dotenv literal must match the legacy SENSITIVE_PATH regex.
+        // Every B2-anchored dotenv literal is a hit for the yes/no lane
+        // too, so Bash-side rules see what the typed view sees.
         #[test]
-        fn pbt_anchored_dotenv_literals_match_sensitive_path(
+        fn pbt_anchored_dotenv_literals_match(
             token in crate::testing::proptest::dotenv_anchored_literal_token(),
         ) {
-            prop_assert!(
-                crate::rules::patterns::SENSITIVE_PATH.is_match(&token),
-                "SENSITIVE_PATH missed {token:?}",
-            );
+            prop_assert!(matches(&token), "matches missed {token:?}");
+        }
+
+        // `matches` is the short-circuiting twin of `classify`; the two
+        // lanes share PROBES, and these pin that they stay in step over
+        // arbitrary ASCII, credential-shaped tokens, and homoglyph
+        // substitutions alike.
+        #[test]
+        fn pbt_matches_agrees_with_classify(s in "[ -~]{0,80}") {
+            prop_assert_eq!(matches(&s), !classify(&s).is_empty(), "diverged on {:?}", s);
+        }
+
+        #[test]
+        fn pbt_matches_agrees_with_classify_on_secret_shapes(
+            s in crate::testing::proptest::sensitive_shaped_token(),
+        ) {
+            prop_assert_eq!(matches(&s), !classify(&s).is_empty(), "diverged on {:?}", s);
+        }
+
+        #[test]
+        fn pbt_matches_agrees_with_classify_on_homoglyphs(
+            (token, _needle) in crate::testing::proptest::homoglyph_substituted_needle(),
+        ) {
+            prop_assert_eq!(matches(&token), !classify(&token).is_empty());
         }
 
         // Negative space: lookalikes without anchors must stay clean.

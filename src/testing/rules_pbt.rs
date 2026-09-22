@@ -4,13 +4,11 @@
 //! negative-space invariant that needs `safe_command_string()` together
 //! with the full `RULES` slice.
 
-#![allow(clippy::expect_used)]
-
 use proptest::prelude::*;
 
-use ptuf::HookInput;
-use ptuf::rules::evaluate_all;
-use ptuf::testing::proptest::{safe_command_string, safe_heads};
+use crate::HookInput;
+use crate::rules::evaluate_all;
+use crate::testing::proptest::{safe_command_string, safe_heads};
 
 fn bash_input(command: String) -> HookInput {
     HookInput {
@@ -31,7 +29,7 @@ fn safe_heads_never_fire_any_builtin_rule() {
         for suffix in suffixes {
             let cmd = format!("{head}{suffix}");
             let input = bash_input(cmd.clone());
-            let facts = ptuf::facts::extract(&input);
+            let facts = crate::facts::extract(&input);
             let decisions = evaluate_all(&facts, &input);
             assert!(
                 decisions.is_empty(),
@@ -45,7 +43,7 @@ proptest! {
     #[test]
     fn pbt_safe_bash_command_fires_no_rule(cmd in safe_command_string()) {
         let input = bash_input(cmd);
-        let facts = ptuf::facts::extract(&input);
+        let facts = crate::facts::extract(&input);
         let decisions = evaluate_all(&facts, &input);
         prop_assert!(
             decisions.is_empty(),
