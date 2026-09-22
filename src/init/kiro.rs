@@ -54,6 +54,11 @@ use serde_json::{Map, Value, json};
 
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
+/// Basename used for the sibling temp file when the destination path
+/// carries no file name of its own (see
+/// [`sibling_install_tmp_path`](super::sibling_install_tmp_path)).
+const TMP_BASENAME: &str = "agent.json";
+
 /// Agent name used by `KiroMode::NewAgent` (the legacy single-file path).
 /// Mirrors the agent file's `name` field and the file stem
 /// (`<name>.json`).
@@ -528,7 +533,7 @@ fn install_one_file(path: &Path, command: &str, dry_run: bool) -> Result<PerFile
         append_hook(&mut root, path, command)?;
     }
     if !dry_run {
-        write_json_atomically(path, &root)?;
+        super::write_install_json(path, &root, TMP_BASENAME)?;
     }
     Ok(PerFileResult {
         already_present: false,
@@ -684,37 +689,6 @@ fn ensure_array<'a>(map: &'a mut Map<String, Value>, key: &str) -> Option<&'a mu
     map.entry(key.to_string())
         .or_insert_with(|| json!([]))
         .as_array_mut()
-}
-
-fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-
-    let mut body = serde_json::to_string_pretty(value).map_err(|e| InitError::Schema {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
-    body.push('\n');
-
-    let tmp = sibling_temp_path(path);
-    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-fn sibling_temp_path(path: &Path) -> PathBuf {
-    super::sibling_install_tmp_path(path, "agent.json")
 }
 
 #[cfg(test)]
@@ -1030,57 +1004,6 @@ mod tests {
         assert!(!command_invokes_ptuf_hook("/x/ptuf hook kiro"));
         assert!(command_is_legacy_ptuf_hook("/x/ptuf hook kiro"));
         assert!(!command_is_legacy_ptuf_hook("/x/ptuf hook kiro-v2"));
-    }
-
-    #[test]
-    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
-        let p = Path::new("/");
-        let tmp = sibling_temp_path(p);
-        assert!(
-            tmp.to_string_lossy().contains("agent.json.ptuf."),
-            "missing file_name must default to agent.json: {tmp:?}"
-        );
-    }
-
-    #[test]
-    fn write_json_atomically_propagates_dir_creation_error() {
-        let dir = workdir("write-json-dir-fail");
-        let blocker = dir.join("blocker");
-        fs::write(&blocker, "not-a-dir").expect("write blocker");
-        let target = blocker.join("nested").join("target.json");
-        let err = write_json_atomically(&target, &json!({"x": 1}))
-            .expect_err("must fail when parent can't be created");
-        assert!(
-            matches!(err, InitError::Io { .. }),
-            "expected Io, got {err:?}"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_json_atomically_propagates_write_error_when_tmp_is_a_directory() {
-        let dir = workdir("write-tmp-blocked");
-        let target = dir.join("ptuf-guarded.json");
-        let collision = dir.join(format!("ptuf-guarded.json.ptuf.{}.tmp", std::process::id()));
-        fs::create_dir_all(&collision).unwrap();
-        let targets = single_target(target);
-        let err = install(&targets, "/x/ptuf", false).unwrap_err();
-        assert!(
-            matches!(err, InitError::Io { .. }),
-            "expected Io, got {err:?}"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_json_atomically_propagates_rename_error_when_target_is_a_directory() {
-        let dir = workdir("kiro-write-json-rename-dir");
-        let target = dir.join("ptuf-guarded.json");
-        fs::create_dir_all(&target).unwrap();
-        let err = write_json_atomically(&target, &json!({"x": 1}))
-            .expect_err("rename onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
