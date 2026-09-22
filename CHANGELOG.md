@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+- `rules::remote_pipe`(`RemoteScriptPipe`)を削除。`static RULES` に載らない
+  テスト専用 oracle で、本番の判定は DSL 版 `core.network.remote-script-pipe`
+  (`src/rules/builtins.yaml`)が行っていた。パリティ PBT は DSL への直接
+  アサーションに置き換え、回帰は `tests/bypass/corpus.jsonl` が守る。公開 API の
+  削除にあたるため 0.9.0 へ bump。(#209)
+
 ### Fixed
 - ラベル無しの PKCS#8 PEM ヘッダ `-----BEGIN PRIVATE KEY-----` が機密分類器を
   すり抜けていた問題を修正。audit redactor 側 (ラベル任意) と分類器側
