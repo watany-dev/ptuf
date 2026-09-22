@@ -20,12 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (ラベル必須) でパターンが食い違っていたのが原因で、分類器統合に伴い
   `PEM_PRIVATE_KEY_{BEGIN,END}` の単一定義へ収斂させた。(#210)
 
-### Changed
+### Changed (BREAKING)
 - 機密 path 分類器を `facts::sensitive` の `PROBES` 1 系統に統合。
   `rules::patterns` の `SENSITIVE_PATH` / `SENSITIVE_NEEDLES` を削除し、
   `matches_sensitive_path` は新設の短絡版 `sensitive::matches` へ委譲する
   薄い adapter になった。2 実装の等価性を縛っていた PBT 群は、実装が 1 つに
-  なったため削除 (engine レベルの surface 間パリティ検証は継続)。(#210)
+  なったため削除 (engine レベルの surface 間パリティ検証は継続)。公開 static の
+  削除にあたるため 0.10.0 へ bump。(#210)
 
 ## [0.8.0] - 2026-09-17
 
