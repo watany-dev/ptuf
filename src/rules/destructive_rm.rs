@@ -6,7 +6,7 @@ use crate::reason;
 
 use super::ConfigRule;
 
-pub struct DestructiveRm;
+pub(crate) struct DestructiveRm;
 
 const RULE_ID: &str = "core.filesystem.destructive-rm";
 

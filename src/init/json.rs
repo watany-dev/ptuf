@@ -17,7 +17,7 @@ use super::InitError;
 /// Read `path` as a JSON document. A missing file and a blank file both
 /// yield `default()` — installing into a host that has never written
 /// its config is the common case, not an error.
-pub fn read_or_default<F>(path: &Path, default: F) -> Result<Value, InitError>
+pub(crate) fn read_or_default<F>(path: &Path, default: F) -> Result<Value, InitError>
 where
     F: FnOnce() -> Value,
 {
@@ -36,13 +36,13 @@ where
 }
 
 /// [`read_or_default`] with an empty JSON object as the default.
-pub fn read_object(path: &Path) -> Result<Value, InitError> {
+pub(crate) fn read_object(path: &Path) -> Result<Value, InitError> {
     read_or_default(path, || json!({}))
 }
 
 /// `map[key]` as a mutable object, inserting `{}` when absent. `None`
 /// when the key is present but holds a non-object.
-pub fn ensure_object<'a>(
+pub(crate) fn ensure_object<'a>(
     map: &'a mut Map<String, Value>,
     key: &str,
 ) -> Option<&'a mut Map<String, Value>> {
@@ -53,7 +53,10 @@ pub fn ensure_object<'a>(
 
 /// `map[key]` as a mutable array, inserting `[]` when absent. `None`
 /// when the key is present but holds a non-array.
-pub fn ensure_array<'a>(map: &'a mut Map<String, Value>, key: &str) -> Option<&'a mut Vec<Value>> {
+pub(crate) fn ensure_array<'a>(
+    map: &'a mut Map<String, Value>,
+    key: &str,
+) -> Option<&'a mut Vec<Value>> {
     map.entry(key.to_string())
         .or_insert_with(|| json!([]))
         .as_array_mut()
@@ -61,7 +64,7 @@ pub fn ensure_array<'a>(map: &'a mut Map<String, Value>, key: &str) -> Option<&'
 
 /// Pin the document's `version` to `1`, inserting it when absent. Any
 /// other value is a schema the installer does not know how to patch.
-pub fn ensure_version(root: &mut Value, path: &Path) -> Result<(), InitError> {
+pub(crate) fn ensure_version(root: &mut Value, path: &Path) -> Result<(), InitError> {
     let Some(map) = root.as_object_mut() else {
         return Err(schema(path, "top-level value must be a JSON object"));
     };
@@ -81,7 +84,7 @@ pub fn ensure_version(root: &mut Value, path: &Path) -> Result<(), InitError> {
 /// `root.hooks.<event>` as a mutable array, creating both levels when
 /// absent. This is the shared prologue of every adapter's
 /// `append_hook`; the adapter only supplies the entry it pushes.
-pub fn hook_array<'a>(
+pub(crate) fn hook_array<'a>(
     root: &'a mut Value,
     path: &Path,
     event: &str,

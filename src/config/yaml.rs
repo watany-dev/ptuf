@@ -55,7 +55,7 @@ pub fn parse_str(path: &Path, source: &str) -> Result<RawConfig, ConfigError> {
 /// Plugin and audit paths are home-expanded and, when relative, joined
 /// onto the directory that contains `path` so each config layer's
 /// references are independent of process cwd.
-pub fn load_path(path: &Path) -> Result<RawConfig, ConfigError> {
+pub(crate) fn load_path(path: &Path) -> Result<RawConfig, ConfigError> {
     let source = fs::read_to_string(path).map_err(|e| ConfigError::Io {
         path: path.to_path_buf(),
         source: e,

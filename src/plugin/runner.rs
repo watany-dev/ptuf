@@ -23,13 +23,15 @@ use crate::rules::ConfigRule;
 
 use super::PluginError;
 use super::dsl::{WhenNode, compile};
-use super::loader::load_path;
+#[cfg(test)]
+use super::loader::load_str;
+use super::loader::{LoadedPlugin, load_path};
 use super::rule::PluginRule;
-use super::schema::{RawPlugin, RawRule, RawTestCase};
+use super::schema::{RawRule, RawTestCase};
 
 /// Result of executing one `tests.deny` or `tests.allow` entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CaseOutcome {
+pub(crate) struct CaseOutcome {
     pub rule_id: String,
     pub expectation: Expectation,
     pub passed: bool,
@@ -38,7 +40,7 @@ pub struct CaseOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Expectation {
+pub(crate) enum Expectation {
     /// The rule should fire (return `Some(_)`).
     ShouldTrigger,
     /// The rule should not fire (return `None`).
@@ -47,7 +49,7 @@ pub enum Expectation {
 
 /// Aggregated result of running every test case in a plugin file.
 #[derive(Debug)]
-pub struct RunReport {
+pub(crate) struct RunReport {
     pub source: PathBuf,
     pub plugin_name: String,
     pub cases: Vec<CaseOutcome>,
@@ -55,21 +57,21 @@ pub struct RunReport {
 
 impl RunReport {
     /// `true` iff every case passed.
-    pub fn passed(&self) -> bool {
+    pub(crate) fn passed(&self) -> bool {
         self.cases.iter().all(|c| c.passed)
     }
 
-    pub fn passed_count(&self) -> usize {
+    pub(crate) fn passed_count(&self) -> usize {
         self.cases.iter().filter(|c| c.passed).count()
     }
 
-    pub fn failed_count(&self) -> usize {
+    pub(crate) fn failed_count(&self) -> usize {
         self.cases.iter().filter(|c| !c.passed).count()
     }
 
     /// Render a human-readable summary. Returns the underlying I/O
     /// error if one of the writes fails.
-    pub fn render<W: Write>(&self, out: &mut W) -> io::Result<()> {
+    pub(crate) fn render<W: Write>(&self, out: &mut W) -> io::Result<()> {
         writeln!(
             out,
             "plugin {} ({}): {} passed, {} failed",
@@ -96,9 +98,8 @@ impl RunReport {
     }
 }
 
-/// Run every plugin test case from `path`.
-pub fn run(path: &Path) -> Result<RunReport, PluginError> {
-    let loaded = load_path(path)?;
+/// Execute every test case of an already-loaded plugin.
+fn run_loaded(path: &Path, loaded: LoadedPlugin) -> Result<RunReport, PluginError> {
     let cases = build_cases(path, &loaded.raw_rules)?;
     let outcomes = cases.into_iter().map(execute_case).collect();
     Ok(RunReport {
@@ -108,20 +109,25 @@ pub fn run(path: &Path) -> Result<RunReport, PluginError> {
     })
 }
 
-/// Run from an in-memory YAML string. Mostly handy for tests of the
-/// runner itself; the public CLI path always reads from disk.
-pub fn run_str(path: &Path, source: &str) -> Result<RunReport, PluginError> {
-    let raw: RawPlugin = serde_yaml_ng::from_str(source).map_err(|e| PluginError::Yaml {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
-    let cases = build_cases(path, &raw.rules)?;
-    let outcomes = cases.into_iter().map(execute_case).collect();
-    Ok(RunReport {
-        source: path.to_path_buf(),
-        plugin_name: raw.metadata.name,
-        cases: outcomes,
-    })
+/// Run every plugin test case from `path`.
+pub(crate) fn run(path: &Path) -> Result<RunReport, PluginError> {
+    run_loaded(path, load_path(path)?)
+}
+
+// In-memory variant of `run`, used only to drive the tests. Goes through
+// the same `load_str` validation as production so a fixture that the CLI
+// would reject cannot quietly pass here.
+#[cfg(test)]
+pub(crate) fn run_str(path: &Path, source: &str) -> Result<RunReport, PluginError> {
+    run_loaded(path, load_str(path, source)?)
+}
+
+// Same, for the embedded `builtins.yaml`, which legitimately owns the
+// reserved `core.` rule-id namespace that `load_str` rejects. Uses the
+// very loader production builds the builtin rule set with.
+#[cfg(test)]
+pub(crate) fn run_builtin_str(path: &Path, source: &str) -> Result<RunReport, PluginError> {
+    run_loaded(path, super::loader::load_builtin_str(path, source)?)
 }
 
 struct PreparedCase {

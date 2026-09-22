@@ -28,7 +28,7 @@ use super::schema::{RawPlugin, RawRule};
 /// Facts that can be referenced from a plugin's
 /// `capabilities.requires`. Must stay in sync with the supported
 /// `when:` leaves in [`super::dsl`].
-pub const SUPPORTED_FACTS: &[&str] = &[
+pub(crate) const SUPPORTED_FACTS: &[&str] = &[
     "shell.ast",
     "shell.argv",
     "shell.pipeline",
@@ -49,15 +49,8 @@ pub struct LoadedPlugin {
     pub source: PathBuf,
 }
 
-impl LoadedPlugin {
-    /// Number of rules the plugin contributed.
-    pub fn rule_count(&self) -> usize {
-        self.rules.len()
-    }
-}
-
 /// Load a single plugin file from disk.
-pub fn load_path(path: &Path) -> Result<LoadedPlugin, PluginError> {
+pub(crate) fn load_path(path: &Path) -> Result<LoadedPlugin, PluginError> {
     let source = fs::read_to_string(path).map_err(|e| PluginError::Io {
         path: path.to_path_buf(),
         source: e,
@@ -187,7 +180,7 @@ metadata:
         let loaded = load_str(&p(), yaml).expect("load");
         assert_eq!(loaded.name, "example");
         assert_eq!(loaded.version, "0.1.0");
-        assert_eq!(loaded.rule_count(), 0);
+        assert_eq!(loaded.rules.len(), 0);
     }
 
     #[test]
@@ -254,7 +247,7 @@ rules:
       - try delete-only-this-dir
 "#;
         let loaded = load_str(&p(), yaml).expect("load");
-        assert_eq!(loaded.rule_count(), 1);
+        assert_eq!(loaded.rules.len(), 1);
         assert_eq!(loaded.rules[0].id(), "pack.demo.block-rm");
     }
 
@@ -349,7 +342,7 @@ rules:
     reason: r
 "#;
         let loaded = load_str(&p(), yaml).expect("corex/mycore are not reserved");
-        assert_eq!(loaded.rule_count(), 2);
+        assert_eq!(loaded.rules.len(), 2);
     }
 
     #[test]

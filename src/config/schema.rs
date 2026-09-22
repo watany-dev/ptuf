@@ -16,26 +16,31 @@ use super::{Allowlist, Mode, PackOverride, RedactionMode, RuleOverride};
 
 /// Single-scope view of the user's policy. All scalars are optional;
 /// missing fields defer to the layer below.
+///
+/// The type itself is `pub` only because it is the value that travels
+/// between the two trust boundaries `fuzz/` drives (`yaml::parse_str`
+/// into `merge::merge`). Its fields stay `pub(crate)` so the shape of
+/// the YAML schema is not frozen into the SemVer surface.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RawConfig {
     /// Currently always `1`. Reserved for future incompatible breaks.
     #[serde(default)]
-    pub version: Option<u32>,
+    pub(crate) version: Option<u32>,
     #[serde(default)]
-    pub mode: Option<Mode>,
+    pub(crate) mode: Option<Mode>,
     #[serde(default)]
-    pub fail_closed: Option<bool>,
+    pub(crate) fail_closed: Option<bool>,
     #[serde(default)]
-    pub packs: BTreeMap<String, RawPack>,
+    pub(crate) packs: BTreeMap<String, RawPack>,
     #[serde(default)]
-    pub rules: BTreeMap<String, RawRuleOverride>,
+    pub(crate) rules: BTreeMap<String, RawRuleOverride>,
     #[serde(default)]
-    pub allowlists: Vec<RawAllowlist>,
+    pub(crate) allowlists: Vec<RawAllowlist>,
     #[serde(default)]
-    pub plugins: Vec<RawPluginRef>,
+    pub(crate) plugins: Vec<RawPluginRef>,
     #[serde(default)]
-    pub audit: RawAudit,
+    pub(crate) audit: RawAudit,
 }
 
 impl RawConfig {
@@ -100,7 +105,7 @@ impl RawConfig {
 /// flat (one entry per pack) without a per-pack subtype.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawPack {
+pub(crate) struct RawPack {
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
@@ -112,7 +117,7 @@ pub struct RawPack {
 /// Per-rule override parsed from `rules: { <rule-id>: { ... } }`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawRuleOverride {
+pub(crate) struct RawRuleOverride {
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
@@ -136,7 +141,7 @@ impl From<RawRuleOverride> for RuleOverride {
 /// load.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawPluginRef {
+pub(crate) struct RawPluginRef {
     pub path: PathBuf,
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -145,7 +150,7 @@ pub struct RawPluginRef {
 /// Layer-local audit overlay.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawAudit {
+pub(crate) struct RawAudit {
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
@@ -162,7 +167,7 @@ pub struct RawAudit {
 /// ids the entry applies to.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawAllowlist {
+pub(crate) struct RawAllowlist {
     pub id: String,
     #[serde(default)]
     pub applies_to: RawAllowlistApplies,
@@ -176,7 +181,7 @@ pub struct RawAllowlist {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RawAllowlistApplies {
+pub(crate) struct RawAllowlistApplies {
     #[serde(default)]
     pub rules: Vec<String>,
 }

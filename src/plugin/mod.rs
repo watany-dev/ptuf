@@ -2,26 +2,27 @@
 //!
 //! v0.2 introduces a small but real plugin system: an
 //! `apiVersion: ptuf.dev/v1, kind: Plugin` document yields zero or more
-//! [`PluginRule`]s the [`crate::Engine`] evaluates alongside the
+//! `PluginRule`s the [`crate::Engine`] evaluates alongside the
 //! built-ins. Plugins cannot reach raw shell strings; they describe
 //! conditions in terms of the facts ptuf already extracts (see
-//! [`SUPPORTED_FACTS`]).
+//! `SUPPORTED_FACTS`).
 //!
 //! See `docs/design/config-and-plugins.md:91-214` for the YAML schema
 //! and `docs/design/decision-model.md` for how rule outputs aggregate.
 
 pub mod dsl;
-pub mod loader;
-pub mod rule;
-pub mod runner;
-pub mod schema;
+pub(crate) mod loader;
+pub(crate) mod rule;
+pub(crate) mod runner;
+pub(crate) mod schema;
 
 use std::path::PathBuf;
 
 use crate::rules::ConfigRule;
 
-pub use loader::{LoadedPlugin, SUPPORTED_FACTS, load_path, load_str};
-pub use rule::PluginRule;
+pub use loader::load_str;
+pub(crate) use loader::{LoadedPlugin, load_path};
+pub(crate) use rule::PluginRule;
 
 /// Errors raised while loading or compiling a plugin.
 #[derive(Debug)]
@@ -165,12 +166,8 @@ impl PluginSet {
         crate::rules::iter().any(|rule| rule.id() == id) || self.rules().any(|rule| rule.id() == id)
     }
 
-    pub fn rule_count(&self) -> usize {
-        self.plugins.iter().map(LoadedPlugin::rule_count).sum()
-    }
-
     /// Iterate over every rule contributed by every loaded plugin.
-    pub fn rules(&self) -> impl Iterator<Item = &PluginRule> {
+    pub(crate) fn rules(&self) -> impl Iterator<Item = &PluginRule> {
         self.plugins.iter().flat_map(|p| p.rules.iter())
     }
 
@@ -212,7 +209,6 @@ rules:
     #[test]
     fn empty_plugin_set_iterates_no_rules() {
         let set = PluginSet::new();
-        assert_eq!(set.rule_count(), 0);
         assert_eq!(set.rules().count(), 0);
     }
 
@@ -221,7 +217,6 @@ rules:
         let mut set = PluginSet::new();
         set.push(ok_plugin("a"));
         set.push(ok_plugin("b"));
-        assert_eq!(set.rule_count(), 2);
         assert_eq!(set.rules().count(), 2);
     }
 

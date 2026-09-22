@@ -139,14 +139,14 @@ const FORCE_IF_INCLUDES: RuleSpec = RuleSpec {
     ],
 };
 
-pub static FORCE_PUSH_RULE: GitRule = GitRule { spec: &FORCE_PUSH };
-pub static FORCE_PUSH_WITH_LEASE_RULE: GitRule = GitRule {
+pub(crate) static FORCE_PUSH_RULE: GitRule = GitRule { spec: &FORCE_PUSH };
+pub(crate) static FORCE_PUSH_WITH_LEASE_RULE: GitRule = GitRule {
     spec: &FORCE_PUSH_WITH_LEASE,
 };
-pub static PUSH_MIRROR_RULE: GitRule = GitRule { spec: &PUSH_MIRROR };
-pub static PUSH_DELETE_REMOTE_RULE: GitRule = GitRule {
+pub(crate) static PUSH_MIRROR_RULE: GitRule = GitRule { spec: &PUSH_MIRROR };
+pub(crate) static PUSH_DELETE_REMOTE_RULE: GitRule = GitRule {
     spec: &PUSH_DELETE_REMOTE,
 };
-pub static FORCE_IF_INCLUDES_RULE: GitRule = GitRule {
+pub(crate) static FORCE_IF_INCLUDES_RULE: GitRule = GitRule {
     spec: &FORCE_IF_INCLUDES,
 };

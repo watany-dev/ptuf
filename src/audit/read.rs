@@ -15,16 +15,16 @@ use serde_json::Value;
 
 use super::time::parse_rfc3339_to_secs;
 
-pub const MAX_AUDIT_RECORD_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_AUDIT_RECORD_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SinceError {
+pub(crate) enum SinceError {
     Invalid,
     Overflow,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AuditFilter {
+pub(crate) struct AuditFilter {
     pub decision: Option<String>,
     pub rule_id: Option<String>,
     pub tool: Option<String>,
@@ -32,7 +32,7 @@ pub struct AuditFilter {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValidatedAuditRecord {
+pub(crate) struct ValidatedAuditRecord {
     pub timestamp: String,
     pub timestamp_secs: u64,
     pub tool: String,
@@ -43,7 +43,7 @@ pub struct ValidatedAuditRecord {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ReadOutcome {
+pub(crate) struct ReadOutcome {
     pub lines_read: u64,
     pub valid_records: u64,
     pub matched: u64,
@@ -54,7 +54,7 @@ pub struct ReadOutcome {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct AuditStats {
+pub(crate) struct AuditStats {
     pub lines_read: u64,
     pub valid_records: u64,
     pub matched: u64,
@@ -65,13 +65,13 @@ pub struct AuditStats {
     pub by_rule: Vec<(String, u64)>,
 }
 
-pub struct Snapshot {
+pub(crate) struct Snapshot {
     reader: io::Take<File>,
     lock_failed: bool,
 }
 
 impl Snapshot {
-    pub fn lock_failed(&self) -> bool {
+    pub(crate) fn lock_failed(&self) -> bool {
         self.lock_failed
     }
 }
@@ -112,14 +112,14 @@ struct Counters {
     incomplete_tail: bool,
 }
 
-pub fn parse_since(value: &str, now: SystemTime) -> Result<u64, SinceError> {
+pub(crate) fn parse_since(value: &str, now: SystemTime) -> Result<u64, SinceError> {
     if let Some(secs) = parse_rfc3339_to_secs(value) {
         return Ok(secs);
     }
     parse_relative(value, now)
 }
 
-pub fn read_filtered<R: Read>(
+pub(crate) fn read_filtered<R: Read>(
     reader: R,
     filter: &AuditFilter,
     limit: usize,
@@ -142,7 +142,7 @@ pub fn read_filtered<R: Read>(
     })
 }
 
-pub fn stats<R: Read>(reader: R, filter: &AuditFilter) -> io::Result<AuditStats> {
+pub(crate) fn stats<R: Read>(reader: R, filter: &AuditFilter) -> io::Result<AuditStats> {
     let mut by_decision = HashMap::new();
     let mut by_rule = HashMap::new();
     let counters = scan_into(reader, filter, |_, rec| {
@@ -163,7 +163,7 @@ pub fn stats<R: Read>(reader: R, filter: &AuditFilter) -> io::Result<AuditStats>
     })
 }
 
-pub fn open_snapshot(path: &Path) -> io::Result<Snapshot> {
+pub(crate) fn open_snapshot(path: &Path) -> io::Result<Snapshot> {
     let file = File::open(path)?;
     let (len, lock_ok) = snapshot_len(&file)?;
     Ok(Snapshot {

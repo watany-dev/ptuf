@@ -1,4 +1,4 @@
-//! Scope merge: fold a vector of [`RawConfig`] layers (lowest first)
+//! Scope merge: fold a vector of `RawConfig` layers (lowest first)
 //! into a single [`Config`].
 //!
 //! Merge rules:

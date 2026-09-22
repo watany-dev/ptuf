@@ -20,7 +20,7 @@ pub struct Url {
 
 /// Parse `s` into a [`Url`]. Returns `None` when `s` lacks a recognisable
 /// `scheme://host` prefix.
-pub fn parse(s: &str) -> Option<Url> {
+pub(crate) fn parse(s: &str) -> Option<Url> {
     let (scheme, rest) = s.split_once("://")?;
     if scheme.is_empty() || !is_valid_scheme(scheme) {
         return None;

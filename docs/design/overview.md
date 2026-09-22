@@ -57,6 +57,26 @@ CLI 経路はこれと異なり fail-closed で動作する。
 `try_decide(&HookInput) -> Result<Decision, EngineError>` は失敗を握り潰さ
 ない並立 API。embed 利用側で CLI と同じ fail-closed 契約が欲しい場合に使う。
 
+公開するのはこのリストと、別 crate である `fuzz/` が叩く信頼境界
+(`config::yaml::parse_str` / `config::merge::merge` / `plugin::load_str` /
+`facts::shell::parse` / `cli::fuzz_copilot_parse` / `cli::fuzz_opencode_parse`)、
+および `tests/` / `benches/` が参照する範囲だけに限る。それ以外は
+`pub(crate)` に留める。`Cargo.toml` の `unreachable_pub = "deny"` が
+crate 外から到達できない `pub` を機械的に弾く。公開 API は PR CI の
+`cargo-semver-checks` が守る対象でもあるため、内部項目に `pub` を付けると
+ただのリファクタが SemVer 破壊として弾かれる。
+
+この境界は **module 宣言の可視性で決まる**。`unreachable_pub` は
+「module 鎖が crate 内に閉じている項目」しか見ないので、`pub mod` の中に
+`pub fn` を置くと lint は何も言わない。したがって公開 API に属さない module は
+`pub(crate) mod` で宣言する。`src/lib.rs` で `pub mod` のまま残すのは
+`audit` / `cli` / `config` / `decision` / `engine` / `facts` / `hook_output` /
+`io_runner` / `plugin` / `rules` と、feature gate 付きの `testing` だけで、
+`hook_input` / `init` / `reason` / `self_paths` / `update` は `pub(crate) mod`。
+子モジュールで `pub` を保つのも `audit::record` / `facts::shell` /
+`plugin::dsl` / `config::yaml` / `config::merge` / `testing::proptest` の
+6 つ、つまり上記の信頼境界とテストが名指しするものだけである。
+
 ## CLI の現在形
 
 実装済みサブコマンドは次のとおり。`--json` はトップレベルの global flag

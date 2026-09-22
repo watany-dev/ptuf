@@ -11,7 +11,7 @@ mod filter;
 #[cfg(test)]
 mod test_support;
 
-pub use builder::EngineBuilder;
+pub(crate) use builder::EngineBuilder;
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -275,7 +275,7 @@ impl Engine {
     /// Begin assembling an [`Engine`] via the builder API.
     ///
     /// Unlike the removed `Engine::default` shim, the builder always
-    /// runs [`ProtectedPaths::collect_with_env`] so self-protection is
+    /// runs `ProtectedPaths::collect_with_env` so self-protection is
     /// populated before evaluation begins. This is the canonical entry
     /// point for embed integrations that cannot use [`Engine::for_cwd`].
     pub fn builder() -> EngineBuilder {

@@ -8,16 +8,16 @@ use std::path::{Path, PathBuf};
 use crate::cli::HookAgent;
 use crate::config::scope::{EnvLookup, SystemEnv};
 
-pub mod claude_code;
-pub mod cline;
-pub mod codex;
-pub mod copilot;
-pub mod cursor;
+pub(crate) mod claude_code;
+pub(crate) mod cline;
+pub(crate) mod codex;
+pub(crate) mod copilot;
+pub(crate) mod cursor;
 pub(crate) mod json;
-pub mod kiro;
-pub mod opencode;
-pub mod pi;
-pub mod verify;
+pub(crate) mod kiro;
+pub(crate) mod opencode;
+pub(crate) mod pi;
+pub(crate) mod verify;
 
 /// Return the first whitespace-delimited token of `cmd`, which is the
 /// executable path/name. Used by path-collection callers to extract the
@@ -42,14 +42,14 @@ pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
 /// Returns agents in a stable order so callers can install / report
 /// deterministically. Production callers pass `std::env::var_os("HOME")`
 /// for `home`; tests inject deterministic paths.
-pub fn detect_agents(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> {
+pub(crate) fn detect_agents(cwd: Option<&Path>, home: Option<&Path>) -> Vec<HookAgent> {
     detect_agents_with_env(cwd, home, &SystemEnv)
 }
 
 /// Hermetic variant of [`detect_agents`]; `env` supplies
 /// `XDG_CONFIG_HOME` for the OpenCode probe so tests never observe the
 /// real process environment.
-pub fn detect_agents_with_env(
+pub(crate) fn detect_agents_with_env(
     cwd: Option<&Path>,
     home: Option<&Path>,
     env: &dyn EnvLookup,
@@ -112,9 +112,7 @@ fn env_opencode_config_dir(home: Option<&Path>, env: &dyn EnvLookup) -> Option<P
 
 /// Errors surfaced by every `init` adapter.
 #[derive(Debug)]
-pub enum InitError {
-    /// Agent name not recognised.
-    UnknownAgent(String),
+pub(crate) enum InitError {
     /// Settings file or its parent directory could not be read / written.
     Io {
         path: PathBuf,
@@ -140,7 +138,6 @@ pub enum InitError {
 impl std::fmt::Display for InitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownAgent(a) => write!(f, "unknown agent: {a}"),
             Self::Io { path, source } => {
                 write!(f, "io error at {}: {source}", path.display())
             },
@@ -187,7 +184,7 @@ impl std::error::Error for InitError {
 /// the `dry_run` flag passed in determines whether [`InstallStatus`]
 /// uses the `Would*` variants.
 #[derive(Debug, PartialEq, Eq)]
-pub struct InstallOutcome {
+pub(crate) struct InstallOutcome {
     pub status: InstallStatus,
     pub agent: &'static str,
     pub paths: Vec<InstallPath>,
@@ -233,13 +230,13 @@ impl AdapterRunReport {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct InstallPath {
+pub(crate) struct InstallPath {
     pub label: &'static str,
     pub path: PathBuf,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum InstallStatus {
+pub(crate) enum InstallStatus {
     /// File already contains a hook entry pointing at our binary; no
     /// change required.
     AlreadyPresent,
@@ -453,7 +450,7 @@ pub(crate) fn command_invokes_ptuf_hook(cmd: &str, tail: &[&str]) -> bool {
 /// that ran `ptuf init`, falling back to the literal `"ptuf"` so the
 /// entry remains useful when `current_exe` is unavailable (e.g. a CI
 /// container without a stable absolute path).
-pub fn detect_binary() -> String {
+pub(crate) fn detect_binary() -> String {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.into_os_string().into_string().ok())
@@ -499,7 +496,6 @@ mod tests {
 
     #[test]
     fn init_error_display_covers_all_variants() {
-        assert!(format!("{}", InitError::UnknownAgent("x".into())).contains("unknown agent"));
         assert!(
             format!(
                 "{}",

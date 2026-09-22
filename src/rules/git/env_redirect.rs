@@ -79,9 +79,9 @@ const ENV_PATH_REDIRECT: RuleSpec = RuleSpec {
     ],
 };
 
-pub static ENV_CREDENTIAL_HIJACK_RULE: GitRule = GitRule {
+pub(crate) static ENV_CREDENTIAL_HIJACK_RULE: GitRule = GitRule {
     spec: &ENV_CREDENTIAL_HIJACK,
 };
-pub static ENV_PATH_REDIRECT_RULE: GitRule = GitRule {
+pub(crate) static ENV_PATH_REDIRECT_RULE: GitRule = GitRule {
     spec: &ENV_PATH_REDIRECT,
 };

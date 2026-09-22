@@ -13,6 +13,12 @@ use std::path::Path;
 /// new manager only requires extending this enum and the `(filename,
 /// kind)` table in `detect_lock_files`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "each variant names the real lock file it detects (`pnpm-lock.yaml`, \
+              `uv.lock`, …); dropping the shared `Lock` suffix would make the \
+              variants read as package managers rather than lock files"
+)]
 pub enum LockKind {
     NpmPackageLock,
     PnpmLock,
@@ -39,7 +45,7 @@ pub struct ProjectFacts {
 /// Build [`ProjectFacts`] for `repo_root`. Returns an empty
 /// `ProjectFacts` when `repo_root` is `None` so callers can wire the
 /// engine without conditionals.
-pub fn collect(repo_root: Option<&Path>, protected_patterns: &[String]) -> ProjectFacts {
+pub(crate) fn collect(repo_root: Option<&Path>, protected_patterns: &[String]) -> ProjectFacts {
     let Some(root) = repo_root else {
         return ProjectFacts::default();
     };

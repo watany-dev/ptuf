@@ -3,17 +3,17 @@ use crate::facts::Facts;
 use crate::{Decision, HookInput};
 
 pub(crate) mod builtin_dsl;
-pub mod destructive_rm;
-pub mod dynamic_eval;
-pub mod git;
-pub mod injection_content;
-pub mod patterns;
-pub mod project_hygiene;
-pub mod self_protection;
-pub mod sensitive_bash_read;
-pub mod sensitive_net;
-pub mod sensitive_read;
-pub mod workspace;
+pub(crate) mod destructive_rm;
+pub(crate) mod dynamic_eval;
+pub(crate) mod git;
+pub(crate) mod injection_content;
+pub(crate) mod patterns;
+pub(crate) mod project_hygiene;
+pub(crate) mod self_protection;
+pub(crate) mod sensitive_bash_read;
+pub(crate) mod sensitive_net;
+pub(crate) mod sensitive_read;
+pub(crate) mod workspace;
 
 /// Trait implemented by every rule that the engine evaluates, both
 /// builtin and (eventually) plugin-loaded.
@@ -108,7 +108,7 @@ pub fn iter() -> impl Iterator<Item = &'static (dyn ConfigRule + Sync)> {
 /// Return whether `rule_id` belongs to a built-in or plugin rule marked
 /// `hard_deny`. Used by mode demotion so repository `mode: monitor`
 /// cannot weaken critical safeguards.
-pub fn is_hard_deny_rule_id(rule_id: &str, plugins: &crate::plugin::PluginSet) -> bool {
+pub(crate) fn is_hard_deny_rule_id(rule_id: &str, plugins: &crate::plugin::PluginSet) -> bool {
     iter().any(|rule| rule.id() == rule_id && rule.hard_deny())
         || plugins
             .rules()

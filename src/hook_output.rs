@@ -24,7 +24,7 @@ pub struct HookSpecificOutput {
     pub permission_decision_reason: String,
 }
 
-pub mod claude_code {
+pub(crate) mod claude_code {
     use super::{HookResponse, HookSpecificOutput};
     use crate::Decision;
 
@@ -48,7 +48,7 @@ pub mod claude_code {
     }
 }
 
-pub mod codex {
+pub(crate) mod codex {
     use super::{HookResponse, HookSpecificOutput, append_demote_note};
     use crate::Decision;
 
@@ -57,7 +57,7 @@ pub mod codex {
 
     /// Build a Codex `hookSpecificOutput` response from a decision.
     /// `Ask` is mapped to a deny because Codex currently fails open on it.
-    pub fn from_decision(decision: &Decision) -> Option<HookResponse> {
+    pub(crate) fn from_decision(decision: &Decision) -> Option<HookResponse> {
         let reason = match decision {
             Decision::Allow | Decision::Monitor { .. } => return None,
             Decision::Ask { reason, .. } => deny_reason_for_ask(reason),
@@ -73,12 +73,12 @@ pub mod codex {
         })
     }
 
-    pub fn deny_reason_for_ask(reason: &str) -> String {
+    pub(crate) fn deny_reason_for_ask(reason: &str) -> String {
         append_demote_note(reason, ASK_UNAVAILABLE_NOTE)
     }
 }
 
-pub mod copilot {
+pub(crate) mod copilot {
     use serde::Serialize;
 
     use super::append_demote_note;
@@ -95,7 +95,7 @@ pub mod copilot {
     /// failures (skipping the response). The CLI therefore writes this
     /// JSON object directly and uses exit `0`, even for deny.
     #[derive(Debug, Serialize)]
-    pub struct CopilotResponse {
+    pub(crate) struct CopilotResponse {
         #[serde(rename = "permissionDecision")]
         pub permission_decision: &'static str,
         #[serde(rename = "permissionDecisionReason")]
@@ -106,7 +106,7 @@ pub mod copilot {
     /// Returns `None` for `Allow` and `Monitor` (Copilot, like the other
     /// adapters, emits no output for those). `Ask` is demoted to a deny
     /// because Copilot can't surface an interactive prompt reliably.
-    pub fn from_decision(decision: &Decision) -> Option<CopilotResponse> {
+    pub(crate) fn from_decision(decision: &Decision) -> Option<CopilotResponse> {
         let reason = match decision {
             Decision::Allow | Decision::Monitor { .. } => return None,
             Decision::Ask { reason, .. } => deny_reason_for_ask(reason),
@@ -119,12 +119,12 @@ pub mod copilot {
         })
     }
 
-    pub fn deny_reason_for_ask(reason: &str) -> String {
+    pub(crate) fn deny_reason_for_ask(reason: &str) -> String {
         append_demote_note(reason, ASK_UNAVAILABLE_NOTE)
     }
 }
 
-pub mod kiro {
+pub(crate) mod kiro {
     use super::append_demote_note;
 
     /// Note appended to a deny reason whenever a Kiro `Ask` decision is
@@ -133,12 +133,12 @@ pub mod kiro {
     /// explicitly on stderr.
     const ASK_UNAVAILABLE_NOTE: &str = "Kiro CLI PreToolUse hooks do not define an interactive ask channel; ptuf is blocking this request instead.";
 
-    pub fn deny_reason_for_ask(reason: &str) -> String {
+    pub(crate) fn deny_reason_for_ask(reason: &str) -> String {
         append_demote_note(reason, ASK_UNAVAILABLE_NOTE)
     }
 }
 
-pub mod cline {
+pub(crate) mod cline {
     use serde::Serialize;
 
     use super::append_demote_note;
@@ -155,7 +155,7 @@ pub mod cline {
     /// serialise to a `cancel: true` envelope. The renderer never emits
     /// `shouldContinue`, `review`, or `overrideInput`.
     #[derive(Debug, Serialize)]
-    pub struct ClineResponse {
+    pub(crate) struct ClineResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub cancel: Option<bool>,
 
@@ -195,7 +195,7 @@ pub mod cline {
     /// Build a Cline hook response from a decision. `Allow` / `Monitor`
     /// produce the empty `{}` object; `Deny` produces a cancel envelope;
     /// `Ask` is demoted to a cancel envelope with the demotion note.
-    pub fn from_decision(decision: &Decision) -> ClineResponse {
+    pub(crate) fn from_decision(decision: &Decision) -> ClineResponse {
         match decision {
             Decision::Allow | Decision::Monitor { .. } => ClineResponse::empty(),
             Decision::Ask { reason, .. } => ClineResponse::cancel(deny_reason_for_ask(reason)),
@@ -203,12 +203,12 @@ pub mod cline {
         }
     }
 
-    pub fn deny_reason_for_ask(reason: &str) -> String {
+    pub(crate) fn deny_reason_for_ask(reason: &str) -> String {
         append_demote_note(reason, ASK_UNAVAILABLE_NOTE)
     }
 }
 
-pub mod pi {
+pub(crate) mod pi {
     use serde::Serialize;
 
     use crate::Decision;
@@ -218,7 +218,7 @@ pub mod pi {
     /// directly (no `hookSpecificOutput` wrapper). `Ask` is preserved because
     /// the TS extension can surface an interactive confirm channel.
     #[derive(Debug, Serialize)]
-    pub struct PiHookResponse {
+    pub(crate) struct PiHookResponse {
         pub decision: &'static str,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub rule_id: Option<String>,
@@ -229,7 +229,7 @@ pub mod pi {
     /// Build a Pi hook response from a decision. Every variant serialises to
     /// JSON on stdout so the extension can interpret allow/monitor/notify/ask/
     /// deny without relying on exit code alone.
-    pub fn from_decision(decision: &Decision) -> PiHookResponse {
+    pub(crate) fn from_decision(decision: &Decision) -> PiHookResponse {
         match decision {
             Decision::Allow => PiHookResponse {
                 decision: "allow",
@@ -255,7 +255,7 @@ pub mod pi {
     }
 }
 
-pub mod opencode {
+pub(crate) mod opencode {
     use super::append_demote_note;
     use super::pi::{self, PiHookResponse};
     use crate::Decision;
@@ -264,18 +264,16 @@ pub mod opencode {
          known to fail silently in some builds, and tool.execute.before cannot start an \
          interactive confirmation; ptuf is blocking this request instead.";
 
-    pub type OpencodeHookResponse = PiHookResponse;
-
-    pub fn from_decision(decision: &Decision) -> PiHookResponse {
+    pub(crate) fn from_decision(decision: &Decision) -> PiHookResponse {
         pi::from_decision(decision)
     }
 
-    pub fn deny_reason_for_ask(reason: &str) -> String {
+    pub(crate) fn deny_reason_for_ask(reason: &str) -> String {
         append_demote_note(reason, ASK_UNAVAILABLE_NOTE)
     }
 }
 
-pub mod cursor {
+pub(crate) mod cursor {
     use serde::Serialize;
 
     use crate::Decision;
@@ -286,7 +284,7 @@ pub mod cursor {
     /// JSON object directly (no `hookSpecificOutput` wrapper); `deny`
     /// additionally exits 2 while `ask` exits 0.
     #[derive(Debug, Serialize)]
-    pub struct CursorResponse {
+    pub(crate) struct CursorResponse {
         pub permission: &'static str,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub user_message: Option<String>,
@@ -300,7 +298,7 @@ pub mod cursor {
     /// from a `failClosed` hook as invalid output. `Ask` maps to
     /// `permission: "ask"` and `Deny` to `permission: "deny"`; both carry
     /// the reason verbatim in `user_message` / `agent_message`.
-    pub fn from_decision(decision: &Decision) -> CursorResponse {
+    pub(crate) fn from_decision(decision: &Decision) -> CursorResponse {
         let (permission, reason) = match decision {
             Decision::Allow | Decision::Monitor { .. } => ("allow", None),
             Decision::Ask { reason, .. } => ("ask", Some(reason.clone())),

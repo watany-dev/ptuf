@@ -23,7 +23,7 @@ use crate::hook_input::HookInput;
 
 /// Schema version of the audit record. Bumped only on incompatible
 /// changes; additive fields keep version `1`.
-pub const AUDIT_SCHEMA_VERSION: u32 = 1;
+pub(crate) const AUDIT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuditRecord {
@@ -77,7 +77,7 @@ impl AuditRecord {
     /// before the record reaches the sink — keeping the redactor
     /// outside the builder lets tests inject untouched commands
     /// and check the writer/sink in isolation.
-    pub fn builder<'a>(
+    pub(crate) fn builder<'a>(
         decision: &'a Decision,
         input: &'a HookInput,
         command_redacted: String,
@@ -97,43 +97,10 @@ impl AuditRecord {
             plugin_versions: Vec::new(),
         }
     }
-
-    /// Build an `AuditRecord` for the supplied decision/input pair.
-    ///
-    /// Prefer [`Self::builder`] for new code.
-    #[deprecated(since = "0.6.0", note = "use `AuditRecord::builder` instead")]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "deprecated semver-compatible shim; delegates to builder"
-    )]
-    pub fn build(
-        timestamp: SystemTime,
-        decision: &Decision,
-        mode: Mode,
-        mode_demoted: bool,
-        input: &HookInput,
-        project_root: Option<&Path>,
-        severity: Option<Severity>,
-        command_redacted: String,
-        allowlist_id: Option<String>,
-        agent: &'static str,
-        plugin_versions: Vec<String>,
-    ) -> Self {
-        Self::builder(decision, input, command_redacted)
-            .timestamp(timestamp)
-            .mode(mode)
-            .mode_demoted(mode_demoted)
-            .project_root(project_root)
-            .severity(severity)
-            .allowlist_id(allowlist_id)
-            .agent(agent)
-            .plugin_versions(plugin_versions)
-            .build()
-    }
 }
 
 /// Builder for [`AuditRecord`].
-pub struct AuditRecordBuilder<'a> {
+pub(crate) struct AuditRecordBuilder<'a> {
     decision: &'a Decision,
     input: &'a HookInput,
     command_redacted: String,
@@ -150,55 +117,55 @@ pub struct AuditRecordBuilder<'a> {
 
 impl<'a> AuditRecordBuilder<'a> {
     /// Set the record timestamp (required).
-    pub fn timestamp(mut self, timestamp: SystemTime) -> Self {
+    pub(crate) fn timestamp(mut self, timestamp: SystemTime) -> Self {
         self.timestamp = Some(timestamp);
         self
     }
 
     /// Set the policy mode (required).
-    pub fn mode(mut self, mode: Mode) -> Self {
+    pub(crate) fn mode(mut self, mode: Mode) -> Self {
         self.mode = Some(mode);
         self
     }
 
     /// Set whether the engine demoted a `Deny` to `Monitor`.
-    pub fn mode_demoted(mut self, mode_demoted: bool) -> Self {
+    pub(crate) fn mode_demoted(mut self, mode_demoted: bool) -> Self {
         self.mode_demoted = mode_demoted;
         self
     }
 
     /// Set the project root path.
-    pub fn project_root(mut self, project_root: Option<&'a Path>) -> Self {
+    pub(crate) fn project_root(mut self, project_root: Option<&'a Path>) -> Self {
         self.project_root = project_root;
         self
     }
 
     /// Set the rule severity.
-    pub fn severity(mut self, severity: Option<Severity>) -> Self {
+    pub(crate) fn severity(mut self, severity: Option<Severity>) -> Self {
         self.severity = severity;
         self
     }
 
     /// Set the allowlist id for suppressed `Allow` outcomes.
-    pub fn allowlist_id(mut self, allowlist_id: Option<String>) -> Self {
+    pub(crate) fn allowlist_id(mut self, allowlist_id: Option<String>) -> Self {
         self.allowlist_id = allowlist_id;
         self
     }
 
     /// Set every allowlist id that suppressed a rule on this evaluation.
-    pub fn allowlist_ids(mut self, allowlist_ids: Vec<String>) -> Self {
+    pub(crate) fn allowlist_ids(mut self, allowlist_ids: Vec<String>) -> Self {
         self.allowlist_ids = allowlist_ids;
         self
     }
 
     /// Set the adapter name (`claude-code` / `cli`).
-    pub fn agent(mut self, agent: &'static str) -> Self {
+    pub(crate) fn agent(mut self, agent: &'static str) -> Self {
         self.agent = agent;
         self
     }
 
     /// Set loaded plugin versions as `name@version` strings.
-    pub fn plugin_versions(mut self, plugin_versions: Vec<String>) -> Self {
+    pub(crate) fn plugin_versions(mut self, plugin_versions: Vec<String>) -> Self {
         self.plugin_versions = plugin_versions;
         self
     }
@@ -215,7 +182,7 @@ impl<'a> AuditRecordBuilder<'a> {
         clippy::expect_used,
         reason = "timestamp and mode are required builder fields; callers always set both"
     )]
-    pub fn build(self) -> AuditRecord {
+    pub(crate) fn build(self) -> AuditRecord {
         let timestamp = self.timestamp.expect("timestamp is required");
         let mode = self.mode.expect("mode is required");
         let rule_id = self.decision.rule_id().map(str::to_owned);
@@ -310,27 +277,6 @@ mod tests {
         AuditRecord::builder(decision, input, command_redacted.into())
             .timestamp(UNIX_EPOCH)
             .mode(Mode::Enforce)
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn deprecated_build_delegates_to_builder() {
-        let inp = input("Bash", "ls");
-        let r = AuditRecord::build(
-            UNIX_EPOCH,
-            &Decision::Allow,
-            Mode::Enforce,
-            false,
-            &inp,
-            None,
-            None,
-            "ls".into(),
-            None,
-            "cli",
-            Vec::new(),
-        );
-        assert_eq!(r.decision, "allow");
-        assert_eq!(r.agent, "cli");
     }
 
     // `Duration::from_secs(1_704_067_200)` is a Unix timestamp (the

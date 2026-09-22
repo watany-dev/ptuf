@@ -63,20 +63,20 @@ const TMP_BASENAME: &str = "agent.json";
 /// Agent name used by `KiroMode::NewAgent` (the legacy single-file path).
 /// Mirrors the agent file's `name` field and the file stem
 /// (`<name>.json`).
-pub const DEFAULT_AGENT_NAME: &str = "ptuf-guarded";
+pub(crate) const DEFAULT_AGENT_NAME: &str = "ptuf-guarded";
 
 /// Agent name used by `KiroMode::PatchExisting` when the target
 /// `agents/` directory is empty (no `*.json` files and no
 /// `settings/cli.json` reference). A fresh `agents/default.json` is
 /// synthesized so Kiro's own default-named agent is guarded.
-pub const FALLBACK_AGENT_NAME: &str = "default";
+pub(crate) const FALLBACK_AGENT_NAME: &str = "default";
 
 /// Matcher recorded in [`InstallOutcome`] and in the appended hook entry.
-pub const DEFAULT_MATCHER: &str = "*";
+pub(crate) const DEFAULT_MATCHER: &str = "*";
 
 /// Default timeout the hook entry advertises to Kiro. Kiro may abort
 /// the tool call if ptuf does not respond within this many ms.
-pub const DEFAULT_TIMEOUT_MS: u64 = 10_000;
+pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
 /// Default cache TTL in seconds. `0` disables caching so every
 /// PreToolUse event is re-evaluated by ptuf.
@@ -170,7 +170,7 @@ pub(crate) struct KiroInstallExtras {
 /// handle, but its fields reference `pub(crate)` types and are not
 /// part of the public API surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TargetPaths {
+pub(crate) struct TargetPaths {
     pub(crate) agent_config_paths: Vec<ResolvedAgent>,
     /// `*.md` agent files seen but intentionally skipped — reported
     /// to the user so they know we noticed them.
@@ -214,7 +214,7 @@ pub struct KiroInitOptions {
 /// `resolve_paths_with`. Tests use `resolve_paths_with` directly so
 /// they can inject a tempdir without mutating process env (forbidden
 /// by `unsafe_code = "forbid"`).
-pub fn resolve_paths(
+pub(crate) fn resolve_paths(
     start: Option<&Path>,
     opts: &KiroInitOptions,
 ) -> Result<TargetPaths, InitError> {
@@ -628,6 +628,17 @@ mod tests {
 
     use super::*;
 
+    /// Test-only shim: the CLI always wants the kiro-specific extras, so
+    /// production has only `install_with_report`. The assertions below
+    /// care about the canonical outcome alone.
+    fn install(
+        targets: &TargetPaths,
+        ptuf_binary: &str,
+        dry_run: bool,
+    ) -> Result<InstallOutcome, InitError> {
+        install_with_report(targets, ptuf_binary, dry_run).map(|(outcome, _)| outcome)
+    }
+
     fn workdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "ptuf-init-kiro-{}-{}-{}",
@@ -653,17 +664,6 @@ mod tests {
             skipped_non_json: Vec::new(),
             default_agent_names: Vec::new(),
         }
-    }
-
-    /// Test shim for the tests that only assert on the canonical
-    /// outcome. Production callers all want the extras, so the adapter
-    /// itself exposes only `install_with_report`.
-    fn install(
-        targets: &TargetPaths,
-        bin: &str,
-        dry_run: bool,
-    ) -> Result<InstallOutcome, InitError> {
-        install_with_report(targets, bin, dry_run).map(|(outcome, _)| outcome)
     }
 
     fn install_and_extras(

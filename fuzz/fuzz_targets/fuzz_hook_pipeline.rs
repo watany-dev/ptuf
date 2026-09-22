@@ -13,7 +13,7 @@
 //! filesystem I/O.
 
 use libfuzzer_sys::fuzz_target;
-use ptuf::config::{self, Config};
+use ptuf::config;
 use ptuf::{Engine, HookInput};
 use std::path::Path;
 

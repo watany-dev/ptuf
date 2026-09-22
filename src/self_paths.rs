@@ -134,7 +134,7 @@ impl ProtectedPaths {
 
     /// Hermetic variant used by tests; collapses to [`Self::collect`]
     /// in production via the [`SystemEnv`] lookup.
-    pub fn collect_with_env(
+    pub(crate) fn collect_with_env(
         repo_root: Option<&Path>,
         config: &Config,
         env: &dyn EnvLookup,
@@ -336,7 +336,7 @@ impl ProtectedPaths {
     /// Bash command (`facts.bash`) so the engine's hot path never
     /// parses the same command line twice. Pass `None` for `bash` to
     /// fall back to parsing the payload's `command` string internally.
-    pub fn classify_input_prepared(
+    pub(crate) fn classify_input_prepared(
         &self,
         input: &HookInput,
         paths: &[crate::facts::path::FilePath],

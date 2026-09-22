@@ -131,7 +131,7 @@ const KEYWORD_NEEDLES: &[&str] = &[
 /// replacement only deletes matched text or splices in `***` /
 /// captured substrings, so no pass can introduce a needle that the
 /// original input did not already contain.
-pub fn redact_strict(input: &str) -> String {
+pub(crate) fn redact_strict(input: &str) -> String {
     let lower = input.to_ascii_lowercase();
     let has_keyword = KEYWORD_NEEDLES.iter().any(|n| lower.contains(n));
 

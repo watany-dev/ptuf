@@ -10,13 +10,13 @@ use std::io;
 use std::process::Command;
 
 #[derive(Debug)]
-pub struct SpawnOutcome {
+pub(crate) struct SpawnOutcome {
     pub exit_code: i32,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
 }
 
-pub trait Spawner {
+pub(crate) trait Spawner {
     /// Run `program` with `args`, capturing stdout/stderr into the outcome.
     /// Use for short probes whose output ptuf parses (curl headers,
     /// `cargo --version`).
@@ -30,7 +30,7 @@ pub trait Spawner {
 }
 
 #[derive(Debug, Default)]
-pub struct ProcessSpawner;
+pub(crate) struct ProcessSpawner;
 
 impl Spawner for ProcessSpawner {
     fn run(&self, program: &str, args: &[&str]) -> io::Result<SpawnOutcome> {
@@ -51,32 +51,32 @@ impl Spawner for ProcessSpawner {
 }
 
 #[cfg(test)]
-pub mod testing {
+pub(crate) mod testing {
     use std::cell::RefCell;
     use std::io;
 
     use super::{SpawnOutcome, Spawner};
 
     #[derive(Debug)]
-    pub struct RecordedCall {
+    pub(crate) struct RecordedCall {
         pub program: String,
         pub args: Vec<String>,
     }
 
-    pub struct RecordingSpawner {
+    pub(crate) struct RecordingSpawner {
         outcomes: RefCell<Vec<io::Result<SpawnOutcome>>>,
         calls: RefCell<Vec<RecordedCall>>,
     }
 
     impl RecordingSpawner {
-        pub fn new(outcomes: Vec<io::Result<SpawnOutcome>>) -> Self {
+        pub(crate) fn new(outcomes: Vec<io::Result<SpawnOutcome>>) -> Self {
             Self {
                 outcomes: RefCell::new(outcomes),
                 calls: RefCell::new(Vec::new()),
             }
         }
 
-        pub fn calls(&self) -> Vec<RecordedCall> {
+        pub(crate) fn calls(&self) -> Vec<RecordedCall> {
             self.calls
                 .borrow()
                 .iter()
@@ -109,7 +109,7 @@ pub mod testing {
         }
     }
 
-    pub fn ok(stdout: &str) -> io::Result<SpawnOutcome> {
+    pub(crate) fn ok(stdout: &str) -> io::Result<SpawnOutcome> {
         Ok(SpawnOutcome {
             exit_code: 0,
             stdout: stdout.as_bytes().to_vec(),
@@ -117,7 +117,7 @@ pub mod testing {
         })
     }
 
-    pub fn ok_with_stderr(exit_code: i32, stderr: &str) -> io::Result<SpawnOutcome> {
+    pub(crate) fn ok_with_stderr(exit_code: i32, stderr: &str) -> io::Result<SpawnOutcome> {
         Ok(SpawnOutcome {
             exit_code,
             stdout: Vec::new(),

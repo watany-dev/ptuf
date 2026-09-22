@@ -43,7 +43,7 @@ use super::ConfigRule;
 use super::sensitive_bash_read::READER_HEADS;
 
 /// `core.injection.invisible-chars` rule — see module docs.
-pub struct InvisibleChars;
+pub(crate) struct InvisibleChars;
 
 const RULE_ID: &str = "core.injection.invisible-chars";
 

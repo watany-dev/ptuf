@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct RawHookInput {
+pub(crate) struct RawHookInput {
     pub tool_name: String,
     #[serde(default)]
     pub tool_input: serde_json::Value,
@@ -15,9 +15,12 @@ pub struct HookInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Event<'a> {
+pub(crate) struct Event<'a> {
     pub agent: Option<&'a str>,
-    pub event: &'static str,
+    /// Hook phase this payload came from. The plugin DSL's `event:` key
+    /// is matched against `dsl::PRE_TOOL_USE`, not against this field,
+    /// so the name here is free.
+    pub kind: &'static str,
     pub tool: &'a str,
     pub inputs: &'a serde_json::Value,
     pub command: Option<&'a str>,
@@ -36,10 +39,10 @@ impl From<RawHookInput> for HookInput {
 }
 
 impl HookInput {
-    pub fn event(&self) -> Event<'_> {
+    pub(crate) fn event(&self) -> Event<'_> {
         Event {
             agent: None,
-            event: "PreToolUse",
+            kind: "PreToolUse",
             tool: &self.tool_name,
             inputs: &self.tool_input,
             command: self.bash_command(),
@@ -61,7 +64,7 @@ impl HookInput {
     /// generic top-level `path` field for `mcp__*` tool calls.
     ///
     /// Nested MCP path arrays (`files[].path`, `items[].path`, `paths[]`)
-    /// are collected by [`Self::event`] for fact extraction, but this
+    /// are collected by `Self::event` for fact extraction, but this
     /// compatibility accessor intentionally keeps the older top-level-only
     /// behavior.
     pub fn file_path(&self) -> Option<&str> {
@@ -486,7 +489,7 @@ mod tests {
         .expect("parse");
         let event = parsed.event();
         assert_eq!(event.tool, "mcp__github__push_files");
-        assert_eq!(event.event, "PreToolUse");
+        assert_eq!(event.kind, "PreToolUse");
         assert_eq!(event.paths, vec!["/tmp/a", "/tmp/b"]);
     }
 

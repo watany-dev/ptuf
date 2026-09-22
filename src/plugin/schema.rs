@@ -15,7 +15,7 @@ use crate::decision::{DecisionKind, Severity};
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct RawPlugin {
+pub(crate) struct RawPlugin {
     #[serde(rename = "apiVersion")]
     pub api_version: String,
     pub kind: String,
@@ -28,7 +28,7 @@ pub struct RawPlugin {
 
 #[derive(Debug, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
-pub struct RawMetadata {
+pub(crate) struct RawMetadata {
     pub name: String,
     #[serde(default)]
     pub version: String,
@@ -38,7 +38,7 @@ pub struct RawMetadata {
 
 #[derive(Debug, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
-pub struct RawCapabilities {
+pub(crate) struct RawCapabilities {
     #[serde(default)]
     pub events: Vec<String>,
     #[serde(default)]

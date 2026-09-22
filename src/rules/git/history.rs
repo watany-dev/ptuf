@@ -96,12 +96,12 @@ const GC_PRUNE_NOW: RuleSpec = RuleSpec {
     ],
 };
 
-pub static UPDATE_REF_DELETE_RULE: GitRule = GitRule {
+pub(crate) static UPDATE_REF_DELETE_RULE: GitRule = GitRule {
     spec: &UPDATE_REF_DELETE,
 };
-pub static REFLOG_EXPIRE_RULE: GitRule = GitRule {
+pub(crate) static REFLOG_EXPIRE_RULE: GitRule = GitRule {
     spec: &REFLOG_EXPIRE,
 };
-pub static GC_PRUNE_NOW_RULE: GitRule = GitRule {
+pub(crate) static GC_PRUNE_NOW_RULE: GitRule = GitRule {
     spec: &GC_PRUNE_NOW,
 };

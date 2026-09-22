@@ -2,11 +2,11 @@
 //!
 //! [`Config`] is the resolved view applied at runtime. Each policy
 //! scope (`/etc/ptuf`, `~/.config/ptuf`, `<repo>/.ptuf.yaml`,
-//! `<repo>/.ptuf.local.yaml`) deserialises into a [`schema::RawConfig`]
-//! whose fields are all optional; [`merge::merge`] folds those layers
+//! `<repo>/.ptuf.local.yaml`) deserialises into a `schema::RawConfig`
+//! whose fields are all optional; `merge::merge` folds those layers
 //! (lowest first) into a single [`Config`].
 //!
-//! [`load_for`] orchestrates the layered load: it walks the documented
+//! `load_for` orchestrates the layered load: it walks the documented
 //! scope order, parses each YAML that exists via [`yaml`] and discards
 //! missing scopes silently. Errors carry the offending path so that
 //! `failClosed` mode can surface them to the user.
@@ -20,9 +20,14 @@ use crate::decision::{DecisionKind, Severity};
 use crate::plugin::dsl::WhenNode;
 
 pub mod merge;
-pub mod repo;
-pub mod schema;
-pub mod scope;
+pub(crate) mod repo;
+pub(crate) mod schema;
+
+// `schema` itself is internal; `RawConfig` is re-exported because it
+// is the value `yaml::parse_str` hands to `merge::merge`, the pair of
+// trust boundaries the `fuzz/` workspace drives.
+pub use schema::RawConfig;
+pub(crate) mod scope;
 pub mod yaml;
 
 /// Operating mode for the engine.
@@ -170,14 +175,14 @@ pub enum RedactionMode {
 }
 
 /// Documented default audit path (`$HOME/.local/share/ptuf/audit.jsonl`).
-pub fn default_audit_path() -> Option<PathBuf> {
+pub(crate) fn default_audit_path() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .map(|home| home.join(".local/share/ptuf/audit.jsonl"))
 }
 
 /// Resolved audit path after applying defaulting and `enabled`.
-pub fn resolved_audit_path(config: &Config) -> Option<PathBuf> {
+pub(crate) fn resolved_audit_path(config: &Config) -> Option<PathBuf> {
     if !config.audit.enabled {
         return None;
     }
@@ -252,14 +257,14 @@ impl std::error::Error for ConfigError {
 /// `home_dir` and `etc_dir` overrides exist for testability — production
 /// callers pass the real `$HOME` and `/etc/ptuf` paths via
 /// [`scope::default_layout`].
-pub fn load_for(repo_root: Option<&Path>) -> Result<Config, ConfigError> {
+pub(crate) fn load_for(repo_root: Option<&Path>) -> Result<Config, ConfigError> {
     load_with_layout(scope::default_layout(repo_root))
 }
 
 /// Load configuration given an explicit [`scope::Layout`]. Used by the
 /// public [`load_for`] helper as well as by integration tests that
 /// inject fixture directories.
-pub fn load_with_layout(layout: scope::Layout) -> Result<Config, ConfigError> {
+pub(crate) fn load_with_layout(layout: scope::Layout) -> Result<Config, ConfigError> {
     let mut layers = Vec::new();
     for path in layout.ordered_paths() {
         if !path.is_file() {

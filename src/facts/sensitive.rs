@@ -260,7 +260,7 @@ fn fold_char(c: char) -> char {
 /// first hit and allocates nothing, so rules that only need the yes/no
 /// answer (`sensitive-path-to-network`, `sensitive-bash-read`) do not
 /// pay for the [`classify`] result vector.
-pub fn matches(token: &str) -> bool {
+pub(crate) fn matches(token: &str) -> bool {
     let folded = fold_sensitive_homoglyphs(token);
     let token = folded.as_ref();
     let mask = needle_mask(token.as_bytes());
@@ -278,7 +278,11 @@ pub fn matches(token: &str) -> bool {
 /// Inspect a single string token and return every sensitive shape it
 /// matches. The slice preserves variant declaration order for
 /// determinism.
-pub fn classify(token: &str) -> Vec<SensitivePath> {
+///
+/// Test-only: production sweeps append into a caller-owned buffer via
+/// [`classify_into`] instead of allocating a `Vec` per token.
+#[cfg(test)]
+pub(crate) fn classify(token: &str) -> Vec<SensitivePath> {
     let mut out = Vec::new();
     classify_into(token, &mut out);
     out
@@ -286,7 +290,7 @@ pub fn classify(token: &str) -> Vec<SensitivePath> {
 
 /// [`classify`] variant that appends into a caller-owned buffer, so
 /// per-token sweeps over large payloads skip the intermediate `Vec`.
-pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
+pub(crate) fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
     classify_into_filtered(token, out, false);
 }
 
@@ -294,7 +298,7 @@ pub fn classify_into(token: &str, out: &mut Vec<SensitivePath>) {
 /// `Edit` `new_string` / MCP `content`): only kinds whose match is
 /// secret data itself ([`SensitiveKind::applies_to_content`]) fire, so
 /// prose merely mentioning credential paths stays clean.
-pub fn classify_content_into(token: &str, out: &mut Vec<SensitivePath>) {
+pub(crate) fn classify_content_into(token: &str, out: &mut Vec<SensitivePath>) {
     classify_into_filtered(token, out, true);
 }
 

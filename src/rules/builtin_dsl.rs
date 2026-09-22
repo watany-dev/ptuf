@@ -29,7 +29,7 @@ const BUILTINS_YAML: &str = include_str!("builtins.yaml");
 const BUILTINS_PATH: &str = "<builtin>/rules/builtins.yaml";
 
 /// Parse and compile the embedded builtin rule set.
-pub fn load() -> Result<Vec<PluginRule>, PluginError> {
+pub(crate) fn load() -> Result<Vec<PluginRule>, PluginError> {
     loader::load_builtin_str(Path::new(BUILTINS_PATH), BUILTINS_YAML).map(|plugin| plugin.rules)
 }
 
@@ -39,7 +39,7 @@ static BUILTIN_RULES: LazyLock<Vec<PluginRule>> =
 /// Iterate over the compiled builtin DSL rules (compiled once, on first
 /// use). On the structurally-unreachable compile failure this yields
 /// the fail-closed sentinel instead.
-pub fn iter() -> impl Iterator<Item = &'static PluginRule> {
+pub(crate) fn iter() -> impl Iterator<Item = &'static PluginRule> {
     BUILTIN_RULES.iter()
 }
 
@@ -147,8 +147,9 @@ mod tests {
     /// one `ptuf plugin test` exposes to plugin authors.
     #[test]
     fn builtins_yaml_self_tests_pass() {
-        let report = crate::plugin::runner::run_str(Path::new(BUILTINS_PATH), BUILTINS_YAML)
-            .expect("embedded builtins.yaml must run its own tests");
+        let report =
+            crate::plugin::runner::run_builtin_str(Path::new(BUILTINS_PATH), BUILTINS_YAML)
+                .expect("embedded builtins.yaml must run its own tests");
         assert!(report.failed_count() == 0, "failing cases: {report:?}");
         assert!(report.passed_count() > 0, "no test cases declared");
     }

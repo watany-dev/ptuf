@@ -26,7 +26,7 @@ use crate::reason;
 
 use super::ConfigRule;
 
-pub struct SensitiveRead;
+pub(crate) struct SensitiveRead;
 
 const RULE_ID: &str = "core.secrets.sensitive-read";
 

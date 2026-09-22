@@ -10,13 +10,13 @@ use super::{FileMode, InitError, InstallOutcome, InstallPath, InstallStatus};
 
 const TEMPLATE: &str = include_str!("templates/opencode_plugin.ts");
 
-pub const MANAGED_MARKER: &str = "Managed by ptuf. Do not edit manually.";
-pub const AGENT_MARKER: &str = "ptuf-agent: opencode";
-pub const BINARY_PLACEHOLDER: &str = "__PTUF_BINARY__";
-pub const VERSION_PLACEHOLDER: &str = "__PTUF_VERSION__";
+pub(crate) const MANAGED_MARKER: &str = "Managed by ptuf. Do not edit manually.";
+pub(crate) const AGENT_MARKER: &str = "ptuf-agent: opencode";
+pub(crate) const BINARY_PLACEHOLDER: &str = "__PTUF_BINARY__";
+pub(crate) const VERSION_PLACEHOLDER: &str = "__PTUF_VERSION__";
 
-pub const DEFAULT_PLUGIN_NAME: &str = "ptuf.ts";
-pub const DEFAULT_MATCHER: &str = "OpenCode tool.execute.before plugin";
+pub(crate) const DEFAULT_PLUGIN_NAME: &str = "ptuf.ts";
+pub(crate) const DEFAULT_MATCHER: &str = "OpenCode tool.execute.before plugin";
 const PLUGIN_DIR: &str = "plugins";
 const LEGACY_PLUGIN_DIR: &str = "plugin";
 
@@ -34,20 +34,20 @@ pub struct OpencodeInitOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TargetPaths {
+pub(crate) struct TargetPaths {
     pub root: PathBuf,
     pub plugin_path: PathBuf,
     pub legacy_plugin_path: PathBuf,
 }
 
-pub fn resolve_paths(
+pub(crate) fn resolve_paths(
     start: Option<&Path>,
     options: &OpencodeInitOptions,
 ) -> Result<TargetPaths, InitError> {
     resolve_paths_with(start, &SystemEnv, options)
 }
 
-pub fn resolve_paths_with(
+pub(crate) fn resolve_paths_with(
     start: Option<&Path>,
     env: &dyn EnvLookup,
     options: &OpencodeInitOptions,
@@ -82,7 +82,7 @@ pub fn resolve_paths_with(
     }
 }
 
-pub fn opencode_config_dir(env: &dyn EnvLookup) -> Result<PathBuf, InitError> {
+pub(crate) fn opencode_config_dir(env: &dyn EnvLookup) -> Result<PathBuf, InitError> {
     if let Some(xdg) = env.var_os("XDG_CONFIG_HOME") {
         return Ok(PathBuf::from(xdg).join("opencode"));
     }
@@ -90,7 +90,7 @@ pub fn opencode_config_dir(env: &dyn EnvLookup) -> Result<PathBuf, InitError> {
     Ok(PathBuf::from(home).join(".config/opencode"))
 }
 
-pub fn install(
+pub(crate) fn install(
     targets: &TargetPaths,
     ptuf_binary: &str,
     dry_run: bool,
@@ -161,7 +161,7 @@ fn apply(path: &Path, desired: &[u8], dry_run: bool) -> Result<InstallStatus, In
     Ok(InstallStatus::Installed)
 }
 
-pub fn render_plugin(ptuf_binary: &str, version: &str) -> Vec<u8> {
+pub(crate) fn render_plugin(ptuf_binary: &str, version: &str) -> Vec<u8> {
     let ptuf_binary = serde_json::to_string(ptuf_binary).unwrap_or_else(|_| "\"ptuf\"".into());
     TEMPLATE
         .replace(BINARY_PLACEHOLDER, &ptuf_binary)

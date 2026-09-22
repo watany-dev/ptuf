@@ -34,6 +34,6 @@ const BRANCH_DELETE_FORCE: RuleSpec = RuleSpec {
     ],
 };
 
-pub static BRANCH_DELETE_FORCE_RULE: GitRule = GitRule {
+pub(crate) static BRANCH_DELETE_FORCE_RULE: GitRule = GitRule {
     spec: &BRANCH_DELETE_FORCE,
 };

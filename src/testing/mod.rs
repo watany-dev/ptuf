@@ -6,7 +6,7 @@
 //! `#[cfg(test)] mod tests` blocks share; the `*_pbt` modules host the
 //! cross-module properties that have no single owning module.
 
-pub mod proptest;
+pub(crate) mod proptest;
 
 mod cli_parse_pbt;
 mod engine_pbt;

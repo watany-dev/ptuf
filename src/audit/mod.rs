@@ -8,16 +8,16 @@
 
 pub(crate) mod read;
 pub mod record;
-pub mod redaction;
-pub mod time;
-pub mod writer;
+pub(crate) mod redaction;
+pub(crate) mod time;
+pub(crate) mod writer;
 
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-pub use record::AuditRecord;
-pub use redaction::redact_strict;
+pub(crate) use record::AuditRecord;
+pub(crate) use redaction::redact_strict;
 
 use writer::WriteError;
 
@@ -31,7 +31,7 @@ pub enum AuditError {
     Write(WriteError),
     /// The sink could not be initialised (e.g. opening the JSONL file
     /// failed). The engine surfaces this through stderr and continues
-    /// with a [`NoopSink`].
+    /// with a `NoopSink`.
     Open { path: PathBuf, message: String },
 }
 
@@ -61,7 +61,7 @@ impl std::error::Error for AuditError {
 pub trait AuditSink: Send + Sync {
     fn record(&self, record: &AuditRecord) -> Result<(), AuditError>;
 
-    /// `false` when this sink discards every record (the [`NoopSink`]).
+    /// `false` when this sink discards every record (the `NoopSink`).
     /// Lets the engine skip redaction and record assembly entirely —
     /// per-call cost that would otherwise be paid for nothing on every
     /// audited-class decision when audit is disabled.
@@ -72,7 +72,7 @@ pub trait AuditSink: Send + Sync {
 
 /// No-op sink used when audit is disabled.
 #[derive(Debug, Default)]
-pub struct NoopSink;
+pub(crate) struct NoopSink;
 
 impl AuditSink for NoopSink {
     fn record(&self, _record: &AuditRecord) -> Result<(), AuditError> {
@@ -121,12 +121,12 @@ impl AuditSink for MemorySink {
 /// concurrent ptuf processes are serialised by an OS-level advisory
 /// lock taken on every record (`flock(2)` on Unix, `LockFileEx` on
 /// Windows) so JSONL lines never interleave across writers.
-pub struct JsonlSink {
+pub(crate) struct JsonlSink {
     file: Mutex<File>,
 }
 
 impl JsonlSink {
-    pub fn open(path: &std::path::Path) -> Result<Self, AuditError> {
+    pub(crate) fn open(path: &std::path::Path) -> Result<Self, AuditError> {
         let f = writer::open_append(path).map_err(|e| AuditError::Open {
             path: path.to_path_buf(),
             message: e.to_string(),

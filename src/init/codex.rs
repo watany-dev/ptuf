@@ -17,19 +17,19 @@ use super::{FileMode, InitError, InstallOutcome, InstallPath, InstallStatus};
 const TMP_BASENAME: &str = "hooks.json";
 
 /// Matcher we install for the first-class Codex adapter.
-pub const DEFAULT_MATCHER: &str = "Bash|apply_patch|mcp__.*";
+pub(crate) const DEFAULT_MATCHER: &str = "Bash|apply_patch|mcp__.*";
 
 /// Trailing tokens that identify a ptuf Codex `PreToolUse` hook.
 pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "codex"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TargetPaths {
+pub(crate) struct TargetPaths {
     pub root: Option<PathBuf>,
     pub hooks_path: PathBuf,
     pub config_path: PathBuf,
 }
 
-pub fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
+pub(crate) fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitError> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     resolve_paths_with(start, home.as_deref())
 }
@@ -53,7 +53,7 @@ pub(crate) fn resolve_paths_with(
     })
 }
 
-pub fn install(
+pub(crate) fn install(
     targets: &TargetPaths,
     ptuf_binary: &str,
     dry_run: bool,
@@ -474,6 +474,7 @@ mod tests {
     }
 
     #[test]
+
     fn entry_commands_returns_empty_when_hooks_key_is_missing() {
         let entry = json!({ "matcher": DEFAULT_MATCHER });
         assert!(entry_commands(&entry).is_empty());

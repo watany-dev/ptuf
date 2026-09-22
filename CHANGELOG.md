@@ -114,6 +114,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   同じ `CWD_LOCK` を取るようにした (PBT が同一バイナリに移り並列度が
   上がったことで顕在化した flake)。(#215)
 
+### Removed (BREAKING)
+- crate 外から参照されていない非テスト `pub` 項目を一掃した。`src/` 配下
+  (`src/main.rs` と `src/testing/**` を除き、末尾の `#[cfg(test)] mod tests` を
+  切り落として数えた `pub fn|struct|enum|trait|type|const|static|mod|use` 宣言)
+  は 482 → 158 件になり、`cargo-semver-checks` が守る公開 API は
+  `src/lib.rs` の re-export (`Decision` / `aggregate` / `Engine` /
+  `EngineError` / `Outcome` / `Facts` / `HookInput` / `decide` /
+  `try_decide`)、`fuzz/` が叩く信頼境界 (`config::yaml::parse_str` /
+  `config::merge::merge` / `plugin::load_str` / `facts::shell::parse` /
+  `cli::fuzz_copilot_parse` / `cli::fuzz_opencode_parse`)、および
+  `tests/` / `benches/` が使う範囲に縮小した。
+- `AuditRecord::build` — 0.6.0 から deprecated だった builder shim。
+  `AuditRecord::builder` を使う。
+- `InitError::UnknownAgent` — 構築箇所が無い variant。agent 名の検証は
+  `cli::ParseError::UnknownAgent` が担う。
+- `facts::path::extract` の production 版 — 単一パス形は test だけが使うため
+  `#[cfg(test)]` に落とした。production は `extract_all` を通る。
+- `LoadedPlugin::rule_count` / `PluginSet::rule_count` — `rules.len()` /
+  `rules().count()` と同値の重複アクセサ。呼び出し側をそちらに寄せて削除した。
+- `facts::sensitive::classify` を `#[cfg(test)]` に落とした。buffer を取る
+  `classify_into` の `Vec` 版で、production からは呼ばれていない。
+- `hook_output::opencode::OpencodeHookResponse` — `PiHookResponse` の未使用 alias。
+- 上記の公開 API 削除にあたるため 0.15.0 へ bump。(#217)
+
+### Changed
+- `unreachable_pub = "deny"` を有効化 (`Cargo.toml [lints.rust]`)。内部項目に
+  付いた inert な `pub` が再び増えるのを止める。この lint は *モジュール鎖が
+  crate 内に閉じている* 項目しか見ないため、公開 API に属さない module 宣言は
+  `pub(crate) mod` に落とし、lint が実際に効く状態にした。`unreachable_pub` と
+  方向が衝突する `clippy::redundant_pub_crate` (nursery) は `allow` にした。
+- 内部専用だった module 宣言を `pub(crate) mod` に降格した
+  (`hook_input` / `init` / `reason` / `self_paths` / `update`、および
+  `audit` / `config` / `facts` / `plugin` / `rules` / `hook_output` 配下の
+  子モジュール)。`pub` のまま残したのは `src/lib.rs` の re-export 経路と
+  `fuzz/` / `tests/` / `benches/` が名指しする
+  `audit::record` / `facts::shell` / `plugin::dsl` / `config::yaml` /
+  `config::merge` のみ。
+- `plugin::runner::run_str` を `#[cfg(test)]` に移し、独自の YAML パースを
+  やめて production と同じ `plugin::load_str` 経由に統一した。test fixture も
+  `apiVersion` / `kind` / 予約 id の検証を通る。`run` と `run_str` は
+  `run_loaded` で本体を共有する。(#217)
+
 ## [0.8.0] - 2026-09-17
 
 ### Added

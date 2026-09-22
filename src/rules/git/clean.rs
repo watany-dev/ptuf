@@ -57,4 +57,4 @@ const CLEAN_FDX: RuleSpec = RuleSpec {
     ],
 };
 
-pub static CLEAN_FDX_RULE: GitRule = GitRule { spec: &CLEAN_FDX };
+pub(crate) static CLEAN_FDX_RULE: GitRule = GitRule { spec: &CLEAN_FDX };

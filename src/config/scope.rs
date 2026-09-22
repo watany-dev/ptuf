@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 /// Resolved set of YAML paths in lowest-to-highest priority order.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Layout {
+pub(crate) struct Layout {
     pub system: Option<PathBuf>,
     pub user: Option<PathBuf>,
     pub project: Option<PathBuf>,
@@ -30,7 +30,7 @@ pub struct Layout {
 
 impl Layout {
     /// Yield every populated path in scope order.
-    pub fn ordered_paths(&self) -> Vec<PathBuf> {
+    pub(crate) fn ordered_paths(&self) -> Vec<PathBuf> {
         [
             self.system.as_ref(),
             self.user.as_ref(),
@@ -48,12 +48,12 @@ impl Layout {
 /// `std::env`; tests inject an in-memory map to avoid mutating global
 /// process state (which is `unsafe` in edition 2024 and is forbidden
 /// by the crate-level lint).
-pub trait EnvLookup {
+pub(crate) trait EnvLookup {
     fn var_os(&self, key: &str) -> Option<OsString>;
 }
 
 /// Production environment lookup.
-pub struct SystemEnv;
+pub(crate) struct SystemEnv;
 
 impl EnvLookup for SystemEnv {
     fn var_os(&self, key: &str) -> Option<OsString> {
@@ -101,13 +101,13 @@ impl EnvLookup for MapEnv {
 }
 
 /// Build the default layout for the current process's environment.
-pub fn default_layout(repo_root: Option<&Path>) -> Layout {
+pub(crate) fn default_layout(repo_root: Option<&Path>) -> Layout {
     layout_for(repo_root, &SystemEnv)
 }
 
 /// Build a layout using `env` for variable lookups. Used directly by
 /// tests that need a hermetic env.
-pub fn layout_for(repo_root: Option<&Path>, env: &dyn EnvLookup) -> Layout {
+pub(crate) fn layout_for(repo_root: Option<&Path>, env: &dyn EnvLookup) -> Layout {
     Layout {
         system: system_config_path(env),
         user: user_config_path(env),

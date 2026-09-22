@@ -2,7 +2,7 @@
 //! own binary, configuration, plugins, or agent hook settings.
 //!
 //! All five rules are `hard_deny: true` / `Severity::Critical` per
-//! `docs/design/policy-packs.md:100-113`. They share the [`SelfRule`]
+//! `docs/design/policy-packs.md:100-113`. They share the `SelfRule`
 //! adapter so the [`crate::rules::ConfigRule`] trait is implemented
 //! exactly once.
 
@@ -21,7 +21,7 @@ struct RuleSpec {
     alternatives: &'static [&'static str],
 }
 
-pub struct SelfRule {
+pub(crate) struct SelfRule {
     spec: &'static RuleSpec,
 }
 
@@ -180,24 +180,24 @@ const OPENCODE_SETTINGS: RuleSpec = RuleSpec {
     ],
 };
 
-pub static BINARY_RULE: SelfRule = SelfRule { spec: &BINARY };
-pub static CONFIG_RULE: SelfRule = SelfRule { spec: &CONFIG };
-pub static PLUGIN_RULE: SelfRule = SelfRule { spec: &PLUGIN };
-pub static CLAUDE_SETTINGS_RULE: SelfRule = SelfRule {
+pub(crate) static BINARY_RULE: SelfRule = SelfRule { spec: &BINARY };
+pub(crate) static CONFIG_RULE: SelfRule = SelfRule { spec: &CONFIG };
+pub(crate) static PLUGIN_RULE: SelfRule = SelfRule { spec: &PLUGIN };
+pub(crate) static CLAUDE_SETTINGS_RULE: SelfRule = SelfRule {
     spec: &CLAUDE_SETTINGS,
 };
-pub static CODEX_SETTINGS_RULE: SelfRule = SelfRule {
+pub(crate) static CODEX_SETTINGS_RULE: SelfRule = SelfRule {
     spec: &CODEX_SETTINGS,
 };
-pub static HOOK_SCRIPT_RULE: SelfRule = SelfRule { spec: &HOOK_SCRIPT };
-pub static COPILOT_SETTINGS_RULE: SelfRule = SelfRule {
+pub(crate) static HOOK_SCRIPT_RULE: SelfRule = SelfRule { spec: &HOOK_SCRIPT };
+pub(crate) static COPILOT_SETTINGS_RULE: SelfRule = SelfRule {
     spec: &COPILOT_SETTINGS,
 };
-pub static KIRO_SETTINGS_RULE: SelfRule = SelfRule {
+pub(crate) static KIRO_SETTINGS_RULE: SelfRule = SelfRule {
     spec: &KIRO_SETTINGS,
 };
-pub static PI_SETTINGS_RULE: SelfRule = SelfRule { spec: &PI_SETTINGS };
-pub static OPENCODE_SETTINGS_RULE: SelfRule = SelfRule {
+pub(crate) static PI_SETTINGS_RULE: SelfRule = SelfRule { spec: &PI_SETTINGS };
+pub(crate) static OPENCODE_SETTINGS_RULE: SelfRule = SelfRule {
     spec: &OPENCODE_SETTINGS,
 };
 

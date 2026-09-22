@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// second precision (e.g. `2026-05-04T12:00:00Z`). Times before the
 /// Unix epoch are clamped to the epoch; they never occur in practice
 /// but a panic-free fallback keeps the audit pipeline lossless.
-pub fn rfc3339_utc(t: SystemTime) -> String {
+pub(crate) fn rfc3339_utc(t: SystemTime) -> String {
     let secs = t
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -25,7 +25,7 @@ pub fn rfc3339_utc(t: SystemTime) -> String {
 /// seconds, lowercase `t`, and offsets without a colon are rejected;
 /// allowlist authors are expected to write timestamps in canonical
 /// form. Returns `None` on any parse failure.
-pub fn parse_rfc3339_to_secs(s: &str) -> Option<u64> {
+pub(crate) fn parse_rfc3339_to_secs(s: &str) -> Option<u64> {
     if !has_canonical_shape(s) {
         return None;
     }

@@ -193,9 +193,9 @@ const ENV_BYPASS: RuleSpec = RuleSpec {
     ],
 };
 
-pub static NO_VERIFY_RULE: GitRule = GitRule { spec: &NO_VERIFY };
-pub static NO_GPG_SIGN_RULE: GitRule = GitRule { spec: &NO_GPG_SIGN };
-pub static CONFIG_OVERRIDE_BYPASS_RULE: GitRule = GitRule {
+pub(crate) static NO_VERIFY_RULE: GitRule = GitRule { spec: &NO_VERIFY };
+pub(crate) static NO_GPG_SIGN_RULE: GitRule = GitRule { spec: &NO_GPG_SIGN };
+pub(crate) static CONFIG_OVERRIDE_BYPASS_RULE: GitRule = GitRule {
     spec: &CONFIG_OVERRIDE_BYPASS,
 };
-pub static ENV_BYPASS_RULE: GitRule = GitRule { spec: &ENV_BYPASS };
+pub(crate) static ENV_BYPASS_RULE: GitRule = GitRule { spec: &ENV_BYPASS };

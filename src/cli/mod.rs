@@ -18,7 +18,7 @@ use crate::init::opencode::OpencodeInitOptions;
 use crate::init::pi::PiInitOptions;
 use crate::reason;
 
-pub use crate::update::UpdateOptions;
+pub(crate) use crate::update::UpdateOptions;
 
 /// Parsed `ptuf audit` flags. `limit = None` means the list-mode
 /// default of 20; `Some(0)` means return every match.
