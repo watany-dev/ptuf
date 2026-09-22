@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+- `rules::remote_pipe`(`RemoteScriptPipe`)を削除。`static RULES` に載らない
+  テスト専用 oracle で、本番の判定は DSL 版 `core.network.remote-script-pipe`
+  (`src/rules/builtins.yaml`)が行っていた。パリティ PBT は DSL への直接
+  アサーションに置き換え、回帰は `tests/bypass/corpus.jsonl` が守る。公開 API の
+  削除にあたるため 0.9.0 へ bump。(#209)
+
+### Fixed
+- ラベル無しの PKCS#8 PEM ヘッダ `-----BEGIN PRIVATE KEY-----` が機密分類器を
+  すり抜けていた問題を修正。audit redactor 側 (ラベル任意) と分類器側
+  (ラベル必須) でパターンが食い違っていたのが原因で、分類器統合に伴い
+  `PEM_PRIVATE_KEY_{BEGIN,END}` の単一定義へ収斂させた。(#210)
+
+### Changed (BREAKING)
+- 機密 path 分類器を `facts::sensitive` の `PROBES` 1 系統に統合。
+  `rules::patterns` の `SENSITIVE_PATH` / `SENSITIVE_NEEDLES` を削除し、
+  `matches_sensitive_path` は新設の短絡版 `sensitive::matches` へ委譲する
+  薄い adapter になった。2 実装の等価性を縛っていた PBT 群は、実装が 1 つに
+  なったため削除 (engine レベルの surface 間パリティ検証は継続)。公開 static の
+  削除にあたるため 0.10.0 へ bump。(#210)
+
+### Changed
+- テスト用の環境変数ダブルを `config::scope::MapEnv`
+  (`#[cfg(test)] pub(crate)`) 1 個に集約。`facts::path` / `self_paths` /
+  `config::scope` / `update::exe` / `init::opencode` に散っていた同型の
+  `MapEnv` 5 定義と、`init` の `EmptyEnv` / `XdgEnv` を削除した。公開 API に
+  影響はない。(#212)
+
+### Removed (BREAKING)
+- `ProtectedPaths::classify_input_with_paths` /
+  `ProtectedPaths::classify_input_with_paths_pair` — 4 段あった
+  `classify_input` の wrapper 連鎖を、facts 抽出を自前で行う
+  `classify_input` と engine 向けの `classify_input_prepared` の 2 本に
+  集約した。中間 2 本はどこからも呼ばれていなかった。(#216)
+- `self_paths::discover_repo` — `config::repo::discover` の 1 行 wrapper。
+  本番の呼び出し元は全て `config::repo::discover` を直接使っている。(#216)
+- 上記の公開 API 削除にあたるため 0.11.0 へ bump。
+
+### Changed
+- 6 つの agent adapter (`copilot` / `kiro` / `cline` / `cursor` / `pi` /
+  `opencode`) の入力正規化を `src/cli/input_helpers.rs` に集約。個別の
+  `*InputError` enum 6 種を単一の `InputError` に統合し、`sanitize_tool_name` /
+  `normalize_at_mcp` / `decode_args` / `first_string` の重複実装を共有化した
+  (crate 内部のみ、公開 API 変更なし)。空 tool name のメッセージは
+  `hook payload tool_name must not be empty` に統一。cline / kiro の
+  `tool_input` も共有 `decode_args` 経由となり、JSON 文字列として渡された
+  object を展開するようになった (従来は `raw` キーに素通し)。(#222)
+
 ### Changed
 - init adapter 9 種に複製されていた atomic write ヘルパ (`mkdir -p` →
   temp file → `rename`) を `init::write_atomically_at` 1 箇所に集約。
@@ -15,7 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sibling_temp_path` ラッパを削除し、`write_install_bytes` /
   `write_install_json` を直接呼ぶ。
 - 権限ビットだけが違った `write_secure` (0600) / `write_executable` (0700)
-  を `FileMode` を取る単一の writer に統合。書き込まれるモードは従来と同一。
+  を `FileMode` を取る単一の writer に統合。書き込まれるモードは従来と同一。(#218)
 
 ## [0.8.0] - 2026-09-17
 

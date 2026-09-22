@@ -93,6 +93,12 @@ pin)。hook 応答・audit record の shape は変わらない。
 - `PluginError` variant 追加は breaking change (0.5.0 bump)。
 - rule 定義が Rust と YAML の 2 箇所に分かれる過渡期が生じる (パリティ
   oracle の削除は全スライス完了後)。
+
+  > 追記 (#209): slice 1 の oracle `src/rules/remote_pipe.rs` は削除した。
+  > 二重メンテのコストが parity 検証の価値を上回ったため、以後は
+  > **slice ごとに oracle を消す** 運用とする。DSL 側の振る舞いは
+  > `src/rules/builtin_dsl.rs` の直接アサーションと
+  > `tests/bypass/corpus.jsonl` の must_catch ケースで pin する。
 - DSL 化された rule は compile を経るぶん、初回評価に LazyLock の
   one-shot コストが乗る (以降は静的 rule と同等)。
 
@@ -114,6 +120,6 @@ pin)。hook 応答・audit record の shape は変わらない。
 | 供給 | `src/rules/builtin_dsl.rs` | LazyLock + fail-closed sentinel + `iter()` |
 | chain | `src/rules/mod.rs` | `iter()` が RULES + DSL builtin を chain |
 | 予約 id | `src/plugin/loader.rs`, `src/plugin/mod.rs` | `ReservedRuleId` / `DuplicateRuleId` |
-| oracle | `src/rules/remote_pipe.rs` | RULES から外し legacy oracle として残置 |
+| oracle | `src/rules/remote_pipe.rs` | RULES から外し legacy oracle として残置 (#209 で削除済み) |
 | Tests | `src/rules/builtin_dsl.rs`, `tests/rules_iter_order.rs`, `tests/bypass/corpus.jsonl` | 片方向パリティ PBT / wire 同一 pin / 強化差分 must_catch 2 件 |
 | Doc | `docs/design/config-and-plugins.md`, `docs/design/policy-packs.md`, `docs/design/roadmap.md`, 本 ADR | 設計追従 |
