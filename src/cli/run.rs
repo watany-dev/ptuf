@@ -107,16 +107,21 @@ fn invalid_payload_deny(problem: &str) -> Decision {
 /// its own tool vocabulary, so its payload routes through
 /// `cli::cursor_input::parse`.
 fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
-    match agent {
-        HookAgent::ClaudeCode | HookAgent::Codex => serde_json::from_str::<HookInput>(body)
-            .map_err(|err| format!("hook payload is not valid JSON ({err})")),
-        HookAgent::Copilot => copilot_input::parse(body).map_err(|err| err.to_string()),
-        HookAgent::Kiro => kiro_input::parse(body).map_err(|err| err.to_string()),
-        HookAgent::Cline => cline_input::parse(body).map_err(|err| err.to_string()),
-        HookAgent::Cursor => cursor_input::parse(body).map_err(|err| err.to_string()),
-        HookAgent::Pi => pi_input::parse(body).map_err(|err| err.to_string()),
-        HookAgent::Opencode => opencode_input::parse(body).map_err(|err| err.to_string()),
-    }
+    // Every adapter fails with the shared `input_helpers::InputError`,
+    // which this single consumer flattens to its rendered message.
+    let adapted = match agent {
+        HookAgent::ClaudeCode | HookAgent::Codex => {
+            return serde_json::from_str::<HookInput>(body)
+                .map_err(|err| format!("hook payload is not valid JSON ({err})"));
+        },
+        HookAgent::Copilot => copilot_input::parse(body),
+        HookAgent::Kiro => kiro_input::parse(body),
+        HookAgent::Cline => cline_input::parse(body),
+        HookAgent::Cursor => cursor_input::parse(body),
+        HookAgent::Pi => pi_input::parse(body),
+        HookAgent::Opencode => opencode_input::parse(body),
+    };
+    adapted.map_err(|err| err.to_string())
 }
 
 pub(super) fn run_check<W1: Write, W2: Write>(
@@ -718,7 +723,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![path],
                     install: Box::new(move |dry_run| {
-                        let binary = init::claude_code::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::claude_code::install(&install_path, &binary, dry_run)?;
                         Ok(init::AdapterRunReport::Simple(outcome))
                     }),
@@ -729,7 +734,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.hooks_path.clone(), targets.config_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::codex::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::codex::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport::Simple(outcome))
                     }),
@@ -740,7 +745,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.hooks_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::copilot::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::copilot::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport::Simple(outcome))
                     }),
@@ -756,7 +761,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths,
                     install: Box::new(move |dry_run| {
-                        let binary = init::kiro::detect_binary();
+                        let binary = init::detect_binary();
                         let (outcome, extras) =
                             init::kiro::install_with_report(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport::Kiro { outcome, extras })
@@ -768,7 +773,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.hook_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::cline::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::cline::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport::Simple(outcome))
                     }),
@@ -779,7 +784,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.hooks_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::cursor::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::cursor::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport::Simple(outcome))
                     }),
@@ -790,7 +795,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.extension_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::pi::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::pi::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport::Simple(outcome))
                     }),
@@ -801,7 +806,7 @@ impl AgentPlan {
                 Ok(Self {
                     snapshot_paths: vec![targets.plugin_path.clone()],
                     install: Box::new(move |dry_run| {
-                        let binary = init::opencode::detect_binary();
+                        let binary = init::detect_binary();
                         let outcome = init::opencode::install(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport::Simple(outcome))
                     }),

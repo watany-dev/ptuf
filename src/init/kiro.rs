@@ -50,9 +50,15 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
+use super::json;
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
+
+/// Basename used for the sibling temp file when the destination path
+/// carries no file name of its own (see
+/// [`sibling_install_tmp_path`](super::sibling_install_tmp_path)).
+const TMP_BASENAME: &str = "agent.json";
 
 /// Agent name used by `KiroMode::NewAgent` (the legacy single-file path).
 /// Mirrors the agent file's `name` field and the file stem
@@ -200,11 +206,6 @@ pub enum ScopeFilter {
 pub struct KiroInitOptions {
     pub mode: KiroMode,
     pub scope: ScopeFilter,
-}
-
-/// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub fn detect_binary() -> String {
-    super::detect_binary_impl()
 }
 
 /// Production entry: resolve every agent-config path to patch.
@@ -511,7 +512,7 @@ fn install_one_file(path: &Path, command: &str, dry_run: bool) -> Result<bool, I
         append_hook(&mut root, path, command)?;
     }
     if !dry_run {
-        write_json_atomically(path, &root)?;
+        super::write_install_json(path, &root, TMP_BASENAME)?;
     }
     Ok(false)
 }
@@ -521,22 +522,9 @@ fn install_one_file(path: &Path, command: &str, dry_run: bool) -> Result<bool, I
 /// derived from the file stem so synthesized `default.json` files
 /// announce `"name": "default"` rather than `"ptuf-guarded"`.
 fn read_agent_config(path: &Path) -> Result<Value, InitError> {
-    match fs::read_to_string(path) {
-        Ok(s) if s.trim().is_empty() => {
-            Ok(default_agent_skeleton(stem_or(path, DEFAULT_AGENT_NAME)))
-        },
-        Ok(s) => serde_json::from_str(&s).map_err(|e| InitError::Json {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        }),
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            Ok(default_agent_skeleton(stem_or(path, DEFAULT_AGENT_NAME)))
-        },
-        Err(e) => Err(InitError::Io {
-            path: path.to_path_buf(),
-            source: e,
-        }),
-    }
+    json::read_or_default(path, || {
+        default_agent_skeleton(stem_or(path, DEFAULT_AGENT_NAME))
+    })
 }
 
 fn stem_or<'a>(path: &'a Path, fallback: &'a str) -> &'a str {
@@ -626,76 +614,13 @@ fn rewrite_legacy_hooks(root: &mut Value, command: &str) -> bool {
 }
 
 fn append_hook(root: &mut Value, agent_path: &Path, command: &str) -> Result<(), InitError> {
-    let Some(map) = root.as_object_mut() else {
-        return Err(InitError::Schema {
-            path: agent_path.to_path_buf(),
-            message: "top-level value must be a JSON object".into(),
-        });
-    };
-
-    let hooks = ensure_object(map, "hooks").ok_or_else(|| InitError::Schema {
-        path: agent_path.to_path_buf(),
-        message: "`hooks` must be an object".into(),
-    })?;
-
-    let pre_tool_use = ensure_array(hooks, "preToolUse").ok_or_else(|| InitError::Schema {
-        path: agent_path.to_path_buf(),
-        message: "`hooks.preToolUse` must be an array".into(),
-    })?;
-
-    pre_tool_use.push(json!({
+    json::hook_array(root, agent_path, "preToolUse")?.push(json!({
         "matcher": DEFAULT_MATCHER,
         "command": command,
         "timeout_ms": DEFAULT_TIMEOUT_MS,
         "cache_ttl_seconds": DEFAULT_CACHE_TTL_SECONDS,
     }));
     Ok(())
-}
-
-fn ensure_object<'a>(
-    map: &'a mut Map<String, Value>,
-    key: &str,
-) -> Option<&'a mut Map<String, Value>> {
-    map.entry(key.to_string())
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-}
-
-fn ensure_array<'a>(map: &'a mut Map<String, Value>, key: &str) -> Option<&'a mut Vec<Value>> {
-    map.entry(key.to_string())
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
-}
-
-fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-
-    let mut body = serde_json::to_string_pretty(value).map_err(|e| InitError::Schema {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
-    body.push('\n');
-
-    let tmp = sibling_temp_path(path);
-    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-fn sibling_temp_path(path: &Path) -> PathBuf {
-    super::sibling_install_tmp_path(path, "agent.json")
 }
 
 #[cfg(test)]
@@ -747,11 +672,6 @@ mod tests {
         dry_run: bool,
     ) -> (InstallOutcome, KiroInstallExtras) {
         install_with_report(targets, bin, dry_run).unwrap()
-    }
-
-    #[test]
-    fn detect_binary_delegates_to_shared_impl() {
-        assert!(!detect_binary().is_empty());
     }
 
     #[test]
@@ -1022,57 +942,6 @@ mod tests {
         assert!(!command_invokes_ptuf_hook("/x/ptuf hook kiro"));
         assert!(command_is_legacy_ptuf_hook("/x/ptuf hook kiro"));
         assert!(!command_is_legacy_ptuf_hook("/x/ptuf hook kiro-v2"));
-    }
-
-    #[test]
-    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
-        let p = Path::new("/");
-        let tmp = sibling_temp_path(p);
-        assert!(
-            tmp.to_string_lossy().contains("agent.json.ptuf."),
-            "missing file_name must default to agent.json: {tmp:?}"
-        );
-    }
-
-    #[test]
-    fn write_json_atomically_propagates_dir_creation_error() {
-        let dir = workdir("write-json-dir-fail");
-        let blocker = dir.join("blocker");
-        fs::write(&blocker, "not-a-dir").expect("write blocker");
-        let target = blocker.join("nested").join("target.json");
-        let err = write_json_atomically(&target, &json!({"x": 1}))
-            .expect_err("must fail when parent can't be created");
-        assert!(
-            matches!(err, InitError::Io { .. }),
-            "expected Io, got {err:?}"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_json_atomically_propagates_write_error_when_tmp_is_a_directory() {
-        let dir = workdir("write-tmp-blocked");
-        let target = dir.join("ptuf-guarded.json");
-        let collision = dir.join(format!("ptuf-guarded.json.ptuf.{}.tmp", std::process::id()));
-        fs::create_dir_all(&collision).unwrap();
-        let targets = single_target(target);
-        let err = install(&targets, "/x/ptuf", false).unwrap_err();
-        assert!(
-            matches!(err, InitError::Io { .. }),
-            "expected Io, got {err:?}"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_json_atomically_propagates_rename_error_when_target_is_a_directory() {
-        let dir = workdir("kiro-write-json-rename-dir");
-        let target = dir.join("ptuf-guarded.json");
-        fs::create_dir_all(&target).unwrap();
-        let err = write_json_atomically(&target, &json!({"x": 1}))
-            .expect_err("rename onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

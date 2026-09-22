@@ -10,13 +10,17 @@
 //! temp + rename so a crash can never leave a half-written
 //! `settings.json`.
 
-use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use super::json;
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
+
+/// Basename used for the sibling temp file when the destination path
+/// carries no file name of its own (see
+/// [`sibling_install_tmp_path`](super::sibling_install_tmp_path)).
+const TMP_BASENAME: &str = "settings.json";
 
 /// Matcher we install in the new entry — covers every tool ptuf can
 /// actually evaluate plus all MCP tools.
@@ -39,13 +43,6 @@ pub fn default_settings_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/settings.json"))
 }
 
-/// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`
-/// so the resulting hook entry is still useful when invoked from a
-/// CI container without a stable absolute path.
-pub fn detect_binary() -> String {
-    super::detect_binary_impl()
-}
-
 /// Install (or report a planned install for `dry_run = true`) the
 /// Claude Code PreToolUse hook entry.
 pub fn install(
@@ -54,7 +51,7 @@ pub fn install(
     dry_run: bool,
 ) -> Result<InstallOutcome, InitError> {
     let command = format!("{ptuf_binary} hook claude-code");
-    let mut root = read_settings(settings_path)?;
+    let mut root = json::read_object(settings_path)?;
 
     // The three exits below differ only in `status`, so build the
     // outcome once and let each branch pick its status.
@@ -79,24 +76,9 @@ pub fn install(
         return Ok(outcome(InstallStatus::WouldInstall));
     }
 
-    write_atomically(settings_path, &root)?;
+    super::write_install_json(settings_path, &root, TMP_BASENAME)?;
 
     Ok(outcome(InstallStatus::Installed))
-}
-
-fn read_settings(path: &Path) -> Result<Value, InitError> {
-    match fs::read_to_string(path) {
-        Ok(s) if s.trim().is_empty() => Ok(json!({})),
-        Ok(s) => serde_json::from_str(&s).map_err(|e| InitError::Json {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        }),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(json!({})),
-        Err(e) => Err(InitError::Io {
-            path: path.to_path_buf(),
-            source: e,
-        }),
-    }
 }
 
 fn has_existing_hook(root: &Value) -> bool {
@@ -142,35 +124,7 @@ pub(crate) fn entry_hooks(entry: &Value) -> Vec<&Value> {
 }
 
 fn append_hook(root: &mut Value, settings_path: &Path, command: &str) -> Result<(), InitError> {
-    if !root.is_object() {
-        return Err(InitError::Schema {
-            path: settings_path.to_path_buf(),
-            message: "top-level value must be a JSON object".into(),
-        });
-    }
-
-    let hooks = root
-        .as_object_mut()
-        .and_then(|m| {
-            m.entry("hooks")
-                .or_insert_with(|| json!({}))
-                .as_object_mut()
-        })
-        .ok_or_else(|| InitError::Schema {
-            path: settings_path.to_path_buf(),
-            message: "`hooks` must be an object".into(),
-        })?;
-
-    let pre_tool_use = hooks
-        .entry("PreToolUse")
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
-        .ok_or_else(|| InitError::Schema {
-            path: settings_path.to_path_buf(),
-            message: "`hooks.PreToolUse` must be an array".into(),
-        })?;
-
-    pre_tool_use.push(json!({
+    json::hook_array(root, settings_path, "PreToolUse")?.push(json!({
         "matcher": DEFAULT_MATCHER,
         "hooks": [{
             "name": HOOK_NAME,
@@ -181,41 +135,11 @@ fn append_hook(root: &mut Value, settings_path: &Path, command: &str) -> Result<
     Ok(())
 }
 
-fn write_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-
-    let mut body = serde_json::to_string_pretty(value).map_err(|e| InitError::Schema {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
-    body.push('\n');
-
-    let tmp = sibling_temp_path(path);
-    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-fn sibling_temp_path(path: &Path) -> PathBuf {
-    super::sibling_install_tmp_path(path, "settings.json")
-}
-
 #[cfg(test)]
 mod tests {
 
     use super::*;
+    use std::fs;
 
     fn workdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -533,15 +457,6 @@ mod tests {
     }
 
     #[test]
-    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
-        let tmp = sibling_temp_path(Path::new(""));
-        assert!(
-            tmp.to_string_lossy().starts_with("settings.json.ptuf."),
-            "got {tmp:?}",
-        );
-    }
-
-    #[test]
     fn install_returns_io_err_when_parent_is_a_regular_file() {
         let dir = workdir("parent-blocker");
         let blocker = dir.join("blocker");
@@ -550,43 +465,6 @@ mod tests {
         let path = blocker.join("settings.json");
         let err = install(&path, "/x/ptuf", false).unwrap_err();
         assert!(matches!(err, InitError::Io { .. }));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn detect_binary_delegates_to_shared_impl() {
-        assert!(!detect_binary().is_empty());
-    }
-
-    #[test]
-    fn write_atomically_propagates_rename_error_when_target_is_a_directory() {
-        let dir = workdir("write-rename-dir");
-        let target = dir.join("target");
-        fs::create_dir_all(&target).unwrap();
-        let err = write_atomically(&target, &json!({})).expect_err("rename onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_atomically_propagates_write_error_when_temp_path_is_a_directory() {
-        let dir = workdir("write-tmp-collision");
-        let target = dir.join("settings.json");
-        let collision = dir.join(format!("settings.json.ptuf.{}.tmp", std::process::id()));
-        fs::create_dir_all(&collision).unwrap();
-        let err = write_atomically(&target, &json!({})).expect_err("write onto dir must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_atomically_propagates_create_dir_all_error_when_parent_is_a_regular_file() {
-        let dir = workdir("write-mkdir-fail");
-        let blocker = dir.join("blocker");
-        fs::write(&blocker, b"x").unwrap();
-        let target = blocker.join("nested").join("settings.json");
-        let err = write_atomically(&target, &json!({})).expect_err("create_dir_all must fail");
-        assert!(matches!(err, InitError::Io { .. }), "got {err:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 

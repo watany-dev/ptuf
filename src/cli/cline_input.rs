@@ -19,7 +19,21 @@
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use super::input_helpers::{InputError, decode_args, first_string, hook_input};
 use crate::hook_input::HookInput;
+
+/// Hook envelopes this adapter understands, quoted verbatim in
+/// [`InputError::UnsupportedEvent`].
+const CLINE_HOOKS: &str = "tool_call or PreToolUse";
+
+/// The `hookName` envelope was not one this adapter handles.
+fn unsupported_hook(name: Option<String>) -> InputError {
+    InputError::UnsupportedEvent {
+        field: "hookName",
+        name,
+        expected: CLINE_HOOKS,
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct ClinePayload {
@@ -52,15 +66,15 @@ struct ClinePreToolUse {
 ///
 /// `tool_call` is preferred whenever present; the legacy `preToolUse`
 /// object is only consulted when `tool_call` is absent.
-pub(super) fn parse(body: &str) -> Result<HookInput, ClineInputError> {
+pub(super) fn parse(body: &str) -> Result<HookInput, InputError> {
     if body.trim().is_empty() {
-        return Err(ClineInputError::Empty);
+        return Err(InputError::Empty);
     }
-    let payload: ClinePayload = serde_json::from_str(body).map_err(ClineInputError::Json)?;
+    let payload: ClinePayload = serde_json::from_str(body).map_err(InputError::Json)?;
 
     if let Some(call) = payload.tool_call {
         if payload.hook_name.as_deref() != Some("tool_call") {
-            return Err(ClineInputError::UnsupportedHookName(payload.hook_name));
+            return Err(unsupported_hook(payload.hook_name));
         }
         return build(&call.name, call.input);
     }
@@ -70,58 +84,26 @@ pub(super) fn parse(body: &str) -> Result<HookInput, ClineInputError> {
             payload.hook_name.as_deref(),
             Some("PreToolUse" | "tool_call")
         ) {
-            return Err(ClineInputError::UnsupportedHookName(payload.hook_name));
+            return Err(unsupported_hook(payload.hook_name));
         }
         return build(&pre.tool_name, pre.parameters);
     }
 
-    Err(ClineInputError::MissingToolCall)
+    Err(InputError::Malformed(
+        "hook payload has neither tool_call nor preToolUse",
+    ))
 }
 
-fn build(raw_name: &str, raw_input: Value) -> Result<HookInput, ClineInputError> {
+fn build(raw_name: &str, raw_input: Value) -> Result<HookInput, InputError> {
     if raw_name.trim().is_empty() {
-        return Err(ClineInputError::EmptyToolName);
+        return Err(InputError::EmptyToolName);
     }
     Ok(normalize_call(raw_name, raw_input))
 }
 
-/// Reasons a Cline payload failed to normalise. Every variant maps to
-/// `core.engine.invalid-payload` at the CLI boundary; the Cline adapter
-/// surfaces the failure as a `cancel: true` JSON object at exit `0`.
-#[derive(Debug)]
-pub(super) enum ClineInputError {
-    Empty,
-    Json(serde_json::Error),
-    UnsupportedHookName(Option<String>),
-    MissingToolCall,
-    EmptyToolName,
-}
-
-impl std::fmt::Display for ClineInputError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "hook payload is empty"),
-            Self::Json(err) => write!(f, "hook payload is not valid JSON ({err})"),
-            Self::UnsupportedHookName(Some(name)) => {
-                write!(
-                    f,
-                    "unsupported hookName: {name} (expected tool_call or PreToolUse)"
-                )
-            },
-            Self::UnsupportedHookName(None) => {
-                write!(f, "missing hookName (expected tool_call or PreToolUse)")
-            },
-            Self::MissingToolCall => {
-                write!(f, "hook payload has neither tool_call nor preToolUse")
-            },
-            Self::EmptyToolName => write!(f, "hook payload tool name is empty"),
-        }
-    }
-}
-
 /// Build a canonical [`HookInput`] from a raw Cline tool name + input.
 fn normalize_call(raw_name: &str, raw_input: Value) -> HookInput {
-    let mut args = to_args_map(raw_input);
+    let mut args = decode_args(raw_input, "raw");
 
     let tool_name = match raw_name {
         "use_mcp_tool" => normalize_mcp_tool(&mut args),
@@ -153,25 +135,7 @@ fn normalize_call(raw_name: &str, raw_input: Value) -> HookInput {
         other => normalize_by_fields(other, &mut args),
     };
 
-    HookInput {
-        tool_name,
-        tool_input: Value::Object(args),
-    }
-}
-
-/// Coerce a Cline `input` / `parameters` value into a key/value map.
-/// Objects pass through; `null` becomes an empty map; anything else is
-/// preserved under a `raw` key so the engine can still inspect it.
-fn to_args_map(raw: Value) -> Map<String, Value> {
-    match raw {
-        Value::Object(map) => map,
-        Value::Null => Map::new(),
-        other => {
-            let mut m = Map::new();
-            m.insert("raw".into(), other);
-            m
-        },
-    }
+    hook_input(tool_name, Value::Object(args))
 }
 
 /// Classify an unknown tool by its input fields (`§5.1` fallbacks):
@@ -332,18 +296,6 @@ fn has_content_and_path(args: &Map<String, Value>) -> bool {
         ]
         .iter()
         .any(|key| args.contains_key(*key))
-}
-
-/// Return the first key in `keys` whose value is a JSON string, without
-/// removing it — Cline normalisation keeps the original alias keys so
-/// audit records still show the agent's raw payload.
-fn first_string(args: &Map<String, Value>, keys: &[&str]) -> Option<String> {
-    for key in keys {
-        if let Some(s) = args.get(*key).and_then(Value::as_str) {
-            return Some(s.to_string());
-        }
-    }
-    None
 }
 
 fn string_field(args: &Map<String, Value>, key: &str) -> Option<String> {
@@ -577,19 +529,19 @@ mod tests {
 
     #[test]
     fn cline_empty_body_is_rejected() {
-        assert!(matches!(parse(""), Err(ClineInputError::Empty)));
-        assert!(matches!(parse("   \n"), Err(ClineInputError::Empty)));
+        assert!(matches!(parse(""), Err(InputError::Empty)));
+        assert!(matches!(parse("   \n"), Err(InputError::Empty)));
     }
 
     #[test]
     fn cline_invalid_json_is_rejected() {
-        assert!(matches!(parse("not-json"), Err(ClineInputError::Json(_))));
+        assert!(matches!(parse("not-json"), Err(InputError::Json(_))));
     }
 
     #[test]
     fn cline_missing_tool_call_is_rejected() {
         let body = r#"{"hookName":"tool_call"}"#;
-        assert!(matches!(parse(body), Err(ClineInputError::MissingToolCall)));
+        assert!(matches!(parse(body), Err(InputError::Malformed(_))));
     }
 
     #[test]
@@ -597,7 +549,7 @@ mod tests {
         let body = r#"{"hookName":"sessionStart","tool_call":{"name":"bash","input":{}}}"#;
         assert!(matches!(
             parse(body),
-            Err(ClineInputError::UnsupportedHookName(Some(_)))
+            Err(InputError::UnsupportedEvent { name: Some(_), .. })
         ));
     }
 
@@ -606,7 +558,7 @@ mod tests {
         let body = r#"{"tool_call":{"name":"bash","input":{}}}"#;
         assert!(matches!(
             parse(body),
-            Err(ClineInputError::UnsupportedHookName(None))
+            Err(InputError::UnsupportedEvent { name: None, .. })
         ));
     }
 
@@ -616,35 +568,19 @@ mod tests {
             r#"{"hookName":"sessionStart","preToolUse":{"toolName":"bash","parameters":{}}}"#;
         assert!(matches!(
             parse(body),
-            Err(ClineInputError::UnsupportedHookName(_))
+            Err(InputError::UnsupportedEvent { .. })
         ));
     }
 
     #[test]
     fn cline_empty_tool_name_is_rejected() {
         let body = r#"{"hookName":"tool_call","tool_call":{"name":"   ","input":{}}}"#;
-        assert!(matches!(parse(body), Err(ClineInputError::EmptyToolName)));
+        assert!(matches!(parse(body), Err(InputError::EmptyToolName)));
     }
 
     #[test]
     fn cline_array_payload_is_rejected() {
-        assert!(matches!(parse("[]"), Err(ClineInputError::Json(_))));
-    }
-
-    #[test]
-    fn cline_input_error_display_covers_all_variants() {
-        let bad = serde_json::from_str::<Value>("nope").unwrap_err();
-        assert!(format!("{}", ClineInputError::Empty).contains("empty"));
-        assert!(format!("{}", ClineInputError::Json(bad)).contains("not valid JSON"));
-        assert!(
-            format!("{}", ClineInputError::UnsupportedHookName(Some("x".into())))
-                .contains("unsupported hookName")
-        );
-        assert!(
-            format!("{}", ClineInputError::UnsupportedHookName(None)).contains("missing hookName")
-        );
-        assert!(format!("{}", ClineInputError::MissingToolCall).contains("neither tool_call"));
-        assert!(format!("{}", ClineInputError::EmptyToolName).contains("tool name is empty"));
+        assert!(matches!(parse("[]"), Err(InputError::Json(_))));
     }
 
     #[test]
@@ -750,7 +686,7 @@ mod tests {
 
     proptest! {
         // parse() is total over arbitrary input strings: it returns
-        // Ok(HookInput) or one of the structured ClineInputError variants
+        // Ok(HookInput) or one of the structured InputError variants
         // and never panics. Drives the fail-closed contract at the
         // adapter boundary.
         #[test]
@@ -779,11 +715,11 @@ mod tests {
         ) {
             match parse(&body) {
                 Err(
-                    ClineInputError::Empty
-                    | ClineInputError::Json(_)
-                    | ClineInputError::UnsupportedHookName(_)
-                    | ClineInputError::MissingToolCall
-                    | ClineInputError::EmptyToolName,
+                    InputError::Empty
+                    | InputError::Json(_)
+                    | InputError::UnsupportedEvent { .. }
+                    | InputError::Malformed(_)
+                    | InputError::EmptyToolName,
                 ) => {},
                 other => prop_assert!(
                     false,

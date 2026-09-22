@@ -19,7 +19,12 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
+use super::{FileMode, InitError, InstallOutcome, InstallPath, InstallStatus};
+
+/// Basename used for the sibling temp file when the destination path
+/// carries no file name of its own (see
+/// [`sibling_install_tmp_path`](super::sibling_install_tmp_path)).
+const TMP_BASENAME: &str = "PreToolUse";
 
 /// Marker comment embedded in every ptuf-managed Cline wrapper. Its
 /// presence is what distinguishes a wrapper ptuf may rewrite from a
@@ -38,11 +43,6 @@ pub struct TargetPaths {
     /// `true` when the target is the `~/Documents/Cline/Hooks` global
     /// fallback rather than a repo-local `.clinerules/hooks` directory.
     pub global: bool,
-}
-
-/// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub fn detect_binary() -> String {
-    super::detect_binary_impl()
 }
 
 /// File name of the Cline `PreToolUse` hook for the current platform.
@@ -126,7 +126,7 @@ fn apply(path: &Path, desired: &[u8], dry_run: bool) -> Result<InstallStatus, In
     if dry_run {
         return Ok(InstallStatus::WouldInstall);
     }
-    write_executable_atomically(path, desired)?;
+    super::write_install_bytes(path, desired, TMP_BASENAME, FileMode::Executable)?;
     Ok(InstallStatus::Installed)
 }
 
@@ -168,30 +168,6 @@ fn quote_powershell(s: &str) -> String {
 fn is_ptuf_managed(bytes: &[u8]) -> bool {
     let text = String::from_utf8_lossy(bytes);
     text.contains(MANAGED_MARKER) || text.contains("ptuf hook cline")
-}
-
-fn write_executable_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-    let tmp = sibling_temp_path(path);
-    crate::init::write_executable(&tmp, bytes).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-fn sibling_temp_path(path: &Path) -> PathBuf {
-    super::sibling_install_tmp_path(path, "PreToolUse")
 }
 
 #[cfg(test)]
@@ -410,10 +386,5 @@ mod tests {
         assert!(is_ptuf_managed(b"do ptuf hook cline now"));
         assert!(!is_ptuf_managed(b"#!/bin/sh\necho hello\n"));
         assert!(!is_ptuf_managed(&[0xff, 0xfe]));
-    }
-
-    #[test]
-    fn detect_binary_delegates_to_shared_impl() {
-        assert!(!detect_binary().is_empty());
     }
 }
