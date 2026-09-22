@@ -65,6 +65,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 権限ビットだけが違った `write_secure` (0600) / `write_executable` (0700)
   を `FileMode` を取る単一の writer に統合。書き込まれるモードは従来と同一。(#218)
 
+### Changed (BREAKING)
+- 各 adapter の `pub fn detect_binary()` (8 個) を削除し、共有実装を
+  `init::detect_binary()` として公開。`init::claude_code::detect_binary()` 等を
+  呼んでいる下流は `init::detect_binary()` に置き換える必要がある。公開 API の
+  削除にあたるため 0.12.0 へ bump。(#219)
+
+### Changed
+- init adapter 間でコピーされていた JSON hook 操作ヘルパを
+  `src/init/json.rs` に集約。`read_hooks` / `read_settings` /
+  `read_agent_config` の共通部分は `json::read_or_default` /
+  `json::read_object` に、`ensure_object` / `ensure_array` /
+  `ensure_version` は 1 実装に、5 箇所の `append_hook` に共通していた
+  `hooks.<event>` 配列の掘り下げは `json::hook_array` になった。
+  生成される JSON とエラーメッセージは従来と同一。(#219)
+
 ## [0.8.0] - 2026-09-17
 
 ### Added

@@ -45,11 +45,6 @@ pub struct TargetPaths {
     pub global: bool,
 }
 
-/// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub fn detect_binary() -> String {
-    super::detect_binary_impl()
-}
-
 /// File name of the Cline `PreToolUse` hook for the current platform.
 fn cline_hook_file_name() -> &'static str {
     if cfg!(windows) {
@@ -391,10 +386,5 @@ mod tests {
         assert!(is_ptuf_managed(b"do ptuf hook cline now"));
         assert!(!is_ptuf_managed(b"#!/bin/sh\necho hello\n"));
         assert!(!is_ptuf_managed(&[0xff, 0xfe]));
-    }
-
-    #[test]
-    fn detect_binary_delegates_to_shared_impl() {
-        assert!(!detect_binary().is_empty());
     }
 }

@@ -40,10 +40,6 @@ pub struct TargetPaths {
     pub legacy_plugin_path: PathBuf,
 }
 
-pub fn detect_binary() -> String {
-    super::detect_binary_impl()
-}
-
 pub fn resolve_paths(
     start: Option<&Path>,
     options: &OpencodeInitOptions,
@@ -436,11 +432,6 @@ mod tests {
     fn is_ptuf_managed_requires_all_markers() {
         assert!(!is_ptuf_managed(b"// random file\n"));
         assert!(is_ptuf_managed(&render_plugin("/bin/ptuf", "1.0.0")));
-    }
-
-    #[test]
-    fn detect_binary_returns_non_empty_string() {
-        assert!(!detect_binary().is_empty());
     }
 
     #[test]

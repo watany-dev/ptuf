@@ -50,8 +50,9 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
+use super::json;
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
 /// Basename used for the sibling temp file when the destination path
@@ -205,11 +206,6 @@ pub enum ScopeFilter {
 pub struct KiroInitOptions {
     pub mode: KiroMode,
     pub scope: ScopeFilter,
-}
-
-/// Try `std::env::current_exe()`. Falls back to the literal `"ptuf"`.
-pub fn detect_binary() -> String {
-    super::detect_binary_impl()
 }
 
 /// Production entry: resolve every agent-config path to patch.
@@ -545,22 +541,9 @@ fn install_one_file(path: &Path, command: &str, dry_run: bool) -> Result<PerFile
 /// derived from the file stem so synthesized `default.json` files
 /// announce `"name": "default"` rather than `"ptuf-guarded"`.
 fn read_agent_config(path: &Path) -> Result<Value, InitError> {
-    match fs::read_to_string(path) {
-        Ok(s) if s.trim().is_empty() => {
-            Ok(default_agent_skeleton(stem_or(path, DEFAULT_AGENT_NAME)))
-        },
-        Ok(s) => serde_json::from_str(&s).map_err(|e| InitError::Json {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        }),
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            Ok(default_agent_skeleton(stem_or(path, DEFAULT_AGENT_NAME)))
-        },
-        Err(e) => Err(InitError::Io {
-            path: path.to_path_buf(),
-            source: e,
-        }),
-    }
+    json::read_or_default(path, || {
+        default_agent_skeleton(stem_or(path, DEFAULT_AGENT_NAME))
+    })
 }
 
 fn stem_or<'a>(path: &'a Path, fallback: &'a str) -> &'a str {
@@ -650,45 +633,13 @@ fn rewrite_legacy_hooks(root: &mut Value, command: &str) -> bool {
 }
 
 fn append_hook(root: &mut Value, agent_path: &Path, command: &str) -> Result<(), InitError> {
-    let Some(map) = root.as_object_mut() else {
-        return Err(InitError::Schema {
-            path: agent_path.to_path_buf(),
-            message: "top-level value must be a JSON object".into(),
-        });
-    };
-
-    let hooks = ensure_object(map, "hooks").ok_or_else(|| InitError::Schema {
-        path: agent_path.to_path_buf(),
-        message: "`hooks` must be an object".into(),
-    })?;
-
-    let pre_tool_use = ensure_array(hooks, "preToolUse").ok_or_else(|| InitError::Schema {
-        path: agent_path.to_path_buf(),
-        message: "`hooks.preToolUse` must be an array".into(),
-    })?;
-
-    pre_tool_use.push(json!({
+    json::hook_array(root, agent_path, "preToolUse")?.push(json!({
         "matcher": DEFAULT_MATCHER,
         "command": command,
         "timeout_ms": DEFAULT_TIMEOUT_MS,
         "cache_ttl_seconds": DEFAULT_CACHE_TTL_SECONDS,
     }));
     Ok(())
-}
-
-fn ensure_object<'a>(
-    map: &'a mut Map<String, Value>,
-    key: &str,
-) -> Option<&'a mut Map<String, Value>> {
-    map.entry(key.to_string())
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-}
-
-fn ensure_array<'a>(map: &'a mut Map<String, Value>, key: &str) -> Option<&'a mut Vec<Value>> {
-    map.entry(key.to_string())
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
 }
 
 #[cfg(test)]
@@ -729,11 +680,6 @@ mod tests {
         dry_run: bool,
     ) -> (InstallOutcome, KiroInstallExtras) {
         install_with_report(targets, bin, dry_run).unwrap()
-    }
-
-    #[test]
-    fn detect_binary_delegates_to_shared_impl() {
-        assert!(!detect_binary().is_empty());
     }
 
     #[test]
