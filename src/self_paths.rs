@@ -565,26 +565,7 @@ fn candidate_targets<'a>(
 mod tests {
 
     use super::*;
-    use std::collections::HashMap;
-    use std::ffi::OsString;
-
-    struct MapEnv(HashMap<String, OsString>);
-
-    impl MapEnv {
-        fn with(pairs: &[(&str, &str)]) -> Self {
-            let mut m = HashMap::new();
-            for (k, v) in pairs {
-                m.insert((*k).to_string(), OsString::from(*v));
-            }
-            Self(m)
-        }
-    }
-
-    impl EnvLookup for MapEnv {
-        fn var_os(&self, key: &str) -> Option<OsString> {
-            self.0.get(key).cloned()
-        }
-    }
+    use crate::config::scope::MapEnv;
 
     #[test]
     fn protected_kind_round_trip_strings() {
@@ -648,7 +629,7 @@ mod tests {
 
     #[test]
     fn collect_includes_repo_local_claude_settings() {
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         assert!(
@@ -675,7 +656,7 @@ mod tests {
 
     #[test]
     fn classify_matches_edit_of_local_claude_settings() {
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         let input = HookInput {
@@ -688,7 +669,7 @@ mod tests {
 
     #[test]
     fn classify_matches_rm_on_protected_path() {
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let mut cfg = Config::default();
         cfg.plugin_paths.push(PathBuf::from("/repo/plugin.yaml"));
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
@@ -702,7 +683,7 @@ mod tests {
 
     #[test]
     fn classify_matches_apply_patch_edit_of_repo_local_codex_settings() {
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let dir = std::env::temp_dir().join(format!(
             "ptuf-self-paths-codex-{}-{}",
@@ -726,7 +707,7 @@ mod tests {
 
     #[test]
     fn classify_does_not_match_bare_relative_name_by_suffix() {
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         let input = HookInput {
@@ -740,7 +721,7 @@ mod tests {
 
     #[test]
     fn classify_matches_sudo_writer_via_positional_unwrap() {
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         let input = HookInput {
@@ -779,7 +760,7 @@ mod tests {
         )
         .expect("write settings");
         let home_string = home.to_string_lossy().into_owned();
-        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let env = MapEnv::new(&[("HOME", home_string.as_str())]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         assert!(
@@ -823,7 +804,7 @@ mod tests {
         let guard = hooks_dir.join("guard.sh");
         std::fs::write(&guard, "#!/bin/sh\n").expect("write guard");
         let home_string = home.to_string_lossy().into_owned();
-        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let env = MapEnv::new(&[("HOME", home_string.as_str())]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
         let candidate = guard
@@ -870,7 +851,7 @@ mod tests {
         )
         .expect("write settings");
         let home_string = home.to_string_lossy().into_owned();
-        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let env = MapEnv::new(&[("HOME", home_string.as_str())]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         assert!(
@@ -899,7 +880,7 @@ mod tests {
 
     #[test]
     fn classify_returns_empty_for_unrelated_input() {
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         let input = HookInput {
@@ -919,7 +900,7 @@ mod tests {
 
     #[test]
     fn empty_when_no_repo_root_and_no_home() {
-        let env = MapEnv::with(&[]);
+        let env = MapEnv::new(&[]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
         assert!(p.claude_settings.is_empty());
@@ -931,7 +912,7 @@ mod tests {
         // The pair variant must classify the union of `paths` and
         // `extra` without forcing a merged Vec. A Bash redirect target
         // arrives via `extra` and should still hit the matching kind.
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         let input = HookInput {
@@ -951,7 +932,7 @@ mod tests {
 
     #[test]
     fn collect_includes_repo_local_copilot_settings() {
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         assert!(
@@ -978,7 +959,7 @@ mod tests {
         std::fs::write(home.join(".kiro/agents/default.json"), "{}").expect("write home");
 
         let home_string = home.to_string_lossy().into_owned();
-        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let env = MapEnv::new(&[("HOME", home_string.as_str())]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(&repo), &cfg, &env);
 
@@ -1002,7 +983,7 @@ mod tests {
 
     #[test]
     fn collect_kiro_settings_is_empty_when_agents_dir_missing() {
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         assert!(
@@ -1034,7 +1015,7 @@ mod tests {
 }"#,
         )
         .expect("write hooks");
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
         assert!(
@@ -1068,7 +1049,7 @@ mod tests {
 }"#,
         )
         .expect("write agent");
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
         assert!(
@@ -1123,7 +1104,7 @@ mod tests {
         let home = dir.join("home");
         std::fs::create_dir_all(home.join(".pi/agent/extensions")).expect("mkdir agent");
         let home_string = home.to_string_lossy().into_owned();
-        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let env = MapEnv::new(&[("HOME", home_string.as_str())]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
         assert!(
@@ -1170,7 +1151,7 @@ mod tests {
         let home = dir.join("home");
         std::fs::create_dir_all(home.join(".config/opencode/plugins")).expect("mkdir config");
         let home_string = home.to_string_lossy().into_owned();
-        let env = MapEnv::with(&[
+        let env = MapEnv::new(&[
             ("HOME", home_string.as_str()),
             ("XDG_CONFIG_HOME", "/xdg/opencode-config"),
         ]);
@@ -1210,7 +1191,7 @@ mod tests {
         let home = dir.join("home");
         std::fs::create_dir_all(home.join(".config/opencode/plugins")).expect("mkdir config");
         let home_string = home.to_string_lossy().into_owned();
-        let env = MapEnv::with(&[("HOME", home_string.as_str())]);
+        let env = MapEnv::new(&[("HOME", home_string.as_str())]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
         assert!(
@@ -1318,7 +1299,7 @@ mod tests {
         // arguments — even when they look like protected targets — must
         // not be added to the candidate set. This pins the
         // `!writer_heads.contains(&argv.head_basename())` skip branch.
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         let input = HookInput {
@@ -1338,7 +1319,7 @@ mod tests {
         // `rm rm` has a positional that equals the head; the
         // `if a == head { continue; }` branch must skip it so the
         // writer-head literal does not get classified as a destination.
-        let env = MapEnv::with(&[("HOME", "/h")]);
+        let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         let input = HookInput {
@@ -1375,7 +1356,7 @@ mod tests {
         // non-string payload values.
         #[test]
         fn pbt_classify_never_panics(input in richer_hook_input()) {
-            let env = MapEnv::with(&[("HOME", "/h")]);
+            let env = MapEnv::new(&[("HOME", "/h")]);
             let cfg = Config::default();
             let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
             let _ = p.classify_input(&input);
@@ -1389,7 +1370,7 @@ mod tests {
             home in "/(?:home|h)/[a-z0-9_]{1,8}",
             repo in "/(?:repo|src|home/[a-z]{1,5}/proj)",
         ) {
-            let env = MapEnv::with(&[("HOME", home.as_str())]);
+            let env = MapEnv::new(&[("HOME", home.as_str())]);
             let cfg = Config::default();
             let p = ProtectedPaths::collect_with_env(Some(Path::new(&repo)), &cfg, &env);
             // claude_settings is the only list whose ordering matters
