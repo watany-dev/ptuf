@@ -97,8 +97,9 @@ co-occurrence 悲観モードを backstop として残す。成功時もフラ�
 - `commands()` 経由の rule (`destructive-rm`, `dynamic-eval`,
   `sensitive-net` 悲観, git, …) は flatten 拡張だけで
   `echo $(rm -rf /)` 等が surface される (意図した副次効果)。
-- plugin DSL `walk_argv_for_pipeline_from_to` と legacy `remote_pipe` の
-  `inner_argv` 再帰、および `path::collect_command_redirects` も
+- plugin DSL `walk_argv_for_pipeline_from_to` と legacy `remote_pipe`
+  (#209 で削除済み) の `inner_argv` 再帰、および
+  `path::collect_command_redirects` も
   `subst_argv` を同じ深さで辿る (1 行対称。B4 と同型の取り逃しを防ぐ)。
 
 ### 採らないもの
@@ -142,7 +143,7 @@ co-occurrence 悲観モードを backstop として残す。成功時もフラ�
 | tokenizer | `src/facts/shell.rs` | `$(…)` / backtick balance-absorb + body capture、`Token::Word` 拡張 |
 | AST | `src/facts/shell.rs` | `Argv.subst_argv`、`collect_commands` flatten、`parse_argv` 再パース |
 | rules | `src/rules/sensitive_bash_read.rs` | `subst_argv` 再帰、pin テストを ask 期待へ |
-| walkers | `src/plugin/dsl.rs`, `src/rules/remote_pipe.rs`, `src/facts/path.rs` | `subst_argv` 対称走査 |
+| walkers | `src/plugin/dsl.rs`, `src/rules/remote_pipe.rs` (#209 で削除済み), `src/facts/path.rs` | `subst_argv` 対称走査 |
 | corpus | `tests/bypass/corpus.jsonl` | `gap-cmdsubst-outer-nonreader` → `must_catch` / ask |
 | PBT | `src/testing/proptest.rs`, `docs/design/testing.md` | 置換内 reader × 機密 ⇒ ask 以上 |
 | fuzz | `fuzz/corpus/fuzz_shell_parse/` | `$(` ネスト seed 追加 |

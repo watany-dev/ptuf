@@ -4,7 +4,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
+use super::{FileMode, InitError, InstallOutcome, InstallPath, InstallStatus};
 
 const TEMPLATE: &str = include_str!("templates/pi_extension.ts");
 
@@ -133,7 +133,7 @@ fn apply(path: &Path, desired: &[u8], dry_run: bool) -> Result<InstallStatus, In
     if dry_run {
         return Ok(InstallStatus::WouldInstall);
     }
-    write_atomically(path, desired)?;
+    super::write_install_bytes(path, desired, DEFAULT_EXTENSION_NAME, FileMode::Secure)?;
     Ok(InstallStatus::Installed)
 }
 
@@ -152,26 +152,6 @@ pub(crate) fn is_ptuf_managed(bytes: &[u8]) -> bool {
         && text.contains(AGENT_MARKER)
         && text.contains("hook")
         && text.contains("pi")
-}
-
-fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-    let tmp = super::sibling_install_tmp_path(path, DEFAULT_EXTENSION_NAME);
-    super::write_secure(&tmp, bytes).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
 }
 
 #[cfg(test)]

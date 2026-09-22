@@ -95,9 +95,16 @@ static BASIC_AUTH: LazyLock<Regex> = LazyLock::new(|| {
         .expect("basic auth")
 });
 
+/// Whole PEM private-key block, built from the same header / footer
+/// fragments the sensitive classifier probes with
+/// (`crate::facts::sensitive`), so "what counts as a private key block"
+/// has one definition across detection and redaction.
 static PEM_BLOB: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----")
-        .expect("pem blob")
+    use crate::facts::sensitive::{PEM_PRIVATE_KEY_BEGIN, PEM_PRIVATE_KEY_END};
+    Regex::new(&format!(
+        "{PEM_PRIVATE_KEY_BEGIN}[\\s\\S]*?{PEM_PRIVATE_KEY_END}"
+    ))
+    .expect("pem blob")
 });
 
 /// Keyword fragments shared by [`SENSITIVE_KEY`] and

@@ -107,16 +107,21 @@ fn invalid_payload_deny(problem: &str) -> Decision {
 /// its own tool vocabulary, so its payload routes through
 /// `cli::cursor_input::parse`.
 fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
-    match agent {
-        HookAgent::ClaudeCode | HookAgent::Codex => serde_json::from_str::<HookInput>(body)
-            .map_err(|err| format!("hook payload is not valid JSON ({err})")),
-        HookAgent::Copilot => copilot_input::parse(body).map_err(|err| err.to_string()),
-        HookAgent::Kiro => kiro_input::parse(body).map_err(|err| err.to_string()),
-        HookAgent::Cline => cline_input::parse(body).map_err(|err| err.to_string()),
-        HookAgent::Cursor => cursor_input::parse(body).map_err(|err| err.to_string()),
-        HookAgent::Pi => pi_input::parse(body).map_err(|err| err.to_string()),
-        HookAgent::Opencode => opencode_input::parse(body).map_err(|err| err.to_string()),
-    }
+    // Every adapter fails with the shared `input_helpers::InputError`,
+    // which this single consumer flattens to its rendered message.
+    let adapted = match agent {
+        HookAgent::ClaudeCode | HookAgent::Codex => {
+            return serde_json::from_str::<HookInput>(body)
+                .map_err(|err| format!("hook payload is not valid JSON ({err})"));
+        },
+        HookAgent::Copilot => copilot_input::parse(body),
+        HookAgent::Kiro => kiro_input::parse(body),
+        HookAgent::Cline => cline_input::parse(body),
+        HookAgent::Cursor => cursor_input::parse(body),
+        HookAgent::Pi => pi_input::parse(body),
+        HookAgent::Opencode => opencode_input::parse(body),
+    };
+    adapted.map_err(|err| err.to_string())
 }
 
 pub(super) fn run_check<W1: Write, W2: Write>(

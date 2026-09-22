@@ -7,13 +7,17 @@
 //! (`$HOME/.cursor/hooks.json`). The `--scope` / `--root` / `--hooks`
 //! flags select between them; see [`CursorInitOptions`].
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use super::json;
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
+
+/// Basename used for the sibling temp file when the destination path
+/// carries no file name of its own (see
+/// [`sibling_install_tmp_path`](super::sibling_install_tmp_path)).
+const TMP_BASENAME: &str = "hooks.json";
 
 /// Matcher recorded in [`InstallOutcome`] and written to the hook entry.
 /// Cursor matches the agent tool name against this regex before invoking
@@ -129,7 +133,7 @@ pub fn install(
     } else if dry_run {
         InstallStatus::WouldInstall
     } else {
-        write_json_atomically(&targets.hooks_path, &root)?;
+        super::write_install_json(&targets.hooks_path, &root, TMP_BASENAME)?;
         InstallStatus::Installed
     };
 
@@ -210,41 +214,11 @@ fn append_hook(root: &mut Value, hooks_path: &Path, command: &str) -> Result<(),
     Ok(())
 }
 
-fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-
-    let mut body = serde_json::to_string_pretty(value).map_err(|e| InitError::Schema {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
-    body.push('\n');
-
-    let tmp = sibling_temp_path(path);
-    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-fn sibling_temp_path(path: &Path) -> PathBuf {
-    super::sibling_install_tmp_path(path, "hooks.json")
-}
-
 #[cfg(test)]
 mod tests {
 
     use super::*;
+    use std::fs;
 
     fn workdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

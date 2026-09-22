@@ -1,13 +1,17 @@
 //! `ptuf init copilot` — idempotently register a `preToolUse` hook in
 //! GitHub Copilot's repo-local `.github/hooks/ptuf.json` file.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use super::json;
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
+
+/// Basename used for the sibling temp file when the destination path
+/// carries no file name of its own (see
+/// [`sibling_install_tmp_path`](super::sibling_install_tmp_path)).
+const TMP_BASENAME: &str = "ptuf.json";
 
 /// Matcher recorded in [`InstallOutcome`] for the rendered summary.
 /// Copilot's preToolUse hook does not actually use a regex matcher —
@@ -61,7 +65,7 @@ pub fn install(
         if dry_run {
             InstallStatus::WouldInstall
         } else {
-            write_json_atomically(&targets.hooks_path, &root)?;
+            super::write_install_json(&targets.hooks_path, &root, TMP_BASENAME)?;
             InstallStatus::Installed
         }
     };
@@ -122,41 +126,11 @@ fn append_hook(root: &mut Value, hooks_path: &Path, command: &str) -> Result<(),
     Ok(())
 }
 
-fn write_json_atomically(path: &Path, value: &Value) -> Result<(), InitError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|e| InitError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-
-    let mut body = serde_json::to_string_pretty(value).map_err(|e| InitError::Schema {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
-    body.push('\n');
-
-    let tmp = sibling_temp_path(path);
-    crate::init::write_secure(&tmp, body.as_bytes()).map_err(|e| InitError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    fs::rename(&tmp, path).map_err(|e| InitError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-fn sibling_temp_path(path: &Path) -> PathBuf {
-    super::sibling_install_tmp_path(path, "ptuf.json")
-}
-
 #[cfg(test)]
 mod tests {
 
     use super::*;
+    use std::fs;
 
     fn workdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -477,16 +451,6 @@ mod tests {
     fn pre_tool_use_commands_returns_empty_when_array_missing() {
         let root = json!({ "version": 1 });
         assert!(pre_tool_use_commands(&root).is_empty());
-    }
-
-    #[test]
-    fn sibling_temp_path_uses_default_filename_when_input_has_none() {
-        let p = Path::new("/");
-        let tmp = sibling_temp_path(p);
-        assert!(
-            tmp.to_string_lossy().contains("ptuf.json.ptuf."),
-            "missing file_name must default to ptuf.json: {tmp:?}"
-        );
     }
 
     #[test]

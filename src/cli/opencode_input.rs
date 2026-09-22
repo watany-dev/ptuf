@@ -7,26 +7,19 @@
 
 use serde_json::{Map, Value};
 
+use super::input_helpers::{
+    InputError, first_string, hook_input, sanitize_tool_name, take_first_string,
+};
 use crate::hook_input::HookInput;
 
 /// Normalise an OpenCode stdin body into a [`HookInput`].
-pub(super) fn parse(body: &str) -> Result<HookInput, OpencodeInputError> {
-    if body.trim().is_empty() {
-        return Err(OpencodeInputError::Empty);
-    }
-    let value: Value = serde_json::from_str(body).map_err(OpencodeInputError::Json)?;
-    let Value::Object(mut map) = value else {
-        return Err(OpencodeInputError::NotAnObject);
-    };
+pub(super) fn parse(body: &str) -> Result<HookInput, InputError> {
+    let mut map = super::input_helpers::parse_object(body)?;
 
-    let raw_name = map
-        .remove("tool_name")
-        .or_else(|| map.remove("toolName"))
-        .or_else(|| map.remove("name"))
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .ok_or(OpencodeInputError::MissingToolName)?;
+    let raw_name = take_first_string(&mut map, &["tool_name", "toolName", "name"])
+        .ok_or(InputError::MissingToolName)?;
     if raw_name.trim().is_empty() {
-        return Err(OpencodeInputError::EmptyToolName);
+        return Err(InputError::EmptyToolName);
     }
 
     let raw_input = map
@@ -37,34 +30,7 @@ pub(super) fn parse(body: &str) -> Result<HookInput, OpencodeInputError> {
 
     let (tool_name, tool_input) = normalize(&raw_name, args);
 
-    Ok(HookInput {
-        tool_name,
-        tool_input,
-    })
-}
-
-/// Reasons an OpenCode payload failed to normalise.
-#[derive(Debug)]
-pub(super) enum OpencodeInputError {
-    Empty,
-    Json(serde_json::Error),
-    NotAnObject,
-    MissingToolName,
-    EmptyToolName,
-    ToolInputNotObject,
-}
-
-impl std::fmt::Display for OpencodeInputError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "hook payload is empty"),
-            Self::Json(err) => write!(f, "hook payload is not valid JSON ({err})"),
-            Self::NotAnObject => write!(f, "hook payload must be a JSON object"),
-            Self::MissingToolName => write!(f, "hook payload is missing tool_name field"),
-            Self::EmptyToolName => write!(f, "hook payload tool_name must not be empty"),
-            Self::ToolInputNotObject => write!(f, "hook payload tool_input must be a JSON object"),
-        }
-    }
+    Ok(hook_input(tool_name, tool_input))
 }
 
 fn normalize(raw_name: &str, mut args: Map<String, Value>) -> (String, Value) {
@@ -93,36 +59,15 @@ fn normalize(raw_name: &str, mut args: Map<String, Value>) -> (String, Value) {
     }
 }
 
-fn sanitize_tool_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            out.push(ch);
-        } else {
-            out.push('_');
-        }
-    }
-    let trimmed = out.trim_matches('_');
-    if trimmed.is_empty() {
-        "unknown".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-fn decode_tool_input(raw: Value) -> Result<Map<String, Value>, OpencodeInputError> {
+/// OpenCode is strict here: unlike the other adapters it refuses to
+/// coerce a non-object `tool_input` rather than stashing it under a
+/// fallback key, because its plugin always sends a real object.
+fn decode_tool_input(raw: Value) -> Result<Map<String, Value>, InputError> {
     match raw {
         Value::Object(map) => Ok(map),
         Value::Null => Ok(Map::new()),
-        _ => Err(OpencodeInputError::ToolInputNotObject),
+        _ => Err(InputError::ToolInputNotObject),
     }
-}
-
-/// First usable string among `keys` in priority order, without consuming
-/// any original key (§7: duplicate into canonical keys, keep originals).
-fn first_string(args: &Map<String, Value>, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|k| args.get(*k).and_then(Value::as_str).map(str::to_owned))
 }
 
 /// Insert `value` under `key` unless a string already occupies it —
@@ -247,20 +192,20 @@ mod tests {
 
     #[test]
     fn opencode_fail_closed_on_invalid_payload() {
-        assert!(matches!(parse(""), Err(OpencodeInputError::Empty)));
-        assert!(matches!(parse("{"), Err(OpencodeInputError::Json(_))));
-        assert!(matches!(parse("[]"), Err(OpencodeInputError::NotAnObject)));
+        assert!(matches!(parse(""), Err(InputError::Empty)));
+        assert!(matches!(parse("{"), Err(InputError::Json(_))));
+        assert!(matches!(parse("[]"), Err(InputError::NotAnObject)));
         assert!(matches!(
             parse(r#"{"tool_input":{}}"#),
-            Err(OpencodeInputError::MissingToolName)
+            Err(InputError::MissingToolName)
         ));
         assert!(matches!(
             parse(r#"{"tool_name":"","tool_input":{}}"#),
-            Err(OpencodeInputError::EmptyToolName)
+            Err(InputError::EmptyToolName)
         ));
         assert!(matches!(
             parse(r#"{"tool_name":"bash","tool_input":"x"}"#),
-            Err(OpencodeInputError::ToolInputNotObject)
+            Err(InputError::ToolInputNotObject)
         ));
     }
 
@@ -390,21 +335,6 @@ mod tests {
         assert_eq!(read.tool_input["path"], ".env");
     }
 
-    #[test]
-    fn opencode_input_error_display_covers_variants() {
-        let cases: Vec<OpencodeInputError> = vec![
-            OpencodeInputError::Empty,
-            OpencodeInputError::NotAnObject,
-            OpencodeInputError::MissingToolName,
-            OpencodeInputError::EmptyToolName,
-            OpencodeInputError::ToolInputNotObject,
-            OpencodeInputError::Json(serde_json::from_str::<serde_json::Value>("{").unwrap_err()),
-        ];
-        for err in cases {
-            assert!(!err.to_string().is_empty());
-        }
-    }
-
     use crate::testing::proptest::arbitrary_utf8_bytes;
     use proptest::prelude::*;
 
@@ -430,12 +360,12 @@ mod tests {
         ) {
             match parse(&body) {
                 Err(
-                    OpencodeInputError::Empty
-                    | OpencodeInputError::NotAnObject
-                    | OpencodeInputError::MissingToolName
-                    | OpencodeInputError::EmptyToolName
-                    | OpencodeInputError::ToolInputNotObject
-                    | OpencodeInputError::Json(_),
+                    InputError::Empty
+                    | InputError::NotAnObject
+                    | InputError::MissingToolName
+                    | InputError::EmptyToolName
+                    | InputError::ToolInputNotObject
+                    | InputError::Json(_),
                 ) => {},
                 other => prop_assert!(
                     false,
