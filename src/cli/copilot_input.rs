@@ -18,20 +18,17 @@
 
 use serde_json::{Map, Value};
 
-use super::input_helpers::take_first_string;
+use super::input_helpers::{InputError, decode_args, hook_input, take_first_string};
 use crate::hook_input::HookInput;
 
 /// Normalise a Copilot stdin body into a [`HookInput`].
 ///
-/// Returns `Ok(None)` when the JSON parses but contains neither a
-/// `tool_name` nor a `toolName` field — callers should fail-closed via
-/// `core.engine.invalid-payload` in that case so the engine never sees a
-/// half-populated input.
-pub(super) fn parse(body: &str) -> Result<HookInput, ParseProblem> {
-    let value: Value = serde_json::from_str(body).map_err(ParseProblem::InvalidJson)?;
-    let Value::Object(mut map) = value else {
-        return Err(ParseProblem::NotAnObject);
-    };
+/// Fails with [`InputError::MissingToolName`] when the JSON parses but
+/// carries neither a `tool_name` nor a `toolName` field — the CLI then
+/// fail-closes via `core.engine.invalid-payload` so the engine never
+/// sees a half-populated input.
+pub(super) fn parse(body: &str) -> Result<HookInput, InputError> {
+    let mut map = super::input_helpers::parse_object(body)?;
 
     if let Some(tool_name) = map
         .get("tool_name")
@@ -39,10 +36,7 @@ pub(super) fn parse(body: &str) -> Result<HookInput, ParseProblem> {
         .map(str::to_owned)
     {
         let tool_input = map.remove("tool_input").unwrap_or(Value::Null);
-        return Ok(HookInput {
-            tool_name,
-            tool_input,
-        });
+        return Ok(hook_input(tool_name, tool_input));
     }
 
     if let Some(tool_name) = map
@@ -52,40 +46,14 @@ pub(super) fn parse(body: &str) -> Result<HookInput, ParseProblem> {
     {
         let raw_args = map.remove("toolArgs").unwrap_or(Value::Null);
         let (mapped_name, mapped_args) = map_tool(&tool_name, raw_args);
-        return Ok(HookInput {
-            tool_name: mapped_name,
-            tool_input: mapped_args,
-        });
+        return Ok(hook_input(mapped_name, mapped_args));
     }
 
-    Err(ParseProblem::MissingToolName)
-}
-
-/// Reasons a Copilot payload failed to normalise. The CLI maps every
-/// variant onto `core.engine.invalid-payload` so Copilot fail-closed
-/// stays exit-0 + bare deny JSON; this enum only exists to make stderr
-/// messages actionable.
-#[derive(Debug)]
-pub(super) enum ParseProblem {
-    InvalidJson(serde_json::Error),
-    NotAnObject,
-    MissingToolName,
-}
-
-impl std::fmt::Display for ParseProblem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidJson(err) => write!(f, "hook payload is not valid JSON ({err})"),
-            Self::NotAnObject => write!(f, "hook payload must be a JSON object"),
-            Self::MissingToolName => {
-                write!(f, "hook payload is missing tool_name / toolName field")
-            },
-        }
-    }
+    Err(InputError::MissingToolName)
 }
 
 fn map_tool(raw_name: &str, raw_args: Value) -> (String, Value) {
-    let args_object = decode_args(raw_args);
+    let args_object = decode_args(raw_args, "raw");
     match raw_name {
         "bash" => ("Bash".into(), Value::Object(args_object)),
         "powershell" => {
@@ -99,32 +67,6 @@ fn map_tool(raw_name: &str, raw_args: Value) -> (String, Value) {
         "create" => ("Write".into(), reshape_create(args_object)),
         "web_fetch" => ("WebFetch".into(), Value::Object(args_object)),
         other => (other.to_string(), Value::Object(args_object)),
-    }
-}
-
-/// Decode the `toolArgs` field. Object → object; JSON-encoded string →
-/// re-parsed object (falls back to `{"raw": "..."}` for non-JSON
-/// strings); anything else → empty object. We never panic or surface a
-/// parse error here — invalid args degrade to a generic input that the
-/// engine evaluates as best-effort.
-fn decode_args(raw: Value) -> Map<String, Value> {
-    match raw {
-        Value::Object(map) => map,
-        Value::String(s) => {
-            if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&s) {
-                map
-            } else {
-                let mut m = Map::new();
-                m.insert("raw".to_string(), Value::String(s));
-                m
-            }
-        },
-        Value::Null => Map::new(),
-        other => {
-            let mut m = Map::new();
-            m.insert("raw".to_string(), other);
-            m
-        },
     }
 }
 
@@ -252,39 +194,17 @@ mod tests {
     #[test]
     fn missing_tool_name_is_an_error() {
         let body = r#"{"toolArgs":{}}"#;
-        assert!(matches!(parse(body), Err(ParseProblem::MissingToolName)));
+        assert!(matches!(parse(body), Err(InputError::MissingToolName)));
     }
 
     #[test]
     fn invalid_json_is_an_error() {
-        assert!(matches!(
-            parse("not-json"),
-            Err(ParseProblem::InvalidJson(_))
-        ));
+        assert!(matches!(parse("not-json"), Err(InputError::Json(_))));
     }
 
     #[test]
     fn array_payload_is_rejected() {
-        assert!(matches!(parse("[]"), Err(ParseProblem::NotAnObject)));
-    }
-
-    #[test]
-    fn parse_problem_display_invalid_json_mentions_json() {
-        let err = serde_json::from_str::<Value>("nope").unwrap_err();
-        let s = format!("{}", ParseProblem::InvalidJson(err));
-        assert!(s.contains("not valid JSON"));
-    }
-
-    #[test]
-    fn parse_problem_display_not_an_object_mentions_object() {
-        let s = format!("{}", ParseProblem::NotAnObject);
-        assert!(s.contains("must be a JSON object"));
-    }
-
-    #[test]
-    fn parse_problem_display_missing_tool_name_mentions_field() {
-        let s = format!("{}", ParseProblem::MissingToolName);
-        assert!(s.contains("missing tool_name"));
+        assert!(matches!(parse("[]"), Err(InputError::NotAnObject)));
     }
 
     #[test]
@@ -331,7 +251,7 @@ mod tests {
 
     proptest! {
         // parse() must be total over arbitrary input strings: it returns
-        // Ok(HookInput) or Err(ParseProblem::*) and never panics. Drives
+        // Ok(HookInput) or Err(InputError::*) and never panics. Drives
         // the fail-closed contract at the adapter boundary.
         #[test]
         fn pbt_parse_is_total_on_arbitrary_utf8(bytes in arbitrary_utf8_bytes()) {
@@ -358,7 +278,7 @@ mod tests {
             ],
         ) {
             match parse(&body) {
-                Err(ParseProblem::NotAnObject | ParseProblem::MissingToolName) => {},
+                Err(InputError::NotAnObject | InputError::MissingToolName) => {},
                 other => prop_assert!(
                     false,
                     "expected NotAnObject or MissingToolName for body {body:?}, got {other:?}",

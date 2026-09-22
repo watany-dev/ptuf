@@ -21,6 +21,11 @@ ptuf には機密 path 分類器が 2 系統ある。設計上は「同じ shape
 - `src/facts/sensitive.rs` の `classify` / `PROBES` — `facts.sensitive` を埋め、
   ファイルツール系 `sensitive-read` が使用。
 
+> 追記 (#210): この 2 系統は統合済み。`SENSITIVE_PATH` / `SENSITIVE_NEEDLES` を
+> 削除し、`matches_sensitive_path` は `facts::sensitive::matches` へ委譲する
+> 薄い adapter になった。以下の穴 A / B は「両実装を一致させる」修正だったが、
+> 現在は実装が 1 つなので構造的に再発しない。
+
 | ID | 穴 | 重大度 |
 | --- | --- | --- |
 | A | npmrc/pypirc の先頭 `\b` アンカーで Bash 側が実ファイルを取り逃す | High |

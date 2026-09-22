@@ -70,9 +70,12 @@ head は `head_basename` で basename 化するため `/usr/bin/curl ... | /bin/
 機密分類は `~/.ssh/**`, `~/.aws/**`, `~/.config/gcloud/**`, `~/.kube/config`,
 `~/.docker/config.json`, SSH 秘密鍵 `id_{rsa,dsa,ecdsa,ed25519}`, `.env*`,
 `.npmrc`, `.pypirc`, `*.tfstate`, PEM blob など。
-機密 path の分類器は Bash 系ルール用 (`src/rules/patterns.rs` の
-`SENSITIVE_PATH`) とファイルツール系ルール用 (`src/facts/sensitive.rs` の
-`classify`) の 2 系統があり、両者は同じ shape 集合を分類しなければならない。
+機密 path の分類器は `src/facts/sensitive.rs` の `PROBES` 1 系統のみ。
+Bash 系ルールは yes/no を返す `sensitive::matches` (`src/rules/patterns.rs` の
+`matches_sensitive_path` が委譲)、ファイルツール / MCP 系は typed な
+`classify` を使うが、どちらも同じ `PROBES` を引く。PEM blob の
+header / footer パターンは `PEM_PRIVATE_KEY_{BEGIN,END}` として audit redactor
+(`src/audit/redaction.rs`) とも共有する。
 `.npmrc` / `.pypirc` は `~/.npmrc` のようにパス境界 (`^` / `/` / 空白 /
 `~`・`$HOME`・`${HOME}` + `/`) に接する場合のみ機密とみなし、`data.npmrc`
 のような lookalike は除外する。2 系統の一致は

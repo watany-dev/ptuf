@@ -303,6 +303,16 @@ dev-dependency のみで足り、通常の `cargo build --release` では出荷�
 `2:2:1` で混ぜ、Bash 偏重を緩和して Read / Write / WebFetch 系の
 fact カバレッジを確保する。
 
+## テストダブルの置き場所
+
+環境変数を読む経路は `config::scope::EnvLookup` 越しに注入する。テスト用の
+実装は `src/config/scope.rs` の `#[cfg(test)] pub(crate) struct MapEnv`
+**1 個だけ**で、`new(&[(k, v)])` / `empty()` / `with_home(h)` の 3
+コンストラクタを持つ。`facts::path` / `self_paths` / `config::scope` /
+`update::exe` / `init::opencode` / `init` のテストはこれを共有し、モジュール
+ごとに同型の double を再定義しない (#212)。新しくホスト環境から切り離した
+テストを書くときも `MapEnv` を使う。
+
 ## 本質的テストのギャップ
 
 行カバレッジでは測れない契約・統合・既知バイパスは
