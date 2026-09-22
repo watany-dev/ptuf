@@ -53,46 +53,32 @@ pub fn install(
     let command = format!("{ptuf_binary} hook claude-code");
     let mut root = json::read_object(settings_path)?;
 
-    if has_existing_hook(&root) {
-        return Ok(InstallOutcome {
-            status: InstallStatus::AlreadyPresent,
-            agent: "claude-code",
-            paths: vec![InstallPath {
-                label: "settings",
-                path: settings_path.to_path_buf(),
-            }],
-            matcher: DEFAULT_MATCHER.to_string(),
-            command,
-        });
-    }
-
-    append_hook(&mut root, settings_path, &command)?;
-
-    if dry_run {
-        return Ok(InstallOutcome {
-            status: InstallStatus::WouldInstall,
-            agent: "claude-code",
-            paths: vec![InstallPath {
-                label: "settings",
-                path: settings_path.to_path_buf(),
-            }],
-            matcher: DEFAULT_MATCHER.to_string(),
-            command,
-        });
-    }
-
-    super::write_install_json(settings_path, &root, TMP_BASENAME)?;
-
-    Ok(InstallOutcome {
-        status: InstallStatus::Installed,
+    // The three exits below differ only in `status`, so build the
+    // outcome once and let each branch pick its status.
+    let outcome = |status| InstallOutcome {
+        status,
         agent: "claude-code",
         paths: vec![InstallPath {
             label: "settings",
             path: settings_path.to_path_buf(),
         }],
         matcher: DEFAULT_MATCHER.to_string(),
-        command,
-    })
+        command: command.clone(),
+    };
+
+    if has_existing_hook(&root) {
+        return Ok(outcome(InstallStatus::AlreadyPresent));
+    }
+
+    append_hook(&mut root, settings_path, &command)?;
+
+    if dry_run {
+        return Ok(outcome(InstallStatus::WouldInstall));
+    }
+
+    super::write_install_json(settings_path, &root, TMP_BASENAME)?;
+
+    Ok(outcome(InstallStatus::Installed))
 }
 
 fn has_existing_hook(root: &Value) -> bool {

@@ -195,17 +195,41 @@ pub struct InstallOutcome {
     pub command: String,
 }
 
-/// Adapter-specific install reporting carried back to the CLI
-/// dispatcher and renderer. `kiro` is populated only by the Kiro
-/// adapter, whose default mode patches an unbounded set of agent JSON
-/// files. Other adapters install into a single fixed file and have no
-/// per-file breakdown to surface. Kept `pub(crate)` so it does not
-/// inflate the lib crate's public surface — embedded `kiro::install`
-/// callers receive only the bare [`InstallOutcome`].
+/// Install reporting carried back to the CLI dispatcher and renderer.
+///
+/// Every adapter produces an [`InstallOutcome`]; the Kiro adapter's
+/// default mode additionally patches an unbounded set of agent JSON
+/// files and has a per-file breakdown to surface. Modelling that as a
+/// second variant keeps the kiro-only payload off the shape the other
+/// eight adapters return. Kept `pub(crate)` so it does not inflate the
+/// lib crate's public surface — embedded `kiro::install_with_report`
+/// callers receive the pair directly.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct AdapterRunReport {
-    pub outcome: InstallOutcome,
-    pub kiro: Option<kiro::KiroInstallExtras>,
+pub(crate) enum AdapterRunReport {
+    /// An adapter that installs into a fixed set of files and has no
+    /// extra reporting.
+    Simple(InstallOutcome),
+    /// The Kiro adapter, which also reports per-file and per-scope
+    /// details.
+    Kiro {
+        outcome: InstallOutcome,
+        extras: kiro::KiroInstallExtras,
+    },
+}
+
+impl AdapterRunReport {
+    pub(crate) const fn outcome(&self) -> &InstallOutcome {
+        match self {
+            Self::Simple(outcome) | Self::Kiro { outcome, .. } => outcome,
+        }
+    }
+
+    pub(crate) const fn kiro(&self) -> Option<&kiro::KiroInstallExtras> {
+        match self {
+            Self::Simple(_) => None,
+            Self::Kiro { extras, .. } => Some(extras),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

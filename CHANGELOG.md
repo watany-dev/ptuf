@@ -80,6 +80,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hooks.<event>` 配列の掘り下げは `json::hook_array` になった。
   生成される JSON とエラーメッセージは従来と同一。(#219)
 
+### Removed (BREAKING)
+- `init::kiro::install` — CLI は `install_with_report` のみを使っており、
+  kiro 固有の報告 (`KiroInstallExtras`) を捨てるだけの wrapper だった。
+- `init::codex::default_home_hooks_path` / `default_home_config_path` —
+  クレート内外から未参照。
+- `init::kiro::DEFAULT_CACHE_TTL_SECONDS` を非公開化 (agent skeleton の
+  生成内部でのみ使用)。
+- 上記の公開 API 削除にあたるため 0.13.0 へ bump。(#221)
+
+### Changed
+- 内部の `AdapterRunReport` を struct から enum (`Simple` / `Kiro`) に変更。
+  kiro 専用フィールドを共通型から外し、`src/cli/run.rs` の `kiro: None` ×11 を
+  解消した。
+- `init::claude_code::install` が同一の `InstallOutcome` literal を 3 回
+  構築していたのを 1 箇所に集約。(#221)
+
 ## [0.8.0] - 2026-09-17
 
 ### Added

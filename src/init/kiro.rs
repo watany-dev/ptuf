@@ -80,7 +80,7 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
 /// Default cache TTL in seconds. `0` disables caching so every
 /// PreToolUse event is re-evaluated by ptuf.
-pub const DEFAULT_CACHE_TTL_SECONDS: u64 = 0;
+const DEFAULT_CACHE_TTL_SECONDS: u64 = 0;
 
 /// Trailing tokens (split on whitespace) of the `command` this adapter
 /// *writes*, and the marker for an entry it already owns.
@@ -447,22 +447,10 @@ fn read_default_agent(settings_dir: &Path) -> Result<Option<String>, InitError> 
 /// already carries a ptuf entry; if any target needs a write, the
 /// outcome reports `Installed` (or `WouldInstall` under `--dry-run`).
 ///
-/// This is the public entry point; the kiro-specific reporting
-/// (`KiroInstallExtras`) is dropped on the floor. CLI dispatchers that
-/// need the extras call `install_with_report` instead.
-pub fn install(
-    targets: &TargetPaths,
-    ptuf_binary: &str,
-    dry_run: bool,
-) -> Result<InstallOutcome, InitError> {
-    let (outcome, _) = install_with_report(targets, ptuf_binary, dry_run)?;
-    Ok(outcome)
-}
-
-/// Internal entry that returns both the canonical `InstallOutcome` and
-/// the kiro-specific `KiroInstallExtras`. Used by the CLI dispatcher to
-/// surface per-scope default-agent / skipped-non-json reporting without
-/// widening `InstallOutcome`'s public surface.
+/// Returns both the canonical `InstallOutcome` and the kiro-specific
+/// `KiroInstallExtras`, so the CLI dispatcher can surface per-scope
+/// default-agent / skipped-non-json reporting without widening
+/// `InstallOutcome`.
 pub(crate) fn install_with_report(
     targets: &TargetPaths,
     ptuf_binary: &str,
@@ -473,8 +461,7 @@ pub(crate) fn install_with_report(
     let mut already_present_count = 0_usize;
 
     for agent in &targets.agent_config_paths {
-        let per_file = install_one_file(&agent.path, &command, dry_run)?;
-        if per_file.already_present {
+        if install_one_file(&agent.path, &command, dry_run)? {
             already_present_count += 1;
         }
         paths.push(InstallPath {
@@ -510,16 +497,12 @@ pub(crate) fn install_with_report(
     ))
 }
 
-struct PerFileResult {
-    already_present: bool,
-}
-
-fn install_one_file(path: &Path, command: &str, dry_run: bool) -> Result<PerFileResult, InitError> {
+/// Patch one agent file, returning `true` when it already carried a
+/// ptuf entry (so nothing was written).
+fn install_one_file(path: &Path, command: &str, dry_run: bool) -> Result<bool, InitError> {
     let mut root = read_agent_config(path)?;
     if has_versioned_hook(&root) {
-        return Ok(PerFileResult {
-            already_present: true,
-        });
+        return Ok(true);
     }
     // A legacy `… hook kiro` entry is this adapter's own earlier output,
     // so rewrite it in place rather than appending a second entry: that
@@ -531,9 +514,7 @@ fn install_one_file(path: &Path, command: &str, dry_run: bool) -> Result<PerFile
     if !dry_run {
         super::write_install_json(path, &root, TMP_BASENAME)?;
     }
-    Ok(PerFileResult {
-        already_present: false,
-    })
+    Ok(false)
 }
 
 /// Read the agent config from disk, or build a fresh default skeleton
@@ -672,6 +653,17 @@ mod tests {
             skipped_non_json: Vec::new(),
             default_agent_names: Vec::new(),
         }
+    }
+
+    /// Test shim for the tests that only assert on the canonical
+    /// outcome. Production callers all want the extras, so the adapter
+    /// itself exposes only `install_with_report`.
+    fn install(
+        targets: &TargetPaths,
+        bin: &str,
+        dry_run: bool,
+    ) -> Result<InstallOutcome, InitError> {
+        install_with_report(targets, bin, dry_run).map(|(outcome, _)| outcome)
     }
 
     fn install_and_extras(
