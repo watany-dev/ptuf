@@ -549,18 +549,16 @@ fn collect_cursor_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<Pa
 /// (`.ps1`) names are protected regardless of the host platform: a
 /// cross-platform checkout still carries whichever one Cline runs.
 fn collect_cline_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(root) = repo_root {
-        dirs.push(root.join(".clinerules/hooks"));
-    }
-    if let Some(home) = home {
-        dirs.push(home.join("Documents/Cline/Hooks"));
-    }
-    let mut paths = Vec::new();
-    for dir in dirs {
-        paths.push(dir.join("PreToolUse"));
-        paths.push(dir.join("PreToolUse.ps1"));
-    }
+    use crate::init::cline::{GLOBAL_HOOKS_DIR, HOOK_FILE_NAMES, REPO_HOOKS_DIR};
+    let dirs = [
+        repo_root.map(|root| root.join(REPO_HOOKS_DIR)),
+        home.map(|home| home.join(GLOBAL_HOOKS_DIR)),
+    ];
+    let mut paths: Vec<PathBuf> = dirs
+        .iter()
+        .flatten()
+        .flat_map(|dir| HOOK_FILE_NAMES.iter().map(move |name| dir.join(name)))
+        .collect();
     paths.sort();
     paths.dedup();
     paths

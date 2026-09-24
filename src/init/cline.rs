@@ -45,12 +45,19 @@ pub(crate) struct TargetPaths {
     pub global: bool,
 }
 
+/// Repo-relative directory Cline reads workspace hooks from.
+pub(crate) const REPO_HOOKS_DIR: &str = ".clinerules/hooks";
+/// `$HOME`-relative directory Cline reads global hooks from.
+pub(crate) const GLOBAL_HOOKS_DIR: &str = "Documents/Cline/Hooks";
+/// `PreToolUse` wrapper file names on POSIX and Windows respectively.
+pub(crate) const HOOK_FILE_NAMES: [&str; 2] = ["PreToolUse", "PreToolUse.ps1"];
+
 /// File name of the Cline `PreToolUse` hook for the current platform.
-fn cline_hook_file_name() -> &'static str {
+const fn cline_hook_file_name() -> &'static str {
     if cfg!(windows) {
-        "PreToolUse.ps1"
+        HOOK_FILE_NAMES[1]
     } else {
-        "PreToolUse"
+        HOOK_FILE_NAMES[0]
     }
 }
 
@@ -66,15 +73,13 @@ pub(crate) fn resolve_paths(start: Option<&Path>) -> Result<TargetPaths, InitErr
     let file_name = cline_hook_file_name();
     if let Some(root) = start.and_then(crate::config::repo::discover) {
         return Ok(TargetPaths {
-            hook_path: root.join(".clinerules/hooks").join(file_name),
+            hook_path: root.join(REPO_HOOKS_DIR).join(file_name),
             global: false,
         });
     }
     let home = std::env::var_os("HOME").ok_or(InitError::HomeNotSet)?;
     Ok(TargetPaths {
-        hook_path: PathBuf::from(home)
-            .join("Documents/Cline/Hooks")
-            .join(file_name),
+        hook_path: PathBuf::from(home).join(GLOBAL_HOOKS_DIR).join(file_name),
         global: true,
     })
 }
