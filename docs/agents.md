@@ -154,6 +154,10 @@ is idempotent — it recognises a ptuf-managed wrapper by the
 `ptuf-managed: cline PreToolUse` marker and refuses to overwrite an
 unmanaged `PreToolUse` hook.
 
+Both wrapper locations (repo-local and global, with and without `.ps1`)
+are covered by `core.self_protection.cline-settings`, so a guarded session
+cannot delete or rewrite the wrapper to remove the hook.
+
 Cline delivers its payload inside a `hookName` envelope, in either the SDK
 `tool_call` form or the legacy `preToolUse` form; the adapter accepts both
 and normalises tool names / input keys before the engine sees them
@@ -185,6 +189,11 @@ a `timeout` of `10`, and `failClosed: true`. Existing ptuf entries are
 detected by the `hook cursor` command tail; other hooks in the file are
 preserved. The `--scope` / `--root` / `--hooks` flags are Cursor-only and
 are rejected for any other agent.
+
+`<repo>/.cursor/hooks.json` and `$HOME/.cursor/hooks.json` are covered by
+`core.self_protection.cursor-settings`, and executables referenced by their
+`preToolUse` commands by `core.self_protection.hook-script`. A file patched
+via `--hooks <path>` outside those two locations is not protected.
 
 Cursor dispatches several hook events; the adapter enforces
 `preToolUse`, `beforeShellExecution` (→`Bash`), `beforeReadFile` (→`Read`),

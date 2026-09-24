@@ -1,7 +1,7 @@
 //! `core.self_protection` pack — refuses any operation that targets ptuf's
 //! own binary, configuration, plugins, or agent hook settings.
 //!
-//! All five rules are `hard_deny: true` / `Severity::Critical` per
+//! All twelve rules are `hard_deny: true` / `Severity::Critical` per
 //! `docs/design/policy-packs.md:100-113`. They share the `SelfRule`
 //! adapter so the [`crate::rules::ConfigRule`] trait is implemented
 //! exactly once.
@@ -117,13 +117,13 @@ const CODEX_SETTINGS: RuleSpec = RuleSpec {
 const HOOK_SCRIPT: RuleSpec = RuleSpec {
     id: "core.self_protection.hook-script",
     kind: ProtectedKind::HookScript,
-    problem: "The command modifies a script registered as a Claude Code, Codex, Copilot, or Kiro \
-         hook. Editing or chmod-ing a hook script can disable ptuf-style enforcement at the next \
-         tool use.",
+    problem: "The command modifies a script registered as a Claude Code, Codex, Copilot, Kiro, or \
+         Cursor hook. Editing or chmod-ing a hook script can disable ptuf-style enforcement at the \
+         next tool use.",
     alternatives: &[
         "Edit the hook script outside an agent session, after review.",
         "Replace the hook entry with `ptuf init claude-code`, `ptuf init codex`, \
-         `ptuf init copilot`, or `ptuf init kiro`.",
+         `ptuf init copilot`, `ptuf init kiro`, or `ptuf init cursor`.",
         "Verify the script change is not reachable from the registered hook path.",
     ],
 };
@@ -180,6 +180,32 @@ const OPENCODE_SETTINGS: RuleSpec = RuleSpec {
     ],
 };
 
+const CURSOR_SETTINGS: RuleSpec = RuleSpec {
+    id: "core.self_protection.cursor-settings",
+    kind: ProtectedKind::CursorSettings,
+    problem: "The command modifies a Cursor hook file (.cursor/hooks.json in the repo or $HOME). \
+         The preToolUse hook registration lives there, so this edit could remove or \
+         short-circuit the ptuf hook entirely.",
+    alternatives: &[
+        "Use `ptuf init cursor` to manage the hook entry safely.",
+        "Have the user edit the hook file outside an agent session.",
+        "If the change is unrelated to hooks, narrow the edit to a non-hook field.",
+    ],
+};
+
+const CLINE_SETTINGS: RuleSpec = RuleSpec {
+    id: "core.self_protection.cline-settings",
+    kind: ProtectedKind::ClineSettings,
+    problem: "The command modifies the Cline PreToolUse hook wrapper under .clinerules/hooks/ or \
+         ~/Documents/Cline/Hooks/. Cline runs that file as the hook, so this edit could remove \
+         or short-circuit the ptuf hook entirely.",
+    alternatives: &[
+        "Use `ptuf init cline` to manage the hook wrapper safely.",
+        "Have the user edit Cline hooks outside an agent session.",
+        "Add unrelated Cline hooks under a different hook name instead of PreToolUse.",
+    ],
+};
+
 pub(crate) static BINARY_RULE: SelfRule = SelfRule { spec: &BINARY };
 pub(crate) static CONFIG_RULE: SelfRule = SelfRule { spec: &CONFIG };
 pub(crate) static PLUGIN_RULE: SelfRule = SelfRule { spec: &PLUGIN };
@@ -199,6 +225,12 @@ pub(crate) static KIRO_SETTINGS_RULE: SelfRule = SelfRule {
 pub(crate) static PI_SETTINGS_RULE: SelfRule = SelfRule { spec: &PI_SETTINGS };
 pub(crate) static OPENCODE_SETTINGS_RULE: SelfRule = SelfRule {
     spec: &OPENCODE_SETTINGS,
+};
+pub(crate) static CURSOR_SETTINGS_RULE: SelfRule = SelfRule {
+    spec: &CURSOR_SETTINGS,
+};
+pub(crate) static CLINE_SETTINGS_RULE: SelfRule = SelfRule {
+    spec: &CLINE_SETTINGS,
 };
 
 #[cfg(test)]
@@ -231,6 +263,8 @@ mod tests {
             &KIRO_SETTINGS_RULE,
             &PI_SETTINGS_RULE,
             &OPENCODE_SETTINGS_RULE,
+            &CURSOR_SETTINGS_RULE,
+            &CLINE_SETTINGS_RULE,
         ] {
             assert!(rule.evaluate(&facts, &input).is_none());
         }
@@ -249,6 +283,8 @@ mod tests {
             &KIRO_SETTINGS_RULE,
             &PI_SETTINGS_RULE,
             &OPENCODE_SETTINGS_RULE,
+            &CURSOR_SETTINGS_RULE,
+            &CLINE_SETTINGS_RULE,
         ] {
             assert!(rule.hard_deny(), "{} must be hard_deny", rule.id());
             assert_eq!(
@@ -290,6 +326,8 @@ mod tests {
             KIRO_SETTINGS_RULE.id(),
             PI_SETTINGS_RULE.id(),
             OPENCODE_SETTINGS_RULE.id(),
+            CURSOR_SETTINGS_RULE.id(),
+            CLINE_SETTINGS_RULE.id(),
         ] {
             assert!(id.starts_with("core.self_protection."), "id was {id}");
         }
@@ -298,7 +336,7 @@ mod tests {
     use crate::testing::proptest::{protected_kind, richer_hook_input};
     use proptest::prelude::*;
 
-    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 10] {
+    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 12] {
         [
             (&BINARY_RULE, ProtectedKind::Binary),
             (&CONFIG_RULE, ProtectedKind::Config),
@@ -310,6 +348,8 @@ mod tests {
             (&KIRO_SETTINGS_RULE, ProtectedKind::KiroSettings),
             (&PI_SETTINGS_RULE, ProtectedKind::PiSettings),
             (&OPENCODE_SETTINGS_RULE, ProtectedKind::OpencodeSettings),
+            (&CURSOR_SETTINGS_RULE, ProtectedKind::CursorSettings),
+            (&CLINE_SETTINGS_RULE, ProtectedKind::ClineSettings),
         ]
     }
 
@@ -325,7 +365,7 @@ mod tests {
         }
 
         // When a single ProtectedKind label is present, exactly the
-        // rule for that kind fires; the other four stay silent.
+        // rule for that kind fires; every other rule stays silent.
         #[test]
         fn pbt_single_kind_fires_exactly_its_rule(
             kind in protected_kind(),

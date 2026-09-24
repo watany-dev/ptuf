@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- `core.self_protection.cursor-settings` / `core.self_protection.cline-settings`
+  を追加。対応 8 host のうち Cursor と Cline だけ hook 登録が自己保護の対象外で、
+  guarded session が `.cursor/hooks.json` の削除・書き換えや Cline の
+  `PreToolUse` wrapper (`.clinerules/hooks/` / `~/Documents/Cline/Hooks/`) の
+  上書きで ptuf hook を外せていた。あわせて `.cursor/hooks.json` の
+  `preToolUse` command が参照する実行ファイルを `core.self_protection.hook-script`
+  の対象に加えた。
+
 ### Changed (BREAKING)
 - `rules::remote_pipe`(`RemoteScriptPipe`)を削除。`static RULES` に載らない
   テスト専用 oracle で、本番の判定は DSL 版 `core.network.remote-script-pipe`

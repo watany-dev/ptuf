@@ -267,6 +267,26 @@ fn hook_script_contract_blocks_repo_local_hook_edits() {
     assert!(stderr.contains("core.self_protection.hook-script"));
 }
 
+#[test]
+fn cursor_settings_contract_blocks_repo_local_hooks_json_edit() {
+    let dir = repo();
+    let payload =
+        r#"{"tool_name":"Write","tool_input":{"file_path":".cursor/hooks.json","content":"{}"}}"#;
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "claude-code"], payload);
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    assert!(stderr.contains("core.self_protection.cursor-settings"));
+}
+
+#[test]
+fn cline_settings_contract_blocks_repo_local_pre_tool_use_wrapper_removal() {
+    let dir = repo();
+    let payload =
+        r#"{"tool_name":"Bash","tool_input":{"command":"rm -f .clinerules/hooks/PreToolUse"}}"#;
+    let (code, stdout, stderr) = run_in(dir.path(), &["hook", "claude-code"], payload);
+    assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
+    assert!(stderr.contains("core.self_protection.cline-settings"));
+}
+
 // ---------------------------------------------------------------
 // GitHub Copilot adapter contracts.
 //
