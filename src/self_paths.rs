@@ -27,6 +27,8 @@ pub enum ProtectedKind {
     KiroSettings,
     PiSettings,
     OpencodeSettings,
+    CursorSettings,
+    ClineSettings,
 }
 
 impl ProtectedKind {
@@ -42,13 +44,15 @@ impl ProtectedKind {
             Self::KiroSettings => "kiro_settings",
             Self::PiSettings => "pi_settings",
             Self::OpencodeSettings => "opencode_settings",
+            Self::CursorSettings => "cursor_settings",
+            Self::ClineSettings => "cline_settings",
         }
     }
 }
 
 /// Small, allocation-free set of protected target labels.
 ///
-/// There are only ten [`ProtectedKind`] variants, so a fixed buffer is
+/// There are only twelve [`ProtectedKind`] variants, so a fixed buffer is
 /// simpler than pulling in a small-vector dependency for the hook hot path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProtectedKinds {
@@ -57,7 +61,7 @@ pub struct ProtectedKinds {
 }
 
 impl ProtectedKinds {
-    const CAPACITY: usize = 10;
+    const CAPACITY: usize = 12;
 
     pub fn new() -> Self {
         Self::default()
@@ -124,6 +128,8 @@ pub struct ProtectedPaths {
     pub kiro_settings: Vec<PathBuf>,
     pub pi_settings: Vec<PathBuf>,
     pub opencode_settings: Vec<PathBuf>,
+    pub cursor_settings: Vec<PathBuf>,
+    pub cline_settings: Vec<PathBuf>,
 }
 
 impl ProtectedPaths {
@@ -258,6 +264,30 @@ impl ProtectedPaths {
         let kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
         let pi_settings = collect_pi_paths(repo_root, home_path.as_deref());
         let opencode_settings = collect_opencode_paths(repo_root, home_path.as_deref(), env);
+        let cursor_settings = collect_cursor_paths(repo_root, home_path.as_deref());
+        let cline_settings = collect_cline_paths(repo_root, home_path.as_deref());
+
+        for hooks_path in &cursor_settings {
+            let Ok(body) = fs::read_to_string(hooks_path) else {
+                continue;
+            };
+            let Ok(parsed): Result<Value, _> = serde_json::from_str(&body) else {
+                continue;
+            };
+            for command in crate::init::cursor::pre_tool_use_commands(&parsed) {
+                let Some(executable) = crate::init::command_executable(&command) else {
+                    continue;
+                };
+                let normalized = crate::facts::path::resolve_with_env(
+                    executable,
+                    repo_root.or_else(|| hooks_path.parent()),
+                    env,
+                );
+                if !hook_scripts.contains(&normalized) {
+                    hook_scripts.push(normalized);
+                }
+            }
+        }
 
         for agent_path in &kiro_settings {
             // `collect_kiro_agent_jsons` enumerates via `read_dir`, so
@@ -303,6 +333,8 @@ impl ProtectedPaths {
         let kiro_settings = canonicalize_each(kiro_settings);
         let pi_settings = canonicalize_each(pi_settings);
         let opencode_settings = canonicalize_each(opencode_settings);
+        let cursor_settings = canonicalize_each(cursor_settings);
+        let cline_settings = canonicalize_each(cline_settings);
 
         Self {
             repo_root: repo_root.map(Path::to_path_buf),
@@ -316,6 +348,8 @@ impl ProtectedPaths {
             kiro_settings,
             pi_settings,
             opencode_settings,
+            cursor_settings,
+            cline_settings,
         }
     }
 
@@ -402,6 +436,12 @@ impl ProtectedPaths {
         if self.opencode_settings.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::OpencodeSettings);
         }
+        if self.cursor_settings.iter().any(|p| matches(p)) {
+            return Some(ProtectedKind::CursorSettings);
+        }
+        if self.cline_settings.iter().any(|p| matches(p)) {
+            return Some(ProtectedKind::ClineSettings);
+        }
         if self.hook_scripts.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::HookScript);
         }
@@ -483,6 +523,42 @@ fn collect_opencode_paths(
         paths.push(config.join("plugins/ptuf.ts"));
         paths.push(config.join("plugin/ptuf.ts"));
     }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// `.cursor/hooks.json` in the repo and `$HOME` scopes — the two files
+/// `ptuf init cursor --scope local|global` patches.
+fn collect_cursor_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(root) = repo_root {
+        paths.push(root.join(crate::init::cursor::DEFAULT_HOOKS_PATH));
+    }
+    if let Some(home) = home {
+        paths.push(home.join(crate::init::cursor::DEFAULT_HOOKS_PATH));
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Cline `PreToolUse` wrapper scripts written by `ptuf init cline`.
+/// Cline file hooks are executables identified by file name, so the
+/// wrapper itself is the registration. Both the Unix and Windows
+/// (`.ps1`) names are protected regardless of the host platform: a
+/// cross-platform checkout still carries whichever one Cline runs.
+fn collect_cline_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    use crate::init::cline::{GLOBAL_HOOKS_DIR, HOOK_FILE_NAMES, REPO_HOOKS_DIR};
+    let dirs = [
+        repo_root.map(|root| root.join(REPO_HOOKS_DIR)),
+        home.map(|home| home.join(GLOBAL_HOOKS_DIR)),
+    ];
+    let mut paths: Vec<PathBuf> = dirs
+        .iter()
+        .flatten()
+        .flat_map(|dir| HOOK_FILE_NAMES.iter().map(move |name| dir.join(name)))
+        .collect();
     paths.sort();
     paths.dedup();
     paths
@@ -580,6 +656,8 @@ mod tests {
             ProtectedKind::KiroSettings,
             ProtectedKind::PiSettings,
             ProtectedKind::OpencodeSettings,
+            ProtectedKind::CursorSettings,
+            ProtectedKind::ClineSettings,
         ] {
             assert!(!k.as_str().is_empty());
         }
@@ -1277,6 +1355,136 @@ mod tests {
             p.match_path(Path::new("/repo/.opencode/plugin/ptuf.ts")),
             Some(ProtectedKind::OpencodeSettings)
         );
+    }
+
+    #[test]
+    fn collect_includes_cursor_hooks_json_in_both_scopes() {
+        let env = MapEnv::new(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        assert!(
+            p.cursor_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/repo/.cursor/hooks.json"))
+        );
+        assert!(
+            p.cursor_settings
+                .iter()
+                .any(|q| q == &PathBuf::from("/h/.cursor/hooks.json"))
+        );
+    }
+
+    #[test]
+    fn classify_matches_edit_of_cursor_settings() {
+        let env = MapEnv::new(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        let input = HookInput {
+            tool_name: "Edit".into(),
+            tool_input: serde_json::json!({ "file_path": "/repo/.cursor/hooks.json" }),
+        };
+        assert!(
+            p.classify_input(&input)
+                .contains(&ProtectedKind::CursorSettings)
+        );
+    }
+
+    #[test]
+    fn collect_extracts_hook_scripts_from_cursor_hooks_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-cursor-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".cursor")).expect("mkdir");
+        std::fs::write(
+            dir.join(".cursor/hooks.json"),
+            r#"{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      { "command": "./hooks/guard.sh hook cursor", "matcher": "Shell" }
+    ]
+  }
+}"#,
+        )
+        .expect("write hooks");
+        let env = MapEnv::new(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
+        assert!(
+            p.hook_scripts
+                .iter()
+                .any(|path| path == &dir.join("./hooks/guard.sh")),
+            "expected hook script from cursor hooks.json, got {:?}",
+            p.hook_scripts
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_includes_cline_hook_wrappers_in_both_scopes() {
+        let env = MapEnv::new(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        for expected in [
+            "/repo/.clinerules/hooks/PreToolUse",
+            "/repo/.clinerules/hooks/PreToolUse.ps1",
+            "/h/Documents/Cline/Hooks/PreToolUse",
+            "/h/Documents/Cline/Hooks/PreToolUse.ps1",
+        ] {
+            assert!(
+                p.cline_settings
+                    .iter()
+                    .any(|q| q == &PathBuf::from(expected)),
+                "missing {expected} in {:?}",
+                p.cline_settings
+            );
+        }
+    }
+
+    #[test]
+    fn classify_matches_rm_of_cline_hook_wrapper() {
+        let env = MapEnv::new(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        let input = HookInput {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({
+                "command": "rm -f /repo/.clinerules/hooks/PreToolUse"
+            }),
+        };
+        assert!(
+            p.classify_input(&input)
+                .contains(&ProtectedKind::ClineSettings)
+        );
+    }
+
+    #[test]
+    fn protected_kind_cursor_and_cline_as_str() {
+        assert_eq!(ProtectedKind::CursorSettings.as_str(), "cursor_settings");
+        assert_eq!(ProtectedKind::ClineSettings.as_str(), "cline_settings");
+    }
+
+    #[test]
+    fn protected_kinds_holds_every_variant() {
+        let all = [
+            ProtectedKind::Binary,
+            ProtectedKind::Config,
+            ProtectedKind::Plugin,
+            ProtectedKind::ClaudeSettings,
+            ProtectedKind::CodexSettings,
+            ProtectedKind::HookScript,
+            ProtectedKind::CopilotSettings,
+            ProtectedKind::KiroSettings,
+            ProtectedKind::PiSettings,
+            ProtectedKind::OpencodeSettings,
+            ProtectedKind::CursorSettings,
+            ProtectedKind::ClineSettings,
+        ];
+        let kinds = ProtectedKinds::from(all.as_slice());
+        assert_eq!(kinds.as_slice(), &all);
     }
 
     #[test]

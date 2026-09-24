@@ -154,7 +154,6 @@ pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
     super::command_invokes_ptuf_hook(cmd, COMMAND_TAIL)
 }
 
-#[cfg(test)]
 pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
     let Some(arr) = root.pointer("/hooks/preToolUse").and_then(Value::as_array) else {
         return Vec::new();
@@ -167,7 +166,6 @@ pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
 }
 
 /// Extract the `command` string field from a Cursor hook entry.
-#[cfg(test)]
 pub(crate) fn entry_commands(entry: &Value) -> Vec<String> {
     let mut commands = Vec::new();
     if let Some(s) = entry.get("command").and_then(Value::as_str) {

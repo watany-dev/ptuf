@@ -972,6 +972,8 @@ rules:
             kiro_settings: Vec::new(),
             pi_settings: Vec::new(),
             opencode_settings: Vec::new(),
+            cursor_settings: Vec::new(),
+            cline_settings: Vec::new(),
         };
         let input = HookInput {
             tool_name: "Edit".into(),
