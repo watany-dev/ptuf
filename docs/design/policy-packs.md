@@ -198,19 +198,35 @@ guard / hook / 監査を 1 発で迂回する)。
 
 ## `core.self_protection`
 
-実装済み rule は 9 個で、すべて `deny`, `hardDeny: true`, `severity: critical`。
+実装済み rule は 5 個で、すべて `deny`, `hardDeny: true`, `severity: critical`。
 
 | Rule id | 対象 |
 | --- | --- |
 | `core.self_protection.binary` | ptuf 実行ファイル |
 | `core.self_protection.config` | config layer (`/etc`, `~/.config`, repo local) |
 | `core.self_protection.plugin` | config で参照された plugin YAML |
-| `core.self_protection.claude-settings` | `.claude/settings*.json` |
-| `core.self_protection.codex-settings` | `.codex/config.toml`, `.codex/hooks.json` |
-| `core.self_protection.copilot-settings` | `.github/hooks/ptuf.json` |
-| `core.self_protection.kiro-settings` | `<repo>/.kiro/agents/*.json` と `$HOME/.kiro/agents/*.json` (実在する `*.json` を起動時に列挙) |
-| `core.self_protection.pi-settings` | `$HOME/.pi/agent/settings.json`, `$HOME/.pi/agent/extensions/ptuf.ts`, `$HOME/.pi/agent/extensions/ptuf/index.ts`, `<repo>/.pi/settings.json`, `<repo>/.pi/extensions/ptuf.ts`, `<repo>/.pi/extensions/ptuf/index.ts` |
-| `core.self_protection.hook-script` | Claude / Codex / Copilot / Kiro / Cline / Pi の hook command が参照する実行ファイル |
+| `core.self_protection.agent-settings` | ptuf が adapter を持つ全 coding agent の hook 登録・権限・MCP 設定 (下表) |
+| `core.self_protection.hook-script` | Claude / Codex / Copilot / Cursor / Kiro の hook command が参照する実行ファイル |
+
+`agent-settings` は「agent 自身の設定を agent に書き換えさせない」ための単一 rule で、
+hook の除去だけでなく、permission allowlist・sandbox / approval policy・MCP server
+追加による**権限昇格**も塞ぐ。旧 `claude-settings` / `codex-settings` /
+`copilot-settings` / `kiro-settings` / `pi-settings` / `opencode-settings` を統合したもの。
+
+| Agent | 対象 |
+| --- | --- |
+| Claude Code | `<repo>/.claude/settings{,.local}.json`, `<repo>/.mcp.json`, `$HOME/.claude/settings{,.local}.json`, `$HOME/.claude.json`, `/etc/claude-code/managed-{settings,mcp}.json`, `/Library/Application Support/ClaudeCode/managed-{settings,mcp}.json` |
+| Codex | `.codex/config.toml`, `.codex/hooks.json` (`<repo>`, `$HOME`, `$CODEX_HOME`) |
+| GitHub Copilot | `<repo>/.github/hooks/ptuf.json`, `$HOME/.copilot/config.json`, `$HOME/.copilot/mcp-config.json` |
+| Cursor | `<repo>/.cursor/{hooks,mcp,cli}.json`, `$HOME/.cursor/{hooks,mcp,cli-config}.json` |
+| Kiro | `.kiro/agents/*.json` (実在する `*.json` を起動時に列挙), `.kiro/settings/mcp.json`, `.kiro/settings/cli.json` (`<repo>`, `$HOME`) |
+| Cline | `.clinerules/hooks/PreToolUse{,.ps1}`, `$HOME/Documents/Cline/Hooks/PreToolUse{,.ps1}` |
+| Pi | `{$HOME/.pi/agent,<repo>/.pi}/settings.json`, `…/extensions/ptuf.ts`, `…/extensions/ptuf/index.ts` |
+| OpenCode | `{$XDG_CONFIG_HOME/opencode,$HOME/.config/opencode,<repo>/.opencode}/{plugins,plugin}/ptuf.ts`, 同 dir の `opencode.json{,c}`, `<repo>/opencode.json{,c}` |
+
+hook script の抽出元は Claude settings / Codex `hooks.json` / Copilot
+`ptuf.json` / Cursor `hooks.json` / Kiro agent JSON に限る。`~/.claude.json`
+のような大きくなりうる permission / MCP 設定は path 保護のみで中身は読まない。
 
 ## `core.engine`
 

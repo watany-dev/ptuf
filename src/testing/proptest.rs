@@ -270,19 +270,14 @@ pub(crate) fn mode() -> impl Strategy<Value = Mode> {
     prop_oneof![Just(Mode::Enforce), Just(Mode::Monitor)]
 }
 
-/// All nine `ProtectedKind` variants drawn uniformly.
+/// All five `ProtectedKind` variants drawn uniformly.
 pub(crate) fn protected_kind() -> impl Strategy<Value = ProtectedKind> {
     prop_oneof![
         Just(ProtectedKind::Binary),
         Just(ProtectedKind::Config),
         Just(ProtectedKind::Plugin),
-        Just(ProtectedKind::ClaudeSettings),
-        Just(ProtectedKind::CodexSettings),
+        Just(ProtectedKind::AgentSettings),
         Just(ProtectedKind::HookScript),
-        Just(ProtectedKind::CopilotSettings),
-        Just(ProtectedKind::KiroSettings),
-        Just(ProtectedKind::PiSettings),
-        Just(ProtectedKind::OpencodeSettings),
     ]
 }
 

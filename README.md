@@ -81,8 +81,10 @@ runs the call. A few examples of what fires by default:
   `additionalWorkspaces`. Symlinks and `..` are resolved before the
   boundary check.
 - **`core.self_protection.*`** — blocks the agent from editing ptuf's own
-  binary, config, plugins, hook script, or your `~/.claude/settings.json`
-  hook entry. The agent cannot turn ptuf off mid-session.
+  binary, config, plugins, hook script, or any supported agent's own
+  settings (hook registration, permission allowlist, MCP servers — e.g.
+  `~/.claude/settings.json`, `.codex/config.toml`, `.cursor/hooks.json`).
+  The agent cannot turn ptuf off or widen its own permissions mid-session.
 
 The full pack catalogue lives in
 [`docs/design/policy-packs.md`](docs/design/policy-packs.md).

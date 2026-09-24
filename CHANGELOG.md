@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed (BREAKING)
+- `core.self_protection.claude-settings` / `codex-settings` /
+  `copilot-settings` / `kiro-settings` / `pi-settings` / `opencode-settings`
+  を `core.self_protection.agent-settings` 1 本に統合。`ProtectedKind` も
+  `AgentSettings` に集約し、audit の protected label は `agent_settings` に
+  なる。旧 rule id を参照する audit 集計・`rule_overrides` は新 id へ移行が必要。
+- `agent-settings` の保護対象を hook 登録から「agent 自身の権限を広げうる設定」
+  全般へ拡張: Claude Code の `$HOME/.claude/settings.local.json` /
+  `.mcp.json` / `~/.claude.json` / managed settings、Codex の `$CODEX_HOME`、
+  Copilot CLI の `~/.copilot/{config,mcp-config}.json`、Cursor の
+  `.cursor/{hooks,mcp,cli}.json` と `~/.cursor/cli-config.json` (従来は未保護)、
+  Kiro の `.kiro/settings/{mcp,cli}.json`、Cline の `PreToolUse` wrapper、
+  OpenCode の `opencode.json{,c}`。Cursor `hooks.json` の hook command も
+  `core.self_protection.hook-script` の抽出元に追加。
+
+### Changed (BREAKING)
 - `rules::remote_pipe`(`RemoteScriptPipe`)を削除。`static RULES` に載らない
   テスト専用 oracle で、本番の判定は DSL 版 `core.network.remote-script-pipe`
   (`src/rules/builtins.yaml`)が行っていた。パリティ PBT は DSL への直接

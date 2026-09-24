@@ -5,8 +5,8 @@
 //! `decide` to populate [`crate::facts::Facts::protected`]. The actual
 //! `core.self_protection.*` rules live in `crate::rules::self_protection`.
 
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::{fs, io::ErrorKind};
 
 use crate::config::Config;
 use crate::config::scope::{EnvLookup, SystemEnv, layout_for};
@@ -20,13 +20,11 @@ pub enum ProtectedKind {
     Binary,
     Config,
     Plugin,
-    ClaudeSettings,
-    CodexSettings,
+    /// Hook registration, permission, and MCP config of every coding
+    /// agent ptuf ships an adapter for (Claude Code, Codex, Copilot,
+    /// Cursor, Kiro, Cline, Pi, OpenCode).
+    AgentSettings,
     HookScript,
-    CopilotSettings,
-    KiroSettings,
-    PiSettings,
-    OpencodeSettings,
 }
 
 impl ProtectedKind {
@@ -35,20 +33,15 @@ impl ProtectedKind {
             Self::Binary => "binary",
             Self::Config => "config",
             Self::Plugin => "plugin",
-            Self::ClaudeSettings => "claude_settings",
-            Self::CodexSettings => "codex_settings",
+            Self::AgentSettings => "agent_settings",
             Self::HookScript => "hook_script",
-            Self::CopilotSettings => "copilot_settings",
-            Self::KiroSettings => "kiro_settings",
-            Self::PiSettings => "pi_settings",
-            Self::OpencodeSettings => "opencode_settings",
         }
     }
 }
 
 /// Small, allocation-free set of protected target labels.
 ///
-/// There are only ten [`ProtectedKind`] variants, so a fixed buffer is
+/// There are only five [`ProtectedKind`] variants, so a fixed buffer is
 /// simpler than pulling in a small-vector dependency for the hook hot path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProtectedKinds {
@@ -57,7 +50,7 @@ pub struct ProtectedKinds {
 }
 
 impl ProtectedKinds {
-    const CAPACITY: usize = 10;
+    const CAPACITY: usize = 5;
 
     pub fn new() -> Self {
         Self::default()
@@ -117,14 +110,15 @@ pub struct ProtectedPaths {
     pub binary: Option<PathBuf>,
     pub configs: Vec<PathBuf>,
     pub plugins: Vec<PathBuf>,
-    pub claude_settings: Vec<PathBuf>,
-    pub codex_settings: Vec<PathBuf>,
+    /// Every agent config that can register / remove a hook or widen
+    /// the agent's own permissions. Sorted and deduplicated.
+    pub agent_settings: Vec<PathBuf>,
     pub hook_scripts: Vec<PathBuf>,
-    pub copilot_settings: Vec<PathBuf>,
-    pub kiro_settings: Vec<PathBuf>,
-    pub pi_settings: Vec<PathBuf>,
-    pub opencode_settings: Vec<PathBuf>,
 }
+
+/// Extracts `PreToolUse`-equivalent hook commands from one agent's
+/// parsed hook config.
+type HookCommandParser = fn(&Value) -> Vec<String>;
 
 impl ProtectedPaths {
     /// Build the protected set from the resolved engine state.
@@ -145,146 +139,57 @@ impl ProtectedPaths {
         configs.sort();
         configs.dedup();
 
-        let mut claude_settings: Vec<PathBuf> = Vec::new();
-        if let Some(root) = repo_root {
-            claude_settings.push(root.join(".claude/settings.json"));
-            claude_settings.push(root.join(".claude/settings.local.json"));
-        }
-        if let Some(home_os) = env.var_os("HOME") {
-            let home = PathBuf::from(home_os);
-            claude_settings.push(home.join(".claude/settings.json"));
-        }
-        claude_settings.sort();
-        claude_settings.dedup();
+        let home = env.var_os("HOME").map(PathBuf::from);
+        let home = home.as_deref();
 
-        let mut codex_settings: Vec<PathBuf> = Vec::new();
-        if let Some(root) = repo_root {
-            codex_settings.push(root.join(".codex/config.toml"));
-            codex_settings.push(root.join(".codex/hooks.json"));
-        }
-        if let Some(home_os) = env.var_os("HOME") {
-            let home = PathBuf::from(home_os);
-            codex_settings.push(home.join(".codex/config.toml"));
-            codex_settings.push(home.join(".codex/hooks.json"));
-        }
-        codex_settings.sort();
-        codex_settings.dedup();
+        let claude = collect_claude_paths(repo_root, home);
+        let codex = collect_codex_paths(repo_root, home, env);
+        let copilot = collect_copilot_paths(repo_root, home);
+        let cursor = collect_cursor_paths(repo_root, home);
+        let kiro_agents = collect_kiro_agent_jsons(repo_root, home);
+        let kiro = collect_kiro_paths(repo_root, home, &kiro_agents);
+        let cline = collect_cline_paths(repo_root, home);
+        let pi = collect_pi_paths(repo_root, home);
+        let opencode = collect_opencode_paths(repo_root, home, env);
 
+        // Only the files that actually carry hook registrations are
+        // parsed; permission / MCP config (e.g. `~/.claude.json`, which
+        // can grow to megabytes) is path-protected without being read.
         let mut hook_scripts = Vec::new();
-        for settings_path in &claude_settings {
-            let body = match fs::read_to_string(settings_path) {
-                Ok(s) => s,
-                Err(err) if err.kind() == ErrorKind::NotFound => continue,
-                Err(_) => continue,
-            };
-            let parsed: Value = match serde_json::from_str(&body) {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-            for command in crate::init::claude_code::pre_tool_use_commands(&parsed) {
-                let Some(executable) = crate::init::command_executable(&command) else {
-                    continue;
-                };
-                let normalized = crate::facts::path::resolve_with_env(
-                    executable,
-                    repo_root.or_else(|| settings_path.parent()),
-                    env,
-                );
-                if !hook_scripts.contains(&normalized) {
-                    hook_scripts.push(normalized);
-                }
-            }
-        }
-        for hooks_path in codex_settings.iter().filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name == "hooks.json")
-        }) {
-            let body = match fs::read_to_string(hooks_path) {
-                Ok(s) => s,
-                Err(err) if err.kind() == ErrorKind::NotFound => continue,
-                Err(_) => continue,
-            };
-            let parsed: Value = match serde_json::from_str(&body) {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-            for command in crate::init::codex::pre_tool_use_commands(&parsed) {
-                let Some(executable) = crate::init::command_executable(&command) else {
-                    continue;
-                };
-                let normalized = crate::facts::path::resolve_with_env(
-                    executable,
-                    repo_root.or_else(|| hooks_path.parent()),
-                    env,
-                );
-                if !hook_scripts.contains(&normalized) {
-                    hook_scripts.push(normalized);
-                }
-            }
+        let hook_sources: [(&[PathBuf], HookCommandParser); 5] = [
+            (
+                &claude.hook_sources,
+                crate::init::claude_code::pre_tool_use_commands,
+            ),
+            (
+                &codex.hook_sources,
+                crate::init::codex::pre_tool_use_commands,
+            ),
+            (
+                &copilot.hook_sources,
+                crate::init::copilot::pre_tool_use_commands,
+            ),
+            (
+                &cursor.hook_sources,
+                crate::init::cursor::pre_tool_use_commands,
+            ),
+            (&kiro_agents, crate::init::kiro::pre_tool_use_commands),
+        ];
+        for (sources, parse) in hook_sources {
+            extend_hook_scripts(&mut hook_scripts, sources, parse, repo_root, env);
         }
 
-        let mut copilot_settings: Vec<PathBuf> = Vec::new();
-        if let Some(root) = repo_root {
-            copilot_settings.push(root.join(".github/hooks/ptuf.json"));
-        }
-
-        for hooks_path in &copilot_settings {
-            let body = match fs::read_to_string(hooks_path) {
-                Ok(s) => s,
-                Err(err) if err.kind() == ErrorKind::NotFound => continue,
-                Err(_) => continue,
-            };
-            let parsed: Value = match serde_json::from_str(&body) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            for command in crate::init::copilot::pre_tool_use_commands(&parsed) {
-                let Some(executable) = crate::init::command_executable(&command) else {
-                    continue;
-                };
-                let normalized = crate::facts::path::resolve_with_env(
-                    executable,
-                    repo_root.or_else(|| hooks_path.parent()),
-                    env,
-                );
-                if !hook_scripts.contains(&normalized) {
-                    hook_scripts.push(normalized);
-                }
-            }
-        }
-
-        let home_path = env.var_os("HOME").map(PathBuf::from);
-        let kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
-        let pi_settings = collect_pi_paths(repo_root, home_path.as_deref());
-        let opencode_settings = collect_opencode_paths(repo_root, home_path.as_deref(), env);
-
-        for agent_path in &kiro_settings {
-            // `collect_kiro_agent_jsons` enumerates via `read_dir`, so
-            // every `agent_path` was present moments ago; treat read /
-            // parse failures uniformly as "skip this scope" so a TOCTOU
-            // race (file removed between enumeration and now) collapses
-            // into the same control flow as malformed JSON.
-            let Ok(body) = fs::read_to_string(agent_path) else {
-                continue;
-            };
-            let Ok(parsed): Result<Value, _> = serde_json::from_str(&body) else {
-                continue;
-            };
-            for command in crate::init::kiro::pre_tool_use_commands(&parsed) {
-                let Some(executable) = crate::init::command_executable(&command) else {
-                    continue;
-                };
-                let normalized = crate::facts::path::resolve_with_env(
-                    executable,
-                    repo_root.or_else(|| agent_path.parent()),
-                    env,
-                );
-                if !hook_scripts.contains(&normalized) {
-                    hook_scripts.push(normalized);
-                }
-            }
-        }
+        let mut agent_settings: Vec<PathBuf> = [
+            claude.paths,
+            codex.paths,
+            copilot.paths,
+            cursor.paths,
+            kiro,
+            cline,
+            pi,
+            opencode,
+        ]
+        .concat();
 
         // Pre-cache `canonical_or_raw` on every target list so
         // `match_path` only canonicalises the candidate. Symlinks
@@ -296,26 +201,18 @@ impl ProtectedPaths {
             .map(|p| p.canonicalize().unwrap_or(p));
         let configs = canonicalize_each(configs);
         let plugins = canonicalize_each(config.plugin_paths.clone());
-        let claude_settings = canonicalize_each(claude_settings);
-        let codex_settings = canonicalize_each(codex_settings);
+        agent_settings = canonicalize_each(agent_settings);
+        agent_settings.sort();
+        agent_settings.dedup();
         let hook_scripts = canonicalize_each(hook_scripts);
-        let copilot_settings = canonicalize_each(copilot_settings);
-        let kiro_settings = canonicalize_each(kiro_settings);
-        let pi_settings = canonicalize_each(pi_settings);
-        let opencode_settings = canonicalize_each(opencode_settings);
 
         Self {
             repo_root: repo_root.map(Path::to_path_buf),
             binary,
             configs,
             plugins,
-            claude_settings,
-            codex_settings,
+            agent_settings,
             hook_scripts,
-            copilot_settings,
-            kiro_settings,
-            pi_settings,
-            opencode_settings,
         }
     }
 
@@ -384,29 +281,148 @@ impl ProtectedPaths {
         if self.plugins.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::Plugin);
         }
-        if self.claude_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::ClaudeSettings);
-        }
-        if self.codex_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::CodexSettings);
-        }
-        if self.copilot_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::CopilotSettings);
-        }
-        if self.kiro_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::KiroSettings);
-        }
-        if self.pi_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::PiSettings);
-        }
-        if self.opencode_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::OpencodeSettings);
+        if self.agent_settings.iter().any(|p| matches(p)) {
+            return Some(ProtectedKind::AgentSettings);
         }
         if self.hook_scripts.iter().any(|p| matches(p)) {
             return Some(ProtectedKind::HookScript);
         }
         None
     }
+}
+
+/// Paths contributed by one agent: `paths` is everything to protect,
+/// `hook_sources` the subset whose hook commands feed `hook_scripts`.
+#[derive(Default)]
+struct AgentPaths {
+    paths: Vec<PathBuf>,
+    hook_sources: Vec<PathBuf>,
+}
+
+/// Parse each existing `source` with `parse` and append the resolved
+/// executable of every registered hook command to `hook_scripts`.
+///
+/// Missing, unreadable, and malformed files are skipped uniformly so a
+/// TOCTOU race (file removed between enumeration and read) collapses
+/// into the same control flow as malformed JSON.
+fn extend_hook_scripts(
+    hook_scripts: &mut Vec<PathBuf>,
+    sources: &[PathBuf],
+    parse: HookCommandParser,
+    repo_root: Option<&Path>,
+    env: &dyn EnvLookup,
+) {
+    for source in sources {
+        let Ok(body) = fs::read_to_string(source) else {
+            continue;
+        };
+        let Ok(parsed): Result<Value, _> = serde_json::from_str(&body) else {
+            continue;
+        };
+        for command in parse(&parsed) {
+            let Some(executable) = crate::init::command_executable(&command) else {
+                continue;
+            };
+            let normalized = crate::facts::path::resolve_with_env(
+                executable,
+                repo_root.or_else(|| source.parent()),
+                env,
+            );
+            if !hook_scripts.contains(&normalized) {
+                hook_scripts.push(normalized);
+            }
+        }
+    }
+}
+
+/// Claude Code: hook-bearing `settings*.json` plus the permission /
+/// MCP surfaces (`.mcp.json`, `~/.claude.json`, managed settings) that
+/// can pre-approve tools or bypass permission prompts.
+fn collect_claude_paths(repo_root: Option<&Path>, home: Option<&Path>) -> AgentPaths {
+    let mut out = AgentPaths::default();
+    if let Some(root) = repo_root {
+        out.hook_sources.push(root.join(".claude/settings.json"));
+        out.hook_sources
+            .push(root.join(".claude/settings.local.json"));
+        out.paths.push(root.join(".mcp.json"));
+    }
+    if let Some(home) = home {
+        out.hook_sources.push(home.join(".claude/settings.json"));
+        out.hook_sources
+            .push(home.join(".claude/settings.local.json"));
+        out.paths.push(home.join(".claude.json"));
+    }
+    for managed in [
+        "/etc/claude-code",
+        "/Library/Application Support/ClaudeCode",
+    ] {
+        let managed = Path::new(managed);
+        out.hook_sources.push(managed.join("managed-settings.json"));
+        out.paths.push(managed.join("managed-mcp.json"));
+    }
+    out.paths.extend(out.hook_sources.iter().cloned());
+    out
+}
+
+/// Codex: `config.toml` (sandbox / approval policy / MCP / feature
+/// flags) and `hooks.json`, per repo, `$HOME`, and `$CODEX_HOME`.
+fn collect_codex_paths(
+    repo_root: Option<&Path>,
+    home: Option<&Path>,
+    env: &dyn EnvLookup,
+) -> AgentPaths {
+    let mut dirs = Vec::new();
+    if let Some(root) = repo_root {
+        dirs.push(root.join(".codex"));
+    }
+    if let Some(home) = home {
+        dirs.push(home.join(".codex"));
+    }
+    if let Some(codex_home) = env.var_os("CODEX_HOME") {
+        dirs.push(PathBuf::from(codex_home));
+    }
+    let mut out = AgentPaths::default();
+    for dir in dirs {
+        out.paths.push(dir.join("config.toml"));
+        out.hook_sources.push(dir.join("hooks.json"));
+    }
+    out.paths.extend(out.hook_sources.iter().cloned());
+    out
+}
+
+/// GitHub Copilot: the managed repo hook file plus the Copilot CLI
+/// user config (trusted folders / allowed tools) and MCP config.
+fn collect_copilot_paths(repo_root: Option<&Path>, home: Option<&Path>) -> AgentPaths {
+    let mut out = AgentPaths::default();
+    if let Some(root) = repo_root {
+        out.hook_sources.push(root.join(".github/hooks/ptuf.json"));
+    }
+    if let Some(home) = home {
+        out.paths.push(home.join(".copilot/config.json"));
+        out.paths.push(home.join(".copilot/mcp-config.json"));
+    }
+    out.paths.extend(out.hook_sources.iter().cloned());
+    out
+}
+
+/// Cursor: `hooks.json`, `mcp.json`, and the CLI permission config
+/// (`<repo>/.cursor/cli.json`, `$HOME/.cursor/cli-config.json`).
+fn collect_cursor_paths(repo_root: Option<&Path>, home: Option<&Path>) -> AgentPaths {
+    let mut out = AgentPaths::default();
+    if let Some(root) = repo_root {
+        let dir = root.join(".cursor");
+        out.hook_sources.push(dir.join("hooks.json"));
+        out.paths.push(dir.join("mcp.json"));
+        out.paths.push(dir.join("cli.json"));
+    }
+    if let Some(home) = home {
+        let dir = home.join(".cursor");
+        out.hook_sources.push(dir.join("hooks.json"));
+        out.paths.push(dir.join("mcp.json"));
+        out.paths.push(dir.join("cli-config.json"));
+    }
+    out.paths.extend(out.hook_sources.iter().cloned());
+    out
 }
 
 /// Enumerate every `*.json` directly under `<repo>/.kiro/agents/` and
@@ -444,6 +460,40 @@ fn collect_kiro_agent_jsons(repo_root: Option<&Path>, home: Option<&Path>) -> Ve
     paths
 }
 
+/// Kiro: every agent JSON plus the workspace / user MCP config and
+/// `settings/cli.json`, whose `chat.defaultAgent` could switch Kiro to
+/// an agent without the ptuf hook.
+fn collect_kiro_paths(
+    repo_root: Option<&Path>,
+    home: Option<&Path>,
+    agents: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut paths = agents.to_vec();
+    for base in [repo_root, home].into_iter().flatten() {
+        paths.push(base.join(".kiro/settings/mcp.json"));
+        paths.push(base.join(".kiro/settings/cli.json"));
+    }
+    paths
+}
+
+/// Cline: the `PreToolUse` wrapper `ptuf init cline` installs, in both
+/// the repo-local and global hook directories, for both platforms.
+fn collect_cline_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(root) = repo_root {
+        dirs.push(root.join(".clinerules/hooks"));
+    }
+    if let Some(home) = home {
+        dirs.push(home.join("Documents/Cline/Hooks"));
+    }
+    let mut paths = Vec::new();
+    for dir in dirs {
+        paths.push(dir.join("PreToolUse"));
+        paths.push(dir.join("PreToolUse.ps1"));
+    }
+    paths
+}
+
 fn collect_pi_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(home) = home {
@@ -458,33 +508,34 @@ fn collect_pi_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBu
         paths.push(pi.join("extensions/ptuf.ts"));
         paths.push(pi.join("extensions/ptuf/index.ts"));
     }
-    paths.sort();
-    paths.dedup();
     paths
 }
 
+/// OpenCode: the managed ptuf plugin plus `opencode.json{,c}`, whose
+/// `permission` block can turn every tool into `allow`.
 fn collect_opencode_paths(
     repo_root: Option<&Path>,
     home: Option<&Path>,
     env: &dyn EnvLookup,
 ) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
+    let mut dirs = Vec::new();
     if let Some(xdg) = env.var_os("XDG_CONFIG_HOME") {
-        let config = PathBuf::from(xdg).join("opencode");
-        paths.push(config.join("plugins/ptuf.ts"));
-        paths.push(config.join("plugin/ptuf.ts"));
+        dirs.push(PathBuf::from(xdg).join("opencode"));
     } else if let Some(home) = home {
-        let config = home.join(".config/opencode");
-        paths.push(config.join("plugins/ptuf.ts"));
-        paths.push(config.join("plugin/ptuf.ts"));
+        dirs.push(home.join(".config/opencode"));
     }
+    let mut paths = Vec::new();
     if let Some(root) = repo_root {
-        let config = root.join(".opencode");
-        paths.push(config.join("plugins/ptuf.ts"));
-        paths.push(config.join("plugin/ptuf.ts"));
+        dirs.push(root.join(".opencode"));
+        paths.push(root.join("opencode.json"));
+        paths.push(root.join("opencode.jsonc"));
     }
-    paths.sort();
-    paths.dedup();
+    for dir in dirs {
+        paths.push(dir.join("plugins/ptuf.ts"));
+        paths.push(dir.join("plugin/ptuf.ts"));
+        paths.push(dir.join("opencode.json"));
+        paths.push(dir.join("opencode.jsonc"));
+    }
     paths
 }
 
@@ -573,13 +624,13 @@ mod tests {
             ProtectedKind::Binary,
             ProtectedKind::Config,
             ProtectedKind::Plugin,
-            ProtectedKind::ClaudeSettings,
-            ProtectedKind::CodexSettings,
+            ProtectedKind::AgentSettings,
+            ProtectedKind::AgentSettings,
             ProtectedKind::HookScript,
-            ProtectedKind::CopilotSettings,
-            ProtectedKind::KiroSettings,
-            ProtectedKind::PiSettings,
-            ProtectedKind::OpencodeSettings,
+            ProtectedKind::AgentSettings,
+            ProtectedKind::AgentSettings,
+            ProtectedKind::AgentSettings,
+            ProtectedKind::AgentSettings,
         ] {
             assert!(!k.as_str().is_empty());
         }
@@ -628,30 +679,148 @@ mod tests {
     }
 
     #[test]
-    fn collect_includes_repo_local_claude_settings() {
+    fn collect_includes_repo_local_and_home_agent_settings() {
         let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         assert!(
-            p.claude_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &PathBuf::from("/repo/.claude/settings.json"))
         );
         assert!(
-            p.claude_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &PathBuf::from("/h/.claude/settings.json"))
         );
         assert!(
-            p.codex_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &PathBuf::from("/repo/.codex/config.toml"))
         );
         assert!(
-            p.codex_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &PathBuf::from("/h/.codex/hooks.json"))
         );
+    }
+
+    #[test]
+    fn collect_includes_permission_and_mcp_surfaces_of_every_agent() {
+        let env = MapEnv::new(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/xdg")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        for expected in [
+            // Claude Code
+            "/repo/.claude/settings.local.json",
+            "/repo/.mcp.json",
+            "/h/.claude/settings.local.json",
+            "/h/.claude.json",
+            "/etc/claude-code/managed-settings.json",
+            "/etc/claude-code/managed-mcp.json",
+            // Copilot CLI
+            "/h/.copilot/config.json",
+            "/h/.copilot/mcp-config.json",
+            // Cursor
+            "/repo/.cursor/hooks.json",
+            "/repo/.cursor/mcp.json",
+            "/repo/.cursor/cli.json",
+            "/h/.cursor/hooks.json",
+            "/h/.cursor/mcp.json",
+            "/h/.cursor/cli-config.json",
+            // Kiro
+            "/repo/.kiro/settings/mcp.json",
+            "/h/.kiro/settings/mcp.json",
+            "/repo/.kiro/settings/cli.json",
+            // Cline
+            "/repo/.clinerules/hooks/PreToolUse",
+            "/h/Documents/Cline/Hooks/PreToolUse.ps1",
+            // OpenCode
+            "/repo/opencode.json",
+            "/repo/opencode.jsonc",
+            "/xdg/opencode/opencode.json",
+        ] {
+            assert!(
+                p.agent_settings.iter().any(|q| q == Path::new(expected)),
+                "{expected} missing from {:?}",
+                p.agent_settings
+            );
+        }
+    }
+
+    #[test]
+    fn collect_honours_codex_home() {
+        let env = MapEnv::new(&[("HOME", "/h"), ("CODEX_HOME", "/codex-home")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
+        for expected in [
+            "/codex-home/config.toml",
+            "/codex-home/hooks.json",
+            "/h/.codex/config.toml",
+        ] {
+            assert!(
+                p.agent_settings.iter().any(|q| q == Path::new(expected)),
+                "{expected} missing from {:?}",
+                p.agent_settings
+            );
+        }
+    }
+
+    #[test]
+    fn classify_matches_edit_of_permission_config() {
+        let env = MapEnv::new(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
+        for path in [
+            "/repo/.claude/settings.local.json",
+            "/repo/.mcp.json",
+            "/repo/.cursor/cli.json",
+            "/repo/opencode.json",
+        ] {
+            let input = HookInput {
+                tool_name: "Write".into(),
+                tool_input: serde_json::json!({ "file_path": path }),
+            };
+            assert!(
+                p.classify_input(&input)
+                    .contains(&ProtectedKind::AgentSettings),
+                "{path} should classify as agent settings"
+            );
+        }
+    }
+
+    #[test]
+    fn collect_extracts_hook_scripts_from_cursor_hooks_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-cursor-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".cursor")).expect("mkdir");
+        std::fs::write(
+            dir.join(".cursor/hooks.json"),
+            r#"{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      { "command": "./hooks/guard.sh hook cursor" }
+    ]
+  }
+}"#,
+        )
+        .expect("write hooks");
+        let env = MapEnv::new(&[("HOME", "/h")]);
+        let cfg = Config::default();
+        let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
+        assert!(
+            p.hook_scripts
+                .iter()
+                .any(|path| path == &dir.join("./hooks/guard.sh")),
+            "expected hook script from cursor hooks.json, got {:?}",
+            p.hook_scripts
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -664,7 +833,7 @@ mod tests {
             tool_input: serde_json::json!({ "file_path": "/repo/.claude/settings.json" }),
         };
         let labels = p.classify_input(&input);
-        assert!(labels.contains(&ProtectedKind::ClaudeSettings));
+        assert!(labels.contains(&ProtectedKind::AgentSettings));
     }
 
     #[test]
@@ -701,7 +870,7 @@ mod tests {
             }),
         };
         let labels = p.classify_input(&input);
-        assert!(labels.contains(&ProtectedKind::CodexSettings));
+        assert!(labels.contains(&ProtectedKind::AgentSettings));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -731,7 +900,7 @@ mod tests {
             }),
         };
         let labels = p.classify_input(&input);
-        assert!(labels.contains(&ProtectedKind::ClaudeSettings));
+        assert!(labels.contains(&ProtectedKind::AgentSettings));
     }
 
     #[test]
@@ -899,12 +1068,21 @@ mod tests {
     }
 
     #[test]
-    fn empty_when_no_repo_root_and_no_home() {
+    fn only_managed_claude_settings_without_repo_root_and_home() {
+        // System-wide managed settings do not depend on HOME / repo, so
+        // they are the only agent settings left when both are absent.
         let env = MapEnv::new(&[]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
-        assert!(p.claude_settings.is_empty());
-        assert!(p.codex_settings.is_empty());
+        assert!(!p.agent_settings.is_empty());
+        assert!(
+            p.agent_settings
+                .iter()
+                .all(|q| q.to_string_lossy().contains("managed-")),
+            "unexpected agent settings without HOME / repo: {:?}",
+            p.agent_settings
+        );
+        assert!(p.hook_scripts.is_empty());
     }
 
     #[test]
@@ -927,7 +1105,7 @@ mod tests {
             &env,
         )];
         let labels = p.classify_input_prepared(&input, &[], &extra, None);
-        assert!(labels.contains(&ProtectedKind::ClaudeSettings));
+        assert!(labels.contains(&ProtectedKind::AgentSettings));
     }
 
     #[test]
@@ -936,7 +1114,7 @@ mod tests {
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         assert!(
-            p.copilot_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &PathBuf::from("/repo/.github/hooks/ptuf.json"))
         );
@@ -969,27 +1147,29 @@ mod tests {
         let expected_home = canon(home.join(".kiro/agents/default.json"));
         let ignored_md = canon(repo.join(".kiro/agents/notes.md"));
 
-        assert!(p.kiro_settings.iter().any(|q| q == &expected_a));
-        assert!(p.kiro_settings.iter().any(|q| q == &expected_b));
-        assert!(p.kiro_settings.iter().any(|q| q == &expected_home));
+        assert!(p.agent_settings.iter().any(|q| q == &expected_a));
+        assert!(p.agent_settings.iter().any(|q| q == &expected_b));
+        assert!(p.agent_settings.iter().any(|q| q == &expected_home));
         assert!(
-            !p.kiro_settings.iter().any(|q| q == &ignored_md),
+            !p.agent_settings.iter().any(|q| q == &ignored_md),
             "non-json agent should be excluded, got {:?}",
-            p.kiro_settings
+            p.agent_settings
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn collect_kiro_settings_is_empty_when_agents_dir_missing() {
+    fn collect_has_no_kiro_agent_json_when_agents_dir_missing() {
         let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
         assert!(
-            p.kiro_settings.is_empty(),
-            "no .kiro/agents/ dir should yield empty kiro_settings, got {:?}",
-            p.kiro_settings
+            !p.agent_settings
+                .iter()
+                .any(|q| q.to_string_lossy().contains(".kiro/agents/")),
+            "no .kiro/agents/ dir should yield no kiro agent JSON, got {:?}",
+            p.agent_settings
         );
     }
 
@@ -1065,7 +1245,7 @@ mod tests {
     #[test]
     fn classify_matches_edit_of_copilot_settings() {
         let p = ProtectedPaths {
-            copilot_settings: vec![PathBuf::from("/repo/.github/hooks/ptuf.json")],
+            agent_settings: vec![PathBuf::from("/repo/.github/hooks/ptuf.json")],
             ..ProtectedPaths::default()
         };
         let input = HookInput {
@@ -1075,13 +1255,13 @@ mod tests {
             }),
         };
         let labels = p.classify_input(&input);
-        assert!(labels.contains(&ProtectedKind::CopilotSettings));
+        assert!(labels.contains(&ProtectedKind::AgentSettings));
     }
 
     #[test]
     fn classify_matches_edit_of_kiro_settings() {
         let p = ProtectedPaths {
-            kiro_settings: vec![PathBuf::from("/repo/.kiro/agents/ptuf-guarded.json")],
+            agent_settings: vec![PathBuf::from("/repo/.kiro/agents/ptuf-guarded.json")],
             ..ProtectedPaths::default()
         };
         let input = HookInput {
@@ -1091,7 +1271,7 @@ mod tests {
             }),
         };
         let labels = p.classify_input(&input);
-        assert!(labels.contains(&ProtectedKind::KiroSettings));
+        assert!(labels.contains(&ProtectedKind::AgentSettings));
     }
 
     #[test]
@@ -1108,12 +1288,12 @@ mod tests {
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
         assert!(
-            p.pi_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &dir.join(".pi/extensions/ptuf.ts"))
         );
         assert!(
-            p.pi_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &home.join(".pi/agent/extensions/ptuf.ts"))
         );
@@ -1123,7 +1303,7 @@ mod tests {
     #[test]
     fn classify_matches_edit_of_pi_settings() {
         let p = ProtectedPaths {
-            pi_settings: vec![PathBuf::from("/repo/.pi/extensions/ptuf.ts")],
+            agent_settings: vec![PathBuf::from("/repo/.pi/extensions/ptuf.ts")],
             ..ProtectedPaths::default()
         };
         let input = HookInput {
@@ -1133,12 +1313,12 @@ mod tests {
             }),
         };
         let labels = p.classify_input(&input);
-        assert!(labels.contains(&ProtectedKind::PiSettings));
+        assert!(labels.contains(&ProtectedKind::AgentSettings));
     }
 
     #[test]
-    fn protected_kind_pi_settings_as_str() {
-        assert_eq!(ProtectedKind::PiSettings.as_str(), "pi_settings");
+    fn protected_kind_agent_settings_as_str() {
+        assert_eq!(ProtectedKind::AgentSettings.as_str(), "agent_settings");
     }
 
     #[test]
@@ -1158,22 +1338,22 @@ mod tests {
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(&dir), &cfg, &env);
         assert!(
-            p.opencode_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &PathBuf::from("/xdg/opencode-config/opencode/plugins/ptuf.ts"))
         );
         assert!(
-            p.opencode_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &PathBuf::from("/xdg/opencode-config/opencode/plugin/ptuf.ts"))
         );
         assert!(
-            p.opencode_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &dir.join(".opencode/plugins/ptuf.ts"))
         );
         assert!(
-            p.opencode_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &dir.join(".opencode/plugin/ptuf.ts"))
         );
@@ -1195,12 +1375,12 @@ mod tests {
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
         assert!(
-            p.opencode_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &home.join(".config/opencode/plugins/ptuf.ts"))
         );
         assert!(
-            p.opencode_settings
+            p.agent_settings
                 .iter()
                 .any(|q| q == &home.join(".config/opencode/plugin/ptuf.ts"))
         );
@@ -1210,7 +1390,7 @@ mod tests {
     #[test]
     fn classify_matches_edit_of_opencode_settings() {
         let p = ProtectedPaths {
-            opencode_settings: vec![PathBuf::from("/repo/.opencode/plugins/ptuf.ts")],
+            agent_settings: vec![PathBuf::from("/repo/.opencode/plugins/ptuf.ts")],
             ..ProtectedPaths::default()
         };
         let input = HookInput {
@@ -1220,13 +1400,13 @@ mod tests {
             }),
         };
         let labels = p.classify_input(&input);
-        assert!(labels.contains(&ProtectedKind::OpencodeSettings));
+        assert!(labels.contains(&ProtectedKind::AgentSettings));
     }
 
     #[test]
     fn match_path_detects_pi_settings_targets() {
         let p = ProtectedPaths {
-            pi_settings: vec![
+            agent_settings: vec![
                 PathBuf::from("/repo/.pi/settings.json"),
                 PathBuf::from("/home/user/.pi/agent/extensions/ptuf/index.ts"),
             ],
@@ -1234,26 +1414,18 @@ mod tests {
         };
         assert_eq!(
             p.match_path(Path::new("/repo/.pi/settings.json")),
-            Some(ProtectedKind::PiSettings)
+            Some(ProtectedKind::AgentSettings)
         );
         assert_eq!(
             p.match_path(Path::new("/home/user/.pi/agent/extensions/ptuf/index.ts")),
-            Some(ProtectedKind::PiSettings)
-        );
-    }
-
-    #[test]
-    fn protected_kind_opencode_settings_as_str() {
-        assert_eq!(
-            ProtectedKind::OpencodeSettings.as_str(),
-            "opencode_settings"
+            Some(ProtectedKind::AgentSettings)
         );
     }
 
     #[test]
     fn match_path_detects_opencode_settings_targets() {
         let p = ProtectedPaths {
-            opencode_settings: vec![
+            agent_settings: vec![
                 PathBuf::from("/xdg/opencode/plugins/ptuf.ts"),
                 PathBuf::from("/xdg/opencode/plugin/ptuf.ts"),
                 PathBuf::from("/repo/.opencode/plugins/ptuf.ts"),
@@ -1263,19 +1435,19 @@ mod tests {
         };
         assert_eq!(
             p.match_path(Path::new("/xdg/opencode/plugins/ptuf.ts")),
-            Some(ProtectedKind::OpencodeSettings)
+            Some(ProtectedKind::AgentSettings)
         );
         assert_eq!(
             p.match_path(Path::new("/xdg/opencode/plugin/ptuf.ts")),
-            Some(ProtectedKind::OpencodeSettings)
+            Some(ProtectedKind::AgentSettings)
         );
         assert_eq!(
             p.match_path(Path::new("/repo/.opencode/plugins/ptuf.ts")),
-            Some(ProtectedKind::OpencodeSettings)
+            Some(ProtectedKind::AgentSettings)
         );
         assert_eq!(
             p.match_path(Path::new("/repo/.opencode/plugin/ptuf.ts")),
-            Some(ProtectedKind::OpencodeSettings)
+            Some(ProtectedKind::AgentSettings)
         );
     }
 
@@ -1373,12 +1545,12 @@ mod tests {
             let env = MapEnv::new(&[("HOME", home.as_str())]);
             let cfg = Config::default();
             let p = ProtectedPaths::collect_with_env(Some(Path::new(&repo)), &cfg, &env);
-            // claude_settings is the only list whose ordering matters
-            // for the dedup contract; verify it's sorted and unique.
-            let mut sorted = p.claude_settings.clone();
+            // agent_settings merges every adapter's paths, so it must
+            // come out sorted and unique.
+            let mut sorted = p.agent_settings.clone();
             sorted.sort();
             sorted.dedup();
-            prop_assert_eq!(p.claude_settings.clone(), sorted);
+            prop_assert_eq!(p.agent_settings.clone(), sorted);
             // configs is also sort+dedup'd.
             let mut sorted_cfg = p.configs.clone();
             sorted_cfg.sort();

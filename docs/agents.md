@@ -122,7 +122,7 @@ priority scope so the hook still gets wired up. Each scope's
 `settings/cli.json` `chat.defaultAgent` is consulted to verify the
 referenced agent JSON exists; a dangling reference fails closed with
 `InitError::Schema`. The patched JSON files are added to
-`core.self_protection.kiro-settings`, so a guarded session cannot rewrite
+`core.self_protection.agent-settings`, so a guarded session cannot rewrite
 them to remove the hook.
 
 Kiro `preToolUse` payloads use a different vocabulary than Claude Code, so
@@ -225,7 +225,7 @@ Environment variables read by the extension:
 | `PTUF_PI_TIMEOUT_MS` | `10000` | Hook subprocess timeout; abort then SIGKILL |
 
 Patched extension paths are covered by
-`core.self_protection.pi-settings`, so a guarded session cannot rewrite
+`core.self_protection.agent-settings`, so a guarded session cannot rewrite
 the extension to remove the hook.
 
 Limitations: project-local installs trust the repo; **global scope is

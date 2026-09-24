@@ -361,7 +361,7 @@ impl PathFact {
 ///
 /// Relative redirect targets are resolved against `repo_root` when one
 /// is known; `~` and `$HOME` are expanded against the production
-/// environment so `> ~/.claude/settings.json` hits the `ClaudeSettings`
+/// environment so `> ~/.claude/settings.json` hits the `AgentSettings`
 /// guardrail.
 pub(crate) fn from_bash_redirects(bash: Option<&Bash>, repo_root: Option<&Path>) -> Vec<PathFact> {
     let Some(bash) = bash else {

@@ -1,5 +1,5 @@
 //! `core.self_protection` pack — refuses any operation that targets ptuf's
-//! own binary, configuration, plugins, or agent hook settings.
+//! own binary, configuration, plugins, coding-agent settings, or hook scripts.
 //!
 //! All five rules are `hard_deny: true` / `Severity::Critical` per
 //! `docs/design/policy-packs.md:100-113`. They share the `SelfRule`
@@ -90,116 +90,41 @@ const PLUGIN: RuleSpec = RuleSpec {
     ],
 };
 
-const CLAUDE_SETTINGS: RuleSpec = RuleSpec {
-    id: "core.self_protection.claude-settings",
-    kind: ProtectedKind::ClaudeSettings,
-    problem: "The command modifies a Claude Code settings file. The hook registration lives there, \
-         so this edit could remove or short-circuit the ptuf hook entirely.",
+const AGENT_SETTINGS: RuleSpec = RuleSpec {
+    id: "core.self_protection.agent-settings",
+    kind: ProtectedKind::AgentSettings,
+    problem: "The command modifies a coding agent's own config (hook registration, permission \
+         allowlist, sandbox / approval policy, or MCP server list) for Claude Code, Codex, \
+         Copilot, Cursor, Kiro, Cline, Pi, or OpenCode. Editing it from inside the agent could \
+         remove the ptuf hook or let the agent escalate its own privileges.",
     alternatives: &[
-        "Use `ptuf init claude-code` to manage the hook entry safely.",
-        "Have the user edit settings outside an agent session.",
-        "If the change is unrelated to hooks, narrow the edit to a non-hook field.",
-    ],
-};
-
-const CODEX_SETTINGS: RuleSpec = RuleSpec {
-    id: "core.self_protection.codex-settings",
-    kind: ProtectedKind::CodexSettings,
-    problem: "The command modifies a Codex hook or config file. The hook registration and \
-         feature enablement live there, so this edit could disable or bypass ptuf in Codex.",
-    alternatives: &[
-        "Use `ptuf init codex` to manage the hook entry safely.",
-        "Have the user edit Codex settings outside an agent session.",
-        "If the change is unrelated to hooks, narrow the edit to a non-hook file.",
+        "Use `ptuf init <agent>` to manage the ptuf hook entry safely.",
+        "Have the user edit agent settings outside an agent session.",
+        "Propose the config change in chat and let the user apply it.",
     ],
 };
 
 const HOOK_SCRIPT: RuleSpec = RuleSpec {
     id: "core.self_protection.hook-script",
     kind: ProtectedKind::HookScript,
-    problem: "The command modifies a script registered as a Claude Code, Codex, Copilot, or Kiro \
-         hook. Editing or chmod-ing a hook script can disable ptuf-style enforcement at the next \
-         tool use.",
+    problem: "The command modifies a script registered as a Claude Code, Codex, Copilot, Cursor, \
+         or Kiro hook. Editing or chmod-ing a hook script can disable ptuf-style enforcement at \
+         the next tool use.",
     alternatives: &[
         "Edit the hook script outside an agent session, after review.",
-        "Replace the hook entry with `ptuf init claude-code`, `ptuf init codex`, \
-         `ptuf init copilot`, or `ptuf init kiro`.",
+        "Replace the hook entry with `ptuf init <agent>` (claude-code, codex, copilot, cursor, \
+         or kiro).",
         "Verify the script change is not reachable from the registered hook path.",
-    ],
-};
-
-const COPILOT_SETTINGS: RuleSpec = RuleSpec {
-    id: "core.self_protection.copilot-settings",
-    kind: ProtectedKind::CopilotSettings,
-    problem: "The command modifies the GitHub Copilot hook file (.github/hooks/ptuf.json). The \
-         hook registration lives there, so this edit could remove or short-circuit the ptuf hook \
-         entirely.",
-    alternatives: &[
-        "Use `ptuf init copilot` to manage the hook entry safely.",
-        "Have the user edit the hook file outside an agent session.",
-        "If the change is unrelated to hooks, narrow the edit to a non-hook field.",
-    ],
-};
-
-const KIRO_SETTINGS: RuleSpec = RuleSpec {
-    id: "core.self_protection.kiro-settings",
-    kind: ProtectedKind::KiroSettings,
-    problem: "The command modifies a Kiro CLI agent config file under .kiro/agents/ (workspace or \
-         $HOME). The PreToolUse hook registration lives there, so this edit could remove or \
-         short-circuit the ptuf hook entirely.",
-    alternatives: &[
-        "Use `ptuf init kiro` to manage the hook entry safely.",
-        "Have the user edit the agent config outside an agent session.",
-        "If the change is unrelated to hooks, narrow the edit to a non-hook field.",
-    ],
-};
-
-const PI_SETTINGS: RuleSpec = RuleSpec {
-    id: "core.self_protection.pi-settings",
-    kind: ProtectedKind::PiSettings,
-    problem: "The command modifies a Pi Coding Agent settings file or the managed ptuf TypeScript \
-         extension under .pi/. The hook registration lives there, so this edit could remove or \
-         short-circuit the ptuf hook entirely.",
-    alternatives: &[
-        "Use `ptuf init pi` to manage the extension safely.",
-        "Have the user edit Pi settings outside an agent session.",
-        "If the change is unrelated to hooks, narrow the edit to a non-hook field.",
-    ],
-};
-
-const OPENCODE_SETTINGS: RuleSpec = RuleSpec {
-    id: "core.self_protection.opencode-settings",
-    kind: ProtectedKind::OpencodeSettings,
-    problem: "The command modifies the managed ptuf OpenCode plugin under .opencode/ or \
-         $XDG_CONFIG_HOME/opencode/. The guardrail registration lives there, so this edit could \
-         remove or short-circuit the ptuf plugin entirely.",
-    alternatives: &[
-        "Use `ptuf init opencode` to manage the plugin safely.",
-        "Have the user edit OpenCode plugin files outside an agent session.",
-        "If the change is unrelated to hooks, narrow the edit to a non-hook field.",
     ],
 };
 
 pub(crate) static BINARY_RULE: SelfRule = SelfRule { spec: &BINARY };
 pub(crate) static CONFIG_RULE: SelfRule = SelfRule { spec: &CONFIG };
 pub(crate) static PLUGIN_RULE: SelfRule = SelfRule { spec: &PLUGIN };
-pub(crate) static CLAUDE_SETTINGS_RULE: SelfRule = SelfRule {
-    spec: &CLAUDE_SETTINGS,
-};
-pub(crate) static CODEX_SETTINGS_RULE: SelfRule = SelfRule {
-    spec: &CODEX_SETTINGS,
+pub(crate) static AGENT_SETTINGS_RULE: SelfRule = SelfRule {
+    spec: &AGENT_SETTINGS,
 };
 pub(crate) static HOOK_SCRIPT_RULE: SelfRule = SelfRule { spec: &HOOK_SCRIPT };
-pub(crate) static COPILOT_SETTINGS_RULE: SelfRule = SelfRule {
-    spec: &COPILOT_SETTINGS,
-};
-pub(crate) static KIRO_SETTINGS_RULE: SelfRule = SelfRule {
-    spec: &KIRO_SETTINGS,
-};
-pub(crate) static PI_SETTINGS_RULE: SelfRule = SelfRule { spec: &PI_SETTINGS };
-pub(crate) static OPENCODE_SETTINGS_RULE: SelfRule = SelfRule {
-    spec: &OPENCODE_SETTINGS,
-};
 
 #[cfg(test)]
 mod tests {
@@ -224,13 +149,8 @@ mod tests {
             &BINARY_RULE,
             &CONFIG_RULE,
             &PLUGIN_RULE,
-            &CLAUDE_SETTINGS_RULE,
-            &CODEX_SETTINGS_RULE,
+            &AGENT_SETTINGS_RULE,
             &HOOK_SCRIPT_RULE,
-            &COPILOT_SETTINGS_RULE,
-            &KIRO_SETTINGS_RULE,
-            &PI_SETTINGS_RULE,
-            &OPENCODE_SETTINGS_RULE,
         ] {
             assert!(rule.evaluate(&facts, &input).is_none());
         }
@@ -242,13 +162,8 @@ mod tests {
             &BINARY_RULE,
             &CONFIG_RULE,
             &PLUGIN_RULE,
-            &CLAUDE_SETTINGS_RULE,
-            &CODEX_SETTINGS_RULE,
+            &AGENT_SETTINGS_RULE,
             &HOOK_SCRIPT_RULE,
-            &COPILOT_SETTINGS_RULE,
-            &KIRO_SETTINGS_RULE,
-            &PI_SETTINGS_RULE,
-            &OPENCODE_SETTINGS_RULE,
         ] {
             assert!(rule.hard_deny(), "{} must be hard_deny", rule.id());
             assert_eq!(
@@ -283,13 +198,8 @@ mod tests {
             BINARY_RULE.id(),
             CONFIG_RULE.id(),
             PLUGIN_RULE.id(),
-            CLAUDE_SETTINGS_RULE.id(),
-            CODEX_SETTINGS_RULE.id(),
+            AGENT_SETTINGS_RULE.id(),
             HOOK_SCRIPT_RULE.id(),
-            COPILOT_SETTINGS_RULE.id(),
-            KIRO_SETTINGS_RULE.id(),
-            PI_SETTINGS_RULE.id(),
-            OPENCODE_SETTINGS_RULE.id(),
         ] {
             assert!(id.starts_with("core.self_protection."), "id was {id}");
         }
@@ -298,18 +208,13 @@ mod tests {
     use crate::testing::proptest::{protected_kind, richer_hook_input};
     use proptest::prelude::*;
 
-    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 10] {
+    fn all_self_rules() -> [(&'static SelfRule, ProtectedKind); 5] {
         [
             (&BINARY_RULE, ProtectedKind::Binary),
             (&CONFIG_RULE, ProtectedKind::Config),
             (&PLUGIN_RULE, ProtectedKind::Plugin),
-            (&CLAUDE_SETTINGS_RULE, ProtectedKind::ClaudeSettings),
-            (&CODEX_SETTINGS_RULE, ProtectedKind::CodexSettings),
+            (&AGENT_SETTINGS_RULE, ProtectedKind::AgentSettings),
             (&HOOK_SCRIPT_RULE, ProtectedKind::HookScript),
-            (&COPILOT_SETTINGS_RULE, ProtectedKind::CopilotSettings),
-            (&KIRO_SETTINGS_RULE, ProtectedKind::KiroSettings),
-            (&PI_SETTINGS_RULE, ProtectedKind::PiSettings),
-            (&OPENCODE_SETTINGS_RULE, ProtectedKind::OpencodeSettings),
         ]
     }
 

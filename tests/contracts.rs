@@ -235,7 +235,7 @@ fn nested_mcp_paths_contract_hits_self_protection() {
     let payload = r#"{"tool_name":"mcp__github__push_files","tool_input":{"files":[{"path":".claude/settings.json","content":"{}"}]}}"#;
     let (code, stdout, stderr) = run_in(dir.path(), &["hook", "claude-code"], payload);
     assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
-    assert!(stderr.contains("core.self_protection.claude-settings"));
+    assert!(stderr.contains("core.self_protection.agent-settings"));
 }
 
 #[test]

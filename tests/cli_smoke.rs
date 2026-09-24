@@ -716,7 +716,7 @@ fn hook_denies_mcp_write_to_protected_claude_settings() {
     let payload = r#"{"tool_name":"mcp__github__create_or_update_file","tool_input":{"path":"~/.claude/settings.json","content":"{}"}}"#;
     let (code, stdout, stderr) = run(&["hook", "claude-code"], payload);
     assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
-    assert!(stderr.contains("core.self_protection.claude-settings"));
+    assert!(stderr.contains("core.self_protection.agent-settings"));
 }
 
 #[test]

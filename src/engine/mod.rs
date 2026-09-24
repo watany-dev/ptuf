@@ -558,8 +558,8 @@ mod tests {
         let outcome = engine.decide(&bash(&format!("echo y > {target_str}")));
         match outcome.decision {
             Decision::Deny { ref rule_id, .. }
-                if rule_id == "core.self_protection.claude-settings" => {},
-            other => panic!("expected core.self_protection.claude-settings deny, got {other:?}"),
+                if rule_id == "core.self_protection.agent-settings" => {},
+            other => panic!("expected core.self_protection.agent-settings deny, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -583,8 +583,8 @@ mod tests {
         let outcome = engine.decide(&bash(&format!("bash -lc 'echo y > {target_str}'")));
         match outcome.decision {
             Decision::Deny { ref rule_id, .. }
-                if rule_id == "core.self_protection.claude-settings" => {},
-            other => panic!("expected core.self_protection.claude-settings deny, got {other:?}"),
+                if rule_id == "core.self_protection.agent-settings" => {},
+            other => panic!("expected core.self_protection.agent-settings deny, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -965,13 +965,8 @@ rules:
             binary: None,
             configs: Vec::new(),
             plugins: vec![plugin_path.clone()],
-            claude_settings: Vec::new(),
-            codex_settings: Vec::new(),
+            agent_settings: Vec::new(),
             hook_scripts: Vec::new(),
-            copilot_settings: Vec::new(),
-            kiro_settings: Vec::new(),
-            pi_settings: Vec::new(),
-            opencode_settings: Vec::new(),
         };
         let input = HookInput {
             tool_name: "Edit".into(),

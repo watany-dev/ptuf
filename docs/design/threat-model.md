@@ -113,7 +113,7 @@ Cursor / Pi / OpenCode) の tool hook として呼ばれる Rust CLI** である
 |---|---|---|---|
 | E-1 | plugin DSL が任意 shell コマンドを実行できる | high | DSL は fact 参照と表明評価のみ (`src/plugin/dsl.rs`)。`exec:` 構文は **存在しない**。`apiVersion: ptuf.dev/v1` schema で書ける表現を制限 |
 | E-2 | hook 入力経由で host OS の任意ファイル読取 | high | hook / check の facts (`path`, `url`, `sensitive_path`) は静的解析し、入力が指すファイルを読み取らない。config / plugin / audit と明示的な `init` / `update` の I/O は別契約 |
-| E-3 | self-protection 回避で ptuf 自身の設定が変更される | high | `core.self_protection` pack で ptuf binary / config / plugin と各 agent の hook 設定を hardDeny。wrapper (`bash -c`, `xargs`, `find -exec`) と redirect も bounded で検査 |
+| E-3 | self-protection 回避で ptuf 自身の設定が変更される | high | `core.self_protection` pack で ptuf binary / config / plugin と各 agent の hook・権限・MCP 設定 (`agent-settings`) を hardDeny。wrapper (`bash -c`, `xargs`, `find -exec`) と redirect も bounded で検査 |
 | E-4 | 公開 MSRV ピンと実ビルド成果物の乖離 (supply chain) | medium | CI の MSRV job は `cargo build` / `cargo test --no-run` / `cargo doc` で codegen と linker を通す (`.github/workflows/ci.yml` `msrv` job)。`package.rust-version` 変更は同一 PR で toolchain pin と CHANGELOG を更新 |
 
 ## Residual risk (現状の既知の弱点)

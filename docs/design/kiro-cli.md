@@ -197,12 +197,13 @@ verify 経路の snapshot capture により mid-loop crash でも自動巻き戻
 
 `ProtectedPaths::collect` は起動時に `<repo>/.kiro/agents/*.json` と
 `$HOME/.kiro/agents/*.json` に実在する `*.json` をすべて列挙し
-`ProtectedKind::KiroSettings` の対象に積む。`ptuf init kiro` の default
-mode で patch される全 agent JSON が `core.self_protection.kiro-settings`
+`ProtectedKind::AgentSettings` の対象に積む。`ptuf init kiro` の default
+mode で patch される全 agent JSON が `core.self_protection.agent-settings`
 の保護下に入るため、hook 直後に同じ session が当該 JSON を書き換えて
 hook を消すことを deny する。`.md` agent や `.kiro/agents/` 自体が存在
-しないリポジトリでは `kiro_settings` は空のまま (protected list は graceful
-degrade)。
+しないリポジトリでは agent JSON は列挙されない (protected list は graceful
+degrade)。`.kiro/settings/cli.json` (`chat.defaultAgent` で hook の無い
+agent へ切り替えられる) と `.kiro/settings/mcp.json` も同 rule で保護する。
 
 ## audit log との関係
 
