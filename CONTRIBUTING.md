@@ -33,7 +33,7 @@ stay on their own Make targets.
 CI additionally runs `tarpaulin` (95% coverage floor), an MSRV build on Rust
 1.93.0 (`cargo build`, `cargo test --no-run`, and `cargo doc` — not merely
 `cargo check`), `cargo-semver-checks` (public-API SemVer gate), `actionlint`,
-`cargo-machete`, and `zizmor` (workflow security audit). A daily scheduled
+`zghalint`, `cargo-machete`, and `zizmor` (workflow security audit). A daily scheduled
 `cargo audit` workflow catches newly-published RustSec advisories outside the
 PR loop, and a scheduled `Nightly` workflow runs coverage-guided fuzzing and
 mutation testing (see below). The MSRV is the floor — do not raise it without
@@ -170,7 +170,9 @@ The current hand-patch set:
   Release. Do not re-add a `publish-crates-io` job when regenerating.
 
 `zizmor` audit suppressions for cargo-dist patterns that cannot currently be
-patched live in `.github/zizmor.yml`.
+patched live in `.github/zizmor.yml`. `zghalint` ignores the same
+`release.yml` in `.zghalint.yml` (SEC021 on the npm-recovery
+`workflow_dispatch` tag checkout).
 
 ### Bumping cargo-dist
 
@@ -190,7 +192,8 @@ dist init  # answer prompts as before, or `dist generate`
 # 4. Diff against the previous release.yml carefully (the
 #    DO-NOT-REGENERATE header in release.yml lists the patch set).
 # 5. Run `actionlint .github/workflows/release.yml`, `zizmor
-#    .github/workflows/`, and `dist plan`.
+#    .github/workflows/`, `zghalint --offline .github/workflows/*.yml`,
+#    and `dist plan`.
 # 6. Run the workflow on a tagged PR to validate end-to-end.
 ```
 

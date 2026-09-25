@@ -204,6 +204,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.7.0] - 2026-08-16
 
 ### Added
+- CI に [`zghalint`](https://github.com/watany-dev/zghalint) v0.0.1 を追加
+  (workflow linter)。cargo-dist 生成の `release.yml` は設定ファイルで
+  ignore（npm 復旧の `workflow_dispatch` tag checkout が SEC021）。
 - **`kiro-v2` agent token** — Kiro CLI の hook 仕様が v3 で変わるため、
   adapter 世代ごとに versioned token を持たせた。現行 adapter は
   `ptuf init kiro-v2` / `ptuf hook kiro-v2`。無印の `kiro` は
