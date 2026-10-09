@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants semver tools tools-deny install-hooks
+.PHONY: build test lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants mutants-diff semver tools tools-deny install-hooks
 
 # Keep these aligned with .github/workflows/ci.yml and nightly.yml:
 # - CARGO_DENY_VERSION must match the cargo-deny pinned in
@@ -107,8 +107,26 @@ fuzz-soak: tools
 # Mutation testing of the decision core (scope set in .cargo/mutants.toml).
 # Surfaces MISSED mutants — source changes the test suite fails to catch.
 # Runs on stable; not part of `make check` — see nightly.yml.
+#
+# mutants:      full scope (nightly). Builds dominate the wall clock, so
+#               debuginfo is dropped to keep each per-job build dir small
+#               and linking fast. Narrow with ARGS, e.g.
+#               ARGS="--no-config -f src/rules/destructive_rm.rs"
+#               (`-f` is ignored while .cargo/mutants.toml sets
+#               examine_globs). Results: mutants.out/.
+# mutants-diff: only the mutants on lines changed since BASE (default
+#               origin/main). Mirrors the non-blocking PR `mutants-diff` job.
+MUTANTS_ENV  = CARGO_PROFILE_DEV_DEBUG=0
+MUTANTS_JOBS ?= 2
+BASE         ?= origin/main
+
 mutants: tools
-	cargo mutants
+	$(MUTANTS_ENV) cargo mutants -j $(MUTANTS_JOBS) $(ARGS)
+
+mutants-diff: tools
+	mkdir -p target
+	git diff $(BASE)... > target/mutants.diff
+	$(MUTANTS_ENV) cargo mutants -j $(MUTANTS_JOBS) --in-diff target/mutants.diff $(ARGS)
 
 # Public-API SemVer gate. Compares the working tree's exported surface
 # against `origin/main`; fails on an unversioned breaking change.
