@@ -1042,7 +1042,7 @@ mod tests {
         let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
         let (code, out, err) = run_with(&["hook", "claude-code"], payload);
         assert_eq!(code, 0);
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         assert!(err.is_empty(), "unexpected stderr: {err}");
     }
 
@@ -1064,7 +1064,7 @@ mod tests {
         assert_eq!(code, 0);
         assert!(out.contains("USAGE"));
         assert!(out.contains("audit"));
-        assert!(err.is_empty());
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -2362,7 +2362,7 @@ rules:
         let (code, stdout, stderr) =
             run_with(&["audit", "--path", "/no/such/ptuf-audit.jsonl"], "");
         assert_eq!(code, 0);
-        assert!(stdout.is_empty());
+        assert_eq!(stdout.len(), 0);
         assert!(stderr.contains("0 matched, 0 returned"));
     }
 
@@ -2372,7 +2372,7 @@ rules:
         let path = dir.path().to_string_lossy().into_owned();
         let (code, stdout, stderr) = run_with(&["audit", "--path", &path], "");
         assert_eq!(code, 1);
-        assert!(stdout.is_empty());
+        assert_eq!(stdout.len(), 0);
         assert!(stderr.contains("directory"));
     }
 
@@ -2419,7 +2419,7 @@ rules:
         let _guard = CwdGuard::change_to(repo.path()).unwrap();
         let (code, stdout, stderr) = run_with(&["audit"], "");
         assert_eq!(code, 1);
-        assert!(stdout.is_empty());
+        assert_eq!(stdout.len(), 0);
         assert!(stderr.contains("ptuf:"));
         assert!(!stderr.contains("audit is currently disabled"));
     }
@@ -2453,7 +2453,7 @@ rules:
             "",
         );
         assert_eq!(code, 0);
-        assert!(stdout.is_empty());
+        assert_eq!(stdout.len(), 0);
         assert!(stderr.contains("0 matched, 0 returned"));
 
         let (code, stdout, stderr) = run_with(
@@ -2469,8 +2469,8 @@ rules:
         assert_eq!(code, 0, "stderr={stderr}");
         let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(v["matched"], 0);
-        assert!(v["byDecision"].as_array().unwrap().is_empty());
-        assert!(v["byRule"].as_array().unwrap().is_empty());
+        assert_eq!(v["byDecision"].as_array().unwrap().len(), 0);
+        assert_eq!(v["byRule"].as_array().unwrap().len(), 0);
         assert!(!stderr.contains("scanned"));
     }
 
@@ -2579,7 +2579,7 @@ rules:
         let (code, stdout, stderr) = run_with(&["audit", "--path", &path_s], "");
         let _ = std::fs::set_permissions(&path, original);
         assert_eq!(code, 1);
-        assert!(stdout.is_empty());
+        assert_eq!(stdout.len(), 0);
         assert!(stderr.contains("ptuf:"));
     }
 }

@@ -109,7 +109,7 @@ metadata:
         assert_eq!(plugin.api_version, "ptuf.dev/v1");
         assert_eq!(plugin.kind, "Plugin");
         assert_eq!(plugin.metadata.name, "example");
-        assert!(plugin.rules.is_empty());
+        assert_eq!(plugin.rules.len(), 0);
     }
 
     #[test]

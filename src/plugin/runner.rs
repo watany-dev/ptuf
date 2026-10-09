@@ -341,7 +341,7 @@ rules:
 "#;
         let report = run_str(&p(), yaml).expect("run");
         assert!(report.passed());
-        assert!(report.cases.is_empty());
+        assert_eq!(report.cases.len(), 0);
     }
 
     #[test]

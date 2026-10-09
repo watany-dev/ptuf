@@ -312,7 +312,7 @@ mod tests {
         let mut err = Vec::new();
         let code = emit_decision(HookAgent::Kiro, &decision, &mut out, &mut err);
         assert_eq!(code, 2, "Kiro must demote Ask to deny exit code");
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         let err_s = String::from_utf8_lossy(&err);
         assert!(err_s.contains("please confirm"), "stderr: {err_s}");
         assert!(
@@ -327,8 +327,8 @@ mod tests {
         let mut err = Vec::new();
         let code = emit_decision(HookAgent::Kiro, &Decision::Allow, &mut out, &mut err);
         assert_eq!(code, 0);
-        assert!(out.is_empty());
-        assert!(err.is_empty());
+        assert_eq!(out.len(), 0);
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -340,8 +340,8 @@ mod tests {
         let mut err = Vec::new();
         let code = emit_decision(HookAgent::Kiro, &monitor, &mut out, &mut err);
         assert_eq!(code, 0);
-        assert!(out.is_empty());
-        assert!(err.is_empty());
+        assert_eq!(out.len(), 0);
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -378,7 +378,7 @@ mod tests {
         let code = emit_decision(HookAgent::Cline, &Decision::Allow, &mut out, &mut err);
         assert_eq!(code, 0);
         assert_eq!(String::from_utf8_lossy(&out), "{}\n");
-        assert!(err.is_empty());
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -469,7 +469,7 @@ mod tests {
         assert_eq!(json["permission"], "allow");
         assert!(json.get("user_message").is_none());
         assert!(json.get("agent_message").is_none());
-        assert!(err.is_empty());
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -525,7 +525,7 @@ mod tests {
         assert_eq!(code, 0);
         let json: serde_json::Value = serde_json::from_slice(&out).expect("Pi stdout must be JSON");
         assert_eq!(json["decision"], "allow");
-        assert!(err.is_empty());
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -615,7 +615,7 @@ mod tests {
             out.is_empty(),
             "Copilot allow must emit no stdout, got: {out:?}"
         );
-        assert!(err.is_empty());
+        assert_eq!(err.len(), 0);
     }
 
     #[test]

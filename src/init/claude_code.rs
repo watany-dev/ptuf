@@ -415,13 +415,13 @@ mod tests {
     #[test]
     fn entry_hooks_returns_empty_when_hooks_key_is_missing() {
         let entry = json!({ "matcher": "Bash" });
-        assert!(entry_hooks(&entry).is_empty());
+        assert_eq!(entry_hooks(&entry).len(), 0);
     }
 
     #[test]
     fn entry_hooks_returns_empty_when_hooks_is_not_an_array() {
         let entry = json!({ "matcher": "Bash", "hooks": "not-an-array" });
-        assert!(entry_hooks(&entry).is_empty());
+        assert_eq!(entry_hooks(&entry).len(), 0);
     }
 
     #[test]

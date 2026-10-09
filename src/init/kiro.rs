@@ -954,7 +954,7 @@ mod tests {
         );
         match result {
             Ok(t) => {
-                assert!(!t.agent_config_paths.is_empty());
+                assert_ne!(t.agent_config_paths.len(), 0);
                 assert!(
                     t.agent_config_paths
                         .iter()
@@ -984,10 +984,11 @@ mod tests {
 
     #[test]
     fn pre_tool_use_commands_returns_empty_when_key_missing() {
-        assert!(pre_tool_use_commands(&json!({})).is_empty());
-        assert!(pre_tool_use_commands(&json!({ "hooks": {} })).is_empty());
-        assert!(
-            pre_tool_use_commands(&json!({ "hooks": { "preToolUse": "not-array" } })).is_empty()
+        assert_eq!(pre_tool_use_commands(&json!({})).len(), 0);
+        assert_eq!(pre_tool_use_commands(&json!({ "hooks": {} })).len(), 0);
+        assert_eq!(
+            pre_tool_use_commands(&json!({ "hooks": { "preToolUse": "not-array" } })).len(),
+            0
         );
     }
 

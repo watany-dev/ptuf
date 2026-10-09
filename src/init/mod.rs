@@ -744,7 +744,7 @@ mod tests {
     fn detect_binary_returns_a_non_empty_string() {
         // Every adapter renders this into its hook command; a non-empty
         // string is the contract the host config writers depend on.
-        assert!(!detect_binary().is_empty());
+        assert_ne!(detect_binary().len(), 0);
     }
 
     #[test]
@@ -900,11 +900,14 @@ mod tests {
         fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
-        assert!(detect_hermetic(Some(dir.as_path()), Some(home.as_path())).is_empty());
+        assert_eq!(
+            detect_hermetic(Some(dir.as_path()), Some(home.as_path())).len(),
+            0
+        );
         // Also covers the home=None branch.
-        assert!(detect_hermetic(Some(dir.as_path()), None).is_empty());
+        assert_eq!(detect_hermetic(Some(dir.as_path()), None).len(), 0);
         // And cwd=None.
-        assert!(detect_hermetic(None, Some(home.as_path())).is_empty());
+        assert_eq!(detect_hermetic(None, Some(home.as_path())).len(), 0);
     }
 
     #[test]
@@ -1122,7 +1125,7 @@ mod tests {
             Some(home.as_path()),
             &xdg_env(&empty_xdg),
         );
-        assert!(found.is_empty());
+        assert_eq!(found.len(), 0);
         let _ = fs::remove_dir_all(&dir);
     }
 }

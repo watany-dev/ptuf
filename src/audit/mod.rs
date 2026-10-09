@@ -220,7 +220,7 @@ mod tests {
             Ok(_) => {}, // Some sandboxes happily create paths under /proc.
             Err(AuditError::Open { path, message }) => {
                 assert_eq!(path, bad);
-                assert!(!message.is_empty());
+                assert_ne!(message.len(), 0);
             },
             Err(other) => panic!("unexpected variant: {other}"),
         }

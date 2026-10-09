@@ -659,7 +659,7 @@ mod tests {
             ProtectedKind::CursorSettings,
             ProtectedKind::ClineSettings,
         ] {
-            assert!(!k.as_str().is_empty());
+            assert_ne!(k.as_str().len(), 0);
         }
     }
 
@@ -981,8 +981,8 @@ mod tests {
         let env = MapEnv::new(&[]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
-        assert!(p.claude_settings.is_empty());
-        assert!(p.codex_settings.is_empty());
+        assert_eq!(p.claude_settings.len(), 0);
+        assert_eq!(p.codex_settings.len(), 0);
     }
 
     #[test]

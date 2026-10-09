@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn paths_ignores_malformed_lines() {
         let command = "*** Begin Patch\n*** Update File:\n*** Move to: \n*** End Patch\n";
-        assert!(paths(command).is_empty());
+        assert_eq!(paths(command).len(), 0);
     }
 
     #[test]
@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn paths_and_added_content_do_not_interfere_on_directive_lines() {
         let command = "*** Begin Patch\n+*** Add File: .env\n+API_KEY=1\n*** End Patch\n";
-        assert!(paths(command).is_empty());
+        assert_eq!(paths(command).len(), 0);
         assert_eq!(
             added_content(command),
             Some("*** Add File: .env\nAPI_KEY=1".into())
