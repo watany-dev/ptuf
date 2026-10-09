@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   上書きで ptuf hook を外せていた。あわせて `.cursor/hooks.json` の
   `preToolUse` command が参照する実行ファイルを `core.self_protection.hook-script`
   の対象に加えた。
+- OpenCode adapter が `apply_patch` を `apply_patch` (パッチ本文を `command` へ
+  複製) として正規化するようにした。現行 OpenCode はパッチツールの id を
+  `patch` から `apply_patch` に改め、GPT 系モデルでは `edit` / `write` の代わりに
+  これを使う。従来は未知ツールとして `mcp__opencode__apply_patch` に落ち、パスが
+  抽出されないため `.env` などへのパッチが素通りしていた。旧 id `patch` も引き続き
+  受け付ける。
 
 ### Changed (BREAKING)
 - `rules::remote_pipe`(`RemoteScriptPipe`)を削除。`static RULES` に載らない

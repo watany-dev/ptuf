@@ -43,7 +43,7 @@ fn normalize(raw_name: &str, mut args: Map<String, Value>) -> (String, Value) {
         "read" => ("Read".into(), reshape_path(&mut args)),
         "write" => ("Write".into(), reshape_path(&mut args)),
         "edit" => ("Edit".into(), reshape_edit(&mut args)),
-        "patch" => ("apply_patch".into(), reshape_patch(&mut args)),
+        "patch" | "apply_patch" => ("apply_patch".into(), reshape_patch(&mut args)),
         "webfetch" => ("WebFetch".into(), Value::Object(args)),
         "grep" => ("mcp__opencode__grep".into(), Value::Object(args)),
         "glob" => ("mcp__opencode__glob".into(), Value::Object(args)),
@@ -156,6 +156,29 @@ mod tests {
         assert_eq!(input.tool_input["command"], patch);
         let paths = extract_all(&input);
         assert!(paths.iter().any(|p| p.raw.as_str() == "secrets.txt"));
+    }
+
+    /// Current OpenCode exposes the patch tool as `apply_patch` (and swaps
+    /// it in for `edit` / `write` on GPT models), so it must normalise the
+    /// same way as the legacy `patch` id instead of falling through to
+    /// `mcp__opencode__apply_patch`.
+    #[test]
+    fn opencode_apply_patch_normalizes_like_patch() {
+        let patch = "*** Begin Patch\n*** Update File: .env\n-SECRET=1\n+SECRET=x\n*** End Patch";
+        let body = format!(
+            r#"{{"tool_name":"apply_patch","tool_input":{{"patchText":{patch_json}}}}}"#,
+            patch_json = serde_json::to_string(patch).unwrap()
+        );
+        let input = parse(&body).unwrap();
+        assert_eq!(input.tool_name, "apply_patch");
+        assert_eq!(input.tool_input["command"], patch);
+        let paths = extract_all(&input);
+        assert!(paths.iter().any(|p| p.raw.as_str() == ".env"));
+        let engine = Engine::with_components(Config::default(), PluginSet::new());
+        assert!(matches!(
+            engine.decide(&input).decision,
+            crate::Decision::Deny { .. }
+        ));
     }
 
     #[test]
