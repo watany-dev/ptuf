@@ -975,7 +975,7 @@ mod tests {
             &mut err,
         );
         assert_eq!(code, 1);
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         let err_s = String::from_utf8_lossy(&err);
         assert!(err_s.contains("npm update"), "stderr: {err_s}");
         assert!(
@@ -1023,8 +1023,8 @@ mod tests {
             false,
             Platform::Unix,
         );
-        assert!(cmd.program.is_empty());
-        assert!(cmd.args.is_empty());
+        assert_eq!(cmd.program.len(), 0);
+        assert_eq!(cmd.args.len(), 0);
     }
 
     #[test]

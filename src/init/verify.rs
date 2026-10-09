@@ -253,7 +253,7 @@ mod tests {
     fn run_returns_passing_report_in_default_environment() {
         let report = run();
         assert!(report.passed(), "verify::run() must pass: {report:?}");
-        assert!(report.warnings.is_empty());
+        assert_eq!(report.warnings.len(), 0);
     }
 
     #[test]

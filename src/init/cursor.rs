@@ -650,13 +650,13 @@ mod tests {
     #[test]
     fn entry_commands_returns_empty_when_no_command_field() {
         let entry = json!({ "type": "command", "timeout": 10 });
-        assert!(entry_commands(&entry).is_empty());
+        assert_eq!(entry_commands(&entry).len(), 0);
     }
 
     #[test]
     fn pre_tool_use_commands_returns_empty_when_array_missing() {
         let root = json!({ "version": 1 });
-        assert!(pre_tool_use_commands(&root).is_empty());
+        assert_eq!(pre_tool_use_commands(&root).len(), 0);
     }
 
     #[test]

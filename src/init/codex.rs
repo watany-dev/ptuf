@@ -477,13 +477,13 @@ mod tests {
 
     fn entry_commands_returns_empty_when_hooks_key_is_missing() {
         let entry = json!({ "matcher": DEFAULT_MATCHER });
-        assert!(entry_commands(&entry).is_empty());
+        assert_eq!(entry_commands(&entry).len(), 0);
     }
 
     #[test]
     fn entry_commands_returns_empty_when_hooks_is_not_an_array() {
         let entry = json!({ "matcher": DEFAULT_MATCHER, "hooks": "not-an-array" });
-        assert!(entry_commands(&entry).is_empty());
+        assert_eq!(entry_commands(&entry).len(), 0);
     }
 
     #[test]

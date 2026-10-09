@@ -254,10 +254,15 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   「行が実行された」を測るが「テストが振る舞いを検証しているか」は
   測らない。スコープは `.cargo/mutants.toml` の `examine_globs` で
   セキュリティ中核 (`src/decision.rs` / `src/rules/**` /
-  `src/engine/**`) に限定する。生き残った (`MISSED`) ミュータントは
-  テストが見逃す実バイパスに直結するため、example-based テストで
-  潰す。`nightly.yml` の `mutants` job が full スコープで実行し
-  mutation report を artifact 出力する。
+  `src/engine/**` / `src/plugin/dsl.rs` / `src/facts/shell.rs` /
+  `src/config/merge.rs` / `src/self_paths.rs`) に限定する。生き残った
+  (`MISSED`) ミュータントはテストが見逃す実バイパスに直結するため、
+  example-based テストで潰す。`nightly.yml` の `mutants` job が full
+  スコープで実行し mutation report を artifact 出力する。PR では
+  `ci.yml` の `mutants-diff` job (`make mutants-diff` 相当、
+  `--in-diff` で変更行のみ) を非ブロッキングで実行し、結果を step
+  summary に出す。MISSED の分類 (B / T / E) と issue との対応は
+  `docs/design/mutants-inventory.md` で棚卸しする。
 - **Bypass 回帰コーパス (`make check` 内)**: `tests/bypass/corpus.jsonl`
   は版管理された敵対的入力の負テストスイートで、`tests/bypass_corpus.rs`
   が通常の `cargo test` (= `make check` の `test` step) で実行する。

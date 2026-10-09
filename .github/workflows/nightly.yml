@@ -72,6 +72,10 @@ jobs:
     name: cargo-mutants
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    env:
+      # Builds dominate the wall clock; drop debuginfo to shrink the
+      # per-job build dirs and speed up linking (see `make mutants`).
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -81,9 +85,10 @@ jobs:
       - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
           tool: cargo-mutants@27.0.0
-      # Scope (decision.rs / rules / engine) comes from .cargo/mutants.toml.
+      # Scope (decision core + shell / DSL / merge / self_paths) comes from
+      # .cargo/mutants.toml.
       - name: Mutation testing
-        run: cargo mutants --no-shuffle
+        run: cargo mutants --no-shuffle -j 2
       - name: Upload mutation report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

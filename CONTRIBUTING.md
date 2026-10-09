@@ -79,10 +79,14 @@ demand) and are not part of `make check`:
   runs one target for longer. Crash reproducers belong in `fuzz/artifacts/`
   when they exist.
 - **Mutation testing** — `make mutants` runs `cargo-mutants` over the
-  decision core (`src/decision.rs`, `src/rules/**`, `src/engine/**`;
-  scope in `.cargo/mutants.toml`). A surviving (`MISSED`) mutant marks a
-  behaviour the test suite fails to verify — close it with an
-  example-based test.
+  decision core and the trust boundaries feeding it (`src/decision.rs`,
+  `src/rules/**`, `src/engine/**`, `src/plugin/dsl.rs`,
+  `src/facts/shell.rs`, `src/config/merge.rs`, `src/self_paths.rs`;
+  scope in `.cargo/mutants.toml`). `make mutants-diff` mutates only the
+  lines changed since `BASE` (default `origin/main`) and mirrors the
+  non-blocking PR `mutants-diff` job. A surviving (`MISSED`) mutant marks
+  a behaviour the test suite fails to verify — close it with an
+  example-based test. Triage lives in `docs/design/mutants-inventory.md`.
 - **Bypass corpus** — `tests/bypass/corpus.jsonl` is a version-controlled
   adversarial negative-security suite (`tests/bypass_corpus.rs`, run by
   the ordinary `cargo test` / `make check` `test` step). New bypasses

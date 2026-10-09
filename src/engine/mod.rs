@@ -694,7 +694,7 @@ rules:
         let cfg = Config::default();
         let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
         let _ = engine.decide(&bash("ls"));
-        assert!(captured.records().is_empty());
+        assert_eq!(captured.records().len(), 0);
     }
 
     #[test]
@@ -717,7 +717,7 @@ rules:
         cfg.audit.include_denied = false;
         let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
         let _ = engine.decide(&bash("rm -rf /"));
-        assert!(captured.records().is_empty());
+        assert_eq!(captured.records().len(), 0);
     }
 
     #[test]
@@ -859,7 +859,7 @@ rules:
         cfg.audit.include_denied = true;
         let engine = engine_with(cfg).with_audit_sink(Box::new(FailingSink));
         // Pre-condition: nothing captured before any decide call.
-        assert!(engine.drain_audit_write_warnings().is_empty());
+        assert_eq!(engine.drain_audit_write_warnings().len(), 0);
 
         let outcome = engine.decide(&bash("rm -rf /"));
         assert!(matches!(outcome.decision, Decision::Deny { .. }));
@@ -877,7 +877,7 @@ rules:
             warnings[0]
         );
         // Drain semantics: a second call returns nothing.
-        assert!(engine.drain_audit_write_warnings().is_empty());
+        assert_eq!(engine.drain_audit_write_warnings().len(), 0);
     }
 
     #[test]

@@ -636,7 +636,7 @@ mod tests {
                 "command": "*** Begin Patch\n*** Update File:\n*** Move to: \n*** End Patch\n"
             }),
         };
-        assert!(extract_all_with_env(&i, &MapEnv::with_home("/h")).is_empty());
+        assert_eq!(extract_all_with_env(&i, &MapEnv::with_home("/h")).len(), 0);
     }
 
     #[test]
@@ -695,13 +695,13 @@ mod tests {
 
     #[test]
     fn from_bash_redirects_returns_empty_for_none_bash() {
-        assert!(from_bash_redirects(None, None).is_empty());
+        assert_eq!(from_bash_redirects(None, None).len(), 0);
     }
 
     #[test]
     fn from_bash_redirects_returns_empty_when_no_redirects() {
         let bash = crate::facts::shell::parse("ls -la");
-        assert!(from_bash_redirects(Some(&bash), None).is_empty());
+        assert_eq!(from_bash_redirects(Some(&bash), None).len(), 0);
     }
 
     #[test]
@@ -709,7 +709,7 @@ mod tests {
         // Heredoc bodies live in `Redirect.target` and must not be
         // misinterpreted as a path.
         let bash = crate::facts::shell::parse("cat <<EOF\nhello\nEOF\n");
-        assert!(from_bash_redirects(Some(&bash), None).is_empty());
+        assert_eq!(from_bash_redirects(Some(&bash), None).len(), 0);
     }
 
     #[test]

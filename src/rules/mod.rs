@@ -127,7 +127,7 @@ mod tests {
     fn evaluate_all_returns_empty_for_safe_bash() {
         let input = sample("Bash");
         let facts = crate::facts::extract(&input);
-        assert!(evaluate_all(&facts, &input).is_empty());
+        assert_eq!(evaluate_all(&facts, &input).len(), 0);
     }
 
     #[test]

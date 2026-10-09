@@ -113,7 +113,7 @@ fn check_allows_safe_command_with_exit_zero() {
     let (code, stdout, stderr) = run(&["check", "--tool", "Bash", "ls"], "");
     assert_eq!(code, 0);
     assert!(stdout.contains("Decision: allow"));
-    assert!(stderr.is_empty());
+    assert_eq!(stderr.len(), 0);
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn check_allows_unrelated_segments_with_sensitive_and_sink() {
     );
     assert_eq!(code, 0);
     assert!(stdout.contains("Decision: allow"));
-    assert!(stderr.is_empty());
+    assert_eq!(stderr.len(), 0);
 }
 
 #[test]
@@ -171,8 +171,8 @@ fn hook_subcommand_allows_safe_payload_with_empty_streams() {
     let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
     let (code, stdout, stderr) = run(&["hook", "claude-code"], payload);
     assert_eq!(code, 0);
-    assert!(stdout.is_empty());
-    assert!(stderr.is_empty());
+    assert_eq!(stdout.len(), 0);
+    assert_eq!(stderr.len(), 0);
 }
 
 #[test]
@@ -189,8 +189,8 @@ fn kiro_hook_allows_safe_read_payload_with_empty_streams() {
     let payload = r#"{"tool_name":"read","tool_input":{"operations":[{"path":"README.md"}]}}"#;
     let (code, stdout, stderr) = run(&["hook", "kiro"], payload);
     assert_eq!(code, 0);
-    assert!(stdout.is_empty());
-    assert!(stderr.is_empty());
+    assert_eq!(stdout.len(), 0);
+    assert_eq!(stderr.len(), 0);
 }
 
 #[test]
@@ -209,7 +209,7 @@ fn kiro_hook_invalid_json_fails_closed_with_stderr_only() {
 fn no_args_returns_one_with_missing_subcommand_error() {
     let (code, stdout, stderr) = run(&[], "");
     assert_eq!(code, 1);
-    assert!(stdout.is_empty());
+    assert_eq!(stdout.len(), 0);
     assert!(stderr.contains("missing value for subcommand"));
 }
 

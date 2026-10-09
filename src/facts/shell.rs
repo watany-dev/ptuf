@@ -1319,13 +1319,13 @@ mod tests {
     #[test]
     fn parses_empty_command() {
         let b = parse("");
-        assert!(b.segments.is_empty());
+        assert_eq!(b.segments.len(), 0);
     }
 
     #[test]
     fn parses_blank_command() {
         let b = parse("   \t  ");
-        assert!(b.segments.is_empty());
+        assert_eq!(b.segments.len(), 0);
     }
 
     #[test]
@@ -1413,7 +1413,7 @@ mod tests {
         let b = parse("curl https://example.com/?key=value");
         let cmd = &b.segments[0].commands[0];
         assert_eq!(cmd.head, "curl");
-        assert!(cmd.env_assignments.is_empty());
+        assert_eq!(cmd.env_assignments.len(), 0);
     }
 
     #[test]
@@ -1422,7 +1422,7 @@ mod tests {
         let b = parse("1FOO=bar cmd");
         let first = &b.segments[0].commands[0];
         assert_eq!(first.head, "1FOO=bar");
-        assert!(first.env_assignments.is_empty());
+        assert_eq!(first.env_assignments.len(), 0);
     }
 
     #[test]
@@ -1738,11 +1738,11 @@ mod tests {
         // infinite loop in tokenize. Verify the lexer terminates and
         // produces no segments for inputs that contain only `&`s.
         let b = parse("&");
-        assert!(b.segments.is_empty());
+        assert_eq!(b.segments.len(), 0);
         let b = parse("ls & echo done");
         // The `&` is dropped; `ls` and `echo done` collapse into one
         // segment because there is no separator between them.
-        assert!(!b.segments.is_empty());
+        assert_ne!(b.segments.len(), 0);
     }
 
     #[test]
@@ -1750,7 +1750,7 @@ mod tests {
         // `|;` would yield an empty pipeline; ensure parse drops it.
         let b = parse("ls | ; echo done");
         // first segment "ls |" produces a pipeline with [ls]
-        assert!(!b.segments.is_empty());
+        assert_ne!(b.segments.len(), 0);
         assert_eq!(b.segments[0].commands[0].head, "ls");
     }
 
@@ -1926,7 +1926,7 @@ mod tests {
         // happened in the segment.
         let b = parse("> /tmp/out");
         assert_eq!(b.segments.len(), 1);
-        assert!(b.segments[0].commands.is_empty());
+        assert_eq!(b.segments[0].commands.len(), 0);
         assert_eq!(b.segments[0].redirects.len(), 1);
     }
 

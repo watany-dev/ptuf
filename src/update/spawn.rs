@@ -135,8 +135,8 @@ mod tests {
         let spawner = ProcessSpawner;
         let outcome = spawner.run("true", &[]).expect("true should run");
         assert_eq!(outcome.exit_code, 0);
-        assert!(outcome.stdout.is_empty());
-        assert!(outcome.stderr.is_empty());
+        assert_eq!(outcome.stdout.len(), 0);
+        assert_eq!(outcome.stderr.len(), 0);
     }
 
     #[test]

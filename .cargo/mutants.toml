@@ -16,6 +16,7 @@
 #   - src/plugin/dsl.rs   — plugin `when:` DSL compiler / evaluator
 #   - src/facts/shell.rs  — shell parser / privilege-wrapper unwrapping
 #   - src/config/merge.rs — layered config merge (last-write-wins, union)
+#   - src/self_paths.rs   — self-protection path matching (hardDeny basis)
 #
 # Run via `make mutants`; CI runs the full scope nightly (see
 # .github/workflows/nightly.yml). Not part of `make check`.
@@ -27,6 +28,7 @@ examine_globs = [
     "src/plugin/dsl.rs",
     "src/facts/shell.rs",
     "src/config/merge.rs",
+    "src/self_paths.rs",
 ]
 
 # Loop-index arithmetic mutants in the shell parser can spin until the
@@ -36,5 +38,6 @@ exclude_re = [
     'replace \+= with \*= in unwrap_prefix_wrapper',
     'replace \+= with \-= in tokenize',
     'replace \+= with \*= in tokenize',
+    'replace \+= with [-*]= in (read_word|read_heredoc_body|absorb_parens|plain_run_len)',
     'replace Engine::builder -> EngineBuilder with Default::default\(\)',
 ]

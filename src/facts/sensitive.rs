@@ -577,8 +577,8 @@ mod tests {
 
     #[test]
     fn classify_returns_empty_for_safe_input() {
-        assert!(classify("ls -la").is_empty());
-        assert!(classify("https://example.com/data.json").is_empty());
+        assert_eq!(classify("ls -la").len(), 0);
+        assert_eq!(classify("https://example.com/data.json").len(), 0);
     }
 
     #[test]

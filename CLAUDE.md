@@ -40,8 +40,10 @@ fd / tempfile リーク・8 MiB stdin 境界・並列 hook と shared audit JSON
   `fuzz/` は独立 workspace で nightly toolchain を要する。クラッシュ種は
   `fuzz/artifacts/` に commit。
 - `make mutants` — `cargo-mutants` による decision コア (`src/decision.rs` / `src/rules/**` /
-  `src/engine/**` に加え `src/plugin/dsl.rs` / `src/facts/shell.rs` / `src/config/merge.rs`、
-  スコープは `.cargo/mutants.toml`) の mutation testing。
+  `src/engine/**` に加え `src/plugin/dsl.rs` / `src/facts/shell.rs` / `src/config/merge.rs` /
+  `src/self_paths.rs`、スコープは `.cargo/mutants.toml`) の mutation testing。
+  `make mutants-diff` は `BASE` (既定 `origin/main`) からの差分行だけを変異させ、PR CI の
+  非ブロッキング `mutants-diff` job と同等。MISSED の棚卸しは `docs/design/mutants-inventory.md`。
 - `make semver` — `cargo-semver-checks` で公開 API の SemVer 破壊を検知 (PR CI でも実行)。
 
 敵対的 bypass の回帰は `tests/bypass/corpus.jsonl` (版管理) に集約し、`make check` の

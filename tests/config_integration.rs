@@ -578,7 +578,7 @@ fn four_layer_merge_audit_path_from_project() {
     );
     assert_eq!(code, 2, "stderr: {stderr}");
     let body = std::fs::read_to_string(&audit_path).expect("project audit path");
-    assert!(!body.is_empty());
+    assert_ne!(body.len(), 0);
 }
 
 #[test]
@@ -798,7 +798,7 @@ fn tilde_audit_path_expands_home() {
     assert_eq!(code, 2, "stderr: {stderr}");
     let expanded = fix.root.path().join("from-tilde.jsonl");
     let body = std::fs::read_to_string(&expanded).expect("tilde-expanded audit path");
-    assert!(!body.is_empty());
+    assert_ne!(body.len(), 0);
 }
 
 /// Return an audit path whose sink can never be opened: the parent is
