@@ -29,7 +29,8 @@ codes per agent, and the full payload contract, see the design notes:
 | OpenCode    | `<repo>/.opencode/` or `<repo>/opencode.json`     | `$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` (default global) or `<repo>/.opencode/plugins/ptuf.ts` |
 
 Pin to a single adapter with `ptuf init <agent>` (`claude-code` / `codex`
-/ `copilot` / `kiro` / `kiro-v2` / `cline` / `cursor` / `pi`).
+/ `copilot` / `kiro` / `kiro-v2` / `cline` / `cursor` / `pi` / `opencode`
+/ `opencode-v1` / `opencode-v2`).
 
 ## Common flags
 
@@ -260,14 +261,38 @@ would only surface a non-blocking warning and let the call through.
 
 ## OpenCode
 
-`ptuf init opencode` installs a managed TypeScript plugin that OpenCode
-loads from the standard `plugins/` directory. The plugin
-registers `tool.execute.before`, builds a minimal JSON payload
-(`tool_name`, `tool_input`, optional `opencode` metadata), and spawns
-`ptuf hook opencode` with an absolute binary path embedded at init time.
-Older ptuf releases wrote `plugin/ptuf.ts`; rerunning init migrates the
-managed file to `plugins/ptuf.ts`, while self-protection still guards
-both paths.
+OpenCode broke its plugin API between v1 and v2: a v1 plugin
+(`@opencode-ai/plugin` + `tool.execute.before`) does not load under
+OpenCode v2, which expects `@opencode/plugin` + `Plugin.define({ id, setup })`
++ `ctx.tool.hook("execute.before", …)`. ptuf ships both generations, so
+each ptuf build stays compatible with whichever OpenCode the user runs.
+
+```bash
+ptuf init opencode      # floating alias: newest adapter (currently v2)
+ptuf init opencode-v2   # pin the v2 plugin API
+ptuf init opencode-v1   # pin the v1 plugin API (legacy OpenCode)
+ptuf init opencode --scope local --root /path/to/repo
+```
+
+Either generation installs to the **same** managed plugin path
+(`$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` by default, or
+`<repo>/.opencode/plugins/ptuf.ts` with `--scope local`); only the file
+*content* carries the generation, so a host only ever loads one ptuf
+plugin. The bare `opencode` token is a **floating alias for the newest
+adapter in this build** — it will follow ptuf forward when the next API
+lands, so pass `opencode-v1` / `opencode-v2` explicitly to pin a
+generation. An unknown `opencode-v3` token is rejected until that adapter
+exists. The generated plugin spawns the *versioned* token (`ptuf hook
+opencode-v2`), never the alias, so an install made today keeps its
+generation across ptuf upgrades.
+
+The plugin builds a minimal JSON payload (`tool_name`, `tool_input`,
+optional `opencode` metadata) and spawns `ptuf hook opencode-v1` /
+`opencode-v2` with an absolute binary path embedded at init time. Older
+ptuf releases wrote `plugin/ptuf.ts`; rerunning init migrates the managed
+file to `plugins/ptuf.ts`, while self-protection still guards both paths.
+The audit name stays `opencode` across both generations so audit records
+remain comparable.
 
 OpenCode native tool names (`bash`, `read`, `patch`, `grep`, …) are
 normalised in Rust (`src/cli/opencode_input.rs`) to the same canonical
@@ -279,7 +304,7 @@ self-protection rules apply without a new subsystem.
 known to fail silently in some builds and `tool.execute.before` cannot
 start interactive confirmation. ptuf therefore demotes Ask to Deny
 (exit `2`, bare `{"decision":"deny",…}` JSON) — same posture as Codex /
-Copilot / Kiro / Cline.
+Copilot / Kiro / Cline. Both generations share this contract.
 
 **Environment:** `PTUF_OPENCODE_TIMEOUT_MS` (default 10000).
 

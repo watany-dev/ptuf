@@ -119,7 +119,7 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
         HookAgent::Cline => cline_input::parse(body),
         HookAgent::Cursor => cursor_input::parse(body),
         HookAgent::Pi => pi_input::parse(body),
-        HookAgent::Opencode => opencode_input::parse(body),
+        HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => opencode_input::parse(body),
     };
     adapted.map_err(|err| err.to_string())
 }
@@ -215,7 +215,7 @@ where
         if detected.is_empty() {
             let _ = writeln!(
                 stderr,
-                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro | kiro-v2 | cline | cursor | pi | opencode)",
+                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro | kiro-v2 | cline | cursor | pi | opencode | opencode-v1 | opencode-v2)",
             );
             return 1;
         }
@@ -801,13 +801,15 @@ impl AgentPlan {
                     }),
                 })
             },
-            HookAgent::Opencode => {
+            HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => {
+                let generation = agent.opencode_generation().unwrap_or_default();
                 let targets = init::opencode::resolve_paths(cwd, &options.opencode)?;
                 Ok(Self {
                     snapshot_paths: vec![targets.plugin_path.clone()],
                     install: Box::new(move |dry_run| {
                         let binary = init::detect_binary();
-                        let outcome = init::opencode::install(&targets, &binary, dry_run)?;
+                        let outcome =
+                            init::opencode::install(&targets, &binary, generation, dry_run)?;
                         Ok(init::AdapterRunReport::Simple(outcome))
                     }),
                 })
@@ -959,9 +961,9 @@ mod tests {
         })
     }
 
-    fn cmd_init_opencode_local(verify: bool, dry_run: bool) -> Command {
+    fn cmd_init_opencode_local(agent: HookAgent, verify: bool, dry_run: bool) -> Command {
         Command::Init(InitOptions {
-            agent: Some(HookAgent::Opencode),
+            agent: Some(agent),
             verify,
             dry_run,
             kiro: init::kiro::KiroInitOptions::default(),
@@ -1279,7 +1281,7 @@ rules:
         let mut err = Vec::new();
         let code = run(
             GlobalFlags::default(),
-            cmd_init_opencode_local(false, false),
+            cmd_init_opencode_local(HookAgent::OpencodeV2, false, false),
             b"" as &[u8],
             &mut out,
             &mut err,
@@ -1287,6 +1289,36 @@ rules:
         assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
         assert!(String::from_utf8_lossy(&out).contains("registered hook"));
         assert!(plugin_path.exists());
+        let body = std::fs::read_to_string(&plugin_path).unwrap();
+        assert!(body.contains("ptuf-agent: opencode-v2"));
+        assert!(body.contains(r#"["hook", "opencode-v2"]"#));
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_explicit_opencode_v1_writes_v1_plugin_at_same_path() {
+        let dir = workdir("init-opencode-v1-real");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let plugin_path = dir.join(".opencode/plugins/ptuf.ts");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init_opencode_local(HookAgent::OpencodeV1, false, false),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(plugin_path.exists());
+        let body = std::fs::read_to_string(&plugin_path).unwrap();
+        // The generation lives in the file content; the path is shared so
+        // a host only ever loads one ptuf plugin.
+        assert!(body.contains("ptuf-agent: opencode"));
+        assert!(body.contains(r#"["hook", "opencode-v1"]"#));
+        assert!(!body.contains("ptuf-agent: opencode-v2"));
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1301,7 +1333,7 @@ rules:
         let mut err = Vec::new();
         let code = run(
             GlobalFlags::default(),
-            cmd_init_opencode_local(false, true),
+            cmd_init_opencode_local(HookAgent::OpencodeV2, false, true),
             b"" as &[u8],
             &mut out,
             &mut err,
@@ -1576,28 +1608,28 @@ rules:
     #[test]
     fn run_hook_routes_opencode_payload_through_normaliser() {
         let payload = r#"{"tool_name":"bash","tool_input":{"command":"rm -rf /"}}"#;
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run(
-            GlobalFlags::default(),
-            Command::HookPreToolUse {
-                agent: HookAgent::Opencode,
-            },
-            payload.as_bytes(),
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 2, "OpenCode deny must exit 2");
-        let out_s = String::from_utf8_lossy(&out);
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&out_s)
-                .expect("OpenCode stdout must be JSON")["decision"],
-            "deny"
-        );
-        assert!(
-            !out_s.contains("hookSpecificOutput"),
-            "OpenCode must emit a bare envelope: {out_s}",
-        );
+        for agent in [HookAgent::OpencodeV1, HookAgent::OpencodeV2] {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = run(
+                GlobalFlags::default(),
+                Command::HookPreToolUse { agent },
+                payload.as_bytes(),
+                &mut out,
+                &mut err,
+            );
+            assert_eq!(code, 2, "OpenCode({agent:?}) deny must exit 2");
+            let out_s = String::from_utf8_lossy(&out);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&out_s)
+                    .expect("OpenCode stdout must be JSON")["decision"],
+                "deny"
+            );
+            assert!(
+                !out_s.contains("hookSpecificOutput"),
+                "OpenCode must emit a bare envelope: {out_s}",
+            );
+        }
     }
 
     #[test]

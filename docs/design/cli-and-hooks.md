@@ -15,7 +15,9 @@ ptuf hook kiro-v2
 ptuf hook cline
 ptuf hook cursor
 ptuf hook pi
-ptuf hook opencode
+ptuf hook opencode       # opencode = その build の最新 OpenCode adapter への floating alias
+ptuf hook opencode-v2
+ptuf hook opencode-v1
 ptuf [--json] check --tool Bash 'git reset --hard HEAD~1'
 ptuf [--json] plugin check ./ptuf-plugin.yaml
 ptuf [--json] init                       # auto-detect every agent
@@ -54,24 +56,27 @@ ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
 | Cline | `<repo>/.clinerules/` `.cline/`、または `$HOME/Documents/Cline/` `.cline/` | repo 配下 `.clinerules/hooks/PreToolUse` または `$HOME/Documents/Cline/Hooks/PreToolUse` |
 | Cursor | `<repo>/.cursor/` または `$HOME/.cursor/` | `<repo>/.cursor/hooks.json` (`--scope global` で `$HOME/.cursor/hooks.json`) |
 | Pi | `<repo>/.pi/` または `$HOME/.pi/agent/` | `$HOME/.pi/agent/extensions/ptuf.ts` (default global) または `<repo>/.pi/extensions/ptuf.ts` (local) |
-| OpenCode | `<repo>/.opencode/` または `<repo>/opencode.json` | `$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` (default global) または `<repo>/.opencode/plugins/ptuf.ts` (local) |
+| OpenCode | `<repo>/.opencode/` または `<repo>/opencode.json` | `$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` (default global) または `<repo>/.opencode/plugins/ptuf.ts` (local)。世代は install 先ではなく**中身**が持つ |
 
 検出 0 件 → exit `1` + `no agent detected` を stderr に出す。1 件以上
 → 全部 install + verify。verify がいずれかで失敗すれば exit `1`。
 `--dry-run` は計画のみ (verify off)、`--no-verify` は書き込むが verify
 を走らせない。`<agent>` を明示すれば auto-detect を bypass し単独
-install になる。
+install になる。OpenCode は検出時に version を区別できないため、
+auto-detect は常に最新世代 (現在 v2) を選ぶ。v1 を狙うなら
+`ptuf init opencode-v1` を明示する。
 
 ## 終了コード
 
 | 条件 | exit |
 | --- | --- |
 | `Allow` / `Monitor` / Claude Code・Cursor・Pi の `Ask` | `0` |
-| `Deny` (Claude Code / Codex / Kiro / Cursor / Pi) | `2` |
+| `Deny` (Claude Code / Codex / Kiro / Cursor / Pi / OpenCode) | `2` |
 | Copilot / Cline の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
 | 内部エラー、引数不正、plugin check fail、init verify fail、update 失敗 (curl 不在 / updater 非ゼロ)、`audit` の I/O エラー / 引数不正 / default path 解決不能 | `1` |
 
-Codex / Kiro では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
+Codex / Kiro / OpenCode では `Ask` を `Deny` へ変換するため、実際には
+exit `2` になる。
 Cursor は Claude Code と同じく `Ask` channel を持つため `Ask` を降格せず、
 `{"permission":"ask",…}` を exit `0` で返す (下記「Cursor への登録」参照)。
 
@@ -396,11 +401,43 @@ Rust (`src/cli/pi_input.rs`) で行う。managed marker (`Managed by ptuf…`,
 `ptuf-agent: pi`) を持たない既存ファイルは `InitError::HookFileConflict`。
 temp file + rename の原子的更新、Unix では mode `0600`。
 
-`--scope` / `--root` は Cursor と Pi で共有する。`--extension` は Pi 専用。
-`--hooks` は Cursor 専用。他 adapter や auto-detect へ渡すと
-`ParseError::ConflictingFlags`。
+`--scope` / `--root` は Cursor / Pi / OpenCode で共有する。`--hooks` は
+Cursor 専用、`--extension` は Pi 専用。他 adapter や auto-detect へ渡すと
+parse error (`ConflictingFlags`)。Kiro の `--global` との取り違えを避ける
+ため Cursor / Pi は `--scope global` を採用している。
 
 
+## OpenCode への登録
+
+`ptuf init opencode` は managed TypeScript plugin (`plugins/ptuf.ts`) を
+書き込む。デフォルト scope は **global**
+(`$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts`、未設定時は
+`~/.config/opencode/plugins/ptuf.ts`)。`--scope local` は `--root` (無ければ
+cwd) 起点の `<repo>/.opencode/plugins/ptuf.ts`。
+
+OpenCode は v1 と v2 で plugin API が破壊的に変わり、v1 plugin は v2 で
+ロードされない。ptuf は両世代を同梱し、versioned token で選ぶ
+(`src/init/opencode.rs`):
+
+| token | 世代 | plugin entrypoint |
+| --- | --- | --- |
+| `opencode-v2` (および floating alias `opencode`) | v2 | `@opencode/plugin` + `Plugin.define({ id, setup })` + `ctx.tool.hook("execute.before", …)` |
+| `opencode-v1` | v1 | `@opencode-ai/plugin` + `tool.execute.before` |
+
+世代は install **先ではなく plugin の中身**が持つ。両世代とも managed path
+`plugins/ptuf.ts` に書き込むため、host が同時にロードする ptuf plugin は常に
+1 つ。marker は v1 が `ptuf-agent: opencode`、v2 が
+`ptuf-agent: opencode-v2` で、前者は後者の prefix のため単一の
+`is_ptuf_managed` 判定で両世代を回収でき、`opencode-v1` / `opencode-v2` は
+互いの managed ファイルを上書き更新できる。書き込む spawn token は常に
+versioned (`ptuf hook opencode-v1` / `opencode-v2`) なので、既存 install が
+ptuf upgrade で勝手に世代を変えることはない。audit 名は両世代とも
+`opencode`。
+
+required marker (`Managed by ptuf…`, `ptuf-agent: opencode`) を持たない
+既存ファイルは `InitError::HookFileConflict`。temp file + rename の原子的
+更新、Unix では mode `0600`。旧 `plugin/ptuf.ts` に managed plugin が
+残っていれば `plugins/ptuf.ts` への移行時に削除する (二重ロード防止)。
 
 ### OpenCode 入力正規化 (`src/cli/opencode_input.rs`)
 

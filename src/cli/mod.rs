@@ -14,7 +14,7 @@ use crate::Decision;
 use crate::engine::Engine;
 use crate::init::cursor::CursorInitOptions;
 use crate::init::kiro::KiroInitOptions;
-use crate::init::opencode::OpencodeInitOptions;
+use crate::init::opencode::{OpencodeGeneration, OpencodeInitOptions};
 use crate::init::pi::PiInitOptions;
 use crate::reason;
 
@@ -87,7 +87,19 @@ pub enum HookAgent {
     Cline,
     Cursor,
     Pi,
-    Opencode,
+    /// OpenCode **v1** plugin API (`@opencode-ai/plugin` +
+    /// `tool.execute.before`). Reachable only through the pinned
+    /// `opencode-v1` token: OpenCode v1 does not run a v2 plugin, and the
+    /// floating `opencode` alias follows the newest adapter (v2).
+    OpencodeV1,
+    /// OpenCode **v2** plugin API (`@opencode/plugin` +
+    /// `ctx.tool.hook("execute.before", …)`). Reached through the pinned
+    /// `opencode-v2` token and the floating `opencode` alias.
+    ///
+    /// Both OpenCode generations share the audit name `"opencode"` so
+    /// audit records stay comparable across the API break, mirroring the
+    /// Kiro adapter generations.
+    OpencodeV2,
 }
 
 impl HookAgent {
@@ -100,7 +112,19 @@ impl HookAgent {
             Self::Cline => "cline",
             Self::Cursor => "cursor",
             Self::Pi => "pi",
-            Self::Opencode => "opencode",
+            Self::OpencodeV1 | Self::OpencodeV2 => "opencode",
+        }
+    }
+
+    /// The OpenCode plugin generation this variant installs, or `None`
+    /// for non-OpenCode agents. Both variants share the `opencode` audit
+    /// name but write a different plugin body, so the generation — not
+    /// the audit name — decides what lands on disk.
+    pub(super) const fn opencode_generation(self) -> Option<OpencodeGeneration> {
+        match self {
+            Self::OpencodeV1 => Some(OpencodeGeneration::V1),
+            Self::OpencodeV2 => Some(OpencodeGeneration::V2),
+            _ => None,
         }
     }
 }
@@ -281,7 +305,8 @@ USAGE:
         (auto-detect every agent under cwd / $HOME and install the
          PreToolUse hook with verify enabled by default. AGENT pins
          to a single adapter: claude-code | codex | copilot | kiro
-         | kiro-v2 | cline | cursor | pi | opencode)
+         | kiro-v2 | cline | cursor | pi | opencode | opencode-v1
+         | opencode-v2)
         The Kiro CLI hook contract changes in v3, so each Kiro adapter
         has a versioned token; `kiro-v2` is the current one. The bare
         `kiro` token always means the newest Kiro adapter this ptuf
@@ -289,6 +314,13 @@ USAGE:
         stay on today's contract. Either way the hook command written
         into agent configs is the versioned `ptuf hook kiro-v2`, so an
         existing install never changes generation on its own.
+        OpenCode broke its plugin API between v1 and v2 and a v1 plugin
+        does not load under v2. `opencode-v1` pins the v1 API
+        (`@opencode-ai/plugin`) and `opencode-v2` pins the current v2
+        API (`@opencode/plugin`); the bare `opencode` token is a
+        floating alias for the newest adapter (currently v2). Either
+        way the generated plugin spawns the versioned token, so an
+        existing install never drifts with the alias.
         Kiro-only flags:
           --new-agent       Create a dedicated ptuf-guarded.json agent
                             (legacy single-file behavior) instead of
@@ -367,7 +399,7 @@ pub fn run<R: Read, W1: Write, W2: Write>(
 #[cfg(test)]
 mod tests {
 
-    use super::HookAgent;
+    use super::{HookAgent, OpencodeGeneration};
 
     #[test]
     fn hook_agent_audit_name_distinguishes_variants() {
@@ -378,6 +410,30 @@ mod tests {
         assert_eq!(HookAgent::Cline.audit_name(), "cline");
         assert_eq!(HookAgent::Cursor.audit_name(), "cursor");
         assert_eq!(HookAgent::Pi.audit_name(), "pi");
-        assert_eq!(HookAgent::Opencode.audit_name(), "opencode");
+        assert_eq!(HookAgent::OpencodeV1.audit_name(), "opencode");
+        assert_eq!(HookAgent::OpencodeV2.audit_name(), "opencode");
+    }
+
+    #[test]
+    fn opencode_generation_maps_only_the_opencode_variants() {
+        assert_eq!(
+            HookAgent::OpencodeV1.opencode_generation(),
+            Some(OpencodeGeneration::V1)
+        );
+        assert_eq!(
+            HookAgent::OpencodeV2.opencode_generation(),
+            Some(OpencodeGeneration::V2)
+        );
+        for agent in [
+            HookAgent::ClaudeCode,
+            HookAgent::Codex,
+            HookAgent::Copilot,
+            HookAgent::Kiro,
+            HookAgent::Cline,
+            HookAgent::Cursor,
+            HookAgent::Pi,
+        ] {
+            assert_eq!(agent.opencode_generation(), None, "{agent:?}");
+        }
     }
 }

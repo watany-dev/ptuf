@@ -36,7 +36,7 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         HookAgent::Pi => Some(serde_json::to_string(&hook_output::pi::from_decision(
             &adapted,
         ))),
-        HookAgent::Opencode => Some(serde_json::to_string(
+        HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => Some(serde_json::to_string(
             &hook_output::opencode::from_decision(&adapted),
         )),
         HookAgent::ClaudeCode | HookAgent::Codex => {
@@ -94,7 +94,7 @@ pub(super) fn render_hook_response(
         HookAgent::Pi => None,
         // OpenCode uses the same bare envelope as Pi; `emit_decision`
         // dispatches through `hook_output::opencode` directly.
-        HookAgent::Opencode => None,
+        HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => None,
     }
 }
 
@@ -116,9 +116,11 @@ pub(super) fn adapt_hook_decision(agent: HookAgent, decision: &Decision) -> Deci
             rule_id: rule_id.clone(),
             reason: hook_output::cline::deny_reason_for_ask(reason),
         },
-        (HookAgent::Opencode, Decision::Ask { rule_id, reason }) => Decision::Deny {
-            rule_id: rule_id.clone(),
-            reason: hook_output::opencode::deny_reason_for_ask(reason),
+        (HookAgent::OpencodeV1 | HookAgent::OpencodeV2, Decision::Ask { rule_id, reason }) => {
+            Decision::Deny {
+                rule_id: rule_id.clone(),
+                reason: hook_output::opencode::deny_reason_for_ask(reason),
+            }
         },
         _ => decision.clone(),
     }
@@ -139,7 +141,10 @@ pub(super) fn decision_exit_code(agent: HookAgent, decision: &Decision) -> u8 {
         (_, Decision::Deny { .. }) => 2,
         // Defense-in-depth: Codex/Kiro/OpenCode Ask is demoted to Deny upstream
         // by `adapt_hook_decision`, but the matrix mirrors that here.
-        (HookAgent::Codex | HookAgent::Kiro | HookAgent::Opencode, Decision::Ask { .. }) => 2,
+        (
+            HookAgent::Codex | HookAgent::Kiro | HookAgent::OpencodeV1 | HookAgent::OpencodeV2,
+            Decision::Ask { .. },
+        ) => 2,
         _ => 0,
     }
 }
@@ -274,10 +279,14 @@ mod tests {
             (HookAgent::Pi, &monitor, 0),
             (HookAgent::Pi, &ask, 0),
             (HookAgent::Pi, &deny, 2),
-            (HookAgent::Opencode, &allow, 0),
-            (HookAgent::Opencode, &monitor, 0),
-            (HookAgent::Opencode, &ask, 2),
-            (HookAgent::Opencode, &deny, 2),
+            (HookAgent::OpencodeV1, &allow, 0),
+            (HookAgent::OpencodeV1, &monitor, 0),
+            (HookAgent::OpencodeV1, &ask, 2),
+            (HookAgent::OpencodeV1, &deny, 2),
+            (HookAgent::OpencodeV2, &allow, 0),
+            (HookAgent::OpencodeV2, &monitor, 0),
+            (HookAgent::OpencodeV2, &ask, 2),
+            (HookAgent::OpencodeV2, &deny, 2),
         ];
         for (agent, decision, expect) in cases {
             assert_eq!(
@@ -543,14 +552,16 @@ mod tests {
             rule_id: "core.filesystem.destructive-rm".into(),
             reason: "blocked".into(),
         };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Opencode, &decision, &mut out, &mut err);
-        assert_eq!(code, 2, "OpenCode deny exits 2");
-        let json: serde_json::Value =
-            serde_json::from_slice(&out).expect("OpenCode stdout must be JSON");
-        assert_eq!(json["decision"], "deny");
-        assert!(String::from_utf8_lossy(&err).contains("blocked"));
+        for agent in [HookAgent::OpencodeV1, HookAgent::OpencodeV2] {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = emit_decision(agent, &decision, &mut out, &mut err);
+            assert_eq!(code, 2, "OpenCode({agent:?}) deny exits 2");
+            let json: serde_json::Value =
+                serde_json::from_slice(&out).expect("OpenCode stdout must be JSON");
+            assert_eq!(json["decision"], "deny");
+            assert!(String::from_utf8_lossy(&err).contains("blocked"));
+        }
     }
 
     #[test]
@@ -559,19 +570,21 @@ mod tests {
             rule_id: "core.test.ask".into(),
             reason: "please confirm".into(),
         };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Opencode, &decision, &mut out, &mut err);
-        assert_eq!(code, 2, "OpenCode Ask must demote to deny exit code");
-        let json: serde_json::Value =
-            serde_json::from_slice(&out).expect("OpenCode stdout must be JSON");
-        assert_eq!(json["decision"], "deny");
-        let err_s = String::from_utf8_lossy(&err);
-        assert!(err_s.contains("please confirm"), "stderr: {err_s}");
-        assert!(
-            err_s.contains("permission.ask"),
-            "stderr should explain OpenCode demotion: {err_s}"
-        );
+        for agent in [HookAgent::OpencodeV1, HookAgent::OpencodeV2] {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = emit_decision(agent, &decision, &mut out, &mut err);
+            assert_eq!(code, 2, "OpenCode({agent:?}) Ask must demote to deny");
+            let json: serde_json::Value =
+                serde_json::from_slice(&out).expect("OpenCode stdout must be JSON");
+            assert_eq!(json["decision"], "deny");
+            let err_s = String::from_utf8_lossy(&err);
+            assert!(err_s.contains("please confirm"), "stderr: {err_s}");
+            assert!(
+                err_s.contains("permission.ask"),
+                "stderr should explain OpenCode demotion: {err_s}"
+            );
+        }
     }
 
     #[test]
@@ -580,7 +593,8 @@ mod tests {
             rule_id: "core.x".into(),
             reason: "r".into(),
         };
-        assert!(render_hook_response(HookAgent::Opencode, &decision).is_none());
+        assert!(render_hook_response(HookAgent::OpencodeV1, &decision).is_none());
+        assert!(render_hook_response(HookAgent::OpencodeV2, &decision).is_none());
     }
 
     #[test]
@@ -646,7 +660,8 @@ mod tests {
             HookAgent::Cline,
             HookAgent::Cursor,
             HookAgent::Pi,
-            HookAgent::Opencode,
+            HookAgent::OpencodeV1,
+            HookAgent::OpencodeV2,
             HookAgent::ClaudeCode,
             HookAgent::Codex,
         ] {
