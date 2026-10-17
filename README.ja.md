@@ -109,8 +109,14 @@ ptuf init kiro-v2       # .kiro/agents/*.json を一括パッチ (`kiro` は最�
 ptuf init cline         # .clinerules/hooks/PreToolUse
 ptuf init cursor        # <repo>/.cursor/hooks.json
 ptuf init pi            # ~/.pi/agent/extensions/ptuf.ts
-ptuf init opencode      # $XDG_CONFIG_HOME/opencode/plugins/ptuf.ts
+ptuf init opencode      # $XDG_CONFIG_HOME/opencode/plugins/ptuf.ts (`opencode` は最新版 alias)
+ptuf init opencode-v2   # v2 plugin API を固定
+ptuf init opencode-v1   # v1 plugin API を固定 (旧 OpenCode)
 ```
+
+引数なしの `ptuf init` は既存 managed OpenCode plugin の世代を維持します。
+新規・世代不明・marker 競合時はファイルを書き換えず、`ptuf init opencode-v1` /
+`ptuf init opencode-v2` の明示指定を案内します。
 
 引数なしの `ptuf init` は到達可能なホストを自動検出して全てに導入します。
 `--dry-run` で書き込みなしの計画表示も可能です。ホストごとの詳細は

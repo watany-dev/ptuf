@@ -352,6 +352,75 @@ fn init_auto_detect_with_no_agents_returns_error() {
 }
 
 #[test]
+fn init_auto_detect_preserves_managed_opencode_generation() {
+    for (generation, plugin_dir) in [
+        ("opencode-v1", "plugins"),
+        ("opencode-v1", "plugin"),
+        ("opencode-v2", "plugins"),
+    ] {
+        let (_dir, home, cwd) = empty_non_repo_cwd();
+        let config = home.join(".config");
+        let mut cmd = binary();
+        let output = cmd
+            .args(["init", generation, "--no-verify"])
+            .current_dir(&cwd)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let plugin = config.join("opencode/plugins/ptuf.ts");
+        if plugin_dir == "plugin" {
+            let legacy = config.join("opencode/plugin/ptuf.ts");
+            std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+            std::fs::rename(&plugin, &legacy).unwrap();
+        }
+        let output = binary()
+            .args(["init", "--no-verify"])
+            .current_dir(&cwd)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let body = std::fs::read_to_string(&plugin).unwrap();
+        assert!(
+            body.contains(&format!("[\"hook\", \"{generation}\"]")),
+            "{body}"
+        );
+        assert!(!config.join("opencode/plugin/ptuf.ts").exists());
+    }
+}
+
+#[test]
+fn init_auto_detect_requires_explicit_opencode_generation_for_new_install() {
+    let (_dir, home, cwd) = empty_non_repo_cwd();
+    let config = home.join(".config");
+    std::fs::create_dir_all(config.join("opencode")).unwrap();
+    for args in [
+        vec!["init", "--no-verify"],
+        vec!["--json", "init", "--dry-run"],
+    ] {
+        let output = binary()
+            .args(args)
+            .current_dir(&cwd)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(text.contains("init opencode-v1"), "{text}");
+        assert!(text.contains("init opencode-v2"), "{text}");
+        assert!(!config.join("opencode/plugins/ptuf.ts").exists());
+    }
+}
+
+#[test]
 fn init_auto_detect_finds_copilot_via_repo_dotgithub_only() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let cwd = dir.path();

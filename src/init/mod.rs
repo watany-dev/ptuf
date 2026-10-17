@@ -36,8 +36,11 @@ pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
 ///   `<home>/Documents/Cline/` or `<home>/.cline/`.
 /// - `Cursor`: `<repo>/.cursor/` or `<home>/.cursor/`.
 /// - `Pi`: `<home>/.pi/agent/` or `<repo>/.pi/`.
-/// - `Opencode`: `<repo>/.opencode/` or `<repo>/opencode.json`, or
+/// - `OpencodeV2`: `<repo>/.opencode/` or `<repo>/opencode.json`, or
 ///   `$XDG_CONFIG_HOME/opencode/` (fallback `~/.config/opencode/`).
+///   This is only a host candidate: detection cannot tell its version.
+///   The install planner preserves the generation of the managed plugin
+///   at the resolved target, or requires an explicit generation selection.
 ///
 /// Returns agents in a stable order so callers can install / report
 /// deterministically. Production callers pass `std::env::var_os("HOME")`
@@ -98,7 +101,7 @@ pub(crate) fn detect_agents_with_env(
             .as_deref()
             .is_some_and(|r| r.join("opencode.json").is_file())
     {
-        found.push(HookAgent::Opencode);
+        found.push(HookAgent::OpencodeV2);
     }
     found
 }
@@ -1050,7 +1053,7 @@ mod tests {
                 HookAgent::Cline,
                 HookAgent::Cursor,
                 HookAgent::Pi,
-                HookAgent::Opencode,
+                HookAgent::OpencodeV2,
             ],
         );
     }
@@ -1086,7 +1089,7 @@ mod tests {
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
-        assert_eq!(found, vec![HookAgent::Opencode]);
+        assert_eq!(found, vec![HookAgent::OpencodeV2]);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1097,7 +1100,7 @@ mod tests {
         let home = dir.join("home");
         fs::create_dir_all(home.join(".config/opencode")).expect("mkdir config/opencode");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
-        assert_eq!(found, vec![HookAgent::Opencode]);
+        assert_eq!(found, vec![HookAgent::OpencodeV2]);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1115,7 +1118,7 @@ mod tests {
         fs::create_dir_all(&home).expect("mkdir home");
         let found =
             detect_agents_with_env(Some(dir.as_path()), Some(home.as_path()), &xdg_env(&xdg));
-        assert_eq!(found, vec![HookAgent::Opencode]);
+        assert_eq!(found, vec![HookAgent::OpencodeV2]);
 
         // Same env but the XDG dir has no opencode/ → not detected.
         let empty_xdg = dir.join("xdg-empty");

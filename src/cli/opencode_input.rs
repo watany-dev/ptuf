@@ -39,7 +39,8 @@ fn normalize(raw_name: &str, mut args: Map<String, Value>) -> (String, Value) {
     // stay byte-identical for user plugin DSL matching and audit logs.
     let lowered = raw_name.to_ascii_lowercase();
     match lowered.as_str() {
-        "bash" => ("Bash".into(), Value::Object(args)),
+        // OpenCode v1 calls this `bash`; v2 renamed the native tool to `shell`.
+        "bash" | "shell" => ("Bash".into(), Value::Object(args)),
         "read" => ("Read".into(), reshape_path(&mut args)),
         "write" => ("Write".into(), reshape_path(&mut args)),
         "edit" => ("Edit".into(), reshape_edit(&mut args)),
@@ -213,6 +214,22 @@ mod tests {
     fn opencode_bash_rm_rf_denies_via_engine() {
         let body = r#"{"tool_name":"bash","tool_input":{"command":"rm -rf /"}}"#;
         let input = parse(body).unwrap();
+        let engine = Engine::with_components(Config::default(), PluginSet::new());
+        assert!(matches!(
+            engine.decide(&input).decision,
+            crate::Decision::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn opencode_v2_shell_normalizes_and_denies_via_engine() {
+        let input = parse(
+            r#"{"tool_name":"shell","tool_input":{"command":"rm -rf /","workdir":"/project"}}"#,
+        )
+        .unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.bash_command(), Some("rm -rf /"));
+        assert_eq!(input.tool_input["workdir"], "/project");
         let engine = Engine::with_components(Config::default(), PluginSet::new());
         assert!(matches!(
             engine.decide(&input).decision,

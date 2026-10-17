@@ -18,6 +18,8 @@ Run before every push:
 make check
 ```
 
+Node 24 is required to execute the generated OpenCode TypeScript plugins.
+
 This runs the same gates that block CI. `make check` installs only
 `cargo-deny` when missing; `tarpaulin` / fuzz / mutants / semver-checks
 stay on their own Make targets.
@@ -27,6 +29,7 @@ stay on their own Make targets.
 | `fmt-check` | `cargo fmt -- --check` |
 | `lint` | `cargo clippy --all-targets --locked -- -D warnings` |
 | `test` | `cargo test --locked` |
+| `test-opencode` | Installed v1/v2 TypeScript callback tests with the real CLI and failing subprocess fixtures |
 | `doc` | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked` |
 | `deny` | `cargo deny check advisories licenses bans sources` |
 
@@ -45,6 +48,26 @@ prior discussion.
 override available). Run it before tagging a release.
 
 ### Heavy end-to-end tests
+
+To verify actual OpenCode hosts on Linux/macOS, install both generations in
+separate directories and run the host smoke test (Python 3.9+ and Git required):
+
+```sh
+npm install --prefix /tmp/ptuf-host-v1 opencode-ai@1.19.3
+npm install --prefix /tmp/ptuf-host-v2 @opencode/cli@2.0.32
+cargo build --locked
+python3 scripts/smoke-opencode-hosts.py \
+  --v1 /tmp/ptuf-host-v1/node_modules/.bin/opencode \
+  --v2 /tmp/ptuf-host-v2/node_modules/.bin/opencode
+```
+
+This runs the real hosts and installed ptuf plugins with a local deterministic
+model endpoint; no model account or API key is required. It checks preservation
+of the installed generation through agentless init, safe shell
+execution, rejection of `git reset --hard HEAD`, preservation of uncommitted
+changes in disposable Git repositories, and ptuf audit records. Host stdout,
+stderr, model requests, and results stay in the printed artifact directory.
+This opt-in check is separate from `make check` because it requires both hosts.
 
 `make e2e` runs the `#[ignore]`d subprocess suite in
 `tests/e2e_heavy.rs`, exercising real-world ptuf invocation patterns
