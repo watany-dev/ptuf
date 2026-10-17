@@ -42,34 +42,6 @@ const KIRO_LATEST_ALIAS: &str = "kiro";
 /// the alias.
 const KIRO_LATEST_AGENT: HookAgent = HookAgent::Kiro;
 
-/// Versioned agent token for the OpenCode **v1** plugin API adapter
-/// (`@opencode-ai/plugin` + `tool.execute.before`).
-///
-/// OpenCode's plugin API broke between v1 and v2: a v1 plugin does not
-/// load under v2 and vice versa. A versioned token always resolves to
-/// that exact generation and never moves.
-const OPENCODE_V1_AGENT: &str = "opencode-v1";
-
-/// Versioned agent token for the OpenCode **v2** plugin API adapter
-/// (`@opencode/plugin` + `Plugin.define` + `ctx.tool.hook`). See
-/// [`OPENCODE_V1_AGENT`] for why the generation is pinned.
-const OPENCODE_V2_AGENT: &str = "opencode-v2";
-
-/// Unversioned OpenCode token: a *floating* alias that resolves to
-/// whichever OpenCode adapter is newest in this build of ptuf (see
-/// [`OPENCODE_LATEST_AGENT`]).
-const OPENCODE_LATEST_ALIAS: &str = "opencode";
-
-/// The adapter [`OPENCODE_LATEST_ALIAS`] currently resolves to.
-///
-/// This is the single point of change when a newer OpenCode plugin API
-/// lands: add its versioned token and repoint this const, and
-/// `ptuf init opencode` follows automatically. Already-installed plugins
-/// stay pinned because the generated plugin spawns a *versioned* token
-/// (`ptuf hook opencode-v2`, see
-/// [`crate::init::opencode::OpencodeGeneration::hook_token`]).
-const OPENCODE_LATEST_AGENT: HookAgent = HookAgent::OpencodeV2;
-
 pub(super) fn parse_init<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
     I: Iterator<Item = &'a String>,
@@ -101,17 +73,8 @@ where
                 "--new-agent" => new_agent = true,
                 "--workspace-only" => workspace_only = true,
                 "--global" => global = true,
-                "claude-code"
-                | "codex"
-                | "copilot"
-                | KIRO_LATEST_ALIAS
-                | KIRO_V2_AGENT
-                | "cline"
-                | "cursor"
-                | "pi"
-                | OPENCODE_LATEST_ALIAS
-                | OPENCODE_V1_AGENT
-                | OPENCODE_V2_AGENT => {
+                "claude-code" | "codex" | "copilot" | KIRO_LATEST_ALIAS | KIRO_V2_AGENT
+                | "cline" | "cursor" | "pi" | "opencode" => {
                     if agent.is_some() {
                         return Err(ParseError::UnexpectedArgument(arg.to_string()));
                     }
@@ -143,7 +106,7 @@ where
     if (shared_scope.is_some() || shared_root.is_some())
         && agent != Some(HookAgent::Cursor)
         && agent != Some(HookAgent::Pi)
-        && !is_opencode(agent)
+        && agent != Some(HookAgent::Opencode)
     {
         return Err(ParseError::ConflictingFlags(
             "`--scope` / `--root` require `cursor`, `pi`, or `opencode` agent",
@@ -199,12 +162,12 @@ where
         extension: pi_extension,
     };
     let opencode = OpencodeInitOptions {
-        scope: if is_opencode(agent) {
+        scope: if agent == Some(HookAgent::Opencode) {
             shared_scope.map(Into::into).unwrap_or_default()
         } else {
             OpencodeScope::default()
         },
-        root: if is_opencode(agent) {
+        root: if agent == Some(HookAgent::Opencode) {
             shared_root
         } else {
             None
@@ -296,18 +259,9 @@ fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
         "cline" => Ok(HookAgent::Cline),
         "cursor" => Ok(HookAgent::Cursor),
         "pi" => Ok(HookAgent::Pi),
-        OPENCODE_LATEST_ALIAS => Ok(OPENCODE_LATEST_AGENT),
-        OPENCODE_V1_AGENT => Ok(HookAgent::OpencodeV1),
-        OPENCODE_V2_AGENT => Ok(HookAgent::OpencodeV2),
+        "opencode" => Ok(HookAgent::Opencode),
         other => Err(ParseError::UnknownAgent(other.to_string())),
     }
-}
-
-/// True for either OpenCode adapter generation. Both share the same
-/// `--scope` / `--root` handling and the same hook I/O contract; only the
-/// generated plugin body and its pinned spawn token differ.
-fn is_opencode(agent: Option<HookAgent>) -> bool {
-    matches!(agent, Some(HookAgent::OpencodeV1 | HookAgent::OpencodeV2))
 }
 
 pub(super) fn parse_hook<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -481,10 +435,7 @@ mod tests {
     use super::super::{
         AuditOptions, Command, GlobalFlags, HookAgent, InitOptions, ParseError, parse,
     };
-    use super::{
-        KIRO_LATEST_AGENT, KIRO_LATEST_ALIAS, KIRO_V2_AGENT, OPENCODE_LATEST_AGENT,
-        OPENCODE_LATEST_ALIAS, OPENCODE_V1_AGENT, OPENCODE_V2_AGENT, parse_agent,
-    };
+    use super::{KIRO_LATEST_AGENT, KIRO_LATEST_ALIAS, KIRO_V2_AGENT, parse_agent};
 
     fn ok(args: &[&str]) -> (GlobalFlags, Command) {
         parse(&s(args)).unwrap()
@@ -563,19 +514,7 @@ mod tests {
         assert_eq!(
             cmd(&["hook", "opencode"]),
             Command::HookPreToolUse {
-                agent: HookAgent::OpencodeV2
-            }
-        );
-        assert_eq!(
-            cmd(&["hook", "opencode-v1"]),
-            Command::HookPreToolUse {
-                agent: HookAgent::OpencodeV1
-            }
-        );
-        assert_eq!(
-            cmd(&["hook", "opencode-v2"]),
-            Command::HookPreToolUse {
-                agent: HookAgent::OpencodeV2
+                agent: HookAgent::Opencode
             }
         );
     }
@@ -747,9 +686,7 @@ mod tests {
             ("cline", HookAgent::Cline),
             ("cursor", HookAgent::Cursor),
             ("pi", HookAgent::Pi),
-            ("opencode", HookAgent::OpencodeV2),
-            ("opencode-v1", HookAgent::OpencodeV1),
-            ("opencode-v2", HookAgent::OpencodeV2),
+            ("opencode", HookAgent::Opencode),
         ] {
             let c = cmd(&["init", token]);
             assert_eq!(
@@ -910,90 +847,6 @@ mod tests {
     #[test]
     fn kiro_v2_token_is_pinned_to_the_v2_adapter() {
         assert_eq!(parse_agent(KIRO_V2_AGENT), Ok(HookAgent::Kiro));
-    }
-
-    /// The bare `opencode` token floats to the newest OpenCode adapter,
-    /// while `opencode-v1` / `opencode-v2` stay pinned to their own plugin
-    /// API generation. A v1 plugin does not load under v2 (and vice
-    /// versa), so the generation must never drift with the alias.
-    #[test]
-    fn opencode_tokens_split_floating_alias_from_pinned_generations() {
-        assert_eq!(
-            parse_agent(OPENCODE_LATEST_ALIAS),
-            Ok(OPENCODE_LATEST_AGENT)
-        );
-        assert_eq!(
-            parse_agent(OPENCODE_LATEST_ALIAS),
-            Ok(HookAgent::OpencodeV2)
-        );
-        assert_eq!(parse_agent(OPENCODE_V1_AGENT), Ok(HookAgent::OpencodeV1));
-        assert_eq!(parse_agent(OPENCODE_V2_AGENT), Ok(HookAgent::OpencodeV2));
-        assert_eq!(
-            cmd(&["hook", OPENCODE_LATEST_ALIAS]),
-            Command::HookPreToolUse {
-                agent: OPENCODE_LATEST_AGENT
-            }
-        );
-    }
-
-    /// `opencode-v3` is a future adapter with a different plugin API; it
-    /// must not silently resolve to the v2 adapter.
-    #[test]
-    fn rejects_opencode_v3_agent_token() {
-        assert!(matches!(
-            parse(&s(&["hook", "opencode-v3"])),
-            Err(ParseError::UnknownAgent(_))
-        ));
-        assert!(matches!(
-            parse(&s(&["init", "opencode-v3"])),
-            Err(ParseError::UnexpectedArgument(_))
-        ));
-    }
-
-    /// `--scope` / `--root` are shared by both OpenCode generations, so
-    /// either versioned token must thread them into `OpencodeInitOptions`.
-    #[test]
-    fn parse_init_accepts_scope_and_root_with_either_opencode_generation() {
-        for token in [OPENCODE_V1_AGENT, OPENCODE_V2_AGENT] {
-            let agent = parse_agent(token).unwrap();
-            assert_eq!(
-                cmd(&["init", token, "--scope", "local", "--root", "/repo"]),
-                Command::Init(InitOptions {
-                    agent: Some(agent),
-                    verify: true,
-                    dry_run: false,
-                    kiro: KiroInitOptions::default(),
-                    cursor: CursorInitOptions::default(),
-                    pi: PiInitOptions::default(),
-                    opencode: OpencodeInitOptions {
-                        scope: crate::init::opencode::OpencodeScope::Local,
-                        root: Some(PathBuf::from("/repo")),
-                    },
-                }),
-                "token {token}",
-            );
-        }
-    }
-
-    /// The implicit `opencode` alias must also accept `--scope` /
-    /// `--root`; it resolves to the v2 adapter today.
-    #[test]
-    fn parse_init_accepts_scope_with_bare_opencode_alias() {
-        assert_eq!(
-            cmd(&["init", OPENCODE_LATEST_ALIAS, "--scope", "local"]),
-            Command::Init(InitOptions {
-                agent: Some(OPENCODE_LATEST_AGENT),
-                verify: true,
-                dry_run: false,
-                kiro: KiroInitOptions::default(),
-                cursor: CursorInitOptions::default(),
-                pi: PiInitOptions::default(),
-                opencode: OpencodeInitOptions {
-                    scope: crate::init::opencode::OpencodeScope::Local,
-                    root: None,
-                },
-            }),
-        );
     }
 
     #[test]

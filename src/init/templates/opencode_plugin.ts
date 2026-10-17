@@ -40,7 +40,7 @@ async function runPtufHook(payload: Record<string, unknown>): Promise<PtufDecisi
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const proc = spawn(PTUF_BINARY, ["hook", "opencode-v1"], {
+    const proc = spawn(PTUF_BINARY, ["hook", "opencode"], {
       stdio: ["pipe", "pipe", "pipe"],
       signal: controller.signal,
     });
@@ -71,17 +71,17 @@ async function runPtufHook(payload: Record<string, unknown>): Promise<PtufDecisi
     ]);
 
     if (exitCode !== 0 && exitCode !== 2) {
-      throw new Error(`ptuf hook opencode-v1 exited ${exitCode}: ${stderr}`);
+      throw new Error(`ptuf hook opencode exited ${exitCode}: ${stderr}`);
     }
     const line = stdout.trim().split("\n").pop() ?? "";
     if (!line) {
-      throw new Error("ptuf hook opencode-v1 returned empty stdout");
+      throw new Error("ptuf hook opencode returned empty stdout");
     }
     const decision = JSON.parse(line) as PtufDecision;
     const permitted = decision.decision === "allow" || decision.decision === "monitor";
     if (permitted !== (exitCode === 0)) {
       throw new Error(
-        `ptuf hook opencode-v1 decision ${decision.decision} is inconsistent with exit ${exitCode}`,
+        `ptuf hook opencode decision ${decision.decision} is inconsistent with exit ${exitCode}`,
       );
     }
     return decision;

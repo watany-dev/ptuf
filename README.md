@@ -269,27 +269,11 @@ never demoted to a hard deny:
 
 **OpenCode** — writes a TypeScript plugin to
 `$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` (default global) or
-`<repo>/.opencode/plugins/ptuf.ts` (local):
-
-```bash
-ptuf init opencode      # floating alias: newest adapter (currently v2)
-ptuf init opencode-v2   # pin the v2 plugin API
-ptuf init opencode-v1   # pin the v1 plugin API (legacy OpenCode)
-ptuf init opencode --scope local --root <path>
-```
-
-OpenCode broke its plugin API between v1 (`@opencode-ai/plugin` +
-`tool.execute.before`) and v2 (`@opencode/plugin` + `Plugin.define` +
-`ctx.tool.hook`), and a v1 plugin does not load under v2. ptuf ships both
-generations and picks the API with a versioned token: `opencode-v1` /
-`opencode-v2` pin a generation, and the bare `opencode` token is a
-**floating alias for the newest adapter ptuf ships**. Both generations
-write the *same* managed path — only the file content carries the
-generation — and the plugin always spawns the versioned `ptuf hook
-opencode-v2` (never the alias), so an existing install keeps its
-generation across ptuf upgrades. ptuf Ask decisions are demoted to Deny
-because OpenCode cannot reliably surface interactive confirmation from
-this hook. Environment variable: `PTUF_OPENCODE_TIMEOUT_MS` (default 10000).
+`<repo>/.opencode/plugins/ptuf.ts` (local). The plugin hooks
+`tool.execute.before` and spawns `ptuf hook opencode` before every tool
+call. ptuf Ask decisions are demoted to Deny because OpenCode cannot
+reliably surface interactive confirmation from this hook.
+Environment variable: `PTUF_OPENCODE_TIMEOUT_MS` (default 10000).
 
 **Pi Coding Agent** — writes a TypeScript extension to
 `$HOME/.pi/agent/extensions/ptuf.ts` (`--scope global`, default) or

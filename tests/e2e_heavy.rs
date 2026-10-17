@@ -759,24 +759,19 @@ mod adapter_parity {
             "pi must emit a bare envelope: {out}"
         );
 
-        // OpenCode: exit 2, bare decision envelope (Ask demoted to deny
-        // upstream). The floating alias and both pinned generations share
-        // the same hook I/O contract — only the installed plugin body
-        // differs.
-        for agent in ["opencode", "opencode-v1", "opencode-v2"] {
-            let r = hook(agent, OPENCODE_DENY);
-            assert_clean_exit(&r);
-            assert_eq!(r.code, 2, "{agent} deny: {}", r.stderr_string());
-            let out = r.stdout_string();
-            assert!(
-                out.contains(r#""decision":"deny""#),
-                "{agent} stdout: {out}"
-            );
-            assert!(
-                !out.contains("hookSpecificOutput"),
-                "{agent} must emit a bare envelope: {out}"
-            );
-        }
+        // OpenCode: exit 2, bare decision envelope (Ask demoted to deny upstream).
+        let r = hook("opencode", OPENCODE_DENY);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 2, "opencode deny: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(
+            out.contains(r#""decision":"deny""#),
+            "opencode stdout: {out}"
+        );
+        assert!(
+            !out.contains("hookSpecificOutput"),
+            "opencode must emit a bare envelope: {out}"
+        );
 
         // Cline: exit 0, cancel-envelope JSON on stdout.
         let r = hook("cline", CLINE_DENY);
@@ -843,18 +838,15 @@ mod adapter_parity {
         let out = r.stdout_string();
         assert!(out.contains(r#""decision":"allow""#), "pi stdout: {out}");
 
-        // OpenCode: exit 0, explicit allow decision envelope (all
-        // generations share the same contract).
-        for agent in ["opencode", "opencode-v1", "opencode-v2"] {
-            let r = hook(agent, OPENCODE_ALLOW);
-            assert_clean_exit(&r);
-            assert_eq!(r.code, 0, "{agent} allow: {}", r.stderr_string());
-            let out = r.stdout_string();
-            assert!(
-                out.contains(r#""decision":"allow""#),
-                "{agent} stdout: {out}"
-            );
-        }
+        // OpenCode: exit 0, explicit allow decision envelope.
+        let r = hook("opencode", OPENCODE_ALLOW);
+        assert_clean_exit(&r);
+        assert_eq!(r.code, 0, "opencode allow: {}", r.stderr_string());
+        let out = r.stdout_string();
+        assert!(
+            out.contains(r#""decision":"allow""#),
+            "opencode stdout: {out}"
+        );
 
         // Cline: exit 0, empty-object `{}` on stdout.
         let r = hook("cline", CLINE_ALLOW);
@@ -1465,17 +1457,7 @@ rules:
         let dir = tempfile::tempdir().expect("tempdir");
         let repo = dir.path();
         std::fs::create_dir_all(repo.join(".git")).expect("mkdir .git");
-        for agent in [
-            "claude-code",
-            "codex",
-            "copilot",
-            "kiro",
-            "cline",
-            "cursor",
-            "opencode",
-            "opencode-v1",
-            "opencode-v2",
-        ] {
+        for agent in ["claude-code", "codex", "copilot", "kiro", "cline", "cursor"] {
             for round in 0..ROUNDS {
                 let r = spawn(&SpawnConfig {
                     args: &["init", agent, "--dry-run"],
