@@ -269,7 +269,7 @@ Older ptuf releases wrote `plugin/ptuf.ts`; rerunning init migrates the
 managed file to `plugins/ptuf.ts`, while self-protection still guards
 both paths.
 
-OpenCode native tool names (`bash`, `read`, `patch`, `grep`, …) are
+OpenCode native tool names (`bash`, `read`, `apply_patch` / legacy `patch`, `grep`, …) are
 normalised in Rust (`src/cli/opencode_input.rs`) to the same canonical
 vocabulary as the other adapters. Unknown tools map to
 `mcp__opencode__<sanitized>` so existing MCP path extraction and
