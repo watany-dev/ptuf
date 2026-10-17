@@ -444,7 +444,7 @@ required marker (`Managed by ptuf…`, `ptuf-agent: opencode`) を持たない
 
 | OpenCode tool | Canonical `tool_name` | 備考 |
 | --- | --- | --- |
-| bash | Bash | |
+| bash (v1) / shell (v2) | Bash | 両世代とも `command` をシェル規則で評価 |
 | read / write / edit | Read / Write / Edit | camelCase `filePath` → `file_path` |
 | patch | apply_patch | patch 本文を `command` に複製 |
 | webfetch | WebFetch | |

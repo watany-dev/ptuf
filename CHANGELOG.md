@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- OpenCode v2 の native `shell` tool を `Bash` に正規化し、シェル規則が
+  適用されず `git reset --hard` 等を許可していた問題を修正。実 v1.19.3 /
+  v2.0.32 のホスト検証で再現し、callback 回帰テストも実際の世代別 tool 名に更新。
 - `RUSTSEC-2024-0449`(`unsafe-libyaml` unmaintained、`serde_yaml_ng` 経由で
   推移的に取得)を `deny.toml` と `.cargo/audit.toml` の `advisories.ignore`
   に追加。unmaintained advisory であって既知の脆弱性ではなく、`cargo-audit` /

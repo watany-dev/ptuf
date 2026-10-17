@@ -11,6 +11,7 @@ import { test } from "node:test";
 const binary = resolve(process.env.PTUF_TEST_BINARY ?? "target/debug/ptuf");
 
 for (const generation of ["opencode-v1", "opencode-v2"]) {
+  const nativeShell = generation === "opencode-v1" ? "bash" : "shell";
   test(`${generation}: installed callback enforces the subprocess boundary`, { timeout: 20000 }, async (t) => {
     const root = await mkdtemp(join(tmpdir(), "ptuf-plugin-"));
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -80,7 +81,7 @@ for (const generation of ["opencode-v1", "opencode-v2"]) {
         const hooks = await module.Ptuf({ directory: root, worktree: root });
         assert.equal(typeof hooks["tool.execute.before"], "function");
         return (command) => hooks["tool.execute.before"](
-          { tool: "bash", sessionID: "session", callID: "call" }, { args: { command } },
+          { tool: nativeShell, sessionID: "session", callID: "call" }, { args: { command } },
         );
       }
       let callback;
@@ -93,7 +94,7 @@ for (const generation of ["opencode-v1", "opencode-v2"]) {
         } },
       });
       assert.equal(typeof callback, "function");
-      return (command) => callback({ tool: "bash", input: { command }, sessionID: "session", id: "call" });
+      return (command) => callback({ tool: nativeShell, input: { command }, sessionID: "session", id: "call" });
     }
     await t.test("real CLI permits safe commands and blocks dangerous commands", async () => {
       const callback = await load();
@@ -113,7 +114,7 @@ for (const generation of ["opencode-v1", "opencode-v2"]) {
         else await callback("ls");
         const captured = JSON.parse(await readFile(capture, "utf8"));
         assert.deepEqual(captured.argv, ["hook", generation]);
-        assert.equal(captured.input.tool_name, "bash");
+        assert.equal(captured.input.tool_name, nativeShell);
         assert.deepEqual(captured.input.tool_input, { command: "ls" });
         assert.equal(captured.input.opencode.cwd, root);
         assert.equal(captured.input.opencode.sessionId, "session");

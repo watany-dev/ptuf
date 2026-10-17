@@ -206,6 +206,14 @@ callback を呼び、実 CLI の allow/deny と、subprocess fixture の spawn �
 ロード検証とは区別する。共通 subprocess 部分は生成時に共有し、配布物は単一の
 `ptuf.ts` のまま。`make check` と PR CI の Linux/macOS 両方に含める。
 
+`scripts/smoke-opencode-hosts.py` はインストール済みの実 v1/v2 CLI を起動する
+手動 E2E。モデル応答のみ localhost の固定 SSE に置き換え、plugin の自動ロード・
+登録・ホストの native tool (`bash` / `shell`)・実 ptuf subprocess を通す。
+2026-10-17 に v1.19.3 / v2.0.32 で実施し、v2 `shell` が未知 MCP tool に分類され
+`git reset --hard` を許可する問題を再現した。`shell` → `Bash` の正規化追加後は
+両世代で safe command の実行と reset の拒否、未コミット変更の維持を確認した。
+外部 API キーは不要。再現コマンドは `CONTRIBUTING.md` を参照。
+
 PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。case 数の
 階層は `Makefile` の `pbt-quick` / `pbt` / `pbt-deep` ターゲットおよび
 `.github/workflows/ci.yml` の `test` / `pbt-deep` job に対応する。

@@ -300,7 +300,7 @@ file to `plugins/ptuf.ts`, while self-protection still guards both paths.
 The audit name stays `opencode` across both generations so audit records
 remain comparable.
 
-OpenCode native tool names (`bash`, `read`, `patch`, `grep`, …) are
+OpenCode native tool names (`bash` in v1 / `shell` in v2, `read`, `patch`, `grep`, …) are
 normalised in Rust (`src/cli/opencode_input.rs`) to the same canonical
 vocabulary as the other adapters. Unknown tools map to
 `mcp__opencode__<sanitized>` so existing MCP path extraction and
