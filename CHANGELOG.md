@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- `RUSTSEC-2024-0449`(`unsafe-libyaml` unmaintained、`serde_yaml_ng` 経由で
+  推移的に取得)を `deny.toml` と `.cargo/audit.toml` の `advisories.ignore`
+  に追加。unmaintained advisory であって既知の脆弱性ではなく、`cargo-audit` /
+  `cargo-deny` の security gate が恒常的に赤になっていたため明示的に受理する。
 - `core.self_protection.cursor-settings` / `core.self_protection.cline-settings`
   を追加。対応 8 host のうち Cursor と Cline だけ hook 登録が自己保護の対象外で、
   guarded session が `.cursor/hooks.json` の削除・書き換えや Cline の

@@ -1,0 +1,8 @@
+# `cargo audit` configuration, consumed by `.github/workflows/audit.yml`.
+# Keep `ignore` in sync with `[advisories] ignore` in the repository-root `deny.toml`.
+[advisories]
+# RUSTSEC-2024-0449: `unsafe-libyaml` is unmaintained (upstream repo archived).
+# Reached transitively via `serde_yaml_ng`, our YAML parser for plugin / config
+# files. "Unmaintained", not a known vulnerability; no maintained drop-in
+# replacement is wired in yet.
+ignore = ["RUSTSEC-2024-0449"]
