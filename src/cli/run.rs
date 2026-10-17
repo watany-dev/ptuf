@@ -802,10 +802,17 @@ impl AgentPlan {
                 })
             },
             HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => {
-                let generation = agent.opencode_generation().unwrap_or_default();
                 let targets = init::opencode::resolve_paths(cwd, &options.opencode)?;
+                let generation = if options.agent.is_none() {
+                    init::opencode::auto_generation(&targets)?
+                } else {
+                    agent.opencode_generation().unwrap_or_default()
+                };
                 Ok(Self {
-                    snapshot_paths: vec![targets.plugin_path.clone()],
+                    snapshot_paths: vec![
+                        targets.plugin_path.clone(),
+                        targets.legacy_plugin_path.clone(),
+                    ],
                     install: Box::new(move |dry_run| {
                         let binary = init::detect_binary();
                         let outcome =

@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants mutants-diff semver tools tools-deny install-hooks
+.PHONY: build test test-opencode lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants mutants-diff semver tools tools-deny install-hooks
 
 # Keep these aligned with .github/workflows/ci.yml and nightly.yml:
 # - CARGO_DENY_VERSION must match the cargo-deny pinned in
@@ -23,6 +23,11 @@ build:
 
 test:
 	cargo test --locked
+
+# Executes the generated TypeScript callbacks (requires Node 24).
+test-opencode:
+	cargo build --locked
+	node --test tests/opencode_plugin.test.mjs
 
 lint:
 	cargo clippy --all-targets --locked -- -D warnings
@@ -175,7 +180,7 @@ else
 		exit 1; }
 endif
 
-check: tools-deny fmt-check lint test doc deny
+check: tools-deny fmt-check lint test test-opencode doc deny
 
 install-hooks:
 	bash scripts/install-hooks.sh

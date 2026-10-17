@@ -18,6 +18,8 @@ Run before every push:
 make check
 ```
 
+Node 24 is required to execute the generated OpenCode TypeScript plugins.
+
 This runs the same gates that block CI. `make check` installs only
 `cargo-deny` when missing; `tarpaulin` / fuzz / mutants / semver-checks
 stay on their own Make targets.
@@ -27,6 +29,7 @@ stay on their own Make targets.
 | `fmt-check` | `cargo fmt -- --check` |
 | `lint` | `cargo clippy --all-targets --locked -- -D warnings` |
 | `test` | `cargo test --locked` |
+| `test-opencode` | Installed v1/v2 TypeScript callback tests with the real CLI and failing subprocess fixtures |
 | `doc` | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked` |
 | `deny` | `cargo deny check advisories licenses bans sources` |
 

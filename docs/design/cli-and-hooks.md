@@ -63,8 +63,9 @@ ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
 `--dry-run` は計画のみ (verify off)、`--no-verify` は書き込むが verify
 を走らせない。`<agent>` を明示すれば auto-detect を bypass し単独
 install になる。OpenCode は検出時に version を区別できないため、
-auto-detect は常に最新世代 (現在 v2) を選ぶ。v1 を狙うなら
-`ptuf init opencode-v1` を明示する。
+auto-detect では実際の install 先にある managed plugin の marker で世代を維持する
+(旧 `plugin/ptuf.ts` も対象)。新規・世代不明・marker の競合時は書き込まず、
+`ptuf init opencode-v1` / `ptuf init opencode-v2` の明示指定を要求する。
 
 ## 終了コード
 

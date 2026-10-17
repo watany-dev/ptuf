@@ -98,6 +98,11 @@ jobs:
         run: cargo nextest run --locked --all-targets
       - name: Doctests
         run: cargo test --locked --doc
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "24"
+      - name: OpenCode generated plugin callbacks
+        run: make test-opencode
 
   pbt-deep:
     # Deep PBT run gated to main pushes so PR latency stays bounded.

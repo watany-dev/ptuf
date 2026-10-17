@@ -38,9 +38,9 @@ pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
 /// - `Pi`: `<home>/.pi/agent/` or `<repo>/.pi/`.
 /// - `OpencodeV2`: `<repo>/.opencode/` or `<repo>/opencode.json`, or
 ///   `$XDG_CONFIG_HOME/opencode/` (fallback `~/.config/opencode/`).
-///   Detection cannot tell the OpenCode version apart, so auto-detect
-///   always picks the newest adapter (v2); pass `opencode-v1` explicitly
-///   to target the v1 plugin API.
+///   This is only a host candidate: detection cannot tell its version.
+///   The install planner preserves the generation of the managed plugin
+///   at the resolved target, or requires an explicit generation selection.
 ///
 /// Returns agents in a stable order so callers can install / report
 /// deterministically. Production callers pass `std::env::var_os("HOME")`

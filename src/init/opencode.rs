@@ -27,6 +27,7 @@ use super::{FileMode, InitError, InstallOutcome, InstallPath, InstallStatus};
 
 const TEMPLATE_V1: &str = include_str!("templates/opencode_plugin.ts");
 const TEMPLATE_V2: &str = include_str!("templates/opencode_v2_plugin.ts");
+const SUBPROCESS_TEMPLATE: &str = include_str!("templates/opencode_subprocess.ts");
 
 pub(crate) const MANAGED_MARKER: &str = "Managed by ptuf. Do not edit manually.";
 /// Agent marker written by the OpenCode **v1** plugin. Kept verbatim
@@ -152,6 +153,58 @@ pub(crate) fn opencode_config_dir(env: &dyn EnvLookup) -> Result<PathBuf, InitEr
     Ok(PathBuf::from(home).join(".config/opencode"))
 }
 
+/// Auto-detection identifies a host, not its API generation. Only a managed
+/// plugin at the actual install target can safely supply the generation.
+pub(crate) fn auto_generation(targets: &TargetPaths) -> Result<OpencodeGeneration, InitError> {
+    let mut generation = None;
+    for path in [&targets.plugin_path, &targets.legacy_plugin_path] {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == ErrorKind::NotFound => continue,
+            Err(source) => {
+                return Err(InitError::Io {
+                    path: path.clone(),
+                    source,
+                });
+            },
+        };
+        let current = managed_generation(&bytes).ok_or_else(|| generation_required(path))?;
+        if generation.is_some_and(|previous| previous != current) {
+            return Err(generation_required(path));
+        }
+        generation = Some(current);
+    }
+    generation.ok_or_else(|| generation_required(&targets.root))
+}
+
+fn generation_required(path: &Path) -> InitError {
+    InitError::Schema {
+        path: path.to_path_buf(),
+        message: "cannot determine OpenCode plugin generation; run ptuf init opencode-v1 or ptuf init opencode-v2 explicitly".into(),
+    }
+}
+
+fn managed_generation(bytes: &[u8]) -> Option<OpencodeGeneration> {
+    if !is_ptuf_managed(bytes) {
+        return None;
+    }
+    let text = std::str::from_utf8(bytes).ok()?;
+    let mut generation = None;
+    for line in text.lines() {
+        let current = match line.trim().strip_prefix("// ptuf-agent: ") {
+            Some("opencode") => OpencodeGeneration::V1,
+            Some("opencode-v2") => OpencodeGeneration::V2,
+            Some(_) => return None,
+            None => continue,
+        };
+        if generation.is_some_and(|previous| previous != current) {
+            return None;
+        }
+        generation = Some(current);
+    }
+    generation
+}
+
 pub(crate) fn install(
     targets: &TargetPaths,
     ptuf_binary: &str,
@@ -232,6 +285,8 @@ pub(crate) fn render_plugin(
     let ptuf_binary = serde_json::to_string(ptuf_binary).unwrap_or_else(|_| "\"ptuf\"".into());
     generation
         .template()
+        .replace("// __PTUF_SUBPROCESS__", SUBPROCESS_TEMPLATE)
+        .replace("__PTUF_HOOK_TOKEN__", generation.hook_token())
         .replace(BINARY_PLACEHOLDER, &ptuf_binary)
         .replace(VERSION_PLACEHOLDER, version)
         .into_bytes()
@@ -286,14 +341,11 @@ mod tests {
         assert!(TEMPLATE_V1.contains(BINARY_PLACEHOLDER));
         assert!(TEMPLATE_V1.contains(VERSION_PLACEHOLDER));
         assert!(TEMPLATE_V1.contains(r#""tool.execute.before""#));
-        assert!(TEMPLATE_V1.contains(r#"["hook", "opencode-v1"]"#));
-        assert!(TEMPLATE_V1.contains("PTUF_OPENCODE_TIMEOUT_MS"));
-        assert!(TEMPLATE_V1.contains("MAX_CAPTURE_BYTES"));
-        assert!(TEMPLATE_V1.contains("SIGKILL"));
+        assert!(TEMPLATE_V1.contains("// __PTUF_SUBPROCESS__"));
         assert!(!TEMPLATE_V1.contains("ASK_MODE"));
         // §4.3 fail-closed matrix: allow/monitor must be accompanied by
         // exit 0 — a deny exit paired with an allow body is thrown.
-        assert!(TEMPLATE_V1.contains("permitted !== (exitCode === 0)"));
+        assert!(SUBPROCESS_TEMPLATE.contains("permitted !== (exitCode === 0)"));
     }
 
     #[test]
@@ -310,12 +362,9 @@ mod tests {
         assert!(!TEMPLATE_V2.contains("@opencode-ai/plugin"));
         assert!(!TEMPLATE_V2.contains(r#""tool.execute.before""#));
         // The plugin spawns the pinned v2 hook token.
-        assert!(TEMPLATE_V2.contains(r#"["hook", "opencode-v2"]"#));
-        assert!(TEMPLATE_V2.contains("PTUF_OPENCODE_TIMEOUT_MS"));
-        assert!(TEMPLATE_V2.contains("MAX_CAPTURE_BYTES"));
-        assert!(TEMPLATE_V2.contains("SIGKILL"));
+        assert!(TEMPLATE_V2.contains("// __PTUF_SUBPROCESS__"));
         assert!(!TEMPLATE_V2.contains("ASK_MODE"));
-        assert!(TEMPLATE_V2.contains("permitted !== (exitCode === 0)"));
+        assert!(SUBPROCESS_TEMPLATE.contains("permitted !== (exitCode === 0)"));
     }
 
     #[test]
@@ -354,6 +403,71 @@ mod tests {
         );
         // The floating alias defaults to the newest generation.
         assert_eq!(OpencodeGeneration::default(), OpencodeGeneration::V2);
+    }
+
+    #[test]
+    fn auto_generation_preserves_current_and_legacy_plugins() {
+        for generation in [OpencodeGeneration::V1, OpencodeGeneration::V2] {
+            for legacy in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let targets = test_targets(dir.path(), dir.path().join("ptuf.ts"));
+                let path = if legacy {
+                    &targets.legacy_plugin_path
+                } else {
+                    &targets.plugin_path
+                };
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, render_plugin("/old/ptuf", "0.0.0", generation)).unwrap();
+                assert_eq!(auto_generation(&targets).unwrap(), generation);
+            }
+        }
+    }
+
+    #[test]
+    fn auto_generation_requires_explicit_selection_when_unknown_or_conflicting() {
+        let dir = tempfile::tempdir().unwrap();
+        let targets = test_targets(dir.path(), dir.path().join("ptuf.ts"));
+        assert!(matches!(
+            auto_generation(&targets),
+            Err(InitError::Schema { .. })
+        ));
+        for body in [
+            "// user plugin",
+            "// Managed by ptuf. Do not edit manually.\n// ptuf-agent: opencode-v3\n// hook opencode",
+            "// Managed by ptuf. Do not edit manually.\n// ptuf-agent: opencode\n// ptuf-agent: opencode-v2\n// hook opencode",
+        ] {
+            fs::write(&targets.plugin_path, body).unwrap();
+            assert!(matches!(
+                auto_generation(&targets),
+                Err(InitError::Schema { .. })
+            ));
+        }
+        fs::write(
+            &targets.plugin_path,
+            render_plugin("ptuf", "0", OpencodeGeneration::V1),
+        )
+        .unwrap();
+        fs::create_dir_all(targets.legacy_plugin_path.parent().unwrap()).unwrap();
+        fs::write(
+            &targets.legacy_plugin_path,
+            render_plugin("ptuf", "0", OpencodeGeneration::V2),
+        )
+        .unwrap();
+        assert!(matches!(
+            auto_generation(&targets),
+            Err(InitError::Schema { .. })
+        ));
+    }
+
+    #[test]
+    fn auto_generation_propagates_read_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let targets = test_targets(dir.path(), dir.path().join("ptuf.ts"));
+        fs::create_dir_all(&targets.plugin_path).unwrap();
+        assert!(matches!(
+            auto_generation(&targets),
+            Err(InitError::Io { .. })
+        ));
     }
 
     #[test]

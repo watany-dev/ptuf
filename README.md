@@ -291,6 +291,12 @@ generation across ptuf upgrades. ptuf Ask decisions are demoted to Deny
 because OpenCode cannot reliably surface interactive confirmation from
 this hook. Environment variable: `PTUF_OPENCODE_TIMEOUT_MS` (default 10000).
 
+With no agent argument, `ptuf init` preserves the generation marked in an
+existing managed OpenCode plugin, including the legacy `plugin/ptuf.ts` path.
+For a new install or an unknown/conflicting generation, it leaves OpenCode
+files untouched and asks you to run `ptuf init opencode-v1` or
+`ptuf init opencode-v2` explicitly.
+
 **Pi Coding Agent** — writes a TypeScript extension to
 `$HOME/.pi/agent/extensions/ptuf.ts` (`--scope global`, default) or
 `<repo>/.pi/extensions/ptuf.ts` (`--scope local`):

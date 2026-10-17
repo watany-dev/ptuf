@@ -11,8 +11,9 @@
 
 ## 必須チェック (commit / push 前)
 
-`make check` を必ずローカルで通すこと。これは CI と同じ 5 ステップ
-(fmt-check / clippy / test / `cargo doc` / cargo-deny) を実行する。手順の
+`make check` を必ずローカルで通すこと。これは CI と同じ 6 ステップ
+(fmt-check / clippy / test / test-opencode / `cargo doc` / cargo-deny) を実行する。
+test-opencode は生成 TypeScript callback を実行するため Node 24 を要する。手順の
 詳細は `CONTRIBUTING.md` と `Makefile` を参照。`make check` は
 cargo-deny だけを必要に応じて install し、tarpaulin / fuzz / mutants /
 semver-checks はそれぞれの target 側で入れる。

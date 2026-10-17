@@ -286,6 +286,12 @@ exists. The generated plugin spawns the *versioned* token (`ptuf hook
 opencode-v2`), never the alias, so an install made today keeps its
 generation across ptuf upgrades.
 
+With no agent argument, `ptuf init` reads the managed plugin marker at the
+actual install target and preserves that generation, including legacy
+`plugin/ptuf.ts` installs. New installs and unknown or conflicting markers
+require an explicit `ptuf init opencode-v1` or `ptuf init opencode-v2`;
+auto-detection does not guess the host API from directory names.
+
 The plugin builds a minimal JSON payload (`tool_name`, `tool_input`,
 optional `opencode` metadata) and spawns `ptuf hook opencode-v1` /
 `opencode-v2` with an absolute binary path embedded at init time. Older

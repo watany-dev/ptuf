@@ -199,6 +199,13 @@ CLI run (`src/cli/run.rs` の `run_with`):
 
 ## ランタイム / CI 構成
 
+`make test-opencode` は Node 24 で実際に install した v1/v2 TypeScript の
+callback を呼び、実 CLI の allow/deny と、subprocess fixture の spawn 失敗・
+不正 JSON・終了コード不整合・出力上限・タイムアウト (SIGTERM 無視→SIGKILL)
+で reject することを検証する。v2 SDK は登録を検証する shim で、実 host の
+ロード検証とは区別する。共通 subprocess 部分は生成時に共有し、配布物は単一の
+`ptuf.ts` のまま。`make check` と PR CI の Linux/macOS 両方に含める。
+
 PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。case 数の
 階層は `Makefile` の `pbt-quick` / `pbt` / `pbt-deep` ターゲットおよび
 `.github/workflows/ci.yml` の `test` / `pbt-deep` job に対応する。
