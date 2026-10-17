@@ -169,6 +169,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `apiVersion` / `kind` / 予約 id の検証を通る。`run` と `run_str` は
   `run_loaded` で本体を共有する。(#217)
 
+### Added
+- **OpenCode v2 adapter** — OpenCode v2 は plugin API を破壊的に変更し
+  (`@opencode-ai/plugin` + `tool.execute.before` →
+  `@opencode/plugin` + `Plugin.define({ id, setup })` +
+  `ctx.tool.hook("execute.before", …)`)、v1 plugin は v2 host でロードされない。
+  ptuf は両世代を同梱し versioned token で選ぶ: `ptuf init opencode-v2` /
+  `ptuf hook opencode-v2` が v2 API、`ptuf init opencode-v1` /
+  `ptuf hook opencode-v1` が v1 API。無印 `opencode` は **最新世代 (現在 v2)
+  への floating alias** で、既存の `ptuf init opencode` / `ptuf hook opencode`
+  もそのまま v2 に解決される。世代は install 先ではなく plugin の中身が持ち、
+  両世代とも managed path `plugins/ptuf.ts` に書き込むため host がロードする
+  ptuf plugin は常に 1 つ。書き込む spawn token は versioned に固定したので、
+  既存 install が ptuf upgrade で世代を勝手に変えることはない。監査名は
+  両世代とも `"opencode"`。
+
+### Changed (BREAKING)
+- 公開 enum `cli::HookAgent` の variant `Opencode` を `OpencodeV1` に改名し、
+  v2 adapter 用の `OpencodeV2` を追加した。`Opencode` を網羅 `match` や
+  構築で名指ししている下流は更新が必要。上記の公開 API 変更にあたるため
+  0.16.0 へ bump。
+
 ## [0.8.0] - 2026-09-17
 
 ### Added
