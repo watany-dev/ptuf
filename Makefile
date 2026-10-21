@@ -134,9 +134,10 @@ mutants-diff: tools
 	$(MUTANTS_ENV) cargo mutants -j $(MUTANTS_JOBS) --in-diff target/mutants.diff $(ARGS)
 
 # Public-API SemVer gate. Compares the working tree's exported surface
-# against `origin/main`; fails on an unversioned breaking change.
+# against the last release tag (see scripts/semver-baseline.sh); fails on
+# a breaking change the Cargo.toml version does not account for.
 semver: tools
-	cargo semver-checks --baseline-rev origin/main
+	cargo semver-checks --baseline-rev "$$(scripts/semver-baseline.sh)"
 
 tools:
 ifeq ($(SKIP_TOOL_INSTALL),)

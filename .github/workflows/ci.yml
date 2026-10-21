@@ -268,8 +268,9 @@ jobs:
     # Public-API SemVer gate: fails the PR when an exported item in
     # `src/lib.rs` (`decide`, `try_decide`, `Engine`, `Decision`, …)
     # changes incompatibly without a version bump. Compares the PR tree
-    # against `origin/main`; once the crate is published the crates.io
-    # release becomes the automatic baseline.
+    # against the last release tag (scripts/semver-baseline.sh), not
+    # `origin/main`, so one minor bump covers every breaking PR until the
+    # next release instead of each PR bumping again.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -277,7 +278,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Full history so `--baseline-rev origin/main` resolves.
+          # Full history and tags so the release-tag baseline resolves.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -285,7 +286,7 @@ jobs:
         with:
           tool: cargo-semver-checks@0.50.0
       - name: SemVer check
-        run: cargo semver-checks --baseline-rev origin/main
+        run: cargo semver-checks --baseline-rev "$(scripts/semver-baseline.sh)"
 
   mutants-diff:
     name: Mutants (PR diff, non-blocking)

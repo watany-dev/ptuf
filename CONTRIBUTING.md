@@ -116,7 +116,11 @@ demand) and are not part of `make check`:
   found by fuzzing or audit are appended there.
 
 `make semver` runs the public-API SemVer check locally (same comparison
-as the PR `semver` job).
+as the PR `semver` job). The baseline is the last stable release tag
+(`scripts/semver-baseline.sh`), not `origin/main`: after vX.Y.Z, the
+first PR with a breaking public-API change bumps `Cargo.toml` to the next
+minor (0.x) and every later breaking PR in the same cycle passes without
+another bump. Do not bump the version in a PR unless the gate asks for it.
 
 ## Commit & PR Hygiene
 
