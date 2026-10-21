@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-21
+
+### Changed (BREAKING)
+- 無印 `kiro` alias の解決先を Kiro v3 adapter に変更 (opencode v2 と同じ扱い)。
+  kiro-cli 2.x の既定 V2 engine を使う場合は `ptuf init kiro-v2` を明示する。
+  auto-detect も v3 を install する。
+- 公開 API: `HookAgent::Kiro` を `HookAgent::KiroV2` に改名し `HookAgent::KiroV3` を追加。
+  `KiroInitOptions` に `root: Option<PathBuf>` を追加し `Copy` を外した。
+- `rules::remote_pipe`(`RemoteScriptPipe`)を削除。`static RULES` に載らない
+  テスト専用 oracle で、本番の判定は DSL 版 `core.network.remote-script-pipe`
+  (`src/rules/builtins.yaml`)が行っていた。パリティ PBT は DSL への直接
+  アサーションに置き換え、回帰は `tests/bypass/corpus.jsonl` が守る。(#209)
+- 機密 path 分類器を `facts::sensitive` の `PROBES` 1 系統に統合。
+  `rules::patterns` の `SENSITIVE_PATH` / `SENSITIVE_NEEDLES` を削除し、
+  `matches_sensitive_path` は新設の短絡版 `sensitive::matches` へ委譲する
+  薄い adapter になった。2 実装の等価性を縛っていた PBT 群は、実装が 1 つに
+  なったため削除 (engine レベルの surface 間パリティ検証は継続)。(#210)
+- 各 adapter の `pub fn detect_binary()` (8 個) を削除し、共有実装を
+  `init::detect_binary()` として公開。`init::claude_code::detect_binary()` 等を
+  呼んでいる下流は `init::detect_binary()` に置き換える必要がある。(#219)
+- 公開 enum `cli::HookAgent` の variant `Opencode` を `OpencodeV1` に改名し、
+  v2 adapter 用の `OpencodeV2` を追加した。`Opencode` を網羅 `match` や
+  構築で名指ししている下流は更新が必要。
+- `config::merge::merge` が `Result<Config, ConfigError>` を返す。
+  allowlist / version の検証失敗を伝播する。
+- `AuditRecord` と `engine::Outcome` に `allowlist_ids: Vec<String>` フィールドを追加。
+  構造体リテラルを書いている下流は更新が必要。
+- `ConfigError` に `Allowlist` / `Version` variant を追加。網羅 `match` している
+  下流は更新が必要。
+- `cli::Command` に `Audit(AuditOptions)` variant を追加。
+  `Command` は `#[non_exhaustive]` ではないため、この enum を網羅 `match`
+  している下流ライブラリ利用者は更新が必要。
+
+### Removed (BREAKING)
+- `ProtectedPaths::classify_input_with_paths` /
+  `ProtectedPaths::classify_input_with_paths_pair` — 4 段あった
+  `classify_input` の wrapper 連鎖を、facts 抽出を自前で行う
+  `classify_input` と engine 向けの `classify_input_prepared` の 2 本に
+  集約した。中間 2 本はどこからも呼ばれていなかった。(#216)
+- `self_paths::discover_repo` — `config::repo::discover` の 1 行 wrapper。
+  本番の呼び出し元は全て `config::repo::discover` を直接使っている。(#216)
+- `init::kiro::install` — CLI は `install_with_report` のみを使っており、
+  kiro 固有の報告 (`KiroInstallExtras`) を捨てるだけの wrapper だった。
+- `init::codex::default_home_hooks_path` / `default_home_config_path` —
+  クレート内外から未参照。
+- `init::kiro::DEFAULT_CACHE_TTL_SECONDS` を非公開化 (agent skeleton の
+  生成内部でのみ使用)。(#221)
+- feature `testing` と公開モジュール `ptuf::testing` を削除。proptest の
+  strategy 群 (`src/testing/proptest.rs`) は `#[cfg(test)]` の crate 内
+  モジュールになり、公開 API からも出荷バイナリからも消えた。
+- `proptest` は optional dependency をやめ dev-dependency のみになった。
+- 未参照の strategy `bash_with_quoting` を削除。(#215)
+- crate 外から参照されていない非テスト `pub` 項目を一掃した。`src/` 配下
+  (`src/main.rs` と `src/testing/**` を除き、末尾の `#[cfg(test)] mod tests` を
+  切り落として数えた `pub fn|struct|enum|trait|type|const|static|mod|use` 宣言)
+  は 482 → 158 件になり、`cargo-semver-checks` が守る公開 API は
+  `src/lib.rs` の re-export (`Decision` / `aggregate` / `Engine` /
+  `EngineError` / `Outcome` / `Facts` / `HookInput` / `decide` /
+  `try_decide`)、`fuzz/` が叩く信頼境界 (`config::yaml::parse_str` /
+  `config::merge::merge` / `plugin::load_str` / `facts::shell::parse` /
+  `cli::fuzz_copilot_parse` / `cli::fuzz_opencode_parse`)、および
+  `tests/` / `benches/` が使う範囲に縮小した。
+- `AuditRecord::build` — 0.6.0 から deprecated だった builder shim。
+  `AuditRecord::builder` を使う。
+- `InitError::UnknownAgent` — 構築箇所が無い variant。agent 名の検証は
+  `cli::ParseError::UnknownAgent` が担う。
+- `facts::path::extract` の production 版 — 単一パス形は test だけが使うため
+  `#[cfg(test)]` に落とした。production は `extract_all` を通る。
+- `LoadedPlugin::rule_count` / `PluginSet::rule_count` — `rules.len()` /
+  `rules().count()` と同値の重複アクセサ。呼び出し側をそちらに寄せて削除した。
+- `facts::sensitive::classify` を `#[cfg(test)]` に落とした。buffer を取る
+  `classify_into` の `Vec` 版で、production からは呼ばれていない。
+- `hook_output::opencode::OpencodeHookResponse` — `PiHookResponse` の未使用 alias。(#217)
+
 ### Added
 - Kiro CLI v3 hook adapter (`ptuf hook kiro-v3` / `ptuf init kiro-v3`)。
   V3 の standalone hook 文書 `.kiro/hooks/ptuf.json` (`version: "v1"`,
@@ -16,6 +90,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   を canonical tool に正規化する。`Ask` は native の
   `permissionDecision: "ask"` envelope で返す (demote しない)。
   仕様は kiro.dev の V3 hooks 移行ガイドと kiro-cli 2.33.0 同梱 engine で確認。
+- **OpenCode v2 adapter** — OpenCode v2 は plugin API を破壊的に変更し
+  (`@opencode-ai/plugin` + `tool.execute.before` →
+  `@opencode/plugin` + `Plugin.define({ id, setup })` +
+  `ctx.tool.hook("execute.before", …)`)、v1 plugin は v2 host でロードされない。
+  ptuf は両世代を同梱し versioned token で選ぶ: `ptuf init opencode-v2` /
+  `ptuf hook opencode-v2` が v2 API、`ptuf init opencode-v1` /
+  `ptuf hook opencode-v1` が v1 API。無印 `opencode` は **最新世代 (現在 v2)
+  への floating alias** で、既存の `ptuf init opencode` / `ptuf hook opencode`
+  もそのまま v2 に解決される。世代は install 先ではなく plugin の中身が持ち、
+  両世代とも managed path `plugins/ptuf.ts` に書き込むため host がロードする
+  ptuf plugin は常に 1 つ。書き込む spawn token は versioned に固定したので、
+  既存 install が ptuf upgrade で世代を勝手に変えることはない。監査名は
+  両世代とも `"opencode"`。
+- audit record に `allowlistIds` (`string[]`) を追加。allowlist が rule を
+  抑止した全件を最終 decision に関わらず残す。`allowlistId` は後方互換のため
+  `Allow` 時の先頭 1 件のまま。
+- `ConfigError::Allowlist` / `ConfigError::Version`。allowlist `when` /
+  `expiresAt` と未対応 `version` の load 時検証失敗を表す。
+- `PluginSet::try_push` — rule id を builtin / 既存 plugin と照合してから追加。
+- **`kiro-v2` agent token** — Kiro CLI の hook 仕様が v3 で変わるため、
+  adapter 世代ごとに versioned token を持たせた。現行 adapter は
+  `ptuf init kiro-v2` / `ptuf hook kiro-v2`。無印の `kiro` は
+  **最新 Kiro adapter を指す floating alias** で、v3 adapter が入れば
+  `ptuf init kiro` はそちらへ追従する (今日の契約に固定したい場合は
+  `kiro-v2` を明示する)。未知の `kiro-v3` は該当 adapter が入るまで reject する。
+  監査名は世代をまたいで `"kiro"` のまま。
+- **`ptuf audit`** — 監査 JSONL の read-only 閲覧 CLI (`--path` /
+  `--decision` / `--rule` / `--tool` / `--since` / `--limit` / `--stats`)。
+  書き込み経路は変更しない。`--json` の `records` は元 JSON object を保持し、
+  text 出力は C0 / DEL / C1 / BiDi を escape する。
+- `apply_patch` の added 行 (`+` prefix) を content lane で PEM スキャン
+  (`facts::patch::added_content`)。非機密 path 宛 patch への PEM 埋め込み bypass
+  (ADR 0001 known limitation) を解消。
+- Cline adapter が `patch` / `patchText` / `content` を `command` へ正規化
+  (OpenCode `reshape_patch` と同等)。Cline 経由 apply_patch の path / content
+  空振りを修正。
+
+### Changed
+- テスト用の環境変数ダブルを `config::scope::MapEnv`
+  (`#[cfg(test)] pub(crate)`) 1 個に集約。`facts::path` / `self_paths` /
+  `config::scope` / `update::exe` / `init::opencode` に散っていた同型の
+  `MapEnv` 5 定義と、`init` の `EmptyEnv` / `XdgEnv` を削除した。公開 API に
+  影響はない。(#212)
+- 6 つの agent adapter (`copilot` / `kiro` / `cline` / `cursor` / `pi` /
+  `opencode`) の入力正規化を `src/cli/input_helpers.rs` に集約。個別の
+  `*InputError` enum 6 種を単一の `InputError` に統合し、`sanitize_tool_name` /
+  `normalize_at_mcp` / `decode_args` / `first_string` の重複実装を共有化した
+  (crate 内部のみ、公開 API 変更なし)。空 tool name のメッセージは
+  `hook payload tool_name must not be empty` に統一。cline / kiro の
+  `tool_input` も共有 `decode_args` 経由となり、JSON 文字列として渡された
+  object を展開するようになった (従来は `raw` キーに素通し)。(#222)
+- init adapter 9 種に複製されていた atomic write ヘルパ (`mkdir -p` →
+  temp file → `rename`) を `init::write_atomically_at` 1 箇所に集約。
+  各 adapter の `write_atomically` / `write_json_atomically` /
+  `write_toml_atomically` / `write_executable_atomically` と
+  `sibling_temp_path` ラッパを削除し、`write_install_bytes` /
+  `write_install_json` を直接呼ぶ。
+- 権限ビットだけが違った `write_secure` (0600) / `write_executable` (0700)
+  を `FileMode` を取る単一の writer に統合。書き込まれるモードは従来と同一。(#218)
+- init adapter 間でコピーされていた JSON hook 操作ヘルパを
+  `src/init/json.rs` に集約。`read_hooks` / `read_settings` /
+  `read_agent_config` の共通部分は `json::read_or_default` /
+  `json::read_object` に、`ensure_object` / `ensure_array` /
+  `ensure_version` は 1 実装に、5 箇所の `append_hook` に共通していた
+  `hooks.<event>` 配列の掘り下げは `json::hook_array` になった。
+  生成される JSON とエラーメッセージは従来と同一。(#219)
+- 内部の `AdapterRunReport` を struct から enum (`Simple` / `Kiro`) に変更。
+  kiro 専用フィールドを共通型から外し、`src/cli/run.rs` の `kiro: None` ×11 を
+  解消した。
+- `init::claude_code::install` が同一の `InstallOutcome` literal を 3 回
+  構築していたのを 1 箇所に集約。(#221)
+- `tests/{engine,rules,cli_parse,filter}_proptest.rs` を
+  `src/testing/{engine,rules,cli_parse,filter}_pbt.rs` に移動し unit test 化。
+  `[[test]] required-features = ["testing"]` の付け忘れでテストが黙って
+  skip される状態を解消した。Makefile / CI / docs の `--features testing`
+  指定 (10 箇所) も削除。(#215)
+- lib テストの CWD 競合を解消: プロセス CWD を読むテストも `CwdGuard` と
+  同じ `CWD_LOCK` を取るようにした (PBT が同一バイナリに移り並列度が
+  上がったことで顕在化した flake)。(#215)
+- `unreachable_pub = "deny"` を有効化 (`Cargo.toml [lints.rust]`)。内部項目に
+  付いた inert な `pub` が再び増えるのを止める。この lint は *モジュール鎖が
+  crate 内に閉じている* 項目しか見ないため、公開 API に属さない module 宣言は
+  `pub(crate) mod` に落とし、lint が実際に効く状態にした。`unreachable_pub` と
+  方向が衝突する `clippy::redundant_pub_crate` (nursery) は `allow` にした。
+- 内部専用だった module 宣言を `pub(crate) mod` に降格した
+  (`hook_input` / `init` / `reason` / `self_paths` / `update`、および
+  `audit` / `config` / `facts` / `plugin` / `rules` / `hook_output` 配下の
+  子モジュール)。`pub` のまま残したのは `src/lib.rs` の re-export 経路と
+  `fuzz/` / `tests/` / `benches/` が名指しする
+  `audit::record` / `facts::shell` / `plugin::dsl` / `config::yaml` /
+  `config::merge` のみ。
+- `plugin::runner::run_str` を `#[cfg(test)]` に移し、独自の YAML パースを
+  やめて production と同じ `plugin::load_str` 経由に統一した。test fixture も
+  `apiVersion` / `kind` / 予約 id の検証を通る。`run` と `run_str` は
+  `run_loaded` で本体を共有する。(#217)
+- RFC3339 formatting/parsing no longer depends on the `time` crate.
+- `make check` installs only `cargo-deny`; tarpaulin / fuzz / mutants /
+  semver-checks stay on their own targets.
+- Unused `benches/perf.rs` + `divan` removed.
+- **Kiro agent JSON に書き込む hook command が `ptuf hook kiro-v2` になった。**
+  無印 `kiro` が最新版 alias になったため、`ptuf hook kiro` と書かれた既存の
+  hook 行は ptuf を upgrade した時点で v3 adapter へ黙って切り替わってしまう。
+  これを防ぐため書き込む形を versioned に pin し、旧 ptuf が書いた
+  `ptuf hook kiro` entry は次回 `ptuf init` で **その場で書き換える**
+  (重複 append はしない)。書き換えが走ったファイルは `AlreadyPresent` ではなく
+  `Installed` として報告される。
+
+### Fixed
+- ラベル無しの PKCS#8 PEM ヘッダ `-----BEGIN PRIVATE KEY-----` が機密分類器を
+  すり抜けていた問題を修正。audit redactor 側 (ラベル任意) と分類器側
+  (ラベル必須) でパターンが食い違っていたのが原因で、分類器統合に伴い
+  `PEM_PRIVATE_KEY_{BEGIN,END}` の単一定義へ収斂させた。(#210)
+- allowlist `when` の DSL コンパイル失敗が無条件 allowlist に化ける fail-open
+  を解消。不正 `when` / 不正 `expiresAt` / `version != 1` は policy-load-failed
+  (issues #202)。
+- `path.filePathPrefixAny` が未正規化文字列 prefix 比較だったため `..` /
+  symlink / 部分一致で allowlist を広げられた問題を、path と prefix の両方を
+  正規化 + `Path::starts_with` に変更して修正 (issue #203)。prefix の
+  祖先 alias (`/tmp` → `/private/tmp`) は辿るが、最終成分の張り替え
+  symlink は辿らず allowlist 拡大を防ぐ。
+- plugin 間 / plugin と builtin の rule id 衝突を load 時に reject。
+  `is_hard_deny_rule_id` は同 id のどれかが `hardDeny` なら true にし、
+  monitor 降格の first-wins 抜けを塞ぐ (issue #204)。
+- config の `plugins[].path` / `audit.path` が home 展開も config ファイル基準の
+  相対解決もしなかった問題を修正 (issue #205)。
+- `overridable: false` の rule が `packs.<prefix>.enabled: false` で消えていた
+  非対称を、rule override と同じ `is_overridable` 判定に揃えて修正 (issue #206)。
+  allowlist ヒットは `includeAllowed: false` でも audit に残る。
+- Nested prefix wrappers (`sudo env …`) are unwrapped for every rule and
+  the plugin DSL, not only `core.git` / `destructive_rm`.
+- `core.project_hygiene` reuses `core.git` matchers, so
+  `git -c key=val reset --hard` is denied on a protected branch.
+- Pi hook template now caps captured output, SIGKILLs a hung hook, and
+  rejects decision/exit-code inconsistency (parity with OpenCode).
+- CI `msrv` job installs Rust 1.93.0 instead of rebuilding stable.
 
 ### Security
 - `core.self_protection.kiro-settings` が `.kiro/hooks/ptuf.json` と起動時に実在する
@@ -38,266 +247,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   上書きで ptuf hook を外せていた。あわせて `.cursor/hooks.json` の
   `preToolUse` command が参照する実行ファイルを `core.self_protection.hook-script`
   の対象に加えた。
-
-### Changed (BREAKING)
-- 無印 `kiro` alias の解決先を Kiro v3 adapter に変更 (opencode v2 と同じ扱い)。
-  kiro-cli 2.x の既定 V2 engine を使う場合は `ptuf init kiro-v2` を明示する。
-  auto-detect も v3 を install する。
-- 公開 API: `HookAgent::Kiro` を `HookAgent::KiroV2` に改名し `HookAgent::KiroV3` を追加。
-  `KiroInitOptions` に `root: Option<PathBuf>` を追加し `Copy` を外した。
-  version を 0.17.0 に bump。
-- `rules::remote_pipe`(`RemoteScriptPipe`)を削除。`static RULES` に載らない
-  テスト専用 oracle で、本番の判定は DSL 版 `core.network.remote-script-pipe`
-  (`src/rules/builtins.yaml`)が行っていた。パリティ PBT は DSL への直接
-  アサーションに置き換え、回帰は `tests/bypass/corpus.jsonl` が守る。公開 API の
-  削除にあたるため 0.9.0 へ bump。(#209)
-
-### Fixed
-- ラベル無しの PKCS#8 PEM ヘッダ `-----BEGIN PRIVATE KEY-----` が機密分類器を
-  すり抜けていた問題を修正。audit redactor 側 (ラベル任意) と分類器側
-  (ラベル必須) でパターンが食い違っていたのが原因で、分類器統合に伴い
-  `PEM_PRIVATE_KEY_{BEGIN,END}` の単一定義へ収斂させた。(#210)
-
-### Changed (BREAKING)
-- 機密 path 分類器を `facts::sensitive` の `PROBES` 1 系統に統合。
-  `rules::patterns` の `SENSITIVE_PATH` / `SENSITIVE_NEEDLES` を削除し、
-  `matches_sensitive_path` は新設の短絡版 `sensitive::matches` へ委譲する
-  薄い adapter になった。2 実装の等価性を縛っていた PBT 群は、実装が 1 つに
-  なったため削除 (engine レベルの surface 間パリティ検証は継続)。公開 static の
-  削除にあたるため 0.10.0 へ bump。(#210)
-
-### Changed
-- テスト用の環境変数ダブルを `config::scope::MapEnv`
-  (`#[cfg(test)] pub(crate)`) 1 個に集約。`facts::path` / `self_paths` /
-  `config::scope` / `update::exe` / `init::opencode` に散っていた同型の
-  `MapEnv` 5 定義と、`init` の `EmptyEnv` / `XdgEnv` を削除した。公開 API に
-  影響はない。(#212)
-
-### Removed (BREAKING)
-- `ProtectedPaths::classify_input_with_paths` /
-  `ProtectedPaths::classify_input_with_paths_pair` — 4 段あった
-  `classify_input` の wrapper 連鎖を、facts 抽出を自前で行う
-  `classify_input` と engine 向けの `classify_input_prepared` の 2 本に
-  集約した。中間 2 本はどこからも呼ばれていなかった。(#216)
-- `self_paths::discover_repo` — `config::repo::discover` の 1 行 wrapper。
-  本番の呼び出し元は全て `config::repo::discover` を直接使っている。(#216)
-- 上記の公開 API 削除にあたるため 0.11.0 へ bump。
-
-### Changed
-- 6 つの agent adapter (`copilot` / `kiro` / `cline` / `cursor` / `pi` /
-  `opencode`) の入力正規化を `src/cli/input_helpers.rs` に集約。個別の
-  `*InputError` enum 6 種を単一の `InputError` に統合し、`sanitize_tool_name` /
-  `normalize_at_mcp` / `decode_args` / `first_string` の重複実装を共有化した
-  (crate 内部のみ、公開 API 変更なし)。空 tool name のメッセージは
-  `hook payload tool_name must not be empty` に統一。cline / kiro の
-  `tool_input` も共有 `decode_args` 経由となり、JSON 文字列として渡された
-  object を展開するようになった (従来は `raw` キーに素通し)。(#222)
-
-### Changed
-- init adapter 9 種に複製されていた atomic write ヘルパ (`mkdir -p` →
-  temp file → `rename`) を `init::write_atomically_at` 1 箇所に集約。
-  各 adapter の `write_atomically` / `write_json_atomically` /
-  `write_toml_atomically` / `write_executable_atomically` と
-  `sibling_temp_path` ラッパを削除し、`write_install_bytes` /
-  `write_install_json` を直接呼ぶ。
-- 権限ビットだけが違った `write_secure` (0600) / `write_executable` (0700)
-  を `FileMode` を取る単一の writer に統合。書き込まれるモードは従来と同一。(#218)
-
-### Changed (BREAKING)
-- 各 adapter の `pub fn detect_binary()` (8 個) を削除し、共有実装を
-  `init::detect_binary()` として公開。`init::claude_code::detect_binary()` 等を
-  呼んでいる下流は `init::detect_binary()` に置き換える必要がある。公開 API の
-  削除にあたるため 0.12.0 へ bump。(#219)
-
-### Changed
-- init adapter 間でコピーされていた JSON hook 操作ヘルパを
-  `src/init/json.rs` に集約。`read_hooks` / `read_settings` /
-  `read_agent_config` の共通部分は `json::read_or_default` /
-  `json::read_object` に、`ensure_object` / `ensure_array` /
-  `ensure_version` は 1 実装に、5 箇所の `append_hook` に共通していた
-  `hooks.<event>` 配列の掘り下げは `json::hook_array` になった。
-  生成される JSON とエラーメッセージは従来と同一。(#219)
-
-### Removed (BREAKING)
-- `init::kiro::install` — CLI は `install_with_report` のみを使っており、
-  kiro 固有の報告 (`KiroInstallExtras`) を捨てるだけの wrapper だった。
-- `init::codex::default_home_hooks_path` / `default_home_config_path` —
-  クレート内外から未参照。
-- `init::kiro::DEFAULT_CACHE_TTL_SECONDS` を非公開化 (agent skeleton の
-  生成内部でのみ使用)。
-- 上記の公開 API 削除にあたるため 0.13.0 へ bump。(#221)
-
-### Changed
-- 内部の `AdapterRunReport` を struct から enum (`Simple` / `Kiro`) に変更。
-  kiro 専用フィールドを共通型から外し、`src/cli/run.rs` の `kiro: None` ×11 を
-  解消した。
-- `init::claude_code::install` が同一の `InstallOutcome` literal を 3 回
-  構築していたのを 1 箇所に集約。(#221)
-
-### Removed (BREAKING)
-- feature `testing` と公開モジュール `ptuf::testing` を削除。proptest の
-  strategy 群 (`src/testing/proptest.rs`) は `#[cfg(test)]` の crate 内
-  モジュールになり、公開 API からも出荷バイナリからも消えた。
-- `proptest` は optional dependency をやめ dev-dependency のみになった。
-- 未参照の strategy `bash_with_quoting` を削除。
-- 上記の公開 API 削除にあたるため 0.14.0 へ bump。(#215)
-
-### Changed
-- `tests/{engine,rules,cli_parse,filter}_proptest.rs` を
-  `src/testing/{engine,rules,cli_parse,filter}_pbt.rs` に移動し unit test 化。
-  `[[test]] required-features = ["testing"]` の付け忘れでテストが黙って
-  skip される状態を解消した。Makefile / CI / docs の `--features testing`
-  指定 (10 箇所) も削除。(#215)
-- lib テストの CWD 競合を解消: プロセス CWD を読むテストも `CwdGuard` と
-  同じ `CWD_LOCK` を取るようにした (PBT が同一バイナリに移り並列度が
-  上がったことで顕在化した flake)。(#215)
-
-### Removed (BREAKING)
-- crate 外から参照されていない非テスト `pub` 項目を一掃した。`src/` 配下
-  (`src/main.rs` と `src/testing/**` を除き、末尾の `#[cfg(test)] mod tests` を
-  切り落として数えた `pub fn|struct|enum|trait|type|const|static|mod|use` 宣言)
-  は 482 → 158 件になり、`cargo-semver-checks` が守る公開 API は
-  `src/lib.rs` の re-export (`Decision` / `aggregate` / `Engine` /
-  `EngineError` / `Outcome` / `Facts` / `HookInput` / `decide` /
-  `try_decide`)、`fuzz/` が叩く信頼境界 (`config::yaml::parse_str` /
-  `config::merge::merge` / `plugin::load_str` / `facts::shell::parse` /
-  `cli::fuzz_copilot_parse` / `cli::fuzz_opencode_parse`)、および
-  `tests/` / `benches/` が使う範囲に縮小した。
-- `AuditRecord::build` — 0.6.0 から deprecated だった builder shim。
-  `AuditRecord::builder` を使う。
-- `InitError::UnknownAgent` — 構築箇所が無い variant。agent 名の検証は
-  `cli::ParseError::UnknownAgent` が担う。
-- `facts::path::extract` の production 版 — 単一パス形は test だけが使うため
-  `#[cfg(test)]` に落とした。production は `extract_all` を通る。
-- `LoadedPlugin::rule_count` / `PluginSet::rule_count` — `rules.len()` /
-  `rules().count()` と同値の重複アクセサ。呼び出し側をそちらに寄せて削除した。
-- `facts::sensitive::classify` を `#[cfg(test)]` に落とした。buffer を取る
-  `classify_into` の `Vec` 版で、production からは呼ばれていない。
-- `hook_output::opencode::OpencodeHookResponse` — `PiHookResponse` の未使用 alias。
-- 上記の公開 API 削除にあたるため 0.15.0 へ bump。(#217)
-
-### Changed
-- `unreachable_pub = "deny"` を有効化 (`Cargo.toml [lints.rust]`)。内部項目に
-  付いた inert な `pub` が再び増えるのを止める。この lint は *モジュール鎖が
-  crate 内に閉じている* 項目しか見ないため、公開 API に属さない module 宣言は
-  `pub(crate) mod` に落とし、lint が実際に効く状態にした。`unreachable_pub` と
-  方向が衝突する `clippy::redundant_pub_crate` (nursery) は `allow` にした。
-- 内部専用だった module 宣言を `pub(crate) mod` に降格した
-  (`hook_input` / `init` / `reason` / `self_paths` / `update`、および
-  `audit` / `config` / `facts` / `plugin` / `rules` / `hook_output` 配下の
-  子モジュール)。`pub` のまま残したのは `src/lib.rs` の re-export 経路と
-  `fuzz/` / `tests/` / `benches/` が名指しする
-  `audit::record` / `facts::shell` / `plugin::dsl` / `config::yaml` /
-  `config::merge` のみ。
-- `plugin::runner::run_str` を `#[cfg(test)]` に移し、独自の YAML パースを
-  やめて production と同じ `plugin::load_str` 経由に統一した。test fixture も
-  `apiVersion` / `kind` / 予約 id の検証を通る。`run` と `run_str` は
-  `run_loaded` で本体を共有する。(#217)
-
-### Added
-- **OpenCode v2 adapter** — OpenCode v2 は plugin API を破壊的に変更し
-  (`@opencode-ai/plugin` + `tool.execute.before` →
-  `@opencode/plugin` + `Plugin.define({ id, setup })` +
-  `ctx.tool.hook("execute.before", …)`)、v1 plugin は v2 host でロードされない。
-  ptuf は両世代を同梱し versioned token で選ぶ: `ptuf init opencode-v2` /
-  `ptuf hook opencode-v2` が v2 API、`ptuf init opencode-v1` /
-  `ptuf hook opencode-v1` が v1 API。無印 `opencode` は **最新世代 (現在 v2)
-  への floating alias** で、既存の `ptuf init opencode` / `ptuf hook opencode`
-  もそのまま v2 に解決される。世代は install 先ではなく plugin の中身が持ち、
-  両世代とも managed path `plugins/ptuf.ts` に書き込むため host がロードする
-  ptuf plugin は常に 1 つ。書き込む spawn token は versioned に固定したので、
-  既存 install が ptuf upgrade で世代を勝手に変えることはない。監査名は
-  両世代とも `"opencode"`。
-
-### Changed (BREAKING)
-- 公開 enum `cli::HookAgent` の variant `Opencode` を `OpencodeV1` に改名し、
-  v2 adapter 用の `OpencodeV2` を追加した。`Opencode` を網羅 `match` や
-  構築で名指ししている下流は更新が必要。上記の公開 API 変更にあたるため
-  0.16.0 へ bump。
-
-## [0.8.0] - 2026-09-17
-
-### Added
-- audit record に `allowlistIds` (`string[]`) を追加。allowlist が rule を
-  抑止した全件を最終 decision に関わらず残す。`allowlistId` は後方互換のため
-  `Allow` 時の先頭 1 件のまま。
-- `ConfigError::Allowlist` / `ConfigError::Version`。allowlist `when` /
-  `expiresAt` と未対応 `version` の load 時検証失敗を表す。
-- `PluginSet::try_push` — rule id を builtin / 既存 plugin と照合してから追加。
-
-### Changed (BREAKING)
-- `config::merge::merge` が `Result<Config, ConfigError>` を返す。
-  allowlist / version の検証失敗を伝播する。
-- `AuditRecord` と `engine::Outcome` に `allowlist_ids: Vec<String>` フィールドを追加。
-  構造体リテラルを書いている下流は更新が必要。
-- `ConfigError` に `Allowlist` / `Version` variant を追加。網羅 `match` している
-  下流は更新が必要。
-
-### Fixed
-- allowlist `when` の DSL コンパイル失敗が無条件 allowlist に化ける fail-open
-  を解消。不正 `when` / 不正 `expiresAt` / `version != 1` は policy-load-failed
-  (issues #202)。
-- `path.filePathPrefixAny` が未正規化文字列 prefix 比較だったため `..` /
-  symlink / 部分一致で allowlist を広げられた問題を、path と prefix の両方を
-  正規化 + `Path::starts_with` に変更して修正 (issue #203)。prefix の
-  祖先 alias (`/tmp` → `/private/tmp`) は辿るが、最終成分の張り替え
-  symlink は辿らず allowlist 拡大を防ぐ。
-- plugin 間 / plugin と builtin の rule id 衝突を load 時に reject。
-  `is_hard_deny_rule_id` は同 id のどれかが `hardDeny` なら true にし、
-  monitor 降格の first-wins 抜けを塞ぐ (issue #204)。
-- config の `plugins[].path` / `audit.path` が home 展開も config ファイル基準の
-  相対解決もしなかった問題を修正 (issue #205)。
-- `overridable: false` の rule が `packs.<prefix>.enabled: false` で消えていた
-  非対称を、rule override と同じ `is_overridable` 判定に揃えて修正 (issue #206)。
-  allowlist ヒットは `includeAllowed: false` でも audit に残る。
-
-## [0.7.0] - 2026-08-16
-
-### Added
-- **`kiro-v2` agent token** — Kiro CLI の hook 仕様が v3 で変わるため、
-  adapter 世代ごとに versioned token を持たせた。現行 adapter は
-  `ptuf init kiro-v2` / `ptuf hook kiro-v2`。無印の `kiro` は
-  **最新 Kiro adapter を指す floating alias** で、v3 adapter が入れば
-  `ptuf init kiro` はそちらへ追従する (今日の契約に固定したい場合は
-  `kiro-v2` を明示する)。未知の `kiro-v3` は該当 adapter が入るまで reject する。
-  監査名は世代をまたいで `"kiro"` のまま。
-- **`ptuf audit`** — 監査 JSONL の read-only 閲覧 CLI (`--path` /
-  `--decision` / `--rule` / `--tool` / `--since` / `--limit` / `--stats`)。
-  書き込み経路は変更しない。`--json` の `records` は元 JSON object を保持し、
-  text 出力は C0 / DEL / C1 / BiDi を escape する。
-- `apply_patch` の added 行 (`+` prefix) を content lane で PEM スキャン
-  (`facts::patch::added_content`)。非機密 path 宛 patch への PEM 埋め込み bypass
-  (ADR 0001 known limitation) を解消。
-- Cline adapter が `patch` / `patchText` / `content` を `command` へ正規化
-  (OpenCode `reshape_patch` と同等)。Cline 経由 apply_patch の path / content
-  空振りを修正。
-
-### Fixed
-- Nested prefix wrappers (`sudo env …`) are unwrapped for every rule and
-  the plugin DSL, not only `core.git` / `destructive_rm`.
-- `core.project_hygiene` reuses `core.git` matchers, so
-  `git -c key=val reset --hard` is denied on a protected branch.
-- Pi hook template now caps captured output, SIGKILLs a hung hook, and
-  rejects decision/exit-code inconsistency (parity with OpenCode).
-- CI `msrv` job installs Rust 1.93.0 instead of rebuilding stable.
-
-### Changed
-- RFC3339 formatting/parsing no longer depends on the `time` crate.
-- `make check` installs only `cargo-deny`; tarpaulin / fuzz / mutants /
-  semver-checks stay on their own targets.
-- Unused `benches/perf.rs` + `divan` removed.
-- **Kiro agent JSON に書き込む hook command が `ptuf hook kiro-v2` になった。**
-  無印 `kiro` が最新版 alias になったため、`ptuf hook kiro` と書かれた既存の
-  hook 行は ptuf を upgrade した時点で v3 adapter へ黙って切り替わってしまう。
-  これを防ぐため書き込む形を versioned に pin し、旧 ptuf が書いた
-  `ptuf hook kiro` entry は次回 `ptuf init` で **その場で書き換える**
-  (重複 append はしない)。書き換えが走ったファイルは `AlreadyPresent` ではなく
-  `Installed` として報告される。
-
-### Changed (BREAKING)
-- `cli::Command` に `Audit(AuditOptions)` variant を追加。
-  `Command` は `#[non_exhaustive]` ではないため、この enum を網羅 `match`
-  している下流ライブラリ利用者は更新が必要。
 
 ## [0.6.0] - 2026-08-12
 
@@ -711,7 +660,8 @@ Initial public release.
 - `curl | sh` and PowerShell installers via cargo-dist
 - crates.io publication
 
-[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/watany-dev/ptuf/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/watany-dev/ptuf/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/watany-dev/ptuf/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/watany-dev/ptuf/compare/v0.4.0...v0.4.1

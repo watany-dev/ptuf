@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "ptuf"
-version = "0.17.0"
+version = "0.7.0"
 dependencies = [
  "memchr",
  "proptest",
