@@ -105,7 +105,7 @@ point は、外部 agent との信頼境界として以下の不変を持つ。
   各 adapter として流すと panic しない。Claude Code / Cursor は exit
   `0`/`1`/`2` のいずれかで、invalid payload 時は exit `2` + deny
   envelope。Copilot は常に exit `0`/`1`（invalid payload も exit `0` +
-  bare deny）。Kiro は exit `0`/`1`/`2`（invalid payload 時は exit `2` +
+  bare deny）。Kiro (v2 / v3 とも) は exit `0`/`1`/`2`（invalid payload 時は exit `2` +
   stdout 空 + stderr reason）。対応 PBT:
   `pbt_run_hook_fails_closed_for_arbitrary_stdin` (Claude Code),
   `pbt_cursor_run_hook_fails_closed_for_arbitrary_stdin`,
@@ -116,8 +116,8 @@ point は、外部 agent との信頼境界として以下の不変を持つ。
   `Err(...)` を返し panic しない。trust boundary ごとに
   `pbt_parse_is_total_on_arbitrary_utf8` を各 adapter module が保持する
   （dedupe しない）
-- 非 object / `toolName`/`tool_name` 欠落 / Kiro の `hook_event_name !=
-  "preToolUse"` / Cline の `tool_call`・`preToolUse` 双方欠落や非対応
+- 非 object / `toolName`/`tool_name` 欠落 / Kiro の `hook_event_name` が
+  `preToolUse` / `PreToolUse` 以外 / Cline の `tool_call`・`preToolUse` 双方欠落や非対応
   `hookName` といった各異常 envelope は対応する parser error variant を
   返す (`pbt_invalid_envelope_returns_err`)
 - 例外として、Copilot の 8 MiB 超 stdin は adapter 経由でも exit `0` +

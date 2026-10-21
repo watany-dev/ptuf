@@ -177,22 +177,23 @@ where
     // confirm whatever was already on disk; treat dry-run as "skip
     // verify" rather than as a parse error.
     let verify = !no_verify && !dry_run;
+    // Kiro v3 also takes the shared `--scope` / `--root`; a Cursor / Pi /
+    // OpenCode `--scope` must not leak into the Kiro options.
+    let kiro_v3 = agent == Some(HookAgent::KiroV3);
     let kiro = KiroInitOptions {
         mode: if new_agent {
             KiroMode::NewAgent
         } else {
             KiroMode::PatchExisting
         },
-        scope: match (workspace_only, global, kiro_v3_scope(agent, shared_scope)) {
-            (true, _, _) | (_, _, Some(SharedScope::Local)) => ScopeFilter::WorkspaceOnly,
-            (_, true, _) | (_, _, Some(SharedScope::Global)) => ScopeFilter::GlobalOnly,
-            _ => ScopeFilter::Both,
-        },
-        root: if agent == Some(HookAgent::KiroV3) {
-            shared_root.clone()
+        scope: if workspace_only || (kiro_v3 && shared_scope == Some(SharedScope::Local)) {
+            ScopeFilter::WorkspaceOnly
+        } else if global || (kiro_v3 && shared_scope == Some(SharedScope::Global)) {
+            ScopeFilter::GlobalOnly
         } else {
-            None
+            ScopeFilter::Both
         },
+        root: shared_root.clone().filter(|_| kiro_v3),
     };
     let cursor = CursorInitOptions {
         scope: if agent == Some(HookAgent::Cursor) {
@@ -275,7 +276,7 @@ fn parse_shared_scope(value: &str) -> Result<SharedScope, ParseError> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum SharedScope {
     Local,
     Global,
@@ -330,17 +331,6 @@ fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
 /// `--workspace-only` / `--global` scope filters.
 fn is_kiro(agent: Option<HookAgent>) -> bool {
     matches!(agent, Some(HookAgent::KiroV2 | HookAgent::KiroV3))
-}
-
-/// `--scope` as seen by the Kiro v3 adapter; `None` for every other
-/// agent so a Cursor / Pi / OpenCode `--scope` never leaks into the
-/// Kiro options.
-fn kiro_v3_scope(agent: Option<HookAgent>, scope: Option<SharedScope>) -> Option<SharedScope> {
-    if agent == Some(HookAgent::KiroV3) {
-        scope
-    } else {
-        None
-    }
 }
 
 /// True for either OpenCode adapter generation. Both share the same

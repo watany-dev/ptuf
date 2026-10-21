@@ -42,7 +42,7 @@
 use serde_json::{Map, Value};
 
 use super::input_helpers::{
-    InputError, decode_args, hook_input, normalize_at_mcp, take_first_string,
+    InputError, decode_args, first_string, hook_input, normalize_at_mcp, take_first_string,
 };
 use crate::hook_input::HookInput;
 
@@ -109,13 +109,10 @@ fn normalize_v2(raw_name: String, args: Map<String, Value>) -> (String, Value) {
         "read" | "fs_read" | "fsRead" => ("Read".into(), reshape_path(args)),
         "write" | "fs_write" | "fsWrite" => ("Write".into(), reshape_write(args)),
         "web_fetch" | "webFetch" => ("WebFetch".into(), Value::Object(args)),
-        _ => {
-            if let Some(canonical) = normalize_at_mcp(&raw_name) {
-                (canonical, Value::Object(args))
-            } else {
-                (raw_name, Value::Object(args))
-            }
-        },
+        _ => (
+            normalize_at_mcp(&raw_name).unwrap_or(raw_name),
+            Value::Object(args),
+        ),
     }
 }
 
@@ -143,13 +140,10 @@ fn normalize_v3(raw_name: String, args: Map<String, Value>) -> (String, Value) {
         "list_directory" | "file_search" | "grep_search" => {
             (format!("mcp__kiro__{raw_name}"), Value::Object(args))
         },
-        _ => {
-            if let Some(canonical) = normalize_mcp_id(&raw_name) {
-                (canonical, Value::Object(args))
-            } else {
-                (raw_name, Value::Object(args))
-            }
-        },
+        _ => (
+            normalize_mcp_id(&raw_name).unwrap_or(raw_name),
+            Value::Object(args),
+        ),
     }
 }
 
@@ -174,9 +168,7 @@ fn normalize_mcp_id(name: &str) -> Option<String> {
 }
 
 fn reshape_bash(mut args: Map<String, Value>) -> Value {
-    if args
-        .get("command")
-        .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
+    if needs_string(&args, "command")
         && let Some(cmd) = take_first_string(&mut args, &["cmd", "script"])
     {
         args.insert("command".into(), Value::String(cmd));
@@ -185,9 +177,7 @@ fn reshape_bash(mut args: Map<String, Value>) -> Value {
 }
 
 fn reshape_path(mut args: Map<String, Value>) -> Value {
-    if args
-        .get("file_path")
-        .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
+    if needs_string(&args, "file_path")
         && let Some(path) = first_path(&args)
     {
         args.insert("file_path".into(), Value::String(path));
@@ -196,9 +186,7 @@ fn reshape_path(mut args: Map<String, Value>) -> Value {
 }
 
 fn reshape_write(mut args: Map<String, Value>) -> Value {
-    if args
-        .get("file_path")
-        .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
+    if needs_string(&args, "file_path")
         && let Some(path) = first_path(&args)
     {
         args.insert("file_path".into(), Value::String(path));
@@ -211,18 +199,21 @@ fn reshape_write(mut args: Map<String, Value>) -> Value {
     Value::Object(args)
 }
 
-/// `str_replace` carries `path` / `oldStr` / `newStr`; mirror them onto
-/// the canonical `Edit` keys (`file_path` / `old_string` / `new_string`).
+/// `str_replace` carries `path` / `oldStr` / `newStr`; fill the canonical
+/// `Edit` keys (`file_path` / `old_string` / `new_string`). The path is
+/// copied so audit records keep the agent's own key; the edit strings are
+/// moved, as `reshape_write` does with `text`, so a large edit is not held
+/// twice.
 fn reshape_str_replace(mut args: Map<String, Value>) -> Value {
-    for (from, to) in [
-        ("path", "file_path"),
-        ("oldStr", "old_string"),
-        ("newStr", "new_string"),
-    ] {
-        if args.get(to).is_none_or(|v| v.as_str().is_none())
-            && let Some(value) = args.get(from).and_then(Value::as_str)
+    if needs_string(&args, "file_path")
+        && let Some(path) = first_string(&args, &["path"])
+    {
+        args.insert("file_path".into(), Value::String(path));
+    }
+    for (from, to) in [("oldStr", "old_string"), ("newStr", "new_string")] {
+        if needs_string(&args, to)
+            && let Some(value) = take_first_string(&mut args, &[from])
         {
-            let value = value.to_string();
             args.insert(to.into(), Value::String(value));
         }
     }
@@ -231,15 +222,18 @@ fn reshape_str_replace(mut args: Map<String, Value>) -> Value {
 
 /// `delete_file` names its target `targetFile`.
 fn reshape_delete(mut args: Map<String, Value>) -> Value {
-    if args
-        .get("file_path")
-        .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
-        && let Some(path) = args.get("targetFile").and_then(Value::as_str)
+    if needs_string(&args, "file_path")
+        && let Some(path) = first_string(&args, &["targetFile"])
     {
-        let path = path.to_string();
         args.insert("file_path".into(), Value::String(path));
     }
     Value::Object(args)
+}
+
+/// `key` is absent, non-string, or empty.
+fn needs_string(args: &Map<String, Value>, key: &str) -> bool {
+    args.get(key)
+        .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
 }
 
 /// Path lookup priority: `path` → `paths[0]` → `operations[0].path` →

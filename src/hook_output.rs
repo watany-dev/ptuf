@@ -125,7 +125,7 @@ pub(crate) mod copilot {
 }
 
 pub(crate) mod kiro {
-    use super::{HookResponse, HookSpecificOutput, append_demote_note};
+    use super::{HookResponse, append_demote_note};
     use crate::Decision;
 
     /// Note appended to a deny reason whenever a Kiro v2 `Ask` decision
@@ -144,17 +144,13 @@ pub(crate) mod kiro {
     /// before running the tool (and denies when no permission prompt is
     /// available, e.g. headless runs). Only `Ask` produces output: allow
     /// is a silent exit 0 and deny is exit 2 with the reason on stderr.
-    pub(crate) fn v3_ask_response(decision: &Decision) -> Option<HookResponse> {
-        let Decision::Ask { reason, .. } = decision else {
-            return None;
-        };
-        Some(HookResponse {
-            hook_specific_output: HookSpecificOutput {
-                hook_event_name: "PreToolUse",
-                permission_decision: "ask",
-                permission_decision_reason: reason.clone(),
-            },
-        })
+    /// The envelope itself is Claude Code's.
+    pub(crate) fn from_decision_v3(decision: &Decision) -> Option<HookResponse> {
+        if matches!(decision, Decision::Ask { .. }) {
+            super::claude_code::from_decision(decision)
+        } else {
+            None
+        }
     }
 }
 
@@ -408,12 +404,12 @@ mod tests {
     }
 
     #[test]
-    fn kiro_v3_ask_response_is_only_built_for_ask() {
+    fn kiro_v3_envelope_is_only_built_for_ask() {
         let ask = Decision::Ask {
             rule_id: "core.a".into(),
             reason: "confirm".into(),
         };
-        let resp = kiro::v3_ask_response(&ask).expect("ask envelope");
+        let resp = kiro::from_decision_v3(&ask).expect("ask envelope");
         assert_eq!(resp.hook_specific_output.permission_decision, "ask");
         assert_eq!(
             resp.hook_specific_output.permission_decision_reason,
@@ -429,7 +425,7 @@ mod tests {
                 reason: "no".into(),
             },
         ] {
-            assert!(kiro::v3_ask_response(&other).is_none(), "{other:?}");
+            assert!(kiro::from_decision_v3(&other).is_none(), "{other:?}");
         }
     }
 

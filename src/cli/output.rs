@@ -39,14 +39,8 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => Some(serde_json::to_string(
             &hook_output::opencode::from_decision(&adapted),
         )),
-        HookAgent::ClaudeCode | HookAgent::Codex => {
+        HookAgent::ClaudeCode | HookAgent::Codex | HookAgent::KiroV3 => {
             render_hook_response(agent, &adapted).map(|r| serde_json::to_string(&r))
-        },
-        // Kiro v3 reads a `hookSpecificOutput.permissionDecision: "ask"`
-        // envelope from a hook that exits 0 and prompts the user; every
-        // other decision is carried by the exit code alone.
-        HookAgent::KiroV3 => {
-            hook_output::kiro::v3_ask_response(&adapted).map(|r| serde_json::to_string(&r))
         },
         HookAgent::KiroV2 => None,
     };
@@ -86,10 +80,13 @@ pub(super) fn render_hook_response(
         // Copilot uses a bare envelope (no `hookSpecificOutput` wrapper);
         // `emit_decision` dispatches through `hook_output::copilot` directly.
         HookAgent::Copilot => None,
+        // Kiro v3 prompts on a `hookSpecificOutput` ask envelope from a
+        // hook that exits 0; every other decision is carried by the exit
+        // code alone.
+        HookAgent::KiroV3 => hook_output::kiro::from_decision_v3(decision),
         // Kiro v2 emits no JSON envelope at all; deny/ask are surfaced via
-        // stderr reason + non-zero exit only. Kiro v3's ask envelope is
-        // dispatched through `hook_output::kiro` directly.
-        HookAgent::KiroV2 | HookAgent::KiroV3 => None,
+        // stderr reason + non-zero exit only.
+        HookAgent::KiroV2 => None,
         // Cline uses a Cline-specific cancel envelope; `emit_decision`
         // dispatches through `hook_output::cline` directly.
         HookAgent::Cline => None,

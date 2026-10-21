@@ -2290,14 +2290,13 @@ rules:
         #[test]
         fn pbt_kiro_run_hook_fails_closed_for_arbitrary_stdin(
             bytes in arbitrary_utf8_bytes(),
+            agent in prop_oneof![Just(HookAgent::KiroV2), Just(HookAgent::KiroV3)],
         ) {
             let mut out = Vec::new();
             let mut err = Vec::new();
             let code = run(
                 GlobalFlags::default(),
-                Command::HookPreToolUse {
-                    agent: HookAgent::KiroV2,
-                },
+                Command::HookPreToolUse { agent },
                 bytes.as_slice(),
                 &mut out,
                 &mut err,

@@ -41,11 +41,6 @@ use super::json;
 use super::kiro::{KiroInitOptions, ScopeFilter};
 use super::{InitError, InstallOutcome, InstallPath, InstallStatus};
 
-/// Basename used for the sibling temp file when the destination path
-/// carries no file name of its own (see
-/// [`sibling_install_tmp_path`](super::sibling_install_tmp_path)).
-const TMP_BASENAME: &str = "ptuf.json";
-
 /// Directory, relative to the scope root (`<repo>` or `$HOME`), that
 /// Kiro CLI v3 scans for standalone hook documents.
 pub(crate) const HOOKS_DIR: &str = ".kiro/hooks";
@@ -54,34 +49,29 @@ pub(crate) const HOOKS_DIR: &str = ".kiro/hooks";
 pub(crate) const HOOK_FILE_NAME: &str = "ptuf.json";
 
 /// Schema version of the standalone hook document format.
-pub(crate) const DOCUMENT_VERSION: &str = "v1";
+const DOCUMENT_VERSION: &str = "v1";
 
 /// `name` of the managed hook entry (required by the v1 schema).
-pub(crate) const HOOK_NAME: &str = "ptuf";
+const HOOK_NAME: &str = "ptuf";
 
 /// Trigger name of the managed hook entry (PascalCase, as the v1 schema
 /// asks for newly written documents).
-pub(crate) const TRIGGER: &str = "PreToolUse";
+const TRIGGER: &str = "PreToolUse";
 
 /// Matcher written to the hook entry: the V3 wildcard selector, so every
 /// built-in and MCP tool call reaches ptuf. Omitting the matcher would
 /// also match everything, but Kiro logs a warning for that case.
-pub(crate) const DEFAULT_MATCHER: &str = "*";
+const DEFAULT_MATCHER: &str = "*";
 
 /// Command timeout in seconds. Kiro treats a timed-out hook as a
 /// non-blocking failure, so this is generous compared with ptuf's
 /// typical latency.
-pub(crate) const DEFAULT_TIMEOUT_SEC: u64 = 30;
+const DEFAULT_TIMEOUT_SEC: u64 = 30;
 
 /// Trailing tokens of the `command` this adapter writes, and the marker
 /// for an entry it already owns. Pinned to the versioned token so an
 /// installed hook never drifts with the floating `kiro` alias.
-pub(crate) const COMMAND_TAIL: &[&str] = &["hook", "kiro-v3"];
-
-/// Trailing tokens of the unversioned spelling. Recognised (and
-/// rewritten to [`COMMAND_TAIL`]) so a hand-written entry is not
-/// duplicated.
-pub(crate) const LEGACY_COMMAND_TAIL: &[&str] = &["hook", "kiro"];
+const COMMAND_TAIL: &[&str] = &["hook", "kiro-v3"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TargetPaths {
@@ -157,7 +147,7 @@ pub(crate) fn install(
     } else if dry_run {
         InstallStatus::WouldInstall
     } else {
-        super::write_install_json(path, &root, TMP_BASENAME)?;
+        super::write_install_json(path, &root, HOOK_FILE_NAME)?;
         InstallStatus::Installed
     };
 
@@ -177,22 +167,11 @@ pub(crate) fn install(
 /// filling in whichever of the two is missing, and return the hook
 /// array. Any other `version` is a schema the installer does not know.
 fn document_hooks<'a>(root: &'a mut Value, path: &Path) -> Result<&'a mut Vec<Value>, InitError> {
+    json::ensure_version_eq(root, path, &json!(DOCUMENT_VERSION))?;
     let map = root
         .as_object_mut()
-        .ok_or_else(|| schema(path, "top-level value must be a JSON object"))?;
-    match map.get("version") {
-        None => {
-            map.insert("version".into(), json!(DOCUMENT_VERSION));
-        },
-        Some(v) if v == DOCUMENT_VERSION => {},
-        Some(other) => {
-            return Err(schema(
-                path,
-                &format!("`version` must be \"{DOCUMENT_VERSION}\" (found {other})"),
-            ));
-        },
-    }
-    json::ensure_array(map, "hooks").ok_or_else(|| schema(path, "`hooks` must be an array"))
+        .ok_or_else(|| json::schema(path, "top-level value must be a JSON object"))?;
+    json::ensure_array(map, "hooks").ok_or_else(|| json::schema(path, "`hooks` must be an array"))
 }
 
 fn canonical_entry(command: &str) -> Value {
@@ -212,13 +191,12 @@ fn entry_command(entry: &Value) -> Option<&str> {
     entry.pointer("/action/command").and_then(Value::as_str)
 }
 
+/// Whether `cmd` is a ptuf Kiro v3 hook command, versioned or in the
+/// unversioned `hook kiro` spelling (rewritten to [`COMMAND_TAIL`] so a
+/// hand-written entry is not duplicated).
 fn is_ptuf_command(cmd: &str) -> bool {
-    command_invokes_ptuf_hook(cmd) || super::command_invokes_ptuf_hook(cmd, LEGACY_COMMAND_TAIL)
-}
-
-/// Whether `cmd` is a ptuf Kiro v3 hook command in the versioned form.
-pub(crate) fn command_invokes_ptuf_hook(cmd: &str) -> bool {
     super::command_invokes_ptuf_hook(cmd, COMMAND_TAIL)
+        || super::kiro::command_is_legacy_ptuf_hook(cmd)
 }
 
 /// Commands of every `PreToolUse` command hook in a v3 hook array — a
@@ -239,13 +217,6 @@ pub(crate) fn pre_tool_use_commands(root: &Value) -> Vec<String> {
         .filter_map(entry_command)
         .map(str::to_string)
         .collect()
-}
-
-fn schema(path: &Path, message: &str) -> InitError {
-    InitError::Schema {
-        path: path.to_path_buf(),
-        message: message.to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -449,10 +420,8 @@ mod tests {
     }
 
     #[test]
-    fn command_marker_matches_only_versioned_tail() {
-        assert!(command_invokes_ptuf_hook("/usr/bin/ptuf hook kiro-v3"));
-        assert!(!command_invokes_ptuf_hook("/usr/bin/ptuf hook kiro-v2"));
-        assert!(!command_invokes_ptuf_hook("/usr/bin/ptuf hook kiro"));
+    fn command_marker_matches_v3_and_unversioned_tails() {
+        assert!(is_ptuf_command("/usr/bin/ptuf hook kiro-v3"));
         assert!(is_ptuf_command("/usr/bin/ptuf hook kiro"));
         assert!(!is_ptuf_command("/usr/bin/ptuf hook kiro-v2"));
     }
