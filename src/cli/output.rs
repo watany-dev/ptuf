@@ -420,8 +420,8 @@ mod tests {
             let mut err = Vec::new();
             let code = emit_decision(HookAgent::KiroV3, &decision, &mut out, &mut err);
             assert_eq!(code, 0);
-            assert!(out.is_empty());
-            assert!(err.is_empty());
+            assert!(out.is_empty(), "stdout: {out:?}");
+            assert!(err.is_empty(), "stderr: {err:?}");
         }
     }
 

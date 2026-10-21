@@ -767,7 +767,7 @@ fn hook_kiro_v3_rejects_other_events_fail_closed() {
     let payload = r#"{"hook_event_name":"PostToolUse","tool_name":"execute_bash","tool_input":{"command":"ls"}}"#;
     let (code, stdout, stderr) = run(&["hook", "kiro-v3"], payload);
     assert_eq!(code, 2, "stderr: {stderr}");
-    assert!(stdout.is_empty());
+    assert!(stdout.is_empty(), "stdout: {stdout}");
     assert!(stderr.contains("core.engine.invalid-payload"), "{stderr}");
 }
 

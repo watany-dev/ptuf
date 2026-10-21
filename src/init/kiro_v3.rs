@@ -444,7 +444,8 @@ mod tests {
             vec!["/x/guard.sh", "/y/ptuf hook kiro-v3"]
         );
         // The legacy object form is not an array and yields nothing here.
-        assert!(pre_tool_use_commands(&json!({"hooks": {"preToolUse": []}})).is_empty());
+        let legacy = pre_tool_use_commands(&json!({"hooks": {"preToolUse": []}}));
+        assert!(legacy.is_empty(), "{legacy:?}");
     }
 
     #[test]
