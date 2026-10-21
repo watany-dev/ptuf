@@ -51,7 +51,9 @@
 ## Cutting a release
 
 1. Make sure `main` is green (`make check`).
-2. Bump the version:
+2. Bump the version (skip if a breaking PR already moved `Cargo.toml` to
+   the next minor since the last tag — the PR `semver` gate compares against
+   the last release tag, so the version is bumped at most once per cycle):
    - `Cargo.toml` `[package].version`
    - `Cargo.lock` (run `cargo build` to refresh, commit the diff)
 3. Update `CHANGELOG.md`:
