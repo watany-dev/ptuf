@@ -11,6 +11,7 @@ ptuf hook claude-code
 ptuf hook codex
 ptuf hook copilot
 ptuf hook kiro           # kiro = その build の最新 Kiro adapter への floating alias
+ptuf hook kiro-v3
 ptuf hook kiro-v2
 ptuf hook cline
 ptuf hook cursor
@@ -52,7 +53,7 @@ ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
 | ClaudeCode | `$HOME/.claude/` | `$HOME/.claude/settings.json` |
 | Codex | `<repo>/.codex/` または `$HOME/.codex/` | repo 配下の `.codex/` |
 | Copilot | `<repo>/.github/` | `<repo>/.github/hooks/ptuf.json` |
-| Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | 両 scope の `.kiro/agents/*.json` を一括 patch (空 scope は `agents/default.json` で fallback) |
+| Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | v3 (既定): `$HOME/.kiro/hooks/ptuf.json` (`--workspace-only` / `--scope local` で `<repo>/.kiro/hooks/ptuf.json`)。v2 (`ptuf init kiro-v2`): 両 scope の `.kiro/agents/*.json` を一括 patch (空 scope は `agents/default.json` で fallback) |
 | Cline | `<repo>/.clinerules/` `.cline/`、または `$HOME/Documents/Cline/` `.cline/` | repo 配下 `.clinerules/hooks/PreToolUse` または `$HOME/Documents/Cline/Hooks/PreToolUse` |
 | Cursor | `<repo>/.cursor/` または `$HOME/.cursor/` | `<repo>/.cursor/hooks.json` (`--scope global` で `$HOME/.cursor/hooks.json`) |
 | Pi | `<repo>/.pi/` または `$HOME/.pi/agent/` | `$HOME/.pi/agent/extensions/ptuf.ts` (default global) または `<repo>/.pi/extensions/ptuf.ts` (local) |
@@ -71,13 +72,13 @@ auto-detect では実際の install 先にある managed plugin の marker で�
 
 | 条件 | exit |
 | --- | --- |
-| `Allow` / `Monitor` / Claude Code・Cursor・Pi の `Ask` | `0` |
+| `Allow` / `Monitor` / Claude Code・Cursor・Pi・Kiro v3 の `Ask` | `0` |
 | `Deny` (Claude Code / Codex / Kiro / Cursor / Pi / OpenCode) | `2` |
 | Copilot / Cline の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
 | 内部エラー、引数不正、plugin check fail、init verify fail、update 失敗 (curl 不在 / updater 非ゼロ)、`audit` の I/O エラー / 引数不正 / default path 解決不能 | `1` |
 
-Codex / Kiro / OpenCode では `Ask` を `Deny` へ変換するため、実際には
-exit `2` になる。
+Codex / Kiro v2 / OpenCode では `Ask` を `Deny` へ変換するため、実際には
+exit `2` になる。Kiro v3 は native の `permissionDecision: "ask"` を exit `0` で返す。
 Cursor は Claude Code と同じく `Ask` channel を持つため `Ask` を降格せず、
 `{"permission":"ask",…}` を exit `0` で返す (下記「Cursor への登録」参照)。
 
@@ -99,8 +100,9 @@ Copilot は protocol 上 non-zero exit が hook failure として扱われ得る
 (`hookSpecificOutput` で wrap しない) を stdout に書く。stdout serialize
 失敗のみ exit `1`。詳細は下記「hook response」セクションを参照。
 
-Kiro hook は JSON envelope を持たず、`Ask` / `Deny` の reason は stderr のみで
-通知する。stdout は常に空。
+Kiro v2 hook は JSON envelope を持たず、`Ask` / `Deny` の reason は stderr のみで
+通知する。stdout は常に空。Kiro v3 は `Deny` を stderr + exit `2`、`Ask` を
+stdout の `hookSpecificOutput` envelope + exit `0` で通知する。
 
 Cline file hook はプロセス失敗が経路によって fail-open になり得るため、
 Copilot と同じく **すべての Decision で exit `0`** に固定し、block は stdout
@@ -215,7 +217,17 @@ hooks = true
 
 ## Kiro CLI への登録
 
-`ptuf init kiro` の default 動作は **既存 agent JSON への一括 patch**:
+### v3 (既定)
+
+`ptuf init kiro` (= `kiro-v3`) は standalone hook 文書 `.kiro/hooks/ptuf.json` を
+作成・更新する。既定は `$HOME/.kiro/hooks/ptuf.json`、`--workspace-only` /
+`--scope local` で `<repo>/.kiro/hooks/ptuf.json`、`--root` で repo を明示する。
+`--scope` と `--workspace-only` / `--global` の併用、`--new-agent` は parse error。
+文書形式・冪等性・制約は [`kiro-cli.md`](kiro-cli.md#kiro-cli-adapter-v3) を参照。
+
+### v2
+
+`ptuf init kiro-v2` の default 動作は **既存 agent JSON への一括 patch**:
 列挙対象の各 scope (workspace + home) にある `*.json` をすべて読み込み、
 `hooks.preToolUse` 配列に ptuf entry を append する。
 
@@ -253,6 +265,7 @@ CLI フラグ:
 
 `--workspace-only` + `--global` は parse error。`--new-agent` +
 `--workspace-only` も parse error。`--new-agent` + `--global` は許可。
+`--scope` / `--root` は v2 では parse error。
 Kiro-only フラグを他 adapter / auto-detect に渡しても parse error。
 
 実装上の契約:
@@ -583,8 +596,20 @@ GitHub Copilot (bare envelope, `hookSpecificOutput` wrap なし):
 }
 ```
 
-Kiro CLI は JSON envelope を持たない。`Ask` / `Deny` reason は stderr のみで
+Kiro CLI v2 は JSON envelope を持たない。`Ask` / `Deny` reason は stderr のみで
 通知し、stdout は常に空。`Ask` は `Deny` へ demote する。
+
+Kiro CLI v3 は `Ask` だけ envelope を返す (`Deny` は stderr + exit `2`):
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "ask",
+    "permissionDecisionReason": "..."
+  }
+}
+```
 
 Cline (`hookSpecificOutput` wrap なし、`shouldContinue` / `review` /
 `overrideInput` は出さない):
@@ -635,7 +660,8 @@ agent 別の Decision → exit / 出力契約:
 | Claude Code | exit `0`, 空 stdout | exit `0`, `hookSpecificOutput` ask | exit `2`, `hookSpecificOutput` deny | exit `2`, deny |
 | Codex | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `2`) | exit `2`, `hookSpecificOutput` deny | exit `2`, deny |
 | Copilot | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `0`, bare JSON) | exit `0`, bare deny JSON | exit `0`, bare deny JSON |
-| Kiro | exit `0`, 空 stdout / 空 stderr | `Ask` → `Deny` に demote (exit `2`, stderr reason のみ) | exit `2`, stderr reason のみ | exit `2`, stderr reason のみ |
+| Kiro v2 | exit `0`, 空 stdout / 空 stderr | `Ask` → `Deny` に demote (exit `2`, stderr reason のみ) | exit `2`, stderr reason のみ | exit `2`, stderr reason のみ |
+| Kiro v3 | exit `0`, 空 stdout / 空 stderr | exit `0`, `hookSpecificOutput` ask (**降格しない**) | exit `2`, stderr reason のみ | exit `2`, stderr reason のみ |
 | Cline | exit `0`, stdout `{}` | `Ask` → `Deny` に demote (exit `0`, cancel JSON) | exit `0`, cancel JSON | exit `0`, cancel JSON |
 | Cursor | exit `0`, bare `permission:allow` JSON | exit `0`, bare `permission:ask` JSON (**降格しない**) | exit `2`, bare `permission:deny` JSON | exit `2`, deny |
 | Pi | exit `0`, bare `decision:allow` / `monitor` JSON | exit `0`, bare `decision:ask` JSON (**降格しない**) | exit `2`, bare `decision:deny` JSON | exit `2`, deny JSON |
@@ -683,7 +709,13 @@ exit `2`、Cline では cancel JSON + exit `0`、Cursor では bare
 
 ## Kiro 入力正規化
 
-Kiro CLI の `preToolUse` payload は `{"hook_event_name":"preToolUse",
+`src/cli/kiro_input.rs` は `hook_event_name` の綴りで語彙を選ぶ。`PreToolUse`
+(V3 engine) なら v3 表、`preToolUse` (V2 engine) なら v2 表を使い、field が
+無い場合だけ adapter 世代 (`kiro-v2` / `kiro-v3`) を fallback にする。V3 engine は
+legacy agent JSON の hook にも V3 payload を送るため、どちらの token で登録しても
+両 engine の payload を正しく判定できる。v3 表は [`kiro-cli.md`](kiro-cli.md#入力-payload) を参照。
+
+以下は v2 (V2 engine) の表。Kiro CLI の `preToolUse` payload は `{"hook_event_name":"preToolUse",
 "tool_name":"<name>","tool_input":{...}}` の形を取る。`src/cli/kiro_input.rs`
 が次の正規化を行う。
 
@@ -708,7 +740,7 @@ Kiro CLI の `preToolUse` payload は `{"hook_event_name":"preToolUse",
 - `Write`: `content` が無ければ `text` → `new_content` の順で先頭 string を
   `content` に複製する
 
-`hook_event_name` が `preToolUse` 以外の場合は `core.engine.invalid-payload`
+`hook_event_name` が `preToolUse` / `PreToolUse` 以外の場合は `core.engine.invalid-payload`
 で fail-closed する。空 payload / 非 object payload / `tool_name` 欠落も同様。
 
 ## Cline 入力正規化

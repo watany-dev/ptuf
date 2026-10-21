@@ -85,7 +85,7 @@ crate 外から到達できない `pub` を機械的に弾く。公開 API は P
 - `ptuf hook claude-code`
 - `ptuf hook codex`
 - `ptuf hook copilot`
-- `ptuf hook kiro`
+- `ptuf hook kiro` (= `kiro-v3`。`kiro-v2` も可)
 - `ptuf hook cline`
 - `ptuf hook cursor`
 - `ptuf hook pi`

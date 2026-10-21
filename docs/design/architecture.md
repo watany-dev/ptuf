@@ -86,7 +86,7 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 - `claude-code`
 - `codex`
 - `copilot` (GitHub Copilot)
-- `kiro` (Kiro CLI)
+- `kiro` (Kiro CLI。`kiro-v3` への floating alias、`kiro-v2` は agent JSON 世代)
 - `cline` (Cline)
 - `cursor` (Cursor)
 - `pi` (Pi Coding Agent)
@@ -107,9 +107,11 @@ normalized `Event { agent, event, tool, inputs, paths, urls, content }`
   ため、reserved rule (`core.engine.invalid-payload` /
   `core.engine.policy-load-failed`) も exit `0` + bare deny JSON で fail-closed
   する。
-- Kiro: hook protocol が JSON envelope を持たないため、stdout は常に空。
+- Kiro v2: hook protocol が JSON envelope を持たないため、stdout は常に空。
   `Ask` / `Deny` の reason は stderr に書き、`Deny` (および demote された
   `Ask`) は exit `2`。reserved rule の fail-closed も同経路で扱う。
+- Kiro v3: `Deny` は v2 と同じく stderr + exit `2`。`Ask` は demote せず
+  `hookSpecificOutput.permissionDecision: "ask"` を stdout に書いて exit `0`。
 - Cline: `Ask` は `Deny` へ demote。すべての Decision で exit `0` を返す。
   `Allow` / `Monitor` は stdout に `{}`、`Deny` (および demote された
   `Ask`) は `{"cancel":true,"errorMessage":"…"}` JSON を stdout に書く。
@@ -141,8 +143,8 @@ Copilot 入力は CLI 層の `src/cli/copilot_input.rs` で snake (`tool_name` /
 mapping (`bash`→`Bash`, `view`→`Read`, `edit`→`Edit`, `create`→`Write`,
 `web_fetch`→`WebFetch`, `powershell`→`Bash`) を適用する。
 
-Kiro 入力は CLI 層の `src/cli/kiro_input.rs` で `hook_event_name == "preToolUse"`
-を検証したうえで tool 名を canonical 形へ正規化する
+Kiro 入力は CLI 層の `src/cli/kiro_input.rs` で `hook_event_name` が `PreToolUse`
+(V3 engine、v3 語彙で正規化。詳細は [`kiro-cli.md`](kiro-cli.md)) か `preToolUse` かを検証し、後者は tool 名を canonical 形へ正規化する
 (`shell` / `execute_bash` / `execute_cmd`→`Bash`、`read` / `fs_read` / `fsRead`
 →`Read`、`write` / `fs_write` / `fsWrite`→`Write`、`web_fetch` / `webFetch`
 →`WebFetch`、`@server/tool`→`mcp__server__tool`)。`tool_input` も
@@ -201,7 +203,8 @@ stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit 
 | `ptuf hook claude-code` | `Ask` / `Deny` のときだけ `hookSpecificOutput` JSON | `Ask` / `Deny` reason | `0` or `2` |
 | `ptuf hook codex` | `Deny` のときだけ `hookSpecificOutput` JSON | deny reason | `0` or `2` |
 | `ptuf hook copilot` | `Deny` のときだけ bare JSON envelope (no `hookSpecificOutput`) | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
-| `ptuf hook kiro` | 常に空 (Kiro hook には JSON envelope が無い) | `Ask` / `Deny` reason | `0` or `2` |
+| `ptuf hook kiro-v2` | 常に空 (Kiro v2 hook には JSON envelope が無い) | `Ask` / `Deny` reason | `0` or `2` |
+| `ptuf hook kiro-v3` (= `kiro`) | `Ask` のときだけ `hookSpecificOutput` JSON | deny reason | `0` or `2` |
 | `ptuf hook cline` | `Allow` / `Monitor` は `{}`、`Deny` は cancel JSON envelope | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
 | `ptuf hook cursor` | `Allow` / `Monitor` は bare `permission:allow` JSON、`Ask` / `Deny` は bare JSON | `Ask` / `Deny` reason | `0` or `2` |
 | `ptuf hook pi` | すべての Decision で bare `decision` JSON | `Ask` / `Deny` reason | `0` or `2` |

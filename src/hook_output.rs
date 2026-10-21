@@ -125,16 +125,32 @@ pub(crate) mod copilot {
 }
 
 pub(crate) mod kiro {
-    use super::append_demote_note;
+    use super::{HookResponse, append_demote_note};
+    use crate::Decision;
 
-    /// Note appended to a deny reason whenever a Kiro `Ask` decision is
-    /// demoted to `Deny`. Kiro's `preToolUse` hook protocol does not
-    /// expose an interactive ask channel, so ptuf surfaces the demotion
-    /// explicitly on stderr.
+    /// Note appended to a deny reason whenever a Kiro v2 `Ask` decision
+    /// is demoted to `Deny`. The CLI 2.x `preToolUse` hook protocol does
+    /// not expose an interactive ask channel, so ptuf surfaces the
+    /// demotion explicitly on stderr.
     const ASK_UNAVAILABLE_NOTE: &str = "Kiro CLI PreToolUse hooks do not define an interactive ask channel; ptuf is blocking this request instead.";
 
     pub(crate) fn deny_reason_for_ask(reason: &str) -> String {
         append_demote_note(reason, ASK_UNAVAILABLE_NOTE)
+    }
+
+    /// Kiro CLI v3 ask envelope. The V3 engine parses stdout of a
+    /// `PreToolUse` command hook that exited 0 and, when it finds
+    /// `hookSpecificOutput.permissionDecision == "ask"`, asks the user
+    /// before running the tool (and denies when no permission prompt is
+    /// available, e.g. headless runs). Only `Ask` produces output: allow
+    /// is a silent exit 0 and deny is exit 2 with the reason on stderr.
+    /// The envelope itself is Claude Code's.
+    pub(crate) fn from_decision_v3(decision: &Decision) -> Option<HookResponse> {
+        if matches!(decision, Decision::Ask { .. }) {
+            super::claude_code::from_decision(decision)
+        } else {
+            None
+        }
     }
 }
 
@@ -385,6 +401,32 @@ mod tests {
         let s = kiro::deny_reason_for_ask("please confirm");
         assert!(s.starts_with("please confirm"));
         assert!(s.contains("Kiro CLI PreToolUse hooks do not define an interactive ask channel"));
+    }
+
+    #[test]
+    fn kiro_v3_envelope_is_only_built_for_ask() {
+        let ask = Decision::Ask {
+            rule_id: "core.a".into(),
+            reason: "confirm".into(),
+        };
+        let resp = kiro::from_decision_v3(&ask).expect("ask envelope");
+        assert_eq!(resp.hook_specific_output.permission_decision, "ask");
+        assert_eq!(
+            resp.hook_specific_output.permission_decision_reason,
+            "confirm"
+        );
+        for other in [
+            Decision::Allow,
+            Decision::Monitor {
+                rule_id: "core.m".into(),
+            },
+            Decision::Deny {
+                rule_id: "core.d".into(),
+                reason: "no".into(),
+            },
+        ] {
+            assert!(kiro::from_decision_v3(&other).is_none(), "{other:?}");
+        }
     }
 
     #[test]

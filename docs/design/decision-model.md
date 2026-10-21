@@ -32,7 +32,7 @@ deny > ask > monitor > allow
 
 ## CLI / hook との対応
 
-| 条件 | Claude Code | Codex | GitHub Copilot | Kiro | Cline | Cursor | Pi |
+| 条件 | Claude Code | Codex | GitHub Copilot | Kiro (v2) | Cline | Cursor | Pi |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `Allow` | exit `0` | exit `0` | exit `0`、stdout 空 | exit `0` | exit `0`、stdout `{}` | exit `0`、bare `permission:allow` JSON | exit `0`、bare `decision:allow` JSON |
 | `Monitor` | exit `0` | exit `0` | exit `0`、stdout 空 | exit `0` | exit `0`、stdout `{}` | exit `0`、bare `permission:allow` JSON | exit `0`、bare `decision:monitor` JSON |
@@ -44,7 +44,9 @@ hook の非ゼロ exit を hook 失敗として扱うため、`Deny` / `Ask` で
 code は `0` のままで、判定は stdout の bare JSON envelope
 (`hookSpecificOutput` ラッパなし) で伝える。fail-closed 経路
 (`core.engine.invalid-payload` / `core.engine.policy-load-failed`) も同じ
-contract に従う。Kiro は JSON envelope を持たないため stderr のみで通知する。
+contract に従う。Kiro v2 は JSON envelope を持たないため stderr のみで通知する。
+Kiro v3 (既定) は Claude Code と同じく `Ask` を保持し、`hookSpecificOutput` ask を
+stdout に書いて exit `0`、`Deny` は stderr + exit `2` で返す。
 Cline も file hook の非ゼロ exit を hook 失敗扱いにするため、`Deny` / `Ask`
 でも exit code は `0` のままで、判定は stdout の cancel JSON envelope
 (`{"cancel":true,"errorMessage":"…"}`) で伝える。`Allow` / `Monitor` でも

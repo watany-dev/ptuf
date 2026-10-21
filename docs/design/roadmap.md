@@ -63,6 +63,9 @@
 - `Read` / `Edit` / `Write` の `paths[]` / `operations[].path` を core
   `collect_event_paths` で重複排除しつつ収集する additive 拡張
 - audit `agent: "kiro"` を許容
+- 追記 (v0.17.0): Kiro CLI V3 hook 仕様に対応する `kiro-v3` adapter を追加し、
+  無印 `kiro` の解決先を v3 に変更。上記は `kiro-v2` として据え置き
+  ([`kiro-cli.md`](kiro-cli.md#kiro-cli-adapter-v3))
 
 ### M7 — Cline adapter (実装済み, post-`v0.1.0`)
 

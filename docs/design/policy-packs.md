@@ -208,7 +208,7 @@ guard / hook / 監査を 1 発で迂回する)。
 | `core.self_protection.claude-settings` | `.claude/settings*.json` |
 | `core.self_protection.codex-settings` | `.codex/config.toml`, `.codex/hooks.json` |
 | `core.self_protection.copilot-settings` | `.github/hooks/ptuf.json` |
-| `core.self_protection.kiro-settings` | `<repo>/.kiro/agents/*.json` と `$HOME/.kiro/agents/*.json` (実在する `*.json` を起動時に列挙) |
+| `core.self_protection.kiro-settings` | `<repo>/.kiro/agents/*.json`・`.kiro/hooks/*.json` と `$HOME` 側の同パス (実在する `*.json` を起動時に列挙) に加え、常に `.kiro/hooks/ptuf.json` |
 | `core.self_protection.pi-settings` | `$HOME/.pi/agent/settings.json`, `$HOME/.pi/agent/extensions/ptuf.ts`, `$HOME/.pi/agent/extensions/ptuf/index.ts`, `<repo>/.pi/settings.json`, `<repo>/.pi/extensions/ptuf.ts`, `<repo>/.pi/extensions/ptuf/index.ts` |
 | `core.self_protection.opencode-settings` | `$XDG_CONFIG_HOME/opencode/plugin{,s}/ptuf.ts` (未設定時は `$HOME/.config/opencode/...`), `<repo>/.opencode/plugin{,s}/ptuf.ts` |
 | `core.self_protection.cursor-settings` | `<repo>/.cursor/hooks.json`, `$HOME/.cursor/hooks.json` |

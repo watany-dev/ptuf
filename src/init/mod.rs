@@ -15,6 +15,7 @@ pub(crate) mod copilot;
 pub(crate) mod cursor;
 pub(crate) mod json;
 pub(crate) mod kiro;
+pub(crate) mod kiro_v3;
 pub(crate) mod opencode;
 pub(crate) mod pi;
 pub(crate) mod verify;
@@ -31,7 +32,10 @@ pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
 /// - `ClaudeCode`: requires `<home>/.claude/` to exist.
 /// - `Codex`: `<repo>/.codex/` or `<home>/.codex/`.
 /// - `Copilot`: `<repo>/.github/`.
-/// - `Kiro`: `<repo>/.kiro/` or `<home>/.kiro/`.
+/// - `KiroV3`: `<repo>/.kiro/` or `<home>/.kiro/`. Like OpenCode, the
+///   probe identifies the host, not its engine generation; auto-detect
+///   installs the newest adapter and `ptuf init kiro-v2` pins the older
+///   one.
 /// - `Cline`: `<repo>/.clinerules/` or `<repo>/.cline/`, or
 ///   `<home>/Documents/Cline/` or `<home>/.cline/`.
 /// - `Cursor`: `<repo>/.cursor/` or `<home>/.cursor/`.
@@ -73,7 +77,7 @@ pub(crate) fn detect_agents_with_env(
     if repo.as_deref().is_some_and(|r| r.join(".kiro").is_dir())
         || home.is_some_and(|h| h.join(".kiro").is_dir())
     {
-        found.push(HookAgent::Kiro);
+        found.push(HookAgent::KiroV3);
     }
     if repo
         .as_deref()
@@ -974,7 +978,7 @@ mod tests {
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
-        assert_eq!(found, vec![HookAgent::Kiro]);
+        assert_eq!(found, vec![HookAgent::KiroV3]);
     }
 
     #[test]
@@ -984,7 +988,7 @@ mod tests {
         let home = dir.join("home");
         fs::create_dir_all(home.join(".kiro")).expect("mkdir home/.kiro");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
-        assert_eq!(found, vec![HookAgent::Kiro]);
+        assert_eq!(found, vec![HookAgent::KiroV3]);
     }
 
     #[test]
@@ -1049,7 +1053,7 @@ mod tests {
                 HookAgent::ClaudeCode,
                 HookAgent::Codex,
                 HookAgent::Copilot,
-                HookAgent::Kiro,
+                HookAgent::KiroV3,
                 HookAgent::Cline,
                 HookAgent::Cursor,
                 HookAgent::Pi,

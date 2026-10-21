@@ -22,14 +22,14 @@ codes per agent, and the full payload contract, see the design notes:
 | ClaudeCode  | `$HOME/.claude/`                                 | `$HOME/.claude/settings.json`             |
 | Codex       | `<repo>/.codex/` or `$HOME/.codex/`              | `<repo>/.codex/{hooks.json,config.toml}`  |
 | Copilot     | `<repo>/.github/`                                | `<repo>/.github/hooks/ptuf.json`          |
-| Kiro        | `<repo>/.kiro/` or `$HOME/.kiro/`                | `<repo>/.kiro/agents/*.json` and `$HOME/.kiro/agents/*.json` (all existing JSONs are patched; empty scope falls back to `agents/default.json`) |
+| Kiro (v3)   | `<repo>/.kiro/` or `$HOME/.kiro/`                | `$HOME/.kiro/hooks/ptuf.json` (default global) or `<repo>/.kiro/hooks/ptuf.json`; `ptuf init kiro-v2` instead patches `<repo>/.kiro/agents/*.json` and `$HOME/.kiro/agents/*.json` |
 | Cline       | `<repo>/.clinerules/`, `<repo>/.cline/`, `$HOME/Documents/Cline/`, or `$HOME/.cline/` | `<repo>/.clinerules/hooks/PreToolUse` |
 | Cursor      | `<repo>/.cursor/` or `$HOME/.cursor/`            | `<repo>/.cursor/hooks.json` (`--scope global` → `$HOME/.cursor/hooks.json`) |
 | Pi          | `<repo>/.pi/` or `$HOME/.pi/agent/`              | `$HOME/.pi/agent/extensions/ptuf.ts` (default global) or `<repo>/.pi/extensions/ptuf.ts` |
 | OpenCode    | `<repo>/.opencode/` or `<repo>/opencode.json`     | `$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` (default global) or `<repo>/.opencode/plugins/ptuf.ts` |
 
 Pin to a single adapter with `ptuf init <agent>` (`claude-code` / `codex`
-/ `copilot` / `kiro` / `kiro-v2` / `cline` / `cursor` / `pi` / `opencode`
+/ `copilot` / `kiro` / `kiro-v2` / `kiro-v3` / `cline` / `cursor` / `pi` / `opencode`
 / `opencode-v1` / `opencode-v2`).
 
 ## Common flags
@@ -85,6 +85,59 @@ adapter always exits `0` and emits a bare JSON envelope (no
 `hookSpecificOutput` wrapper). `Ask` decisions become `Deny` for the same
 non-interactive reason as Codex.
 
+## Kiro CLI (v3, default)
+
+```bash
+ptuf init kiro                      # writes $HOME/.kiro/hooks/ptuf.json
+ptuf init kiro --scope local        # writes <repo>/.kiro/hooks/ptuf.json (alias: --workspace-only)
+ptuf init kiro --scope local --root <dir>
+ptuf init kiro-v3                   # pinned spelling of the same adapter
+```
+
+Kiro CLI V3 loads standalone hook documents from `.kiro/hooks/*.json` in
+the workspace and from `~/.kiro/hooks/*.json` globally, alongside each
+other, for every agent profile. The installer owns one document,
+`ptuf.json`, holding a single `PreToolUse` command hook:
+
+```json
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "ptuf",
+      "trigger": "PreToolUse",
+      "matcher": "*",
+      "action": { "type": "command", "command": "<ptuf> hook kiro-v3" },
+      "timeout": 30,
+      "enabled": true
+    }
+  ]
+}
+```
+
+Re-running is idempotent; a ptuf entry that was disabled or retargeted is
+restored in place, and other hooks in the same file are preserved. Agent
+profiles are never touched. Every `*.json` under `.kiro/hooks/` (and the
+managed `ptuf.json`, even before it exists) is protected by
+`core.self_protection.kiro-settings`, together with the executables those
+hooks run.
+
+The V3 engine sends PascalCase `hook_event_name: "PreToolUse"` and V3 tool
+IDs: `execute_bash` / `execute_pwsh` → `Bash`, `read_file` → `Read`,
+`fs_write` / `fs_append` → `Write`, `str_replace` → `Edit`, `delete_file` →
+`Write` (target path only), `web_fetch` → `WebFetch`,
+`list_directory` / `file_search` / `grep_search` → `mcp__kiro__*`, and
+`mcp_<server>_<tool>` → `mcp__<server>__<tool>`. Deny is exit `2` with the
+reason on stderr. Unlike v2, **Ask is preserved**: ptuf exits `0` and
+prints `{"hookSpecificOutput":{"permissionDecision":"ask",…}}`, and Kiro
+asks the user before running the tool (or denies it when no prompt is
+available, e.g. headless runs).
+
+Two Kiro behaviours to keep in mind: hooks only run in workspaces Kiro
+trusts, and a hook that crashes or times out (any exit other than `2`)
+does not block the tool. ptuf itself always exits `2` on its own internal
+failures.
+
 ## Kiro CLI (v2)
 
 ```bash
@@ -96,12 +149,12 @@ ptuf init kiro-v2 --global          # patch only $HOME/.kiro/agents/*.json
 ptuf init kiro-v2 --new-agent       # legacy: create a single ptuf-guarded.json
 ```
 
-Kiro CLI's hook contract changes in v3, so each Kiro adapter carries its
-own versioned token; `kiro-v2` is the current one. The bare `kiro` token
-is a **floating alias for the newest Kiro adapter in this build** — it
-will resolve to v3 once that adapter lands, so pass `kiro-v2` explicitly
-to pin today's contract. A `kiro-v3` token is rejected as an unknown
-agent until that adapter exists.
+Kiro CLI changed its hook contract in V3, so each Kiro adapter carries its
+own versioned token. The bare `kiro` token is a **floating alias for the
+newest Kiro adapter in this build** (currently v3); pass `kiro-v2` for the
+CLI 2.x V2 / Classic engines, which do not read `.kiro/hooks/`. Kiro CLI
+2.x keeps starting the V2 engine until you opt in to V3, and both installs
+can coexist.
 
 The audit name stays `kiro` across generations so audit records remain
 comparable. The `command` written into agent JSON, by contrast, is always
@@ -126,13 +179,19 @@ referenced agent JSON exists; a dangling reference fails closed with
 `core.self_protection.kiro-settings`, so a guarded session cannot rewrite
 them to remove the hook.
 
-Kiro `preToolUse` payloads use a different vocabulary than Claude Code, so
-the adapter normalises tool names and `tool_input` keys before the engine
-sees them (`shell` / `execute_bash` → `Bash`, `fs_read` → `Read`, `fs_write`
-→ `Write`, `web_fetch` → `WebFetch`, `@server/tool` → `mcp__server__tool`,
-etc.). See `docs/design/kiro-cli.md` for the full normalization table. As
-with Codex and Copilot, `Ask` decisions become `Deny` because Kiro
-`preToolUse` does not define an interactive prompt channel.
+CLI 2.x `preToolUse` payloads use a different vocabulary than Claude Code,
+so the adapter normalises tool names and `tool_input` keys before the
+engine sees them (`shell` / `execute_bash` → `Bash`, `fs_read` → `Read`,
+`fs_write` → `Write`, `web_fetch` → `WebFetch`, `@server/tool` →
+`mcp__server__tool`, etc.). See `docs/design/kiro-cli.md` for the full
+normalization table. As with Codex and Copilot, `Ask` decisions become
+`Deny` because the CLI 2.x `preToolUse` hook does not define an interactive
+prompt channel.
+
+The V3 engine keeps running legacy agent-profile hooks (it accepts the
+camelCase trigger as an alias) but sends them V3 payloads. Both Kiro
+adapters pick the vocabulary from the payload's `hook_event_name`
+spelling, so a `kiro-v2` install keeps guarding after the engine switch.
 
 ## Cline
 
@@ -249,7 +308,8 @@ recommended**. Each tool call spawns a fresh `ptuf` process. Non-interactive
 | Claude Code | exit `0`, no JSON | exit `0`, `permissionDecision: "ask"` | exit `2`, `permissionDecision: "deny"` + reason on stderr | `core.engine.invalid-payload` deny at exit `2` |
 | Codex | exit `0`, no JSON | converted to **deny** | exit `2`, `permissionDecision: "deny"` + reason on stderr | `core.engine.invalid-payload` deny at exit `2` |
 | GitHub Copilot | exit `0`, empty stdout | converted to **deny** | exit `0`, bare `{"permissionDecision":"deny",…}` JSON + reason on stderr | bare deny JSON at exit `0` |
-| Kiro CLI | exit `0`, empty stdout | converted to **deny** | exit `2`, reason on stderr only (no envelope) | `core.engine.invalid-payload` deny at exit `2` |
+| Kiro CLI v3 | exit `0`, empty stdout | **preserved**, exit `0`, `{"hookSpecificOutput":{"permissionDecision":"ask",…}}` JSON | exit `2`, reason on stderr only (no envelope) | `core.engine.invalid-payload` deny at exit `2` |
+| Kiro CLI v2 | exit `0`, empty stdout | converted to **deny** | exit `2`, reason on stderr only (no envelope) | `core.engine.invalid-payload` deny at exit `2` |
 | Cline | exit `0`, stdout `{}` | converted to **deny**, exit `0`, cancel JSON | exit `0`, `{"cancel":true,…}` JSON + reason on stderr | `core.engine.invalid-payload` cancel JSON at exit `0` |
 | Cursor | exit `0`, `{"permission":"allow"}` JSON | **preserved**, exit `0`, `{"permission":"ask",…}` JSON | exit `2`, `{"permission":"deny",…}` JSON + reason on stderr | `core.engine.invalid-payload` deny JSON at exit `2` |
 | Pi | exit `0`, `{"decision":"allow"}` JSON | **preserved**, exit `0`, `{"decision":"ask",…}` JSON | exit `2`, `{"decision":"deny",…}` JSON + reason on stderr | `core.engine.invalid-payload` deny JSON at exit `2` |
