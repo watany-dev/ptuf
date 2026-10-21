@@ -105,7 +105,8 @@ Windows (PowerShell) / `cargo binstall` / `cargo install` / mise / aqua、
 ptuf init claude-code   # ~/.claude/settings.json に hook を登録
 ptuf init codex         # <repo>/.codex/hooks.json + config.toml
 ptuf init copilot       # <repo>/.github/hooks/ptuf.json
-ptuf init kiro-v2       # .kiro/agents/*.json を一括パッチ (`kiro` は最新版 alias)
+ptuf init kiro          # ~/.kiro/hooks/ptuf.json (Kiro CLI V3。`kiro` は最新版 alias = kiro-v3)
+ptuf init kiro-v2       # .kiro/agents/*.json を一括パッチ (CLI 2.x の V2 / Classic engine 向け)
 ptuf init cline         # .clinerules/hooks/PreToolUse
 ptuf init cursor        # <repo>/.cursor/hooks.json
 ptuf init pi            # ~/.pi/agent/extensions/ptuf.ts

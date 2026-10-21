@@ -657,6 +657,8 @@ mod adapter_parity {
     const KIRO_DENY: &[u8] = br#"{"hook_event_name":"preToolUse","tool_name":"shell","tool_input":{"command":"rm -rf /"}}"#;
     const KIRO_ALLOW: &[u8] =
         br#"{"hook_event_name":"preToolUse","tool_name":"shell","tool_input":{"command":"ls"}}"#;
+    const KIRO_V3_DENY: &[u8] = br#"{"session_id":"s","hook_event_name":"PreToolUse","cwd":"/tmp","tool_name":"execute_bash","tool_input":{"command":"rm -rf /"}}"#;
+    const KIRO_V3_ALLOW: &[u8] = br#"{"session_id":"s","hook_event_name":"PreToolUse","cwd":"/tmp","tool_name":"execute_bash","tool_input":{"command":"ls"}}"#;
     const CLINE_DENY: &[u8] = br#"{"hookName":"tool_call","tool_call":{"id":"c1","name":"execute_command","input":{"command":"rm -rf /"}}}"#;
     const CLINE_ALLOW: &[u8] = br#"{"hookName":"tool_call","tool_call":{"id":"c1","name":"execute_command","input":{"command":"ls"}}}"#;
     const CLINE_LEGACY_DENY: &[u8] = br#"{"hookName":"PreToolUse","preToolUse":{"toolName":"execute_command","parameters":{"command":"rm -rf /"}}}"#;
@@ -720,19 +722,26 @@ mod adapter_parity {
             "copilot must be bare: {out}"
         );
 
-        // Kiro: exit 2, no JSON envelope — reason on stderr only.
-        let r = hook("kiro", KIRO_DENY);
-        assert_clean_exit(&r);
-        assert_eq!(r.code, 2, "kiro deny: {}", r.stderr_string());
-        assert!(
-            r.stdout_string().trim().is_empty(),
-            "kiro stdout must be empty: {}",
-            r.stdout_string()
-        );
-        assert!(
-            !r.stderr_string().trim().is_empty(),
-            "kiro deny reason must be on stderr"
-        );
+        // Kiro (both generations and the floating alias): exit 2, no JSON
+        // envelope — reason on stderr only.
+        for (agent, payload) in [
+            ("kiro-v2", KIRO_DENY),
+            ("kiro-v3", KIRO_V3_DENY),
+            ("kiro", KIRO_V3_DENY),
+        ] {
+            let r = hook(agent, payload);
+            assert_clean_exit(&r);
+            assert_eq!(r.code, 2, "{agent} deny: {}", r.stderr_string());
+            assert!(
+                r.stdout_string().trim().is_empty(),
+                "{agent} stdout must be empty: {}",
+                r.stdout_string()
+            );
+            assert!(
+                !r.stderr_string().trim().is_empty(),
+                "{agent} deny reason must be on stderr"
+            );
+        }
 
         // Cursor: exit 2, bare permission envelope (no hookSpecificOutput wrap).
         let r = hook("cursor", CURSOR_DENY);
@@ -812,19 +821,25 @@ mod adapter_parity {
         );
 
         // Kiro: exit 0, empty stdout AND empty stderr.
-        let r = hook("kiro", KIRO_ALLOW);
-        assert_clean_exit(&r);
-        assert_eq!(r.code, 0, "kiro allow: {}", r.stderr_string());
-        assert!(
-            r.stdout_string().trim().is_empty(),
-            "kiro allow stdout: {}",
-            r.stdout_string()
-        );
-        assert!(
-            r.stderr_string().trim().is_empty(),
-            "kiro allow stderr must be empty: {}",
-            r.stderr_string()
-        );
+        for (agent, payload) in [
+            ("kiro-v2", KIRO_ALLOW),
+            ("kiro-v3", KIRO_V3_ALLOW),
+            ("kiro", KIRO_V3_ALLOW),
+        ] {
+            let r = hook(agent, payload);
+            assert_clean_exit(&r);
+            assert_eq!(r.code, 0, "{agent} allow: {}", r.stderr_string());
+            assert!(
+                r.stdout_string().trim().is_empty(),
+                "{agent} allow stdout: {}",
+                r.stdout_string()
+            );
+            assert!(
+                r.stderr_string().trim().is_empty(),
+                "{agent} allow stderr must be empty: {}",
+                r.stderr_string()
+            );
+        }
 
         // Cursor: exit 0, explicit allow envelope.
         let r = hook("cursor", CURSOR_ALLOW);
@@ -933,7 +948,7 @@ mod adapter_parity {
     fn kiro_rejects_malformed_events_fail_closed() {
         // Wrong hook_event_name → core.engine.invalid-payload deny.
         let r = hook(
-            "kiro",
+            "kiro-v2",
             br#"{"hook_event_name":"postToolUse","tool_name":"shell","tool_input":{"command":"ls"}}"#,
         );
         assert_clean_exit(&r);
@@ -955,7 +970,7 @@ mod adapter_parity {
 
         // Missing tool_name → same fail-closed path.
         let r = hook(
-            "kiro",
+            "kiro-v2",
             br#"{"hook_event_name":"preToolUse","tool_input":{"command":"ls"}}"#,
         );
         assert_clean_exit(&r);
@@ -971,11 +986,12 @@ mod adapter_parity {
     #[ignore = "heavy E2E; run via `make e2e`"]
     fn fifty_sequential_invocations_per_adapter_stay_clean() {
         const N: usize = 50;
-        let allow: [(&str, &[u8]); 5] = [
+        let allow: [(&str, &[u8]); 6] = [
             ("claude-code", super::ALLOW_PAYLOAD),
             ("codex", super::ALLOW_PAYLOAD),
             ("copilot", COPILOT_ALLOW),
-            ("kiro", KIRO_ALLOW),
+            ("kiro-v2", KIRO_ALLOW),
+            ("kiro-v3", KIRO_V3_ALLOW),
             ("cline", CLINE_ALLOW),
         ];
         for (agent, payload) in allow {
@@ -1470,6 +1486,8 @@ rules:
             "codex",
             "copilot",
             "kiro",
+            "kiro-v2",
+            "kiro-v3",
             "cline",
             "cursor",
             "opencode",

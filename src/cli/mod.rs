@@ -75,15 +75,18 @@ pub enum HookAgent {
     Codex,
     Copilot,
     /// Kiro CLI v2 — the `.kiro/agents/*.json` + `hooks.preToolUse`
-    /// contract. Selected by the versioned token `kiro-v2`, or by the
-    /// unversioned `kiro`, which is a floating alias for whichever Kiro
-    /// adapter is newest (today, this one). Kiro CLI v3 changes that
-    /// contract and will get its own variant, at which point `kiro`
-    /// follows it forward while `kiro-v2` stays here.
+    /// contract. Reachable only through the pinned `kiro-v2` token: the
+    /// floating `kiro` alias follows the newest adapter ([`Self::KiroV3`]).
     ///
     /// The audit name stays `"kiro"` regardless, so audit records remain
     /// comparable across adapter generations.
-    Kiro,
+    KiroV2,
+    /// Kiro CLI v3 — standalone `.kiro/hooks/*.json` documents
+    /// (`version: "v1"`, PascalCase `PreToolUse` trigger) and the V3
+    /// built-in tool IDs (`execute_bash`, `read_file`, `fs_write`, …).
+    /// Reached through the pinned `kiro-v3` token and the floating `kiro`
+    /// alias. Shares the `"kiro"` audit name with [`Self::KiroV2`].
+    KiroV3,
     Cline,
     Cursor,
     Pi,
@@ -108,7 +111,7 @@ impl HookAgent {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::Copilot => "copilot",
-            Self::Kiro => "kiro",
+            Self::KiroV2 | Self::KiroV3 => "kiro",
             Self::Cline => "cline",
             Self::Cursor => "cursor",
             Self::Pi => "pi",
@@ -130,7 +133,7 @@ impl HookAgent {
 }
 
 /// Parsed `ptuf init [<agent>] [--no-verify] [--dry-run]
-/// [--new-agent] [--workspace-only] [--global]`.
+/// [--new-agent] [--workspace-only] [--global] [--scope …] [--root …]`.
 ///
 /// `agent = None` means "auto-detect every agent reachable from
 /// `cwd` / `$HOME`". `verify` defaults to `true`; `--no-verify`
@@ -138,10 +141,11 @@ impl HookAgent {
 /// dry run never writes, so the synthetic-deny check would just
 /// confirm the unmodified disk state).
 ///
-/// `kiro` carries the Kiro-specific flags. These are accepted only
-/// when `agent == Some(HookAgent::Kiro)` — selected on the command
-/// line as `kiro-v2` or via the `kiro` alias; the parser rejects them
-/// against other agents (or against auto-detect) with
+/// `kiro` carries the Kiro-specific flags. `--workspace-only` /
+/// `--global` are accepted for either Kiro generation, `--new-agent`
+/// only for `kiro-v2`, and `--scope` / `--root` (shared with Cursor /
+/// Pi / OpenCode) only for `kiro-v3`; the parser rejects them against
+/// other agents (or against auto-detect) with
 /// `ParseError::ConflictingFlags`.
 ///
 /// `cursor` carries the Cursor-specific flags (`--scope` / `--root` /
@@ -305,15 +309,16 @@ USAGE:
         (auto-detect every agent under cwd / $HOME and install the
          PreToolUse hook with verify enabled by default. AGENT pins
          to a single adapter: claude-code | codex | copilot | kiro
-         | kiro-v2 | cline | cursor | pi | opencode | opencode-v1
-         | opencode-v2)
-        The Kiro CLI hook contract changes in v3, so each Kiro adapter
-        has a versioned token; `kiro-v2` is the current one. The bare
-        `kiro` token always means the newest Kiro adapter this ptuf
-        ships, so it will follow ptuf forward to v3. Pin `kiro-v2` to
-        stay on today's contract. Either way the hook command written
-        into agent configs is the versioned `ptuf hook kiro-v2`, so an
-        existing install never changes generation on its own.
+         | kiro-v2 | kiro-v3 | cline | cursor | pi | opencode
+         | opencode-v1 | opencode-v2)
+        Kiro CLI changed its hook contract in v3. `kiro-v3` writes a
+        standalone hook document (~/.kiro/hooks/ptuf.json by default)
+        for the V3 engine; `kiro-v2` patches the `hooks.preToolUse`
+        array of every agent JSON for the CLI 2.x (V2 / Classic)
+        engines. The bare `kiro` token is a floating alias for the
+        newest adapter (currently v3). Either way the hook command
+        written to disk is the versioned `ptuf hook kiro-v2|kiro-v3`,
+        so an existing install never changes generation on its own.
         OpenCode broke its plugin API between v1 and v2 and a v1 plugin
         does not load under v2. `opencode-v1` pins the v1 API
         (`@opencode-ai/plugin`) and `opencode-v2` pins the current v2
@@ -322,11 +327,18 @@ USAGE:
         way the generated plugin spawns the versioned token, so an
         existing install never drifts with the alias.
         Kiro-only flags:
-          --new-agent       Create a dedicated ptuf-guarded.json agent
-                            (legacy single-file behavior) instead of
-                            patching every existing agent JSON.
-          --workspace-only  Patch only <repo>/.kiro/agents/*.json.
-          --global          Patch only $HOME/.kiro/agents/*.json.
+          --new-agent       (kiro-v2) Create a dedicated ptuf-guarded.json
+                            agent instead of patching every agent JSON.
+          --workspace-only  kiro-v2: patch only <repo>/.kiro/agents/*.json.
+                            kiro-v3: same as --scope local.
+          --global          kiro-v2: patch only $HOME/.kiro/agents/*.json.
+                            kiro-v3: same as --scope global.
+          --scope <local|global>
+                            (kiro-v3) global (default) writes
+                            $HOME/.kiro/hooks/ptuf.json; local writes
+                            <repo>/.kiro/hooks/ptuf.json.
+          --root <PATH>     (kiro-v3) Override the repo-discovery start
+                            directory.
         Cursor-only flags:
           --scope <local|global>
                             local (default) patches <repo>/.cursor/hooks.json;
@@ -406,7 +418,8 @@ mod tests {
         assert_eq!(HookAgent::ClaudeCode.audit_name(), "claude-code");
         assert_eq!(HookAgent::Codex.audit_name(), "codex");
         assert_eq!(HookAgent::Copilot.audit_name(), "copilot");
-        assert_eq!(HookAgent::Kiro.audit_name(), "kiro");
+        assert_eq!(HookAgent::KiroV2.audit_name(), "kiro");
+        assert_eq!(HookAgent::KiroV3.audit_name(), "kiro");
         assert_eq!(HookAgent::Cline.audit_name(), "cline");
         assert_eq!(HookAgent::Cursor.audit_name(), "cursor");
         assert_eq!(HookAgent::Pi.audit_name(), "pi");
@@ -428,7 +441,8 @@ mod tests {
             HookAgent::ClaudeCode,
             HookAgent::Codex,
             HookAgent::Copilot,
-            HookAgent::Kiro,
+            HookAgent::KiroV2,
+            HookAgent::KiroV3,
             HookAgent::Cline,
             HookAgent::Cursor,
             HookAgent::Pi,

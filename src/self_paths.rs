@@ -261,7 +261,7 @@ impl ProtectedPaths {
         }
 
         let home_path = env.var_os("HOME").map(PathBuf::from);
-        let kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
+        let kiro_settings = collect_kiro_paths(repo_root, home_path.as_deref());
         let pi_settings = collect_pi_paths(repo_root, home_path.as_deref());
         let opencode_settings = collect_opencode_paths(repo_root, home_path.as_deref(), env);
         let cursor_settings = collect_cursor_paths(repo_root, home_path.as_deref());
@@ -290,8 +290,8 @@ impl ProtectedPaths {
         }
 
         for agent_path in &kiro_settings {
-            // `collect_kiro_agent_jsons` enumerates via `read_dir`, so
-            // every `agent_path` was present moments ago; treat read /
+            // `collect_kiro_paths` enumerates via `read_dir` (plus the
+            // managed `ptuf.json`, which may be absent); treat read /
             // parse failures uniformly as "skip this scope" so a TOCTOU
             // race (file removed between enumeration and now) collapses
             // into the same control flow as malformed JSON.
@@ -301,7 +301,12 @@ impl ProtectedPaths {
             let Ok(parsed): Result<Value, _> = serde_json::from_str(&body) else {
                 continue;
             };
-            for command in crate::init::kiro::pre_tool_use_commands(&parsed) {
+            // v2 profiles nest commands under `hooks.preToolUse`; v3
+            // hook documents and current profiles use a `hooks` array.
+            let commands = crate::init::kiro::pre_tool_use_commands(&parsed)
+                .into_iter()
+                .chain(crate::init::kiro_v3::pre_tool_use_commands(&parsed));
+            for command in commands {
                 let Some(executable) = crate::init::command_executable(&command) else {
                     continue;
                 };
@@ -449,32 +454,39 @@ impl ProtectedPaths {
     }
 }
 
-/// Enumerate every `*.json` directly under `<repo>/.kiro/agents/` and
-/// `$HOME/.kiro/agents/`. Missing directories are silently skipped so
-/// the protected set degrades to empty when `ptuf init kiro` has not
-/// yet been run, rather than locking unknown legacy paths.
-fn collect_kiro_agent_jsons(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
+/// Kiro hook registration files in the repo and `$HOME` scopes: every
+/// `*.json` directly under `.kiro/agents/` (v2 profiles, and v3 profiles
+/// with inline hooks) and `.kiro/hooks/` (v3 standalone hook documents),
+/// plus the `.kiro/hooks/ptuf.json` that `ptuf init kiro-v3` manages even
+/// before it exists. Missing directories are silently skipped so the
+/// protected set degrades gracefully when `ptuf init kiro` has not yet
+/// been run, rather than locking unknown legacy paths.
+fn collect_kiro_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
 
     if let Some(root) = repo_root {
-        dirs.push(root.join(".kiro/agents"));
+        roots.push(root);
     }
 
     if let Some(home) = home {
-        dirs.push(home.join(".kiro/agents"));
+        roots.push(home);
     }
 
     let mut paths = Vec::new();
 
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
+    for root in roots {
+        let hooks_dir = root.join(crate::init::kiro_v3::HOOKS_DIR);
+        paths.push(hooks_dir.join(crate::init::kiro_v3::HOOK_FILE_NAME));
+        for dir in [root.join(".kiro/agents"), hooks_dir] {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
-                paths.push(path);
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
+                    paths.push(path);
+                }
             }
         }
     }
@@ -1060,15 +1072,76 @@ mod tests {
     }
 
     #[test]
-    fn collect_kiro_settings_is_empty_when_agents_dir_missing() {
+    fn collect_kiro_settings_is_only_managed_hook_file_when_dirs_missing() {
         let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
-        assert!(
-            p.kiro_settings.is_empty(),
-            "no .kiro/agents/ dir should yield empty kiro_settings, got {:?}",
-            p.kiro_settings
+        assert_eq!(
+            p.kiro_settings,
+            vec![
+                PathBuf::from("/h/.kiro/hooks/ptuf.json"),
+                PathBuf::from("/repo/.kiro/hooks/ptuf.json"),
+            ],
+            "no .kiro dirs should leave only the managed v3 hook file protected",
         );
+    }
+
+    #[test]
+    fn collect_enumerates_kiro_v3_hook_documents_and_their_scripts() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-kiro-v3-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        let home = dir.join("home");
+        std::fs::create_dir_all(repo.join(".kiro/hooks")).expect("mkdir repo hooks");
+        std::fs::create_dir_all(home.join(".kiro/agents")).expect("mkdir home agents");
+        std::fs::write(
+            repo.join(".kiro/hooks/guard.json"),
+            r#"{"version":"v1","hooks":[{"name":"g","trigger":"PreToolUse",
+                "action":{"type":"command","command":"./hooks/guard.sh hook kiro-v3"}}]}"#,
+        )
+        .expect("write hook doc");
+        std::fs::write(repo.join(".kiro/hooks/notes.txt"), "ignored").expect("write txt");
+        std::fs::write(
+            home.join(".kiro/agents/dev.json"),
+            r#"{"name":"dev","hooks":[{"name":"p","trigger":"PreToolUse",
+                "action":{"type":"command","command":"/opt/inline.sh"}}]}"#,
+        )
+        .expect("write inline profile");
+        let home_str = home.to_string_lossy().into_owned();
+        let env = MapEnv::new(&[("HOME", home_str.as_str())]);
+        let p = ProtectedPaths::collect_with_env(Some(&repo), &Config::default(), &env);
+        let canon = |p: PathBuf| p.canonicalize().unwrap_or(p);
+        assert!(
+            p.kiro_settings
+                .contains(&canon(repo.join(".kiro/hooks/guard.json")))
+        );
+        assert!(
+            p.kiro_settings
+                .contains(&repo.join(".kiro/hooks/ptuf.json"))
+        );
+        assert!(
+            p.kiro_settings
+                .contains(&canon(home.join(".kiro/agents/dev.json")))
+        );
+        assert!(
+            !p.kiro_settings
+                .contains(&canon(repo.join(".kiro/hooks/notes.txt")))
+        );
+        assert!(
+            p.hook_scripts.iter().any(|s| s.ends_with("hooks/guard.sh")),
+            "standalone hook script must be protected, got {:?}",
+            p.hook_scripts
+        );
+        assert!(
+            p.hook_scripts.contains(&PathBuf::from("/opt/inline.sh")),
+            "inline profile hook script must be protected, got {:?}",
+            p.hook_scripts
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

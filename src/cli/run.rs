@@ -99,7 +99,8 @@ fn invalid_payload_deny(problem: &str) -> Decision {
 /// payload routes through `cli::copilot_input::parse` for normalisation
 /// before the engine sees it. Kiro uses a snake_case shape but with its
 /// own tool-name vocabulary (`shell`, `read`, `write`, `@server/tool`,
-/// etc.), so its payload routes through `cli::kiro_input::parse`. Cline
+/// etc.), so its payload routes through `cli::kiro_input::parse` (v2) /
+/// `cli::kiro_input::parse_v3` (v3). Cline
 /// wraps its tool call in a `hookName` envelope (`tool_call` or legacy
 /// `preToolUse`), so its payload routes through `cli::cline_input::parse`.
 /// Cursor speaks a `hook_event_name`-dispatched shape (`preToolUse` /
@@ -115,7 +116,8 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
                 .map_err(|err| format!("hook payload is not valid JSON ({err})"));
         },
         HookAgent::Copilot => copilot_input::parse(body),
-        HookAgent::Kiro => kiro_input::parse(body),
+        HookAgent::KiroV2 => kiro_input::parse(body),
+        HookAgent::KiroV3 => kiro_input::parse_v3(body),
         HookAgent::Cline => cline_input::parse(body),
         HookAgent::Cursor => cursor_input::parse(body),
         HookAgent::Pi => pi_input::parse(body),
@@ -751,7 +753,7 @@ impl AgentPlan {
                     }),
                 })
             },
-            HookAgent::Kiro => {
+            HookAgent::KiroV2 => {
                 let targets = init::kiro::resolve_paths(cwd, &options.kiro)?;
                 let snapshot_paths = targets
                     .agent_config_paths
@@ -765,6 +767,17 @@ impl AgentPlan {
                         let (outcome, extras) =
                             init::kiro::install_with_report(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport::Kiro { outcome, extras })
+                    }),
+                })
+            },
+            HookAgent::KiroV3 => {
+                let targets = init::kiro_v3::resolve_paths(cwd, &options.kiro)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.hooks_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::detect_binary();
+                        let outcome = init::kiro_v3::install(&targets, &binary, dry_run)?;
+                        Ok(init::AdapterRunReport::Simple(outcome))
                     }),
                 })
             },
@@ -1184,7 +1197,7 @@ rules:
         let mut err = Vec::new();
         let code = run(
             GlobalFlags::default(),
-            cmd_init(Some(HookAgent::Kiro), false, true),
+            cmd_init(Some(HookAgent::KiroV2), false, true),
             b"" as &[u8],
             &mut out,
             &mut err,
@@ -2094,7 +2107,7 @@ rules:
         let code = run(
             GlobalFlags::default(),
             Command::HookPreToolUse {
-                agent: HookAgent::Kiro,
+                agent: HookAgent::KiroV2,
             },
             b"" as &[u8],
             &mut out,
@@ -2283,7 +2296,7 @@ rules:
             let code = run(
                 GlobalFlags::default(),
                 Command::HookPreToolUse {
-                    agent: HookAgent::Kiro,
+                    agent: HookAgent::KiroV2,
                 },
                 bytes.as_slice(),
                 &mut out,

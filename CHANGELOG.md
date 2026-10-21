@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Kiro CLI v3 hook adapter (`ptuf hook kiro-v3` / `ptuf init kiro-v3`)。
+  V3 の standalone hook 文書 `.kiro/hooks/ptuf.json` (`version: "v1"`,
+  `trigger: "PreToolUse"`, 既定 global、`--workspace-only` / `--scope local` /
+  `--root` で workspace) を idempotent に管理し、V3 tool ID (`execute_bash` /
+  `read_file` / `fs_write` / `str_replace` / `delete_file` / `mcp_<server>_<tool>` 等)
+  を canonical tool に正規化する。`Ask` は native の
+  `permissionDecision: "ask"` envelope で返す (demote しない)。
+  仕様は kiro.dev の V3 hooks 移行ガイドと kiro-cli 2.33.0 同梱 engine で確認。
+
 ### Security
+- `core.self_protection.kiro-settings` が `.kiro/hooks/ptuf.json` と起動時に実在する
+  `.kiro/hooks/*.json` (repo / `$HOME`) も保護し、その `PreToolUse` command が
+  参照する実行ファイルを `core.self_protection.hook-script` の対象に加えた。
+- `ptuf hook kiro-v2` が V3 engine の `PreToolUse` payload (V3 engine は legacy
+  agent JSON の hook にも V3 形を送る) を全件 fail-closed で拒否せず、V3 語彙で
+  正しく判定するようにした。
 - OpenCode v2 の native `shell` tool を `Bash` に正規化し、シェル規則が
   適用されず `git reset --hard` 等を許可していた問題を修正。実 v1.19.3 /
   v2.0.32 のホスト検証で再現し、callback 回帰テストも実際の世代別 tool 名に更新。
@@ -24,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   の対象に加えた。
 
 ### Changed (BREAKING)
+- 無印 `kiro` alias の解決先を Kiro v3 adapter に変更 (opencode v2 と同じ扱い)。
+  kiro-cli 2.x の既定 V2 engine を使う場合は `ptuf init kiro-v2` を明示する。
+  auto-detect も v3 を install する。
+- 公開 API: `HookAgent::Kiro` を `HookAgent::KiroV2` に改名し `HookAgent::KiroV3` を追加。
+  `KiroInitOptions` に `root: Option<PathBuf>` を追加し `Copy` を外した。
+  version を 0.17.0 に bump。
 - `rules::remote_pipe`(`RemoteScriptPipe`)を削除。`static RULES` に載らない
   テスト専用 oracle で、本番の判定は DSL 版 `core.network.remote-script-pipe`
   (`src/rules/builtins.yaml`)が行っていた。パリティ PBT は DSL への直接

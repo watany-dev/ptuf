@@ -42,7 +42,13 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         HookAgent::ClaudeCode | HookAgent::Codex => {
             render_hook_response(agent, &adapted).map(|r| serde_json::to_string(&r))
         },
-        HookAgent::Kiro => None,
+        // Kiro v3 reads a `hookSpecificOutput.permissionDecision: "ask"`
+        // envelope from a hook that exits 0 and prompts the user; every
+        // other decision is carried by the exit code alone.
+        HookAgent::KiroV3 => {
+            hook_output::kiro::v3_ask_response(&adapted).map(|r| serde_json::to_string(&r))
+        },
+        HookAgent::KiroV2 => None,
     };
     if let Some(result) = serialised {
         match result {
@@ -80,9 +86,10 @@ pub(super) fn render_hook_response(
         // Copilot uses a bare envelope (no `hookSpecificOutput` wrapper);
         // `emit_decision` dispatches through `hook_output::copilot` directly.
         HookAgent::Copilot => None,
-        // Kiro emits no JSON envelope at all; deny/ask are surfaced via
-        // stderr reason + non-zero exit only.
-        HookAgent::Kiro => None,
+        // Kiro v2 emits no JSON envelope at all; deny/ask are surfaced via
+        // stderr reason + non-zero exit only. Kiro v3's ask envelope is
+        // dispatched through `hook_output::kiro` directly.
+        HookAgent::KiroV2 | HookAgent::KiroV3 => None,
         // Cline uses a Cline-specific cancel envelope; `emit_decision`
         // dispatches through `hook_output::cline` directly.
         HookAgent::Cline => None,
@@ -108,7 +115,7 @@ pub(super) fn adapt_hook_decision(agent: HookAgent, decision: &Decision) -> Deci
             rule_id: rule_id.clone(),
             reason: hook_output::copilot::deny_reason_for_ask(reason),
         },
-        (HookAgent::Kiro, Decision::Ask { rule_id, reason }) => Decision::Deny {
+        (HookAgent::KiroV2, Decision::Ask { rule_id, reason }) => Decision::Deny {
             rule_id: rule_id.clone(),
             reason: hook_output::kiro::deny_reason_for_ask(reason),
         },
@@ -139,10 +146,12 @@ pub(super) fn decision_exit_code(agent: HookAgent, decision: &Decision) -> u8 {
     }
     match (agent, decision) {
         (_, Decision::Deny { .. }) => 2,
-        // Defense-in-depth: Codex/Kiro/OpenCode Ask is demoted to Deny upstream
-        // by `adapt_hook_decision`, but the matrix mirrors that here.
+        // Defense-in-depth: Codex/Kiro v2/OpenCode Ask is demoted to Deny
+        // upstream by `adapt_hook_decision`, but the matrix mirrors that here.
+        // Kiro v3 keeps Ask: the V3 engine only reads the ask envelope from
+        // a hook that exits 0 (exit 2 would block outright).
         (
-            HookAgent::Codex | HookAgent::Kiro | HookAgent::OpencodeV1 | HookAgent::OpencodeV2,
+            HookAgent::Codex | HookAgent::KiroV2 | HookAgent::OpencodeV1 | HookAgent::OpencodeV2,
             Decision::Ask { .. },
         ) => 2,
         _ => 0,
@@ -264,10 +273,14 @@ mod tests {
             (HookAgent::ClaudeCode, &ask, 0),
             (HookAgent::ClaudeCode, &deny, 2),
             (HookAgent::Codex, &ask, 2),
-            (HookAgent::Kiro, &allow, 0),
-            (HookAgent::Kiro, &monitor, 0),
-            (HookAgent::Kiro, &ask, 2),
-            (HookAgent::Kiro, &deny, 2),
+            (HookAgent::KiroV2, &allow, 0),
+            (HookAgent::KiroV2, &monitor, 0),
+            (HookAgent::KiroV2, &ask, 2),
+            (HookAgent::KiroV2, &deny, 2),
+            (HookAgent::KiroV3, &allow, 0),
+            (HookAgent::KiroV3, &monitor, 0),
+            (HookAgent::KiroV3, &ask, 0),
+            (HookAgent::KiroV3, &deny, 2),
             (HookAgent::Cline, &allow, 0),
             (HookAgent::Cline, &ask, 0),
             (HookAgent::Cline, &deny, 0),
@@ -305,7 +318,7 @@ mod tests {
         };
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Kiro, &decision, &mut out, &mut err);
+        let code = emit_decision(HookAgent::KiroV2, &decision, &mut out, &mut err);
         assert_eq!(code, 2);
         assert!(out.is_empty(), "Kiro must not write stdout, got: {out:?}");
         assert!(String::from_utf8_lossy(&err).contains("blocked"));
@@ -319,7 +332,7 @@ mod tests {
         };
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Kiro, &decision, &mut out, &mut err);
+        let code = emit_decision(HookAgent::KiroV2, &decision, &mut out, &mut err);
         assert_eq!(code, 2, "Kiro must demote Ask to deny exit code");
         assert_eq!(out.len(), 0);
         let err_s = String::from_utf8_lossy(&err);
@@ -334,7 +347,7 @@ mod tests {
     fn kiro_allow_writes_nothing_and_exits_zero() {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Kiro, &Decision::Allow, &mut out, &mut err);
+        let code = emit_decision(HookAgent::KiroV2, &Decision::Allow, &mut out, &mut err);
         assert_eq!(code, 0);
         assert_eq!(out.len(), 0);
         assert_eq!(err.len(), 0);
@@ -347,10 +360,69 @@ mod tests {
         };
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Kiro, &monitor, &mut out, &mut err);
+        let code = emit_decision(HookAgent::KiroV2, &monitor, &mut out, &mut err);
         assert_eq!(code, 0);
         assert_eq!(out.len(), 0);
         assert_eq!(err.len(), 0);
+    }
+
+    /// Kiro CLI v3 blocks a tool on exit 2 (stderr is shown to the
+    /// agent) and ignores stdout for that exit code.
+    #[test]
+    fn kiro_v3_deny_uses_exit_2_and_stderr_only() {
+        let decision = Decision::Deny {
+            rule_id: "core.filesystem.destructive-rm".into(),
+            reason: "blocked".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::KiroV3, &decision, &mut out, &mut err);
+        assert_eq!(code, 2);
+        assert!(out.is_empty(), "stdout: {out:?}");
+        assert!(String::from_utf8_lossy(&err).contains("blocked"));
+    }
+
+    /// Kiro CLI v3 prompts the user when a hook that exits 0 prints
+    /// `hookSpecificOutput.permissionDecision: "ask"`, so Ask is kept.
+    #[test]
+    fn kiro_v3_ask_emits_native_ask_envelope_with_zero_exit() {
+        let decision = Decision::Ask {
+            rule_id: "core.test.ask".into(),
+            reason: "please confirm".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::KiroV3, &decision, &mut out, &mut err);
+        assert_eq!(code, 0);
+        let body: serde_json::Value =
+            serde_json::from_slice(&out).expect("stdout is one JSON object");
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "ask",
+                    "permissionDecisionReason": "please confirm",
+                }
+            })
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(!err_s.contains("do not define an interactive ask channel"));
+    }
+
+    #[test]
+    fn kiro_v3_allow_and_monitor_write_nothing() {
+        let monitor = Decision::Monitor {
+            rule_id: "core.test.monitor".into(),
+        };
+        for decision in [Decision::Allow, monitor] {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = emit_decision(HookAgent::KiroV3, &decision, &mut out, &mut err);
+            assert_eq!(code, 0);
+            assert!(out.is_empty());
+            assert!(err.is_empty());
+        }
     }
 
     #[test]
@@ -359,7 +431,8 @@ mod tests {
             rule_id: "core.x".into(),
             reason: "r".into(),
         };
-        assert!(render_hook_response(HookAgent::Kiro, &decision).is_none());
+        assert!(render_hook_response(HookAgent::KiroV2, &decision).is_none());
+        assert!(render_hook_response(HookAgent::KiroV3, &decision).is_none());
     }
 
     #[test]
