@@ -293,14 +293,35 @@ fn confine_project_audit_path(raw: &mut schema::RawConfig, config_path: &Path) {
         return;
     };
     let inside = raw.audit.path.as_deref().is_some_and(|p| {
-        p.strip_prefix(root).is_ok_and(|rest| {
-            rest.components()
-                .all(|c| matches!(c, std::path::Component::Normal(_)))
+        // Compare both spellings: the layout's root may already be
+        // canonical (macOS `/var` → `/private/var`) while the YAML names
+        // the symlinked form, or the other way round.
+        let roots = [Some(root.to_path_buf()), std::fs::canonicalize(root).ok()];
+        let paths = [Some(p.to_path_buf()), canonical_parent_join(p)];
+        roots.iter().flatten().any(|r| {
+            paths
+                .iter()
+                .flatten()
+                .any(|candidate| lexically_inside(candidate, r))
         })
     });
     if !inside {
         raw.audit.path = None;
     }
+}
+
+fn lexically_inside(path: &Path, root: &Path) -> bool {
+    path.strip_prefix(root).is_ok_and(|rest| {
+        rest.components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+    })
+}
+
+/// `p` with its parent directory canonicalized, when that parent exists.
+fn canonical_parent_join(p: &Path) -> Option<PathBuf> {
+    let name = p.file_name()?;
+    let parent = std::fs::canonicalize(p.parent()?).ok()?;
+    Some(parent.join(name))
 }
 
 #[cfg(test)]
@@ -395,6 +416,50 @@ mod tests {
         std::fs::write(&project, "audit:\n  path: logs/audit.jsonl\n").expect("write");
         let cfg = load_with_layout(layout(&project)).expect("load");
         assert_eq!(cfg.audit.path, Some(repo.join("logs/audit.jsonl")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_audit_path_through_a_symlinked_root_stays_inside() {
+        // macOS tempdirs live under `/var` → `/private/var`: the layout
+        // root and the YAML value can spell the same directory
+        // differently.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(&real).expect("mkdir");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let project = real.join(".ptuf.yaml");
+        let via_link = link.join("audit.jsonl");
+        std::fs::write(
+            &project,
+            format!("audit:\n  path: {}\n", via_link.display()),
+        )
+        .expect("write");
+        let layout = scope::Layout {
+            system: None,
+            user: None,
+            project: Some(project.clone()),
+            project_local: None,
+        };
+        let cfg = load_with_layout(layout).expect("load");
+        assert_eq!(cfg.audit.path, Some(via_link));
+
+        let link_project = link.join(".ptuf.yaml");
+        let real_audit = real.join("audit.jsonl");
+        std::fs::write(
+            &project,
+            format!("audit:\n  path: {}\n", real_audit.display()),
+        )
+        .expect("write");
+        let layout = scope::Layout {
+            system: None,
+            user: None,
+            project: Some(link_project),
+            project_local: None,
+        };
+        let cfg = load_with_layout(layout).expect("load");
+        assert_eq!(cfg.audit.path, Some(real_audit));
     }
 
     #[test]
