@@ -926,6 +926,51 @@ mod tests {
     }
 
     #[test]
+    fn bom_after_leading_invalid_byte_is_not_exempt() {
+        // Only a BOM at byte 0 of the file is a byte-order mark.
+        let finding = scan_bytes(b"\xff\xef\xbb\xbfx", Origin::START).expect("finding");
+        assert_eq!(finding.codepoint, 0xFEFF);
+        assert_eq!(finding.byte, 1);
+        let mid = Origin {
+            byte: 10,
+            line: None,
+        };
+        assert!(scan_bytes("\u{FEFF}x".as_bytes(), mid).is_some());
+    }
+
+    #[test]
+    fn finding_byte_counts_valid_and_invalid_bytes() {
+        let finding = scan_bytes("ab\u{fffd}".as_bytes(), Origin::START);
+        assert!(finding.is_none());
+        let mut bytes = b"ab\xffc".to_vec();
+        bytes.extend_from_slice("\u{200B}".as_bytes());
+        let finding = scan_bytes(&bytes, Origin::START).expect("finding");
+        assert_eq!(finding.byte, 4);
+        let origin = Origin {
+            byte: 100,
+            line: Some(7),
+        };
+        let finding = scan_bytes(&bytes, origin).expect("finding");
+        assert_eq!(finding.byte, 104);
+        assert_eq!(finding.line, Some(7));
+    }
+
+    #[test]
+    fn locate_line_finds_byte_of_line_past_first_chunk() {
+        // 10-byte lines; line 6601 starts at byte 66000, beyond the
+        // 64 KiB read chunk. `offset` 6602 targets line 6601.
+        let dir = TempDir::new().expect("tempdir");
+        let path = write_file(&dir, "lines.txt", &b"123456789\n".repeat(7000));
+        let mut file = File::open(&path).expect("open");
+        let origin = locate_line(&mut file, 6602).expect("found");
+        assert_eq!(origin.byte, 66_000);
+        assert_eq!(origin.line, Some(6601));
+        let origin = locate_line(&mut file, 3).expect("found");
+        assert_eq!(origin.byte, 10);
+        assert!(locate_line(&mut file, 9000).is_none());
+    }
+
+    #[test]
     fn line_separators_are_their_own_category() {
         for ch in ['\u{2028}', '\u{2029}'] {
             let text = format!("a{ch}b");
