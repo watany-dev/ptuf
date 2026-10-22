@@ -2062,6 +2062,11 @@ mod tests {
         assert_eq!(b.segments[0].commands[0].args, ["x"]);
         let b = parse("echo a#b ${#x} $#");
         assert_eq!(b.segments[0].commands[0].args, ["a#b", "${#x}", "$#"]);
+        // `\⏎` vanishes before word splitting, so a `#` right after it
+        // still starts a word and therefore a comment.
+        let b = parse("echo x \\\n#; rm -rf /");
+        assert_eq!(b.segments.len(), 1, "{b:?}");
+        assert_eq!(b.segments[0].commands[0].args, ["x"]);
     }
 
     #[test]
