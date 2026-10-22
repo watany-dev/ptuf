@@ -47,5 +47,7 @@ exclude_re = [
     # ever time out.
     'replace read_word -> .* with \(.*, 0, (true|false), .*\)',
     'replace read_word -> .* with .*vec!\["xyzzy"\.into\(\)\]\)',
+    # Stepping a lexer index backwards re-reads the same bytes forever.
+    'replace \+ with - in (tokenize|read_word|read_heredoc_body|absorb_parens)',
     'replace Engine::builder -> EngineBuilder with Default::default\(\)',
 ]
