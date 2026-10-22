@@ -522,11 +522,8 @@ fn tokenize(s: &str) -> TokenizeOutput {
             while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
                 j += 1;
             }
-            let (word, advanced, word_subst, bodies) = if j < bytes.len() {
-                read_word(&bytes[j..])
-            } else {
-                (String::new(), 0, false, Vec::new())
-            };
+            // An empty tail reads as an empty word.
+            let (word, advanced, word_subst, bodies) = read_word(&bytes[j..]);
             out.push(Token::Redirect(RedirectOp::Heredoc));
             out.push(Token::HeredocBody(word));
             if word_subst {
@@ -1890,6 +1887,14 @@ mod tests {
         assert_eq!(b.segments[0].commands[0], argv("grep", &["a"]));
         assert_eq!(b.segments[0].redirects[0].target, "q w");
         assert_eq!(b.segments[1].commands[0].head, "ls");
+
+        // A dangling `<<<` (with or without trailing blanks) is an empty
+        // operand.
+        for cmd in ["cat <<<", "cat <<<  "] {
+            let b = parse(cmd);
+            assert_eq!(b.segments[0].commands[0].head, "cat", "{cmd:?}");
+            assert_eq!(b.segments[0].redirects[0].target, "", "{cmd:?}");
+        }
     }
 
     #[test]
