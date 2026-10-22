@@ -50,7 +50,7 @@ impl ConfigRule for SensitiveRead {
     fn evaluate(&self, facts: &Facts, input: &HookInput) -> Option<Decision> {
         let is_file_tool = matches!(
             input.tool_name.as_str(),
-            "Read" | "Edit" | "Write" | "apply_patch",
+            "Read" | "Edit" | "Write" | "Grep" | "apply_patch",
         ) || (input.is_mcp_tool() && !facts.paths.is_empty());
         if !is_file_tool {
             return None;
@@ -96,6 +96,30 @@ mod tests {
                 "new_string": new_string,
             }),
         }
+    }
+
+    #[test]
+    fn denies_grep_over_a_credentials_file_or_dir() {
+        for path in [".env", "~/.ssh", "/home/me/.aws/credentials"] {
+            let input = HookInput {
+                tool_name: "Grep".into(),
+                tool_input: serde_json::json!({ "pattern": ".", "path": path }),
+            };
+            let facts = crate::facts::extract(&input);
+            assert!(
+                matches!(
+                    SensitiveRead.evaluate(&facts, &input),
+                    Some(Decision::Deny { .. })
+                ),
+                "Grep over {path} must deny"
+            );
+        }
+        let input = HookInput {
+            tool_name: "Grep".into(),
+            tool_input: serde_json::json!({ "pattern": "fn", "path": "src" }),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(SensitiveRead.evaluate(&facts, &input).is_none());
     }
 
     #[test]
@@ -367,7 +391,7 @@ mod tests {
             tool in "[A-Z][A-Za-z]{0,8}",
             fp in file_path(),
         ) {
-            prop_assume!(!matches!(tool.as_str(), "Read" | "Edit" | "Write"));
+            prop_assume!(!matches!(tool.as_str(), "Read" | "Edit" | "Write" | "Grep"));
             let input = HookInput {
                 tool_name: tool,
                 tool_input: serde_json::json!({ "file_path": fp }),

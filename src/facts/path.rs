@@ -116,6 +116,18 @@ pub(crate) fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Ve
                 .collect();
             (tool, values)
         },
+        // Claude Code's `Grep` returns matching lines of the file (or
+        // tree) named by `path`, so it reads contents just like `Read`.
+        "Grep" => {
+            let values = input
+                .tool_input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map(|raw| (raw.to_owned(), PathOrigin::ToolInputDirect))
+                .into_iter()
+                .collect();
+            (PathTool::Read, values)
+        },
         "apply_patch" => {
             let values = input
                 .tool_input
