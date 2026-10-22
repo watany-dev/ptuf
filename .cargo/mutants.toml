@@ -49,5 +49,7 @@ exclude_re = [
     'replace read_word -> .* with .*vec!\["xyzzy"\.into\(\)\]\)',
     # Stepping a lexer index backwards re-reads the same bytes forever.
     'replace \+ with - in (tokenize|read_word|read_heredoc_body|absorb_parens)',
+    # Same for the backquote unescaper: a step that does not advance `i` spins.
+    'replace \+= with [-*]= in unescape_backquoted',
     'replace Engine::builder -> EngineBuilder with Default::default\(\)',
 ]
