@@ -519,7 +519,7 @@ fn tokenize(s: &str) -> TokenizeOutput {
         // (`echo x #; rm -rf /` runs only `echo x`). Mid-word `#`
         // (`a#b`, `$#`, `${#x}`) never reaches here.
         if c == b'#' {
-            i += memchr::memchr(b'\n', &bytes[i..]).unwrap_or(bytes.len() - i);
+            i = memchr::memchr(b'\n', &bytes[i..]).map_or(bytes.len(), |n| i + n);
             continue;
         }
         if c == b'|' {
@@ -2042,8 +2042,21 @@ mod tests {
     }
 
     #[test]
+    fn backslash_escapes_and_continuations_in_words() {
+        let b = parse("echo a\\ b \\x");
+        assert_eq!(b.segments[0].commands[0].args, ["a b", "x"]);
+        let b = parse("echo a \\\n b");
+        assert_eq!(b.segments[0].commands[0].args, ["a", "b"]);
+        let b = parse("echo a\\\nb");
+        assert_eq!(b.segments[0].commands[0].args, ["ab"]);
+    }
+
+    #[test]
     fn word_initial_hash_starts_a_comment() {
-        assert!(parse("#rm -rf /").segments.is_empty());
+        assert_eq!(parse("#rm -rf /").segments.len(), 0);
+        let b = parse("echo x # comment\nrm -rf /");
+        assert_eq!(b.segments.len(), 2);
+        assert_eq!(b.segments[1].commands[0].head, "rm");
         let b = parse("echo x #; rm -rf /");
         assert_eq!(b.segments.len(), 1);
         assert_eq!(b.segments[0].commands[0].args, ["x"]);
