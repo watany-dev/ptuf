@@ -45,6 +45,26 @@ fn repo() -> tempfile::TempDir {
     dir
 }
 
+/// Spawning a binary this process just wrote races with any other test
+/// thread that forks while our write fd is still open in its child: exec
+/// then fails with `ETXTBSY` until that child execs or exits. Retry briefly
+/// instead of failing the suite on that scheduling accident.
+#[cfg(unix)]
+fn spawn_retrying_etxtbsy(
+    mut spawn: impl FnMut() -> std::io::Result<std::process::Child>,
+) -> std::io::Result<std::process::Child> {
+    let mut attempts = 0;
+    loop {
+        match spawn() {
+            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 50 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            },
+            other => return other,
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn npm_layout_init_dry_run_uses_native_binary_path() {
@@ -58,15 +78,17 @@ fn npm_layout_init_dry_run_uses_native_binary_path() {
     perms.set_mode(0o755);
     std::fs::set_permissions(&native, perms).expect("chmod native");
 
-    let mut child = Command::new(&native)
-        .args(["--json", "init", "codex", "--dry-run"])
-        .current_dir(dir.path())
-        .env("HOME", dir.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn npm-layout ptuf");
+    let mut child = spawn_retrying_etxtbsy(|| {
+        Command::new(&native)
+            .args(["--json", "init", "codex", "--dry-run"])
+            .current_dir(dir.path())
+            .env("HOME", dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    })
+    .expect("spawn npm-layout ptuf");
     drop(child.stdin.take());
     let output = child.wait_with_output().expect("wait");
     let code = output.status.code().expect("exit code");
