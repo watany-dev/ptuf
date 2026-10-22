@@ -1,6 +1,9 @@
 //! `core.engine.dynamic-eval` — Ask before running interpreters whose
 //! `-c` / `-e` / first-positional argument hides code from the parser
-//! (so other built-in rules cannot inspect what will actually run).
+//! (so other built-in rules cannot inspect what will actually run), and
+//! before commands whose *name* is only known at run time: a variable
+//! or substitution (`$X -rf /`, `$(echo rm)`, `` `echo rm` ``) or a
+//! pathname glob (`/bin/r? -rf /`).
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
@@ -68,8 +71,10 @@ impl ConfigRule for DynamicEval {
         let reason = reason::build(
             RULE_ID,
             "The command loads code at runtime through an interpreter flag \
-             (`bash -c`, `python -c`, `node -e`, `eval`, …). The inner code is \
-             opaque to ptuf, so other rules cannot inspect what will actually run.",
+             (`bash -c`, `python -c`, `node -e`, `eval`, …) or picks the command \
+             name at runtime (`$X …`, `$(…) …`, a glob such as `/bin/r?`). The \
+             real command is opaque to ptuf, so other rules cannot inspect what \
+             will actually run.",
             &[
                 "Save the inner code to a script file and run that file directly.",
                 "Show the inner code to the user before approving.",
@@ -85,7 +90,22 @@ impl ConfigRule for DynamicEval {
 }
 
 fn invokes_dynamic_eval(argv: &Argv) -> bool {
-    matches_dynamic_eval(&unwrap_all_prefix_wrappers(argv))
+    let argv = unwrap_all_prefix_wrappers(argv);
+    matches_dynamic_eval(&argv) || has_dynamic_head(&argv.head)
+}
+
+/// True when the command name is decided by the shell at run time, so
+/// no head table can match it: a parameter / command substitution in
+/// the basename (`$X`, `${X:-rm}`, `$(echo rm)`; a backtick body leaves
+/// its inner words, hence the whitespace check) or a glob (`/bin/r?`,
+/// `/usr/bin/[r]m`). A variable directory with a literal basename
+/// (`$HOME/bin/tool`) is not dynamic: rules still match `tool`.
+fn has_dynamic_head(head: &str) -> bool {
+    let base = crate::facts::shell::head_basename(head);
+    if base.is_empty() || base == "[" || base == "[[" {
+        return false;
+    }
+    base.contains(['$', '*', '?', '[']) || base.contains(char::is_whitespace)
 }
 
 fn matches_dynamic_eval(argv: &Argv) -> bool {
@@ -221,6 +241,33 @@ mod tests {
     #[test]
     fn asks_on_find_exec_eval_wrapper_itself() {
         assert_ask(r"find . -exec bash -c 'echo hi' \;");
+    }
+
+    #[test]
+    // `${X:-rm}` is shell syntax, not a format string.
+    #[allow(clippy::literal_string_with_formatting_args)]
+    fn asks_on_dynamic_or_glob_heads() {
+        for cmd in [
+            "$(echo rm) -rf /",
+            "`echo rm` -rf /",
+            "X=rm; $X -rf /",
+            "${X:-rm} -rf /",
+            "/bin/r? -rf /",
+            "/bin/r* -rf /",
+            "/usr/bin/[r]m -rf /",
+            "sudo $CMD",
+        ] {
+            assert_ask(cmd);
+        }
+    }
+
+    #[test]
+    fn allows_literal_heads_under_variable_directories() {
+        assert_allow("$HOME/bin/tool --flag");
+        assert_allow("${CARGO_HOME}/bin/cargo build");
+        assert_allow("[ -f x ]");
+        assert_allow("[[ -f x ]]");
+        assert_allow("ls *.txt");
     }
 
     #[test]

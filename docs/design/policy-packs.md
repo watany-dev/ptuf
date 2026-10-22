@@ -219,7 +219,7 @@ guard / hook / 監査を 1 発で迂回する)。
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.engine.dynamic-eval` | ask | false | medium | `bash -c …` / `sh -c` / `python -c` / `node -e` / `perl -e` / `ruby -c\|-e` / `eval …` 等の 2 段階実行 |
+| `core.engine.dynamic-eval` | ask | false | medium | `bash -c …` / `sh -c` / `python -c` / `node -e` / `perl -e` / `ruby -c\|-e` / `eval …` 等の 2 段階実行、およびコマンド名が実行時に決まる head (basename に `$` / 置換 / glob を含む: `$X …`, `$(echo rm) …`, `/bin/r? …`。`$HOME/bin/tool` のように basename が字句的なものは対象外) |
 
 shell wrapper (`bash -c`, `sh -c`, `eval`, `xargs`, `find -exec`) については、
 bounded depth の再 parse により inner command と redirect が既存 rule
