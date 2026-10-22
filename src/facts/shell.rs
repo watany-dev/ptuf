@@ -858,8 +858,8 @@ fn ifs_expansion_len(bytes: &[u8]) -> Option<usize> {
         return (!ident).then_some(4);
     }
     let rest = bytes.strip_prefix(b"${IFS")?;
+    // `${IFS}` or `${IFS<op>…}`, but not `${IFSX}`.
     match rest.first() {
-        Some(b'}') => Some(6),
         Some(b) if !(b.is_ascii_alphanumeric() || *b == b'_') => {
             memchr::memchr(b'}', rest).map(|p| 5 + p + 1)
         },
@@ -1982,6 +1982,14 @@ mod tests {
             ["$IFS"]
         );
         assert_eq!(parse("echo $IFSX").segments[0].commands[0].args, ["$IFSX"]);
+        for word in ["a${IFSX}b", "a${IFS_}b", "a${IFS1:-x}b"] {
+            assert_eq!(
+                parse(&format!("echo {word}")).segments[0].commands[0].args,
+                [word],
+            );
+        }
+        assert_eq!(ifs_expansion_len(b"${IFS}x"), Some(6));
+        assert_eq!(ifs_expansion_len(b"${IFS:- }x"), Some(9));
     }
 
     #[test]
