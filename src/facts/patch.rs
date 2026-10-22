@@ -128,7 +128,7 @@ mod tests {
         let wrapped = shell::parse("bash -c \"apply_patch '*** Add File: c'\"");
         assert_eq!(paths(&bash_bodies(&wrapped).concat()), vec!["c"]);
         let other = shell::parse("cat <<'EOF'\n*** Add File: d\nEOF\n");
-        assert!(bash_bodies(&other).is_empty());
+        assert_eq!(bash_bodies(&other), Vec::<String>::new());
     }
 
     #[test]
