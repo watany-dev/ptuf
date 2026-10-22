@@ -47,6 +47,14 @@ pub(crate) const READER_HEADS: &[&str] = &[
     "cat", "head", "tail", "less", "more", "view", "bat", "xxd", "od", "hexdump", "strings",
     "base64", "base32", "grep", "egrep", "fgrep", "awk", "gawk", "mawk", "sed", "cut", "tr",
     "sort", "uniq", "wc", "nl", "tac", "rev", "column", "file", "dd", "source", ".",
+    // Structured / reformatting readers.
+    "jq", "yq", "paste", "fold", "fmt", "pr", "expand", "unexpand", "iconv",
+    // Comparators print the differing lines.
+    "diff", "cmp", "comm", "join",
+    // Compressors with `-c` and their `cat` companions stream the bytes.
+    "gzip", "bzip2", "xz", "zstd", "zcat", "bzcat", "xzcat", "zstdcat", "zless", "zmore",
+    // Editors and pagers load the file into the agent's terminal.
+    "vi", "vim", "nvim", "nano", "emacs", "most",
 ];
 
 impl ConfigRule for SensitiveBashRead {
@@ -186,6 +194,26 @@ mod tests {
         ] {
             assert_ask(cmd);
         }
+    }
+
+    #[test]
+    fn asks_for_extended_reader_heads() {
+        for cmd in [
+            "jq . .env",
+            "yq . .env",
+            "paste .env",
+            "fold .env",
+            "iconv -f utf8 .env",
+            "diff .env /dev/null",
+            "gzip -c .env",
+            "zcat ~/.aws/credentials.gz",
+            "vim .env",
+            "nano ~/.ssh/id_rsa",
+        ] {
+            assert_ask(cmd);
+        }
+        assert_silent("jq . package.json");
+        assert_silent("diff a.txt b.txt");
     }
 
     #[test]
