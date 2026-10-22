@@ -1117,7 +1117,7 @@ fn peel_reserved_words(words: &mut std::collections::VecDeque<String>) {
             // `coproc cmd` / `coproc NAME { cmd; }`
             "coproc" => {
                 words.pop_front();
-                if words.len() > 1 && words.get(1).is_some_and(|w| w == "{") {
+                if words.get(1).is_some_and(|w| w == "{") {
                     words.pop_front();
                 }
             },
@@ -1369,6 +1369,16 @@ mod tests {
             inner_code: Vec::new(),
             inner_redirects: Vec::new(),
             subst_argv: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn plain_word_bytes_exclude_shell_syntax() {
+        for &b in b"aZ0/.-{}*\xC3" {
+            assert!(is_plain_word_byte(b), "{b}");
+        }
+        for &b in b" \t\n|&;\\<>$'\"`()" {
+            assert!(!is_plain_word_byte(b), "{b}");
         }
     }
 
