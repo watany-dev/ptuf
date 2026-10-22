@@ -40,4 +40,8 @@ exclude_re = [
     'replace \+= with \*= in tokenize',
     'replace \+= with [-*]= in (read_word|read_heredoc_body|absorb_parens|plain_run_len)',
     'replace Engine::builder -> EngineBuilder with Default::default\(\)',
+    # Index arithmetic that stops advancing (`pos * 4` at 0, `i *= 1`) loops
+    # forever instead of failing a test; the run only ever times out.
+    'replace \+ with \* in expand_cwd_references',
+    'replace \+= with \*= in fnmatch_from',
 ]
