@@ -191,9 +191,9 @@ fn home_rest(path: &str) -> Option<&str> {
         // `~NAME` is NAME's home; `~+` / `~-` are `$PWD` / `$OLDPWD`.
         let end = after.find('/').unwrap_or(after.len());
         let name = &after[..end];
+        // (`-` is covered by the user-name character set.)
         let valid = name.is_empty()
             || name == "+"
-            || name == "-"
             || name
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
