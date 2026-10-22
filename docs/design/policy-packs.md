@@ -228,6 +228,15 @@ Bash からの書き込み先として、次のものを保護対象と照合す
 `rm` / `mv` については、保護対象の祖先ディレクトリも一致とみなす (`rm -rf .claude`、`mv ~/.config/ptuf x`)。ただし `/` と `$HOME` 自体は `core.filesystem.destructive-rm` の担当なので除く。
 
 相対パスは、同じ Bash 呼び出し内のリテラルな `cd` / `pushd` を順に追って解決する (`cd .claude && echo {} > settings.json`)。`cd $X` や `cd -` のように移動先が分からない場合は、以後の相対パスの書き込みをファイル名だけで照合する。
+writer head には in-place 編集系の `sponge` / `patch` / `ed` / `ex` と、`awk -i inplace` / `perl -i` / `ruby -i` も含める。
+
+書き込み先に実行時に決まる部分がある場合は次のように扱う。
+
+- `$PWD` / `${PWD}` / `$(pwd)` は追跡中の cwd に展開する。
+- `$(which X)` / `$(command -v X)` / `$(type -P X)` は、ファイル名 `X` として照合する。
+- その他の `$…` を含むパスは、最後の動的成分より後ろのリテラル部分が 2 成分以上あれば、それを保護対象の末尾と照合する (`$D/.claude/settings.json`)。
+
+glob (`*` / `?` / `[…]`) を含む書き込み先は、保護対象と成分ごとにパターン照合する。`rm` / `mv` の場合は、保護対象の祖先ディレクトリに一致するパターンも対象とする (`rm -rf .c*`)。
 
 ## `core.engine`
 
