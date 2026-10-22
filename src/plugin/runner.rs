@@ -69,6 +69,33 @@ impl RunReport {
         self.cases.iter().filter(|c| !c.passed).count()
     }
 
+    /// Machine-readable form of the report for `ptuf --json plugin check`.
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        let cases: Vec<serde_json::Value> = self
+            .cases
+            .iter()
+            .map(|case| {
+                serde_json::json!({
+                    "ruleId": case.rule_id,
+                    "expect": match case.expectation {
+                        Expectation::ShouldTrigger => "deny",
+                        Expectation::ShouldSkip => "allow",
+                    },
+                    "passed": case.passed,
+                    "command": case.command,
+                    "got": case.got.as_ref().map(decision_label),
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "plugin": self.plugin_name,
+            "source": self.source.display().to_string(),
+            "passed": self.passed_count(),
+            "failed": self.failed_count(),
+            "cases": cases,
+        })
+    }
+
     /// Render a human-readable summary. Returns the underlying I/O
     /// error if one of the writes fails.
     pub(crate) fn render<W: Write>(&self, out: &mut W) -> io::Result<()> {
