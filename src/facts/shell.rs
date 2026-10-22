@@ -217,13 +217,26 @@ struct PrefixWrapper {
 }
 
 impl PrefixWrapper {
-    fn short_value_flag(&self, arg: &str) -> Option<char> {
-        let flag = arg.strip_prefix('-')?.chars().next()?;
-        self.value_flags
-            .iter()
-            .filter_map(ValueFlag::short)
-            .any(|c| c == flag)
-            .then_some(flag)
+    /// Whether the short-flag cluster `arg` (`-u`, `-nHu`) ends in a
+    /// value-taking flag whose value is the *next* token. Scanning stops
+    /// at the first value flag: anything after it in the cluster is its
+    /// inline value (`-uroot`), so the next token is not consumed.
+    fn short_cluster_takes_next(&self, arg: &str) -> bool {
+        let Some(cluster) = arg.strip_prefix('-') else {
+            return false;
+        };
+        let mut chars = cluster.chars();
+        while let Some(flag) = chars.next() {
+            if self
+                .value_flags
+                .iter()
+                .filter_map(ValueFlag::short)
+                .any(|c| c == flag)
+            {
+                return chars.as_str().is_empty();
+            }
+        }
+        false
     }
 
     fn is_long_value_flag(&self, name: &str) -> bool {
@@ -234,11 +247,22 @@ impl PrefixWrapper {
     }
 
     /// Whether inline `KEY=VALUE` assignments sit between this wrapper's
-    /// flags and the inner command. Only `env FOO=bar CMD` does this; for
-    /// every other wrapper such a token is the command head and must not
-    /// be skipped.
+    /// flags and the inner command (`env FOO=bar CMD`, `sudo FOO=bar
+    /// CMD`). For every other wrapper such a token is the command head
+    /// and must not be skipped.
     fn skips_env_assignments(&self) -> bool {
-        self.name == "env"
+        // `sudo FOO=bar CMD` sets FOO for CMD just like `env` does.
+        matches!(self.name, "env" | "sudo")
+    }
+
+    /// `command -v CMD` / `command -V CMD` only print how CMD would be
+    /// resolved; they never run it, so they do not unwrap.
+    fn is_lookup_only(&self, args: &[String]) -> bool {
+        self.name == "command"
+            && args
+                .iter()
+                .take_while(|a| a.starts_with('-') && a.as_str() != "--")
+                .any(|a| a.contains(['v', 'V']))
     }
 }
 
@@ -287,6 +311,8 @@ const ENV_VALUE_FLAGS: &[ValueFlag] = &[
     Both('u', "unset"),
     Both('C', "chdir"),
     Both('S', "split-string"),
+    // BSD / macOS `env -P altpath` searches `altpath` for the utility.
+    Short('P'),
 ];
 
 const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
@@ -312,9 +338,9 @@ const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
         name: "env",
         value_flags: ENV_VALUE_FLAGS,
     },
-    // `command CMD` runs CMD; its own `-p`/`-v`/`-V` are valueless. Even
-    // the lookup-only `command -v curl` unwraps to `curl` — the deny-safe
-    // over-approximation this filter prefers (cf. `RUN0_VALUE_FLAGS`).
+    // `command CMD` runs CMD; its own `-p`/`-v`/`-V` are valueless. The
+    // lookup-only `command -v curl` / `-V` never runs CMD and does not
+    // unwrap (`PrefixWrapper::is_lookup_only`).
     PrefixWrapper {
         name: "command",
         value_flags: &[],
@@ -342,6 +368,9 @@ pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
     let wrapper = PREFIX_WRAPPERS
         .iter()
         .find(|w| w.name == head_basename(&argv.head))?;
+    if wrapper.is_lookup_only(&argv.args) {
+        return None;
+    }
 
     let mut i = 0;
     while i < argv.args.len() {
@@ -368,10 +397,7 @@ pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
             i += 1;
             continue;
         }
-        if let Some(value_flag) = wrapper.short_value_flag(arg)
-            && arg.len() == 2
-            && arg.ends_with(value_flag)
-        {
+        if wrapper.short_cluster_takes_next(arg) {
             i += 1;
         }
         i += 1;
@@ -2010,9 +2036,7 @@ mod tests {
             ("command", &["bash"], "bash", &[]),
             ("env", &["rm", "-rf", "/"], "rm", &["-rf", "/"]),
             ("command", &["rm", "-rf", "/"], "rm", &["-rf", "/"]),
-            // `command -v curl` is lookup-only, but the deny-safe
-            // over-approximation still unwraps it to `curl`.
-            ("command", &["-v", "curl"], "curl", &[]),
+            ("command", &["-p", "rm", "-rf", "/"], "rm", &["-rf", "/"]),
         ];
         for &(wrapper, args, head, rest) in cases {
             let inner = unwrap_prefix_wrapper(&argv(wrapper, args))
@@ -2022,13 +2046,44 @@ mod tests {
     }
 
     #[test]
-    fn unwrap_prefix_wrapper_non_env_does_not_skip_inline_assignments() {
-        // Only `env` may skip `KEY=VALUE` tokens; other wrappers treat
+    fn command_lookup_flags_do_not_unwrap() {
+        // `command -v` / `-V` print how CMD resolves; they never run it.
+        for args in [
+            &["-v", "curl"][..],
+            &["-V", "rm", "-rf", "/"],
+            &["-pv", "rm"],
+        ] {
+            assert!(
+                unwrap_prefix_wrapper(&argv("command", args)).is_none(),
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unwrap_prefix_wrapper_inline_assignments_only_for_env_and_sudo() {
+        // `env` and `sudo` skip `KEY=VALUE` tokens; other wrappers treat
         // them as the command head.
         let inner = unwrap_prefix_wrapper(&argv("sudo", &["FOO=bar", "rm", "-rf", "/"]))
-            .expect("sudo keeps FOO=bar as the inner head");
+            .expect("sudo unwraps");
+        assert_eq!(inner, argv("rm", &["-rf", "/"]));
+        let inner = unwrap_prefix_wrapper(&argv("doas", &["FOO=bar", "rm", "-rf", "/"]))
+            .expect("doas keeps FOO=bar as the inner head");
         assert_eq!(inner.head, "FOO=bar");
-        assert_eq!(inner.args, vec!["rm", "-rf", "/"]);
+    }
+
+    #[test]
+    fn unwrap_prefix_wrapper_short_clusters_ending_in_value_flag() {
+        for (wrapper, args) in [
+            ("sudo", &["-nHu", "root", "rm", "-rf", "/"][..]),
+            ("sudo", &["-uroot", "rm", "-rf", "/"]),
+            ("sudo", &["-nu", "root", "-g", "wheel", "rm", "-rf", "/"]),
+            ("env", &["-P", "/bin", "rm", "-rf", "/"]),
+            ("env", &["-iP", "/bin", "rm", "-rf", "/"]),
+        ] {
+            let inner = unwrap_all_prefix_wrappers(&argv(wrapper, args));
+            assert_eq!(inner, argv("rm", &["-rf", "/"]), "{wrapper} {args:?}");
+        }
     }
 
     #[test]
