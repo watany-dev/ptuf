@@ -68,16 +68,18 @@ head は `head_basename` で basename 化するため `/usr/bin/curl ... | /bin/
 | `core.secrets.sensitive-bash-read` | ask | false | high | Bash の reader head (`cat`/`head`/`tail`/`source`/`.`/`grep`/`awk`/`sed`/`dd` 等) または `<` redirect が機密 path を読む |
 
 機密分類は `~/.ssh/**`, `~/.aws/**`, `~/.config/gcloud/**`, `~/.kube/config`,
-`~/.docker/config.json`, SSH 秘密鍵 `id_{rsa,dsa,ecdsa,ed25519}`, `.env*`,
-`.npmrc`, `.pypirc`, `*.tfstate`, PEM blob など。
+`~/.docker/config.json`, SSH 秘密鍵 `id_{rsa,dsa,ecdsa,ed25519}`, `.env*` /
+`.envrc`, `.npmrc`, `.pypirc`, `*.tfstate`, `.netrc`, `.git-credentials`,
+`~/.gnupg/**`, `~/.config/gh/hosts.yml`, `~/.azure/**`, `.vault-token`,
+`*.key` / `*.p12` / `*.pfx`, PEM blob など。
 機密 path の分類器は `src/facts/sensitive.rs` の `PROBES` 1 系統のみ。
 Bash 系ルールは yes/no を返す `sensitive::matches` (`src/rules/patterns.rs` の
 `matches_sensitive_path` が委譲)、ファイルツール / MCP 系は typed な
 `classify` を使うが、どちらも同じ `PROBES` を引く。PEM blob の
 header / footer パターンは `PEM_PRIVATE_KEY_{BEGIN,END}` として audit redactor
 (`src/audit/redaction.rs`) とも共有する。
-`.npmrc` / `.pypirc` は `~/.npmrc` のようにパス境界 (`^` / `/` / 空白 /
-`~`・`$HOME`・`${HOME}` + `/`) に接する場合のみ機密とみなし、`data.npmrc`
+`.npmrc` / `.pypirc` / `.netrc` などの dotfile は `~/.npmrc` のようにパス境界
+(`^` / `/` / 空白 / `=`・`@`・`<`・`:` / `~`・`$HOME`・`${HOME}` + `/`) に接する場合のみ機密とみなし、`data.npmrc`
 のような lookalike は除外する。2 系統の一致は
 `pbt_sensitive_path_matches_classify` property (`src/rules/patterns.rs`) と
 engine レベルの `pbt_sensitive_path_parity_across_surfaces`

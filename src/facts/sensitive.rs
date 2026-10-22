@@ -30,6 +30,15 @@ pub enum SensitiveKind {
     Pypirc,
     Tfstate,
     PemBlob,
+    Netrc,
+    GitCredentials,
+    GnupgDir,
+    GhHosts,
+    AzureDir,
+    VaultToken,
+    KeyFile,
+    P12File,
+    PfxFile,
 }
 
 impl SensitiveKind {
@@ -46,6 +55,15 @@ impl SensitiveKind {
             Self::Pypirc => "pypirc",
             Self::Tfstate => "tfstate",
             Self::PemBlob => "pem_blob",
+            Self::Netrc => "netrc",
+            Self::GitCredentials => "git_credentials",
+            Self::GnupgDir => "gnupg_dir",
+            Self::GhHosts => "gh_hosts",
+            Self::AzureDir => "azure_dir",
+            Self::VaultToken => "vault_token",
+            Self::KeyFile => "key_file",
+            Self::P12File => "p12_file",
+            Self::PfxFile => "pfx_file",
         }
     }
 
@@ -70,7 +88,16 @@ impl SensitiveKind {
             | Self::Dotenv
             | Self::Npmrc
             | Self::Pypirc
-            | Self::Tfstate => false,
+            | Self::Tfstate
+            | Self::Netrc
+            | Self::GitCredentials
+            | Self::GnupgDir
+            | Self::GhHosts
+            | Self::AzureDir
+            | Self::VaultToken
+            | Self::KeyFile
+            | Self::P12File
+            | Self::PfxFile => false,
         }
     }
 
@@ -89,6 +116,15 @@ impl SensitiveKind {
             "pypirc" => Self::Pypirc,
             "tfstate" => Self::Tfstate,
             "pem_blob" => Self::PemBlob,
+            "netrc" => Self::Netrc,
+            "git_credentials" => Self::GitCredentials,
+            "gnupg_dir" => Self::GnupgDir,
+            "gh_hosts" => Self::GhHosts,
+            "azure_dir" => Self::AzureDir,
+            "vault_token" => Self::VaultToken,
+            "key_file" => Self::KeyFile,
+            "p12_file" => Self::P12File,
+            "pfx_file" => Self::PfxFile,
             _ => return None,
         })
     }
@@ -176,7 +212,7 @@ const PROBES: &[(SensitiveKind, &str, &str)] = &[
     (
         SensitiveKind::Dotenv,
         ".env",
-        r"(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
+        r"(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:(?i-u:rc)|\.[A-Za-z0-9_-]+)?\b",
     ),
     (
         SensitiveKind::Npmrc,
@@ -190,6 +226,43 @@ const PROBES: &[(SensitiveKind, &str, &str)] = &[
     ),
     (SensitiveKind::Tfstate, ".tfstate", r"\S+(?i-u:\.tfstate)\b"),
     (SensitiveKind::PemBlob, "-----begin", PEM_PRIVATE_KEY_BEGIN),
+    (
+        SensitiveKind::Netrc,
+        ".netrc",
+        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.netrc)\b",
+    ),
+    (
+        SensitiveKind::GitCredentials,
+        ".git-credentials",
+        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.git-credentials)\b",
+    ),
+    (
+        SensitiveKind::GnupgDir,
+        ".gnupg",
+        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.gnupg)(?:/|$|\b)",
+    ),
+    (
+        SensitiveKind::GhHosts,
+        ".config/gh",
+        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.config/gh/hosts\.ya?ml)\b",
+    ),
+    (
+        SensitiveKind::AzureDir,
+        ".azure",
+        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.azure)(?:/|$|\b)",
+    ),
+    (
+        SensitiveKind::VaultToken,
+        ".vault-token",
+        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.vault-token)\b",
+    ),
+    (
+        SensitiveKind::KeyFile,
+        ".key",
+        r"[^\s/.]\S*?(?i-u:\.key)(?:$|[^.\w])",
+    ),
+    (SensitiveKind::P12File, ".p12", r"\S+(?i-u:\.p12)\b"),
+    (SensitiveKind::PfxFile, ".pfx", r"\S+(?i-u:\.pfx)\b"),
 ];
 
 /// Per-variant regexes, indexed parallel to [`PROBES`]. Each slot
@@ -268,7 +341,7 @@ pub(crate) fn matches(token: &str) -> bool {
         return false;
     }
     PROBES.iter().enumerate().any(|(idx, (_, _, pat))| {
-        mask & (1_u16 << idx) != 0
+        mask & (1_u32 << idx) != 0
             && SENSITIVE_REGEXES[idx]
                 .get_or_init(|| build(pat))
                 .is_match(token)
@@ -313,7 +386,7 @@ fn classify_into_filtered(token: &str, out: &mut Vec<SensitivePath>, content_onl
         return;
     }
     for (idx, (kind, _, pat)) in PROBES.iter().enumerate() {
-        if mask & (1_u16 << idx) == 0 || (content_only && !kind.applies_to_content()) {
+        if mask & (1_u32 << idx) == 0 || (content_only && !kind.applies_to_content()) {
             continue;
         }
         let re = SENSITIVE_REGEXES[idx].get_or_init(|| build(pat));
@@ -345,9 +418,9 @@ const fn is_mask_trigger(b: u8) -> bool {
 /// long payloads use `memchr` SIMD scans to jump between candidate
 /// start bytes, so a megabyte with no needle-opening byte costs two
 /// vector sweeps and nothing else.
-fn needle_mask(bytes: &[u8]) -> u16 {
-    const ALL: u16 = (1_u16 << PROBES.len()) - 1;
-    let mut mask = 0_u16;
+fn needle_mask(bytes: &[u8]) -> u32 {
+    const ALL: u32 = (1_u32 << PROBES.len()) - 1;
+    let mut mask = 0_u32;
     if bytes.len() <= 64 {
         for pos in 0..bytes.len() {
             if is_mask_trigger(bytes[pos]) {
@@ -377,41 +450,46 @@ fn needle_mask(bytes: &[u8]) -> u16 {
 }
 
 /// Test whether any needle starts at `bytes[pos]` and record it in
-/// `mask`. Dispatches on the first byte — and, for the eight
-/// dot-needles, the second byte, which is unique per needle — so each
-/// candidate position costs at most one slice comparison. The
+/// `mask`. Dispatches on the first byte — and, for the dot-needles, the
+/// second byte, which narrows the candidates to at most three — so each
+/// candidate position costs only a few slice comparisons. The
 /// hard-coded `PROBES` indices are pinned by the
 /// `check_needles_at_detects_each_needle_at_its_index` test.
-fn check_needles_at(bytes: &[u8], pos: usize, mask: &mut u16) {
-    let idx = match bytes[pos].to_ascii_lowercase() {
+fn check_needles_at(bytes: &[u8], pos: usize, mask: &mut u32) {
+    let candidates: &[usize] = match bytes[pos].to_ascii_lowercase() {
         b'.' => {
             let Some(&second) = bytes.get(pos + 1) else {
                 return;
             };
             match second.to_ascii_lowercase() {
-                b's' => 0, // .ssh
-                b'a' => 1, // .aws
-                b'k' => 3, // .kube
-                b'd' => 4, // .docker
-                b'e' => 6, // .env
-                b'n' => 7, // .npmrc
-                b'p' => 8, // .pypirc
-                b't' => 9, // .tfstate
+                b's' => &[0],         // .ssh
+                b'a' => &[1, 15],     // .aws, .azure
+                b'k' => &[3, 17],     // .kube, .key
+                b'd' => &[4],         // .docker
+                b'e' => &[6],         // .env
+                b'n' => &[7, 11],     // .npmrc, .netrc
+                b'p' => &[8, 18, 19], // .pypirc, .p12, .pfx
+                b't' => &[9],         // .tfstate
+                b'g' => &[12, 13],    // .git-credentials, .gnupg
+                b'c' => &[14],        // .config/gh
+                b'v' => &[16],        // .vault-token
                 _ => return,
             }
         },
-        b'g' => 2,  // gcloud
-        b'i' => 5,  // id_
-        b'-' => 10, // -----begin
+        b'g' => &[2],  // gcloud
+        b'i' => &[5],  // id_
+        b'-' => &[10], // -----begin
         _ => return,
     };
-    let bit = 1_u16 << idx;
-    if *mask & bit != 0 {
-        return;
-    }
-    let n = PROBES[idx].1.as_bytes();
-    if bytes.len() - pos >= n.len() && bytes[pos..pos + n.len()].eq_ignore_ascii_case(n) {
-        *mask |= bit;
+    for &idx in candidates {
+        let bit = 1_u32 << idx;
+        if *mask & bit != 0 {
+            continue;
+        }
+        let n = PROBES[idx].1.as_bytes();
+        if bytes.len() - pos >= n.len() && bytes[pos..pos + n.len()].eq_ignore_ascii_case(n) {
+            *mask |= bit;
+        }
     }
 }
 
@@ -514,6 +592,65 @@ mod tests {
     }
 
     #[test]
+    fn classifies_plaintext_credential_files() {
+        for (token, kind) in [
+            ("~/.netrc", SensitiveKind::Netrc),
+            ("$HOME/.git-credentials", SensitiveKind::GitCredentials),
+            (
+                "/home/me/.gnupg/private-keys-v1.d/x.key",
+                SensitiveKind::GnupgDir,
+            ),
+            ("~/.config/gh/hosts.yml", SensitiveKind::GhHosts),
+            ("~/.azure/accessTokens.json", SensitiveKind::AzureDir),
+            ("~/.vault-token", SensitiveKind::VaultToken),
+            ("server.key", SensitiveKind::KeyFile),
+            ("certs/cert.p12", SensitiveKind::P12File),
+            ("x.PFX", SensitiveKind::PfxFile),
+            (".envrc", SensitiveKind::Dotenv),
+        ] {
+            assert!(kinds(token).contains(&kind), "{token:?} should be {kind:?}");
+        }
+    }
+
+    #[test]
+    fn credential_file_kinds_skip_lookalikes() {
+        for token in [
+            "foo.keystore.md",
+            "id.key.pub",
+            "README.netrc.md.txt-not",
+            "docs/azure.md",
+            ".environment",
+        ] {
+            let found = kinds(token);
+            assert!(
+                !found.iter().any(|k| matches!(
+                    k,
+                    SensitiveKind::KeyFile | SensitiveKind::AzureDir | SensitiveKind::Dotenv
+                )),
+                "false positive on {token:?}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_kind_tags_round_trip() {
+        for kind in [
+            SensitiveKind::Netrc,
+            SensitiveKind::GitCredentials,
+            SensitiveKind::GnupgDir,
+            SensitiveKind::GhHosts,
+            SensitiveKind::AzureDir,
+            SensitiveKind::VaultToken,
+            SensitiveKind::KeyFile,
+            SensitiveKind::P12File,
+            SensitiveKind::PfxFile,
+        ] {
+            assert_eq!(SensitiveKind::parse(kind.as_str()), Some(kind));
+            assert!(!kind.applies_to_content());
+        }
+    }
+
+    #[test]
     fn does_not_misclassify_dotenv_lookalikes() {
         // No leading anchor character: not a path token.
         assert!(!kinds("envfile").contains(&SensitiveKind::Dotenv));
@@ -609,11 +746,11 @@ mod tests {
         // position 0 and require its own bit to light up.
         for (idx, (kind, needle, _)) in PROBES.iter().enumerate() {
             for cased in [needle.to_ascii_lowercase(), needle.to_ascii_uppercase()] {
-                let mut mask = 0_u16;
+                let mut mask = 0_u32;
                 check_needles_at(cased.as_bytes(), 0, &mut mask);
                 assert_eq!(
                     mask,
-                    1_u16 << idx,
+                    1_u32 << idx,
                     "dispatch missed {kind:?} needle {cased:?} (idx {idx})"
                 );
             }
