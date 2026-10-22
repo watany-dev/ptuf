@@ -755,6 +755,17 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
             absorb_parens(bytes, &mut i, &mut buf, Some(&mut bodies));
             continue;
         }
+        // ANSI-C quoting `$'…'`: decode the escapes like bash does, and
+        // honour `\'` so an escaped quote does not end the span early.
+        if c == b'$' && bytes.get(i + 1) == Some(&b'\'') {
+            i = read_ansi_c_quoted(bytes, i + 2, &mut buf);
+            continue;
+        }
+        // Locale quoting `$"…"` is a plain double-quoted span here.
+        if c == b'$' && bytes.get(i + 1) == Some(&b'"') {
+            i += 1;
+            continue;
+        }
         // Unquoted `$(…)`: balance-absorb and capture body (ADR 0008).
         if c == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
             saw_subst = true;
@@ -834,6 +845,91 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
         push_latin1(&mut buf, &bytes[run..i]);
     }
     (buf, i, saw_subst, bodies)
+}
+
+/// Decode the body of an ANSI-C quoted span (`$'…'`) starting at
+/// `start` (just past the opening `'`) into `buf`, returning the index
+/// just past the closing `'` (or the input length when unterminated).
+/// Escapes follow bash: `\a \b \e \E \f \n \r \t \v \\ \' \" \?`,
+/// `\NNN` (octal), `\xHH`, `\uHHHH`, `\UHHHHHHHH`, and `\cX`. A decoded
+/// NUL ends the word's value, as in bash; the rest of the span is skipped.
+fn read_ansi_c_quoted(bytes: &[u8], start: usize, buf: &mut String) -> usize {
+    let mut i = start;
+    let mut truncated = false;
+    while i < bytes.len() && bytes[i] != b'\'' {
+        let (decoded, next) = if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            decode_ansi_c_escape(bytes, i + 1)
+        } else {
+            (u32::from(bytes[i]), i + 1)
+        };
+        i = next;
+        if decoded == 0 {
+            truncated = true;
+        }
+        if truncated {
+            continue;
+        }
+        match char::from_u32(decoded) {
+            Some(ch) => buf.push(ch),
+            None => buf.push(char::REPLACEMENT_CHARACTER),
+        }
+    }
+    if i < bytes.len() {
+        i += 1; // closing quote
+    }
+    i
+}
+
+/// Decode one escape whose letter is at `bytes[i]` (just past the `\`).
+/// Returns the code point (bytes from `\NNN` / `\xHH` keep their Latin-1
+/// value, matching [`push_latin1`]) and the index after the escape.
+fn decode_ansi_c_escape(bytes: &[u8], i: usize) -> (u32, usize) {
+    let digits = |from: usize, max: usize, radix: u32| -> (u32, usize) {
+        let mut value = 0_u32;
+        let mut j = from;
+        while j < bytes.len() && j - from < max {
+            let Some(d) = char::from(bytes[j]).to_digit(radix) else {
+                break;
+            };
+            value = value.saturating_mul(radix).saturating_add(d);
+            j += 1;
+        }
+        (value, j)
+    };
+    let simple = |v: u8| (u32::from(v), i + 1);
+    match bytes[i] {
+        b'a' => simple(0x07),
+        b'b' => simple(0x08),
+        b'e' | b'E' => simple(0x1b),
+        b'f' => simple(0x0c),
+        b'n' => simple(b'\n'),
+        b'r' => simple(b'\r'),
+        b't' => simple(b'\t'),
+        b'v' => simple(0x0b),
+        b'0'..=b'7' => {
+            let (v, j) = digits(i, 3, 8);
+            (v & 0xff, j)
+        },
+        b'x' | b'u' | b'U' => {
+            let max = match bytes[i] {
+                b'x' => 2,
+                b'u' => 4,
+                _ => 8,
+            };
+            let (v, j) = digits(i + 1, max, 16);
+            if j == i + 1 {
+                // No hex digits: bash keeps the escape literally.
+                (u32::from(b'\\'), i)
+            } else {
+                (v, j)
+            }
+        },
+        b'c' if i + 1 < bytes.len() => (u32::from(bytes[i + 1] & 0x1f), i + 2),
+        // `\\`, `\'`, `\"`, `\?` decode to the byte itself; any other
+        // escape is kept with its backslash.
+        b'\\' | b'\'' | b'"' | b'?' => simple(bytes[i]),
+        _ => (u32::from(b'\\'), i),
+    }
 }
 
 /// Length of the leading run of plain word bytes (see
@@ -1846,6 +1942,31 @@ mod tests {
         assert_eq!(b.segments[0].redirects.len(), 1);
         assert_eq!(b.segments[0].redirects[0].op, RedirectOp::Heredoc);
         assert_eq!(b.segments[0].redirects[0].target, "leftover");
+    }
+
+    #[test]
+    fn ansi_c_quote_honours_escaped_quote() {
+        let b = parse("echo $'a\\'b' ; rm -rf /");
+        assert_eq!(b.segments.len(), 2);
+        assert_eq!(b.segments[0].commands[0], argv("echo", &["a'b"]));
+        assert_eq!(b.segments[1].commands[0], argv("rm", &["-rf", "/"]));
+    }
+
+    #[test]
+    fn ansi_c_quote_decodes_escapes() {
+        for (cmd, head) in [
+            ("$'rm' -rf /", "rm"),
+            ("$'\\x72m' -rf /", "rm"),
+            ("$'\\162m' -rf /", "rm"),
+            ("$'\\u0072m' -rf /", "rm"),
+            ("$'r\\cJm'", "r\nm"),
+            ("$'\\q'", "\\q"),
+            ("$'\\x'", "\\x"),
+            ("$'a\\0b'", "a"),
+        ] {
+            assert_eq!(parse(cmd).segments[0].commands[0].head, head, "{cmd:?}");
+        }
+        assert_eq!(parse("$\"rm\" -rf /").segments[0].commands[0].head, "rm");
     }
 
     #[test]
