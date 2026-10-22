@@ -156,7 +156,7 @@ Cline 入力は CLI 層の `src/cli/cline_input.rs` で SDK 形 (`tool_call`) �
 legacy 形 (`preToolUse`) の両 envelope を正規化する。`tool_call` がある場合は
 `hookName == "tool_call"` を要求して優先採用し、無ければ `preToolUse` を
 `hookName ∈ {"PreToolUse","tool_call"}` で採用する。tool 名 mapping
-(`run_commands` / `execute_command` / `bash`→`Bash`、`read_files`→`Read`、
+(`run_commands` / `execute_command` / `bash`→`Bash`、`read_files` / `search_files`→`Read`、
 `write_file`→`Write`、`use_mcp_tool`→`mcp__server__tool` 等) を適用し、
 alias キー (`command` / `file_path` / `content` 等) を非破壊的に正規化する。
 
@@ -170,7 +170,7 @@ enforce 対象は `preToolUse` (tool 名を canonical 形へ正規化) /
 `beforeShellExecution`→`Bash` / `beforeReadFile`→`Read` /
 `beforeMCPExecution`→`mcp__server__tool` で、それ以外の event は MVP では
 `core.engine.invalid-payload` で fail-closed する。tool 名 mapping
-(`Shell` / `Bash`→`Bash`、`Read` / `ReadFile`→`Read`、`Write`→`Write`、
+(`Shell` / `Bash`→`Bash`、`Read` / `ReadFile` / `Grep`→`Read`、`Write` / `Delete`→`Write`、
 `Edit`→`Edit`、`Fetch`→`WebFetch`、`MCP` / `mcp__*`→`mcp__server__tool`) を
 適用し、`tool_input` (camelCase `toolInput` / root も読む) の `command` /
 `file_path` / `content` / `old_string` / `new_string` を alias から非破壊的に

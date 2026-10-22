@@ -89,7 +89,12 @@ fn normalize(
     match raw_name {
         "Shell" | "Bash" | "shell" | "bash" => ("Bash".into(), reshape_bash(args, root)),
         "Read" | "ReadFile" | "read" => ("Read".into(), reshape_path(args, root)),
+        // `Grep` returns file contents, so it is a read of `path`.
+        "Grep" | "grep" => ("Read".into(), reshape_path(args, root)),
         "Write" | "write" => ("Write".into(), reshape_write(args, root)),
+        // A delete clobbers the target like an overwrite (Kiro v3 maps
+        // `delete_file` the same way).
+        "Delete" | "delete" | "DeleteFile" => ("Write".into(), reshape_path(args, root)),
         "Edit" | "edit" => ("Edit".into(), reshape_edit(args, root)),
         "WebFetch" | "Fetch" | "fetch" | "web_fetch" => ("WebFetch".into(), Value::Object(args)),
         "MCP" | "mcp" => {
@@ -283,6 +288,19 @@ mod tests {
         let input = parse(body).unwrap();
         assert_eq!(input.tool_name, "Read");
         assert_eq!(input.file_path(), Some("/tmp/a"));
+    }
+
+    #[test]
+    fn cursor_grep_and_delete_carry_a_path() {
+        let grep =
+            parse(r#"{"tool_name":"Grep","tool_input":{"pattern":".","path":".env"}}"#).unwrap();
+        assert_eq!(grep.tool_name, "Read");
+        assert_eq!(grep.file_path(), Some(".env"));
+        let del =
+            parse(r#"{"tool_name":"Delete","tool_input":{"path":".cursor/hooks.json"}}"#).unwrap();
+        assert_eq!(del.tool_name, "Write");
+        assert_eq!(del.file_path(), Some(".cursor/hooks.json"));
+        assert_eq!(del.write_payload(), None);
     }
 
     #[test]
