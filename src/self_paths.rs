@@ -822,10 +822,11 @@ fn fetcher_outputs(argv: &crate::facts::shell::Argv) -> Vec<String> {
             | ("aria2c", "-d" | "--dir") => {
                 dir = value();
             },
-            ("curl", s) if s.starts_with("-o") && s.len() > 2 && !s.starts_with("--") => {
+            // Attached values (`-oFILE`); the bare flags matched above.
+            ("curl", s) if s.starts_with("-o") && !s.starts_with("--") => {
                 files.push(s[2..].to_owned())
             },
-            ("wget", s) if s.starts_with("-O") && s.len() > 2 => files.push(s[2..].to_owned()),
+            ("wget", s) if s.starts_with("-O") => files.push(s[2..].to_owned()),
             _ => {},
         }
     }
@@ -1263,6 +1264,57 @@ mod tests {
             tool_name: "Bash".into(),
             tool_input: serde_json::json!({ "command": cmd }),
         })
+    }
+
+    #[test]
+    fn fetcher_attached_output_values() {
+        let p = repo_protected();
+        assert!(!bash_kinds(&p, "wget -O.claude/settings.json https://x").is_empty());
+        assert!(!bash_kinds(&p, "curl -o.claude/settings.json https://x").is_empty());
+        // A short flag's attached value keeps its `=`: a different file.
+        assert!(bash_kinds(&p, "curl -o.claude/settings.json=1 https://x").is_empty());
+    }
+
+    #[test]
+    fn literal_cd_resolves_instead_of_losing_cwd() {
+        let p = repo_protected();
+        // `/repo/sub/settings.json` is not protected; only a lost cwd
+        // would fall back to matching the bare file name.
+        for cmd in [
+            "cd sub && echo x > settings.json",
+            "cd sub && cp a settings.json",
+            "pushd sub && tee settings.json",
+        ] {
+            assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+        }
+        assert!(!bash_kinds(&p, "cd $D && echo x > settings.json").is_empty());
+        assert!(!bash_kinds(&p, "cd - && echo x > settings.json").is_empty());
+    }
+
+    #[test]
+    fn heredoc_body_after_cd_is_not_a_write_target() {
+        let p = repo_protected();
+        let cmd = "cd sub && cat <<EOF\n../.claude/settings.json\nEOF\n";
+        assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_a_symlinked_ancestor_matches_via_canonical_path() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(real.join(".claude")).expect("mkdir");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(&other).expect("mkdir");
+        let env = MapEnv::new(&[("HOME", "/h")]);
+        let root = real.canonicalize().expect("canonical");
+        let p = ProtectedPaths::collect_with_env(Some(&root), &Config::default(), &env);
+        let link_cmd = format!("rm -rf {}", link.display());
+        assert!(!bash_kinds(&p, &link_cmd).is_empty(), "{link_cmd}");
+        let other_cmd = format!("rm -rf {}", other.display());
+        assert!(bash_kinds(&p, &other_cmd).is_empty(), "{other_cmd}");
     }
 
     #[test]
