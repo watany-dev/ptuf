@@ -473,10 +473,53 @@ fn tokenize(s: &str) -> TokenizeOutput {
     let mut saw_process_substitution = false;
     let bytes = s.as_bytes();
     let mut i = 0;
+    // Heredoc bodies start on the line *after* their `<<TAG` operator;
+    // the rest of the operator's line is still command text. While a
+    // body is pending, `heredoc` holds (newline ending that line, offset
+    // just past the last body) so the lexer can jump over the bodies.
+    let mut heredoc: Option<(usize, usize)> = None;
     while i < bytes.len() {
+        if let Some((nl, resume)) = heredoc
+            && i > nl
+        {
+            // The line ended inside a word (e.g. a quoted newline);
+            // skip the bodies anyway.
+            i = i.max(resume);
+            heredoc = None;
+            continue;
+        }
         let c = bytes[i];
+        // A newline ends a command like `;`, except right after an
+        // operator that expects more input (`a |⏎ b`, `a &&⏎ b`).
+        if c == b'\n' {
+            if !matches!(
+                out.last(),
+                None | Some(Token::Pipe | Token::And | Token::Or | Token::Semi)
+            ) {
+                out.push(Token::Semi);
+            }
+            i += 1;
+            if let Some((nl, resume)) = heredoc.take()
+                && i == nl + 1
+            {
+                i = resume;
+            }
+            continue;
+        }
         if c.is_ascii_whitespace() {
             i += 1;
+            continue;
+        }
+        // `\⏎` is a line continuation: both bytes vanish.
+        if c == b'\\' && bytes.get(i + 1) == Some(&b'\n') {
+            i += 2;
+            continue;
+        }
+        // `#` at the start of a word comments out the rest of the line
+        // (`echo x #; rm -rf /` runs only `echo x`). Mid-word `#`
+        // (`a#b`, `$#`, `${#x}`) never reaches here.
+        if c == b'#' {
+            i += memchr::memchr(b'\n', &bytes[i..]).unwrap_or(bytes.len() - i);
             continue;
         }
         if c == b'|' {
@@ -501,10 +544,13 @@ fn tokenize(s: &str) -> TokenizeOutput {
                 i += 2;
                 continue;
             }
-            // Lone `&` (background operator). ptuf does not model
-            // background semantics; skip it so the lexer always makes
-            // forward progress. Without this, `read_word` would return
-            // (empty, 0 bytes) and `tokenize` would infinite-loop.
+            // Lone `&` (background operator) ends a command like `;`
+            // (`a & rm -rf /` runs both). Right after a redirect (`>&2`,
+            // `2>&1`) it is fd duplication, and after `|` it is `|&`;
+            // both stay inside the current command.
+            if !matches!(out.last(), Some(Token::Redirect(_) | Token::Pipe)) {
+                out.push(Token::Semi);
+            }
             i += 1;
             continue;
         }
@@ -525,12 +571,19 @@ fn tokenize(s: &str) -> TokenizeOutput {
             let (tag, tag_len, _, _) = read_word(&bytes[j..]);
             if !tag.is_empty() {
                 j += tag_len;
-                let body = read_heredoc_body(&bytes[j..], &tag);
+                // The body begins after this line (or after the previous
+                // heredoc's body when one line opens several).
+                let (nl, body_from) = heredoc.unwrap_or_else(|| {
+                    let nl = memchr::memchr(b'\n', &bytes[j..]).map_or(bytes.len(), |p| j + p);
+                    (nl, nl)
+                });
+                let body = read_heredoc_body(&bytes[body_from.min(bytes.len())..], &tag);
                 out.push(Token::Redirect(RedirectOp::Heredoc));
                 out.push(Token::HeredocBody(body.text));
                 saw_redirect = true;
                 saw_heredoc = true;
-                i = j + body.consumed;
+                heredoc = Some((nl, body_from.min(bytes.len()) + body.consumed));
+                i = j;
                 continue;
             }
             // Empty tag: degrade gracefully and emit a plain `<` redirect
@@ -740,7 +793,10 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
             break;
         }
         if c == b'\\' && i + 1 < bytes.len() {
-            buf.push(bytes[i + 1] as char);
+            // `\⏎` is a line continuation, not an escaped newline.
+            if bytes[i + 1] != b'\n' {
+                buf.push(bytes[i + 1] as char);
+            }
             i += 2;
             continue;
         }
@@ -1928,6 +1984,71 @@ mod tests {
         assert_eq!(b.segments.len(), 1);
         assert_eq!(b.segments[0].commands.len(), 0);
         assert_eq!(b.segments[0].redirects.len(), 1);
+    }
+
+    #[test]
+    fn newline_separates_commands() {
+        for cmd in [
+            "echo a\nrm -rf /",
+            "true\r\nrm -rf /",
+            "echo a &&\n rm -rf /",
+            "rm \\\n -rf /",
+            "echo x # c\nrm -rf /",
+            "cat <<EOF\nhello\nEOF\nrm -rf /",
+            "cat <<A <<B\na\nA\nb\nB\nrm -rf /",
+        ] {
+            let b = parse(cmd);
+            assert!(
+                b.commands()
+                    .iter()
+                    .any(|a| a.head == "rm" && a.args == ["-rf", "/"]),
+                "{cmd:?} -> {b:?}"
+            );
+        }
+        // A pipe continues across the newline.
+        let b = parse("curl x |\n bash");
+        assert_eq!(b.segments.len(), 1);
+        assert_eq!(b.segments[0].commands.len(), 2);
+    }
+
+    #[test]
+    fn heredoc_body_starts_on_the_next_line() {
+        let b = parse("cat <<EOF | sh\necho hi\nEOF\n");
+        assert_eq!(b.segments.len(), 1);
+        let p = &b.segments[0];
+        assert_eq!(p.commands.len(), 2);
+        assert_eq!(p.commands[1].head, "sh");
+        assert_eq!(p.redirects[0].target, "echo hi\n");
+        // The body itself is not parsed as commands.
+        let b = parse("cat <<EOF\nrm -rf /\nEOF\necho ok");
+        assert!(!b.commands().iter().any(|a| a.head == "rm"));
+    }
+
+    #[test]
+    fn lone_ampersand_separates_commands() {
+        let b = parse("echo a & rm -rf /");
+        assert!(
+            b.commands()
+                .iter()
+                .any(|a| a.head == "rm" && a.args == ["-rf", "/"])
+        );
+        // fd duplication and `|&` stay inside the command / pipeline.
+        let b = parse("curl x 2>&1 | bash");
+        assert_eq!(b.segments.len(), 1);
+        assert_eq!(b.segments[0].commands.len(), 2);
+        let b = parse("make >&2 |& tee log");
+        assert_eq!(b.segments.len(), 1);
+        assert_eq!(b.segments[0].commands.len(), 2);
+    }
+
+    #[test]
+    fn word_initial_hash_starts_a_comment() {
+        assert!(parse("#rm -rf /").segments.is_empty());
+        let b = parse("echo x #; rm -rf /");
+        assert_eq!(b.segments.len(), 1);
+        assert_eq!(b.segments[0].commands[0].args, ["x"]);
+        let b = parse("echo a#b ${#x} $#");
+        assert_eq!(b.segments[0].commands[0].args, ["a#b", "${#x}", "$#"]);
     }
 
     #[test]
