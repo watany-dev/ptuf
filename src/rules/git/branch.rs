@@ -1,5 +1,6 @@
-//! `core.git.branch-delete-force` — `git branch -D` force-deletes a
-//! branch even if it has unmerged commits.
+//! `core.git.branch-delete-force` — `git branch -D` (or `-d` with
+//! `-f` / `--force`) force-deletes a branch even if it has unmerged
+//! commits.
 
 use crate::decision::{DecisionKind, Severity};
 use crate::facts::shell::Argv;
@@ -12,11 +13,13 @@ pub(super) fn matches_branch_delete_force(argv: &Argv) -> bool {
         return false;
     }
     let rest = args_after_subcommand(argv, "branch");
-    rest.iter().any(|a| {
-        *a == "-D"
-            || (a.starts_with('-') && !a.starts_with("--") && a.contains('D'))
-            || *a == "--delete=force"
-    })
+    let short = |a: &&str, c: char| a.starts_with('-') && !a.starts_with("--") && a.contains(c);
+    // `-D` is shorthand for `--delete --force`; the two halves may also
+    // be spelled separately (`-d -f`, `-df`, `--delete --force`).
+    let capital_d = rest.iter().any(|a| short(a, 'D'));
+    let delete = rest.iter().any(|a| *a == "--delete" || short(a, 'd'));
+    let force = rest.iter().any(|a| *a == "--force" || short(a, 'f'));
+    capital_d || (delete && force)
 }
 
 const BRANCH_DELETE_FORCE: RuleSpec = RuleSpec {
