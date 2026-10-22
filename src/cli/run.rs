@@ -2626,6 +2626,12 @@ rules:
         let mut denied = original.clone();
         denied.set_mode(0o000);
         std::fs::set_permissions(&path, denied).unwrap();
+        // root (or CAP_DAC_OVERRIDE) ignores the mode bits, so the file stays
+        // readable and there is no read error to observe.
+        if std::fs::File::open(&path).is_ok() {
+            let _ = std::fs::set_permissions(&path, original);
+            return;
+        }
         let path_s = path.to_string_lossy().into_owned();
         let (code, stdout, stderr) = run_with(&["audit", "--path", &path_s], "");
         let _ = std::fs::set_permissions(&path, original);
