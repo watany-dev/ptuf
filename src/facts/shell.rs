@@ -513,6 +513,36 @@ fn tokenize(s: &str) -> TokenizeOutput {
             i += 1;
             continue;
         }
+        // Here-string: `<<< WORD`. The operand is one ordinary word, so a
+        // following `;` / `&&` / `|` still separates commands. Surfaced
+        // like a heredoc (the word is stdin content, not a file), with any
+        // `$(…)` bodies kept so subst_argv still sees them.
+        if bytes[i..].starts_with(b"<<<") {
+            let mut j = i + 3;
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            let (word, advanced, word_subst, bodies) = if j < bytes.len() {
+                read_word(&bytes[j..])
+            } else {
+                (String::new(), 0, false, Vec::new())
+            };
+            out.push(Token::Redirect(RedirectOp::Heredoc));
+            out.push(Token::HeredocBody(word));
+            if word_subst {
+                saw_command_substitution = true;
+            }
+            if !bodies.is_empty() {
+                out.push(Token::Word {
+                    text: String::new(),
+                    subst_bodies: bodies,
+                });
+            }
+            saw_redirect = true;
+            saw_heredoc = true;
+            i = j + advanced;
+            continue;
+        }
         // Heredoc: `<<TAG` or `<<-TAG` (must precede the bare `<` arm).
         if c == b'<' && i + 1 < bytes.len() && bytes[i + 1] == b'<' {
             let mut j = i + 2;
@@ -1846,6 +1876,30 @@ mod tests {
         assert_eq!(b.segments[0].redirects.len(), 1);
         assert_eq!(b.segments[0].redirects[0].op, RedirectOp::Heredoc);
         assert_eq!(b.segments[0].redirects[0].target, "leftover");
+    }
+
+    #[test]
+    fn here_string_operand_is_one_word_and_does_not_swallow_the_rest() {
+        let b = parse("cat <<< x; rm -rf /");
+        assert_eq!(b.segments.len(), 2);
+        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::Heredoc);
+        assert_eq!(b.segments[0].redirects[0].target, "x");
+        assert_eq!(b.segments[1].commands[0], argv("rm", &["-rf", "/"]));
+
+        let b = parse("grep a <<<\"q w\" && ls");
+        assert_eq!(b.segments[0].commands[0], argv("grep", &["a"]));
+        assert_eq!(b.segments[0].redirects[0].target, "q w");
+        assert_eq!(b.segments[1].commands[0].head, "ls");
+    }
+
+    #[test]
+    fn here_string_surfaces_command_substitution_bodies() {
+        let b = parse("cat <<< \"$(rm -rf /)\"");
+        assert!(b.has_command_substitution);
+        assert_eq!(
+            b.segments[0].commands[0].subst_argv,
+            vec![argv("rm", &["-rf", "/"])]
+        );
     }
 
     #[test]
