@@ -1,5 +1,52 @@
 //! Codex `apply_patch` command parsing helpers.
 
+use crate::facts::shell::{self, Bash, RedirectOp};
+
+/// Command heads Codex intercepts from the shell and runs as its
+/// internal `apply_patch` (`apply_patch <<'EOF' … EOF`, `apply_patch '…'`).
+const SHELL_HEADS: &[&str] = &["apply_patch", "applypatch"];
+
+/// Cheap pre-filter so callers only parse a Bash line when it can
+/// possibly invoke the shell-level `apply_patch`.
+pub(crate) fn may_invoke_from_shell(command: &str) -> bool {
+    SHELL_HEADS.iter().any(|h| command.contains(h))
+}
+
+/// Patch bodies handed to a shell-level `apply_patch` / `applypatch`:
+/// the first positional argument plus every heredoc body in the same
+/// pipeline (or inner shell code). Over-collecting heredocs is
+/// harmless: a body without `***` markers yields no paths.
+pub(crate) fn bash_bodies(bash: &Bash) -> Vec<String> {
+    let mut out = Vec::new();
+    for pipe in &bash.segments {
+        let mut cmds = Vec::new();
+        for c in &pipe.commands {
+            c.collect_commands(&mut cmds);
+        }
+        let mut hit = false;
+        for c in &cmds {
+            let argv = shell::unwrap_all_prefix_wrappers(c);
+            if SHELL_HEADS.contains(&argv.head_basename()) {
+                hit = true;
+                if let Some(first) = argv.args.iter().find(|a| !a.starts_with('-')) {
+                    out.push(first.clone());
+                }
+            }
+        }
+        if !hit {
+            continue;
+        }
+        let heredocs = pipe
+            .redirects
+            .iter()
+            .chain(cmds.iter().flat_map(|c| c.inner_redirects.iter()))
+            .filter(|r| r.op == RedirectOp::Heredoc)
+            .map(|r| r.target.clone());
+        out.extend(heredocs);
+    }
+    out
+}
+
 const PATH_PREFIXES: &[&str] = &[
     "*** Add File: ",
     "*** Update File: ",
@@ -11,6 +58,8 @@ const PATH_PREFIXES: &[&str] = &[
 pub(crate) fn paths(command: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in command.lines() {
+        // Codex matches hunk headers on trimmed lines.
+        let line = line.trim();
         for prefix in PATH_PREFIXES {
             if let Some(path) = line.strip_prefix(prefix) {
                 let trimmed = path.trim();
@@ -60,6 +109,26 @@ mod tests {
             paths(command),
             vec!["new.txt", "old.txt", "renamed.txt", "gone.txt"]
         );
+    }
+
+    #[test]
+    fn paths_trims_indented_headers() {
+        let command = "*** Begin Patch\n  *** Add File: a.txt\n*** End Patch\n";
+        assert_eq!(paths(command), vec!["a.txt"]);
+    }
+
+    #[test]
+    fn bash_bodies_reads_argument_and_heredoc_forms() {
+        let arg = shell::parse("apply_patch '*** Begin Patch\n*** Add File: a\n*** End Patch'");
+        assert_eq!(paths(&bash_bodies(&arg).concat()), vec!["a"]);
+        let heredoc = shell::parse(
+            "applypatch <<'EOF'\n*** Begin Patch\n*** Delete File: b\n*** End Patch\nEOF\n",
+        );
+        assert_eq!(paths(&bash_bodies(&heredoc).concat()), vec!["b"]);
+        let wrapped = shell::parse("bash -c \"apply_patch '*** Add File: c'\"");
+        assert_eq!(paths(&bash_bodies(&wrapped).concat()), vec!["c"]);
+        let other = shell::parse("cat <<'EOF'\n*** Add File: d\nEOF\n");
+        assert!(bash_bodies(&other).is_empty());
     }
 
     #[test]

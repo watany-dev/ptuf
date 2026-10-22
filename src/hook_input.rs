@@ -90,7 +90,9 @@ impl HookInput {
         if self.tool_name != "apply_patch" {
             return None;
         }
-        self.tool_input.get("command")?.as_str()
+        ["command", "input", "patch"]
+            .iter()
+            .find_map(|k| self.tool_input.get(*k)?.as_str())
     }
 
     /// Body the agent intends to write: `Write::content` /
@@ -364,6 +366,17 @@ mod tests {
             parsed.apply_patch_command(),
             Some("*** Begin Patch\n*** End Patch\n")
         );
+    }
+
+    #[test]
+    fn apply_patch_command_falls_back_to_input_and_patch_keys() {
+        for key in ["input", "patch"] {
+            let raw = format!(
+                r#"{{"tool_name":"apply_patch","tool_input":{{"{key}":"*** Begin Patch"}}}}"#
+            );
+            let parsed: HookInput = serde_json::from_str(&raw).expect("parse");
+            assert_eq!(parsed.apply_patch_command(), Some("*** Begin Patch"));
+        }
     }
 
     #[test]

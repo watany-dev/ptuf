@@ -51,7 +51,11 @@ impl ConfigRule for SensitiveRead {
         let is_file_tool = matches!(
             input.tool_name.as_str(),
             "Read" | "Edit" | "Write" | "apply_patch",
-        ) || (input.is_mcp_tool() && !facts.paths.is_empty());
+        ) || (input.is_mcp_tool() && !facts.paths.is_empty())
+            || facts
+                .paths
+                .iter()
+                .any(|p| p.tool == crate::facts::path::PathTool::ApplyPatch);
         if !is_file_tool {
             return None;
         }

@@ -37,11 +37,11 @@ pub enum PathOrigin {
     ToolInputDirect,
     /// Nested MCP carriers: `files[].path`, `items[].path`, `paths[]`.
     ToolInputNested,
-    /// `apply_patch` `*** Add/Update/Delete/Move` lines.
+    /// `apply_patch` `*** Add/Update/Delete/Move` lines, from the tool
+    /// or from a shell-level `apply_patch` / `applypatch` invocation.
     ApplyPatch,
     /// Bash redirect operand (`>`, `>>`, `<`, `2>`, `&>`). Surfaced
-    /// only by the engine — never emitted by `extract_all_with_env`
-    /// because Bash inputs do not carry a tool-level `file_path`.
+    /// only by the engine — never emitted by `extract_all_with_env`.
     BashRedirect,
 }
 
@@ -118,12 +118,24 @@ pub(crate) fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Ve
         },
         "apply_patch" => {
             let values = input
-                .tool_input
-                .get("command")
-                .and_then(serde_json::Value::as_str)
+                .apply_patch_command()
                 .map(crate::facts::patch::paths)
                 .unwrap_or_default()
                 .into_iter()
+                .map(|raw| (raw, PathOrigin::ApplyPatch))
+                .collect();
+            (PathTool::ApplyPatch, values)
+        },
+        "Bash" => {
+            let Some(cmd) = input
+                .bash_command()
+                .filter(|c| crate::facts::patch::may_invoke_from_shell(c))
+            else {
+                return Vec::new();
+            };
+            let values = crate::facts::patch::bash_bodies(&crate::facts::shell::parse(cmd))
+                .iter()
+                .flat_map(|body| crate::facts::patch::paths(body))
                 .map(|raw| (raw, PathOrigin::ApplyPatch))
                 .collect();
             (PathTool::ApplyPatch, values)

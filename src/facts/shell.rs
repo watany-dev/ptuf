@@ -145,7 +145,7 @@ impl Argv {
         head_basename(&self.head)
     }
 
-    fn collect_commands<'a>(&'a self, out: &mut Vec<&'a Self>) {
+    pub(crate) fn collect_commands<'a>(&'a self, out: &mut Vec<&'a Self>) {
         out.push(self);
         for inner in &self.inner_argv {
             inner.collect_commands(out);

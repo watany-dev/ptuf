@@ -153,6 +153,13 @@ fn collect_sensitive(
     {
         sensitive::classify_content_into(&body, &mut out);
     }
+    if let Some(b) = bash {
+        for body in patch::bash_bodies(b) {
+            if let Some(added) = patch::added_content(&body) {
+                sensitive::classify_content_into(&added, &mut out);
+            }
+        }
+    }
 
     out
 }
