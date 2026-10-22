@@ -231,7 +231,7 @@ rules:
 | `tool` | `string` | `tool_name` と一致 |
 | `toolAny` | `string[]` | `tool_name` がいずれかに一致 |
 | `shell.argv` | `{ headAny: [string] }` | command head がいずれかに一致。`bash -c`, `eval`, `xargs`, `find -exec` のような wrapper で surfaced した nested command も含む |
-| `shell.pipeline` | `{ from: { commandAny: [...] }, to: { commandAny: [...] } }` | pipeline に from→to の流れがある |
+| `shell.pipeline` | `{ from: { commandAny: [...] }, to: { commandAny: [...] } }` | pipeline に from→to の流れがある (head は basename で照合し、末尾の版番号 `[0-9.]+` を除いた名前でも照合する: `python3.12` は `python` に一致) |
 | `shell.ast` | — | **未サポート** — `capabilities.requires` では宣言できるが `when:` leaf には使えない |
 | `path.filePathPrefixAny` | `string[]` | 抽出 path を正規化し、prefix は祖先の directory alias (`/tmp` → `/private/tmp`) を辿ったうえで component 単位の `Path::starts_with` で判定。最終成分が別名へ飛ぶ symlink (`build-link` → `/`) は辿らない。文字列 prefix や部分一致 (`/home/me/proj` 対 `/home/me/proj-secrets`) では一致しない |
 | `url.schemeAny` | `string[]` | URL scheme が一致 |

