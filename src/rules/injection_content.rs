@@ -956,6 +956,13 @@ mod tests {
     }
 
     #[test]
+    fn finding_line_counts_newlines_before_it() {
+        let finding = scan_bytes("a\nb\nc\u{200B}".as_bytes(), Origin::START).expect("finding");
+        assert_eq!(finding.line, Some(3));
+        assert_eq!(finding.byte, 5);
+    }
+
+    #[test]
     fn locate_line_finds_byte_of_line_past_first_chunk() {
         // 10-byte lines; line 6601 starts at byte 66000, beyond the
         // 64 KiB read chunk. `offset` 6602 targets line 6601.
