@@ -1963,6 +1963,18 @@ mod tests {
             ("$'\\q'", "\\q"),
             ("$'\\x'", "\\x"),
             ("$'a\\0b'", "a"),
+            ("$'\\a\\b\\e\\E\\f\\v'", "\u{7}\u{8}\u{1b}\u{1b}\u{c}\u{b}"),
+            ("$'1\\n2\\r3\\t4'", "1\n2\r3\t4"),
+            // Octal takes at most three digits, hex `\x` at most two.
+            ("$'\\1621'", "r1"),
+            ("$'\\x41B'", "AB"),
+            ("$'\\162'", "r"),
+            ("$'\\x72'", "r"),
+            // A trailing lone backslash in an unterminated span.
+            ("$'ab\\", "ab\\"),
+            // Digits running into the end of an unterminated span.
+            ("$'\\162", "r"),
+            ("$'\\x72", "r"),
         ] {
             assert_eq!(parse(cmd).segments[0].commands[0].head, head, "{cmd:?}");
         }
