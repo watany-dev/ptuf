@@ -265,15 +265,42 @@ pub(crate) fn load_for(repo_root: Option<&Path>) -> Result<Config, ConfigError> 
 /// public [`load_for`] helper as well as by integration tests that
 /// inject fixture directories.
 pub(crate) fn load_with_layout(layout: scope::Layout) -> Result<Config, ConfigError> {
+    let project_layers = [layout.project.as_deref(), layout.project_local.as_deref()];
     let mut layers = Vec::new();
     for path in layout.ordered_paths() {
         if !path.is_file() {
             continue;
         }
-        let raw = yaml::load_path(&path)?;
+        let mut raw = yaml::load_path(&path)?;
+        if project_layers.contains(&Some(path.as_path())) {
+            confine_project_audit_path(&mut raw, &path);
+        }
         layers.push(raw);
     }
     merge::merge(layers)
+}
+
+/// A repository's `.ptuf.yaml` / `.ptuf.local.yaml` arrives with the
+/// clone and is not trusted to pick where ptuf writes: an `audit.path`
+/// outside the repository (e.g. `~/.claude/settings.json` or
+/// `~/.bashrc`) would let a cloned repo make every hook call append to
+/// an arbitrary file. Keep the value only when it stays lexically inside
+/// the directory holding the config file; otherwise drop it so a
+/// lower (system / user) layer or the default path applies.
+fn confine_project_audit_path(raw: &mut schema::RawConfig, config_path: &Path) {
+    let Some(root) = config_path.parent() else {
+        raw.audit.path = None;
+        return;
+    };
+    let inside = raw.audit.path.as_deref().is_some_and(|p| {
+        p.strip_prefix(root).is_ok_and(|rest| {
+            rest.components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+        })
+    });
+    if !inside {
+        raw.audit.path = None;
+    }
 }
 
 #[cfg(test)]
@@ -335,6 +362,39 @@ mod tests {
         let dyn_ver: &dyn std::error::Error = &ver_err;
         assert!(dyn_ver.source().is_none());
         assert!(format!("{ver_err}").contains("version 2"));
+    }
+
+    #[test]
+    fn project_layers_cannot_point_audit_outside_the_repository() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).expect("mkdir");
+        let user = dir.path().join("user.yaml");
+        std::fs::write(&user, "audit:\n  path: /var/log/ptuf/user.jsonl\n").expect("write");
+        let layout = |project: &Path| scope::Layout {
+            system: None,
+            user: Some(user.clone()),
+            project: Some(project.to_path_buf()),
+            project_local: None,
+        };
+        let project = repo.join(".ptuf.yaml");
+        for outside in [
+            "~/.claude/settings.json",
+            "/tmp/elsewhere.jsonl",
+            "../sibling/audit.jsonl",
+            "logs/../../escape.jsonl",
+        ] {
+            std::fs::write(&project, format!("audit:\n  path: {outside}\n")).expect("write");
+            let cfg = load_with_layout(layout(&project)).expect("load");
+            assert_eq!(
+                cfg.audit.path,
+                Some(PathBuf::from("/var/log/ptuf/user.jsonl")),
+                "{outside} must fall back to the user layer"
+            );
+        }
+        std::fs::write(&project, "audit:\n  path: logs/audit.jsonl\n").expect("write");
+        let cfg = load_with_layout(layout(&project)).expect("load");
+        assert_eq!(cfg.audit.path, Some(repo.join("logs/audit.jsonl")));
     }
 
     #[test]
