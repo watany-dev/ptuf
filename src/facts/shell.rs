@@ -1085,6 +1085,11 @@ fn augment_inner_commands(argv: &mut Argv, nesting_budget: usize) {
     if let Some(inner) = extract_find_exec_inner(argv, nesting_budget) {
         argv.inner_argv.push(inner);
     }
+    // `git -c core.sshCommand='…'` / `alias.x='!…'` / `git config
+    // core.pager '…'`: git hands these values to `sh -c`.
+    for code in crate::facts::git::exec_payloads(argv) {
+        merge_inner_shell(argv, &code, nesting_budget);
+    }
 }
 
 fn merge_inner_shell(argv: &mut Argv, code: &str, nesting_budget: usize) {

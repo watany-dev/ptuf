@@ -15,6 +15,7 @@
 
 use crate::HookInput;
 
+pub(crate) mod git;
 pub(crate) mod patch;
 pub(crate) mod path;
 pub(crate) mod project;
