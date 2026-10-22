@@ -1369,6 +1369,13 @@ mod tests {
     }
 
     #[test]
+    fn skip_backquoted_steps_over_escaped_backquotes() {
+        // `\`` inside a backquoted span is a literal backquote, not the close.
+        assert_eq!(skip_backquoted(b"a\\`b`x", 0), Some(5));
+        assert_eq!(skip_backquoted(b"ab\\`", 0), None);
+    }
+
+    #[test]
     fn parses_simple_command() {
         let b = parse("rm -rf /");
         assert_eq!(b.segments.len(), 1);
