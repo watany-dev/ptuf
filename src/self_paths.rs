@@ -1710,6 +1710,26 @@ mod tests {
         assert!(!fnmatch(b"[!a]", b"a"));
         // `?` needs a character.
         assert!(!fnmatch(b"a?", b"a"));
+        // A range after the negation marker is still a range.
+        assert!(!fnmatch(b"[!a-c]", b"b"));
+        assert!(fnmatch(b"[!a-c]", b"d"));
+        assert!(fnmatch(b"[xa-c]", b"b"));
+        // A trailing `-` before `]` is a member, not a range.
+        assert!(!fnmatch(b"[!xa-]", b"-"));
+        assert!(fnmatch(b"[!xa-]", b"b"));
+        // An unterminated `[` (even one ending in `-`) is a literal.
+        assert!(fnmatch(b"[a-", b"[a-"));
+        assert!(!fnmatch(b"[ab", b"xab"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_glob_matches_compares_non_utf8_components_exactly() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = |b: &[u8]| PathBuf::from(std::ffi::OsStr::from_bytes(b));
+        let pat = path(b"/a/\xff/*.json");
+        assert!(path_glob_matches(&pat, &path(b"/a/\xff/x.json"), false));
+        assert!(!path_glob_matches(&pat, &path(b"/a/\xfe/x.json"), false));
     }
 
     #[test]
