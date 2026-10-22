@@ -780,7 +780,7 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
                     push_latin1(&mut buf, &bytes[i..=i]);
                     i += 1;
                 }
-                let body = latin1_slice(&bytes[body_start..i]);
+                let body = unescape_backquoted(&bytes[body_start..i]);
                 if !body.is_empty() {
                     bodies.push(body);
                 }
@@ -932,6 +932,25 @@ fn absorb_parens(bytes: &[u8], i: &mut usize, buf: &mut String, bodies: Option<&
         buf.push(pc as char);
         *i += 1;
     }
+}
+
+/// Body of a `` `…` `` substitution as bash runs it: inside backquotes
+/// `\\`, `` \` `` and `\$` lose their backslash, so a nested
+/// `` \`cmd\` `` becomes a real substitution when the body is re-parsed.
+/// Every other backslash is kept.
+fn unescape_backquoted(bytes: &[u8]) -> String {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && matches!(bytes[i + 1], b'\\' | b'`' | b'$') {
+            out.push(bytes[i + 1]);
+            i += 2;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    latin1_slice(&out)
 }
 
 /// Decode a byte slice the same way [`push_latin1`] appends — ASCII as
@@ -1928,6 +1947,18 @@ mod tests {
         assert_eq!(b.segments.len(), 1);
         assert_eq!(b.segments[0].commands.len(), 0);
         assert_eq!(b.segments[0].redirects.len(), 1);
+    }
+
+    #[test]
+    fn nested_escaped_backticks_are_reparsed() {
+        let b = parse("echo `echo \\`rm -rf /\\``");
+        assert!(
+            b.commands()
+                .iter()
+                .any(|a| a.head == "rm" && a.args == ["-rf", "/"]),
+            "{b:?}"
+        );
+        assert_eq!(unescape_backquoted(br"a \\ \` \$ \n"), r"a \ ` $ \n");
     }
 
     #[test]
