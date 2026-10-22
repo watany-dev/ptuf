@@ -1638,6 +1638,61 @@ mod tests {
         assert!(fnmatch(b".c*", b".claude"));
         assert!(fnmatch(b"a[", b"a["));
         assert!(!fnmatch(b"[^s]*", b"settings"));
+        // `]` first in a set is a member, not the terminator.
+        assert!(fnmatch(b"[]a]", b"]"));
+        assert!(fnmatch(b"[]a]", b"a"));
+        // The negation marker is not itself a member.
+        assert!(fnmatch(b"[!a]", b"!"));
+        assert!(!fnmatch(b"[!a]", b"a"));
+        // `?` needs a character.
+        assert!(!fnmatch(b"a?", b"a"));
+    }
+
+    #[test]
+    fn path_glob_matches_respects_length_unless_prefix() {
+        let pat = Path::new("/a/*");
+        assert!(path_glob_matches(pat, Path::new("/a/b"), false));
+        assert!(!path_glob_matches(pat, Path::new("/a/b/c"), false));
+        assert!(path_glob_matches(pat, Path::new("/a/b/c"), true));
+        assert!(!path_glob_matches(pat, Path::new("/a"), true));
+    }
+
+    #[test]
+    fn literal_tail_skips_dot_and_empty_components() {
+        assert_eq!(
+            literal_tail("$D/./.claude//settings.json"),
+            Some(PathBuf::from(".claude/settings.json")),
+        );
+        assert_eq!(literal_tail("$D/config.yaml"), None);
+        assert_eq!(literal_tail(".claude/settings.json"), None);
+    }
+
+    #[test]
+    fn expand_cwd_references_leaves_longer_names() {
+        let cwd = Some(Path::new("/w"));
+        assert_eq!(expand_cwd_references("$PWD/a", cwd), "/w/a");
+        assert_eq!(expand_cwd_references("$PWD_X/a", cwd), "$PWD_X/a");
+        assert_eq!(expand_cwd_references("$PWDX/a", cwd), "$PWDX/a");
+        assert_eq!(expand_cwd_references("${PWD}/a", cwd), "/w/a");
+    }
+
+    #[test]
+    fn edits_in_place_needs_the_inplace_extension() {
+        let argv = |cmd: &str| crate::facts::shell::parse(cmd).segments[0].commands[0].clone();
+        assert!(edits_in_place(&argv("awk -i inplace '{print}' f")));
+        assert!(!edits_in_place(&argv("awk -i lib.awk '{print}' f")));
+        assert!(!edits_in_place(&argv("awk -f inplace f")));
+        assert!(edits_in_place(&argv("perl -pi -e 1 f")));
+        assert!(!edits_in_place(&argv("perl --include f")));
+    }
+
+    #[test]
+    fn heredoc_body_is_not_a_write_target() {
+        let p = repo_protected();
+        let cmd = "cat <<EOF\n$HOME/.claude/settings.json\n.claude/settings.json\nEOF\n";
+        assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+        let cmd = "cd sub && cat <<EOF\n../.claude/settings.json\nEOF\n";
+        assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
     }
 
     #[test]
