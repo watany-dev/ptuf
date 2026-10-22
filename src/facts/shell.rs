@@ -971,7 +971,8 @@ fn skip_double_quoted(bytes: &[u8], start: usize) -> Option<usize> {
             b'\\' => i += 2,
             b'"' => return Some(i + 1),
             b'`' => i = skip_backquoted(bytes, i + 1)?,
-            b'$' if bytes.get(i + 1) == Some(&b'(') => i = find_group_close(bytes, i + 2)? + 1,
+            // Resume on the closing `)`, a plain byte here.
+            b'$' if bytes.get(i + 1) == Some(&b'(') => i = find_group_close(bytes, i + 2)?,
             _ => i += 1,
         }
     }
@@ -1914,6 +1915,12 @@ mod tests {
             "echo \"$(echo '(')\" ; rm -rf /",
             "echo $(echo `echo )`); rm -rf /",
             "echo $(echo \\)) ; rm -rf /",
+            "echo $(echo \"$(echo \")\")\"); rm -rf /",
+            "echo $(echo \"$x\"); rm -rf /",
+            "echo $(echo \"`echo \"x\"`\"); rm -rf /",
+            "echo $(echo \"a\\\")b\"); rm -rf /",
+            "echo $( (echo a) ); rm -rf /",
+            "echo $( (echo (a)) ); rm -rf /",
         ] {
             let b = parse(cmd);
             assert_eq!(b.segments.len(), 2, "{cmd:?} -> {b:?}");
@@ -1922,6 +1929,38 @@ mod tests {
                 argv("rm", &["-rf", "/"]),
                 "{cmd:?}"
             );
+        }
+    }
+
+    #[test]
+    fn command_substitution_bodies_are_exact() {
+        let b = parse("echo $(echo \\)) ; rm -rf /");
+        assert_eq!(
+            b.segments[0].commands[0].subst_argv,
+            vec![argv("echo", &[")"])]
+        );
+        // The whole substitution stays one word, however its body nests
+        // quotes, backquotes and parentheses.
+        for word in [
+            "$(a)b",
+            "$( (echo a) )",
+            "$( (echo (a)) )",
+            "$(echo \"$(echo \")\")\")",
+            "$(echo \"`echo \"x\"`\")",
+            "$(echo \"`echo \")\"`\")",
+            "$(echo \"a\\\")b\")",
+            "$(echo \"$x)\")",
+        ] {
+            let b = parse(&format!("echo {word} x"));
+            assert_eq!(b.segments[0].commands[0].args, [word, "x"], "{word:?}");
+        }
+    }
+
+    #[test]
+    fn unterminated_quote_inside_substitution_does_not_panic() {
+        for cmd in ["echo $(echo \"abc", "echo $(echo \"a\\", "echo $(echo \"`x"] {
+            let b = parse(cmd);
+            assert_eq!(b.segments[0].commands[0].head, "echo", "{cmd:?}");
         }
     }
 
