@@ -922,7 +922,8 @@ fn brace_expand_into(word: &[(char, bool)], out: &mut Vec<Vec<(char, bool)>>) {
         };
         // `${…}` is parameter expansion, not brace expansion.
         if open > 0 && word[open - 1].0 == '$' {
-            search = close + 1;
+            // `word[close]` is the `}`, so the next `{` lies beyond it.
+            search = close;
             continue;
         }
         let alternatives: Vec<Vec<(char, bool)>> = if commas.is_empty() {
@@ -2133,6 +2134,10 @@ mod tests {
         assert_eq!(words("echo ${a,b}"), ["echo", "${a,b}"]);
         // A lone `0` is not zero padding.
         assert_eq!(words("echo {0..2}"), ["echo", "0", "1", "2", "{0..2}"]);
+        assert_eq!(
+            words("echo {0..10..5}"),
+            ["echo", "0", "5", "10", "{0..10..5}"]
+        );
         // Character ranges need letters.
         assert_eq!(words("echo {!..#}"), ["echo", "{!..#}"]);
         assert_eq!(words("r{m,} -rf /"), ["rm", "r", "r{m,}", "-rf", "/"]);
