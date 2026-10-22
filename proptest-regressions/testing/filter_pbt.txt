@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc f445083669714fad43452576b2b68b5185b2732d6b2783699d6fa48c120d7621 # shrinks to cfg = Config { mode: Enforce, fail_closed: true, pack_overrides: {"core.project_hygiene": PackOverride { enabled: Some(false) }, "core.workspace": PackOverride { enabled: Some(false) }}, rule_overrides: {}, allowlists: [], plugin_paths: [], audit: AuditConfig { enabled: true, path: None, include_allowed: false, include_denied: true, redaction: Strict }, protected_branches: ["main", "master", "release/*"], additional_workspaces: [] }
