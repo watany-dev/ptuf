@@ -819,6 +819,93 @@ rules:
     }
 
     #[test]
+    fn monitor_mode_keeps_hard_deny_when_a_later_rule_override_also_denies() {
+        // `aggregate` keeps the last of equal-kind decisions. A repo config
+        // that promotes the later `dynamic-eval` to deny must not let its
+        // demotion drag the co-firing hardDeny `destructive-rm` down with it.
+        let mut cfg = Config {
+            mode: Mode::Monitor,
+            ..Config::default()
+        };
+        cfg.rule_overrides.insert(
+            "core.engine.dynamic-eval".into(),
+            RuleOverride {
+                decision: Some(DecisionKind::Deny),
+                ..RuleOverride::default()
+            },
+        );
+        let outcome = engine_with(cfg).decide(&bash("bash -c 'rm -rf /'"));
+        match &outcome.decision {
+            Decision::Deny { rule_id, .. } => {
+                assert_eq!(rule_id, "core.filesystem.destructive-rm");
+            },
+            other => panic!("hardDeny must survive monitor mode, got {other:?}"),
+        }
+        assert!(!outcome.mode_demoted);
+    }
+
+    #[test]
+    fn monitor_mode_keeps_hard_deny_when_a_plugin_deny_also_fires() {
+        // Plugin rules run after every builtin, so a co-firing non-hardDeny
+        // plugin deny always wins the `aggregate` tie.
+        let mut set = PluginSet::new();
+        set.push(
+            load_str(
+                std::path::Path::new("team.yaml"),
+                r#"
+apiVersion: ptuf.dev/v1
+kind: Plugin
+metadata:
+  name: team
+rules:
+  - id: team.no-rm
+    severity: low
+    defaultDecision: deny
+    when:
+      shell.argv:
+        headAny: [rm]
+    reason: no rm
+"#,
+            )
+            .expect("team"),
+        );
+        let cfg = Config {
+            mode: Mode::Monitor,
+            ..Config::default()
+        };
+        let outcome = Engine::with_components(cfg, set).decide(&bash("rm -rf /"));
+        match &outcome.decision {
+            Decision::Deny { rule_id, .. } => {
+                assert_eq!(rule_id, "core.filesystem.destructive-rm");
+            },
+            other => panic!("hardDeny must survive monitor mode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn monitor_mode_demoted_deny_does_not_mask_a_co_firing_ask() {
+        // Monitor mode demotes deny only; an ask from another rule stays.
+        let mut cfg = Config {
+            mode: Mode::Monitor,
+            ..Config::default()
+        };
+        cfg.rule_overrides.insert(
+            "core.git.no-verify".into(),
+            RuleOverride {
+                decision: Some(DecisionKind::Deny),
+                ..RuleOverride::default()
+            },
+        );
+        let outcome = engine_with(cfg).decide(&bash("bash -c 'git commit --no-verify'"));
+        assert!(
+            matches!(outcome.decision, Decision::Ask { .. }),
+            "got {:?}",
+            outcome.decision
+        );
+        assert!(outcome.mode_demoted);
+    }
+
+    #[test]
     fn plugin_pack_can_be_disabled_via_config() {
         let yaml = r#"
 apiVersion: ptuf.dev/v1

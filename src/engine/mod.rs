@@ -370,10 +370,17 @@ impl Engine {
                 }
             }
         }
-        let raw = aggregate(decisions);
-        let demoted_decision = demote_for_mode(raw.clone(), self.config.mode, &self.plugins);
-        let mode_demoted = matches!(raw, Decision::Deny { .. })
-            && matches!(demoted_decision, Decision::Monitor { .. });
+        // Demote each rule's decision before aggregating, not the aggregate:
+        // `aggregate` keeps the last of equal-kind decisions, so demoting
+        // only the winner would let a later non-hardDeny deny drag a
+        // co-firing hardDeny down to Monitor.
+        let raw_is_deny = decisions.iter().any(|d| matches!(d, Decision::Deny { .. }));
+        let demoted_decision = aggregate(
+            decisions
+                .into_iter()
+                .map(|d| demote_for_mode(d, self.config.mode, &self.plugins)),
+        );
+        let mode_demoted = raw_is_deny && !matches!(demoted_decision, Decision::Deny { .. });
         let allowlist_ids: Vec<String> =
             allowlist_hits.iter().map(|id| (*id).to_string()).collect();
         let allowlist_id = if matches!(demoted_decision, Decision::Allow) {
