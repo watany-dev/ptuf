@@ -2058,6 +2058,11 @@ mod tests {
                 "{args:?}"
             );
         }
+        // Only flags before CMD count: `-v` after it belongs to CMD.
+        for args in [&["rm", "-v", "-rf", "/"][..], &["-p", "--", "rm", "-v"]] {
+            let inner = unwrap_prefix_wrapper(&argv("command", args)).expect("unwraps");
+            assert_eq!(inner.head, "rm", "{args:?}");
+        }
     }
 
     #[test]
