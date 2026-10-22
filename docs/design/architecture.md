@@ -31,9 +31,9 @@ facts::extract()
   ↓
 built-in rules + plugin rules
   ↓
-aggregate(deny > ask > monitor > allow)
+rule ごとに mode に応じて demote (hardDeny は対象外)
   ↓
-mode に応じて demote
+aggregate(deny > ask > monitor > allow)
   ↓
 hook response / eval text / audit JSONL
 ```
