@@ -113,7 +113,8 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
     let adapted = match agent {
         HookAgent::ClaudeCode | HookAgent::Codex => {
             return serde_json::from_str::<HookInput>(body)
-                .map_err(|err| format!("hook payload is not valid JSON ({err})"));
+                .map_err(|err| format!("hook payload is not valid JSON ({err})"))
+                .and_then(require_bash_command);
         },
         HookAgent::Copilot => copilot_input::parse(body),
         HookAgent::KiroV2 => kiro_input::parse(body),
@@ -123,7 +124,19 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
         HookAgent::Pi => pi_input::parse(body),
         HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => opencode_input::parse(body),
     };
-    adapted.map_err(|err| err.to_string())
+    adapted
+        .map_err(|err| err.to_string())
+        .and_then(require_bash_command)
+}
+
+/// Every Bash rule reads `tool_input.command` as a string; without one
+/// the parser never runs and the call would sail through as allow.
+/// Treat that shape as an invalid payload so it fails closed instead.
+fn require_bash_command(input: HookInput) -> Result<HookInput, String> {
+    if input.tool_name == "Bash" && input.bash_command().is_none() {
+        return Err("hook payload Bash tool_input.command must be a string".into());
+    }
+    Ok(input)
 }
 
 pub(super) fn run_check<W1: Write, W2: Write>(
@@ -1066,6 +1079,36 @@ mod tests {
         assert_eq!(code, 0);
         assert_eq!(out.len(), 0);
         assert!(err.is_empty(), "unexpected stderr: {err}");
+    }
+
+    #[test]
+    fn hook_fails_closed_when_bash_command_is_not_a_string() {
+        for (agent, payload) in [
+            (
+                "codex",
+                r#"{"tool_name":"Bash","tool_input":{"command":["bash","-lc","rm -rf /"]}}"#,
+            ),
+            (
+                "claude-code",
+                r#"{"tool_name":"Bash","tool_input":{"cmd":"rm -rf /"}}"#,
+            ),
+            (
+                "claude-code",
+                r#"{"tool_name":"Bash","tool_input":"rm -rf /"}"#,
+            ),
+            ("claude-code", r#"{"tool_name":"Bash"}"#),
+            (
+                "cline",
+                r#"{"hookName":"tool_call","tool_call":{"name":"execute_command","input":{}}}"#,
+            ),
+        ] {
+            // Cline blocks with exit 0 + `cancel: true`, so judge by the rule.
+            let (_code, out, err) = run_with(&["hook", agent], payload);
+            assert!(
+                err.contains(INVALID_PAYLOAD_RULE),
+                "{agent} {payload}: {out} {err}"
+            );
+        }
     }
 
     #[test]
