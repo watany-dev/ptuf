@@ -426,6 +426,27 @@ mod tests {
     }
 
     #[test]
+    fn is_ptuf_package_requires_a_tap_for_slashed_names() {
+        for yes in [
+            "ptuf",
+            "ptuf@0.1.0",
+            "@watany-dev/ptuf",
+            "@watany-dev/ptuf@1",
+            "watany-dev/tap/ptuf",
+        ] {
+            assert!(is_ptuf_package(yes), "{yes}");
+        }
+        for no in [
+            "someone/ptuf",
+            "watany-dev/tap/other",
+            "ptuf-extra",
+            "@other/ptuf",
+        ] {
+            assert!(!is_ptuf_package(no), "{no}");
+        }
+    }
+
+    #[test]
     fn rule_ids_are_kebab_case_under_self_protection() {
         for id in [
             BINARY_RULE.id(),
