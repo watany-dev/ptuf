@@ -63,7 +63,13 @@ stdout に `{}` を出し、`shouldContinue` は一切出さない。
 block する。repository 側の `.ptuf.yaml` で `mode: monitor` を指定しても、
 `destructive-rm` や `remote-script-pipe` などの critical rule は弱化できない。
 
-降格前の結果が `Deny` で、mode によって `Monitor` へ変わった場合は
+降格は集約前に rule ごとに適用する。`aggregate` は同じ kind の決定が複数あると
+最後のものを返すため、集約後の 1 件だけを降格すると、後ろに評価される
+非 `hardDeny` の `Deny` (rule override で格上げしたもの、plugin rule など) と
+同時に発火した `hardDeny` まで `Monitor` に落ちてしまう。rule ごとの降格では
+非 `hardDeny` の `Deny` だけが `Monitor` になり、同時に発火した `Ask` もそのまま残る。
+
+降格前にいずれかの rule が `Deny` を返し、mode による降格で最終結果が `Deny` でなくなった場合は
 `Outcome.mode_demoted = true` となり、audit の `modeDemoted` にも反映される。
 
 ## fail-closed の境界

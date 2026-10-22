@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- `mode: monitor` で、hardDeny ルールと同時に発火した非 hardDeny の deny
+  (rule override による格上げや plugin ルールなど、評価順が後ろのもの) が
+  hardDeny ごと `Monitor` に降格されていた問題を修正。降格を集約前に
+  ルールごとに適用するようにした。副次的に、降格された deny が同時に発火した
+  ask を隠して `Monitor` になることもなくなった。(#278)
+
 ## [0.7.0] - 2026-10-21
 
 ### Changed (BREAKING)

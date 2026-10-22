@@ -818,6 +818,63 @@ rules:
         assert!(!outcome.mode_demoted);
     }
 
+    /// Monitor-mode config that promotes `rule_id` to deny.
+    fn monitor_cfg_promoting_to_deny(rule_id: &str) -> Config {
+        let mut cfg = Config {
+            mode: Mode::Monitor,
+            ..Config::default()
+        };
+        cfg.rule_overrides.insert(
+            rule_id.into(),
+            RuleOverride {
+                decision: Some(DecisionKind::Deny),
+                ..RuleOverride::default()
+            },
+        );
+        cfg
+    }
+
+    #[test]
+    fn monitor_mode_keeps_hard_deny_when_a_later_rule_override_also_denies() {
+        // `aggregate` keeps the last of equal-kind decisions. A repo config
+        // that promotes the later `dynamic-eval` to deny must not let its
+        // demotion drag the co-firing hardDeny `destructive-rm` down with it.
+        let cfg = monitor_cfg_promoting_to_deny("core.engine.dynamic-eval");
+        let outcome = engine_with(cfg).decide(&bash("bash -c 'rm -rf /'"));
+        assert_eq!(outcome.decision.kind(), DecisionKind::Deny);
+        assert_eq!(
+            outcome.decision.rule_id(),
+            Some("core.filesystem.destructive-rm")
+        );
+        assert!(!outcome.mode_demoted);
+    }
+
+    #[test]
+    fn monitor_mode_keeps_hard_deny_when_a_plugin_deny_also_fires() {
+        // Plugin rules run after every builtin, so a co-firing non-hardDeny
+        // plugin deny always wins the `aggregate` tie.
+        let cfg = Config {
+            mode: Mode::Monitor,
+            ..Config::default()
+        };
+        let outcome =
+            Engine::with_components(cfg, plugin_set_with_bash_deny()).decide(&bash("rm -rf /"));
+        assert_eq!(outcome.decision.kind(), DecisionKind::Deny);
+        assert_eq!(
+            outcome.decision.rule_id(),
+            Some("core.filesystem.destructive-rm")
+        );
+    }
+
+    #[test]
+    fn monitor_mode_demoted_deny_does_not_mask_a_co_firing_ask() {
+        // Monitor mode demotes deny only; an ask from another rule stays.
+        let cfg = monitor_cfg_promoting_to_deny("core.git.no-verify");
+        let outcome = engine_with(cfg).decide(&bash("bash -c 'git commit --no-verify'"));
+        assert_eq!(outcome.decision.kind(), DecisionKind::Ask);
+        assert!(outcome.mode_demoted);
+    }
+
     #[test]
     fn plugin_pack_can_be_disabled_via_config() {
         let yaml = r#"

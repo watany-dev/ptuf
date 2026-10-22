@@ -42,7 +42,7 @@ redaction を通してから書き込む。
 | `commandRedacted` | string | redaction 後の command または `(tool=<name>)` |
 | `projectRoot` | string \| null | repo root が分かった場合 |
 | `mode` | string | `enforce` / `monitor` |
-| `modeDemoted` | bool | deny が monitor に降格された場合のみ `true` で出力 |
+| `modeDemoted` | bool | mode による deny の降格で最終 decision が `Deny` でなくなった場合のみ `true` で出力 |
 | `allowlistId` | string \| null | allowlist suppression で最終 decision が `Allow` になった場合の先頭 1 件 |
 | `allowlistIds` | string[] | この評価で rule を抑止した allowlist id の全件。空なら省略。最終 decision が `Allow` でなくても残る |
 | `agent` | string | `claude-code` / `codex` / `copilot` / `kiro` / `cline` / `cli` / `unknown` |
