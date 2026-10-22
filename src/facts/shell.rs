@@ -1982,6 +1982,22 @@ mod tests {
     }
 
     #[test]
+    fn ansi_c_helpers_stop_at_the_end_of_input() {
+        let mut buf = String::new();
+        // Unterminated: the index is the input length, never past it.
+        assert_eq!(read_ansi_c_quoted(b"ab", 0, &mut buf), 2);
+        assert_eq!(buf, "ab");
+        // Hex digits running into the end of input.
+        assert_eq!(decode_ansi_c_escape(b"x72", 0), (0x72, 3));
+        assert_eq!(decode_ansi_c_escape(b"x7", 0), (0x7, 2));
+        // `\c` with nothing after it is kept literally.
+        assert_eq!(decode_ansi_c_escape(b"c", 0), (u32::from(b'\\'), 0));
+        assert_eq!(decode_ansi_c_escape(b"cJ", 0), (0x0a, 2));
+        // `\u` takes at most four hex digits.
+        assert_eq!(decode_ansi_c_escape(b"u00410", 0), (0x41, 5));
+    }
+
+    #[test]
     fn flags_process_substitution_input() {
         let b = parse("diff <(a) <(b)");
         assert!(b.has_process_substitution);

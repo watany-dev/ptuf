@@ -39,5 +39,19 @@ exclude_re = [
     'replace \+= with \-= in tokenize',
     'replace \+= with \*= in tokenize',
     'replace \+= with [-*]= in (read_word|read_heredoc_body|absorb_parens|plain_run_len)',
+    # `plain_run_len` is a fast path: returning 0 only makes the caller
+    # take the byte-at-a-time loop (equivalent; see mutants-inventory.md).
+    'replace plain_run_len -> usize with 0',
+    # A `read_word` that consumes nothing stalls the lexer, and one that
+    # returns a fixed substitution body re-parses it forever: both only
+    # ever time out.
+    'replace read_word -> .* with \(.*, 0, (true|false), .*\)',
+    'replace read_word -> .* with .*vec!\["xyzzy"\.into\(\)\]\)',
     'replace Engine::builder -> EngineBuilder with Default::default\(\)',
+    # Index arithmetic in the ANSI-C (`$'…'`) decoder: stepping backwards
+    # or not at all only ever spins until the per-mutant timeout.
+    'replace read_ansi_c_quoted -> usize with [01]',
+    'replace \+ with - in (read_ansi_c_quoted|decode_ansi_c_escape)',
+    'replace \+ with \* in read_ansi_c_quoted',
+    'replace \+= with \*= in decode_ansi_c_escape',
 ]
