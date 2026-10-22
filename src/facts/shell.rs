@@ -2034,6 +2034,17 @@ mod tests {
     }
 
     #[test]
+    fn lone_reserved_word_stays_the_head() {
+        // Nothing follows `done` / `}` to promote, so the word itself
+        // remains the command rather than vanishing.
+        for word in ["done", "}", "fi"] {
+            let b = parse(word);
+            let heads: Vec<&str> = b.commands().iter().map(|a| a.head.as_str()).collect();
+            assert_eq!(heads, [word], "{word:?} -> {b:?}");
+        }
+    }
+
+    #[test]
     fn exec_and_builtin_unwrap_like_command() {
         let inner = unwrap_all_prefix_wrappers(&argv("exec", &["-a", "x", "rm", "-rf", "/"]));
         assert_eq!(inner, argv("rm", &["-rf", "/"]));

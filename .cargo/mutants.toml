@@ -39,5 +39,8 @@ exclude_re = [
     'replace \+= with \-= in tokenize',
     'replace \+= with \*= in tokenize',
     'replace \+= with [-*]= in (read_word|read_heredoc_body|absorb_parens|plain_run_len)',
+    # `plain_run_len` is a fast path: returning 0 only makes the caller
+    # take the byte-at-a-time loop (equivalent; see mutants-inventory.md).
+    'replace plain_run_len -> usize with 0',
     'replace Engine::builder -> EngineBuilder with Default::default\(\)',
 ]
