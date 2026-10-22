@@ -319,6 +319,16 @@ const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
         name: "command",
         value_flags: &[],
     },
+    // `exec [-cl] [-a NAME] CMD` replaces the shell with CMD.
+    PrefixWrapper {
+        name: "exec",
+        value_flags: &[Short('a')],
+    },
+    // `builtin NAME` runs a shell builtin (`builtin source .env`).
+    PrefixWrapper {
+        name: "builtin",
+        value_flags: &[],
+    },
 ];
 
 /// Return the command a prefix wrapper would execute.
@@ -508,7 +518,11 @@ fn tokenize(s: &str) -> TokenizeOutput {
             i += 1;
             continue;
         }
-        if c == b';' {
+        // `;` and unquoted `(` / `)` (subshells, function definitions
+        // `f() {`, case patterns `x)`) end a command. Process / command
+        // substitution openers (`<(`, `>(`, `$(`) never reach here: they
+        // are absorbed as words below or inside `read_word`.
+        if matches!(c, b';' | b'(' | b')') {
             out.push(Token::Semi);
             i += 1;
             continue;
@@ -764,6 +778,10 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
             absorb_parens(bytes, &mut i, &mut buf, Some(&mut bodies));
             continue;
         }
+        // A bare `(` / `)` is a command boundary (see `tokenize`).
+        if matches!(c, b'(' | b')') {
+            break;
+        }
         if c == b'\'' || c == b'"' || c == b'`' {
             if c == b'`' {
                 // Backtick command substitution: absorb to closing `
@@ -839,7 +857,7 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
 /// Length of the leading run of plain word bytes (see
 /// [`is_plain_word_byte`]). Typical tokens end within the bytewise
 /// prefix scan; pathological megabyte words fall through to `memchr`
-/// SIMD sweeps over the 15-byte special set (five triples).
+/// SIMD sweeps over the 17-byte special set (six triples).
 fn plain_run_len(bytes: &[u8]) -> usize {
     let quick = bytes.len().min(64);
     let mut i = 0;
@@ -860,6 +878,7 @@ fn plain_run_len(bytes: &[u8]) -> usize {
         (b'&', b';', b'\\'),
         (b'<', b'>', b'$'),
         (b'\'', b'"', b'`'),
+        (b'(', b')', b'('),
     ] {
         if let Some(p) = memchr::memchr3(a, b, c, &rest[..end]) {
             end = p;
@@ -877,7 +896,7 @@ const fn is_plain_word_byte(b: u8) -> bool {
     !(b.is_ascii_whitespace()
         || matches!(
             b,
-            b'|' | b'&' | b';' | b'\\' | b'<' | b'>' | b'$' | b'\'' | b'"' | b'`'
+            b'|' | b'&' | b';' | b'\\' | b'<' | b'>' | b'$' | b'\'' | b'"' | b'`' | b'(' | b')'
         ))
 }
 
@@ -1045,6 +1064,7 @@ fn parse_argv(words: Vec<(String, Vec<String>)>, nesting_budget: usize) -> Argv 
             None => break,
         }
     }
+    peel_reserved_words(&mut words);
     let head = words.pop_front().unwrap_or_default();
     let mut argv = Argv {
         env_assignments,
@@ -1067,6 +1087,49 @@ fn parse_argv(words: Vec<(String, Vec<String>)>, nesting_budget: usize) -> Argv 
         }
     }
     argv
+}
+
+/// Reserved words that introduce (or close) a compound command and are
+/// followed directly by the command they wrap: `if cmd`, `then cmd`,
+/// `do cmd`, `{ cmd`, `! cmd`, `time cmd`, ... Peeling them makes the
+/// real command the head, so `if true; then rm -rf /; fi` and
+/// `{ rm -rf /; }` are checked like the bare `rm -rf /`.
+const RESERVED_PREFIXES: &[&str] = &[
+    "{", "}", "!", "if", "then", "elif", "else", "while", "until", "do", "done", "fi", "esac",
+];
+
+fn peel_reserved_words(words: &mut std::collections::VecDeque<String>) {
+    while words.len() > 1 {
+        let Some(first) = words.front().map(String::as_str) else {
+            break;
+        };
+        match first {
+            w if RESERVED_PREFIXES.contains(&w) => {
+                words.pop_front();
+            },
+            // `time [-p] cmd`
+            "time" => {
+                words.pop_front();
+                if words.front().is_some_and(|w| w == "-p") {
+                    words.pop_front();
+                }
+            },
+            // `coproc cmd` / `coproc NAME { cmd; }`
+            "coproc" => {
+                words.pop_front();
+                if words.len() > 1 && words.get(1).is_some_and(|w| w == "{") {
+                    words.pop_front();
+                }
+            },
+            // `function NAME { cmd; }`: the body follows the name (a
+            // `()` after the name is already a command boundary).
+            "function" => {
+                words.pop_front();
+                words.pop_front();
+            },
+            _ => break,
+        }
+    }
 }
 
 fn augment_inner_commands(argv: &mut Argv, nesting_budget: usize) {
@@ -1931,14 +1994,62 @@ mod tests {
     }
 
     #[test]
+    fn compound_commands_expose_inner_heads() {
+        for cmd in [
+            "(rm -rf /)",
+            "(cd x && rm -rf /)",
+            "{ rm -rf /; }",
+            "if true; then rm -rf /; fi",
+            "if false; then :; else rm -rf /; fi",
+            "for i in 1; do rm -rf /; done",
+            "while false; do rm -rf /; done",
+            "until true; do rm -rf /; done",
+            "! rm -rf /",
+            "time -p rm -rf /",
+            "f(){ rm -rf /; }; f",
+            "f() { rm -rf /; }",
+            "function f { rm -rf /; }",
+            "case x in x) rm -rf /;; esac",
+            "coproc rm -rf /",
+            "coproc N { rm -rf /; }",
+        ] {
+            let b = parse(cmd);
+            assert!(
+                b.commands()
+                    .iter()
+                    .any(|a| a.head == "rm" && a.args == ["-rf", "/"]),
+                "{cmd:?} -> {b:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn exec_and_builtin_unwrap_like_command() {
+        let inner = unwrap_all_prefix_wrappers(&argv("exec", &["-a", "x", "rm", "-rf", "/"]));
+        assert_eq!(inner, argv("rm", &["-rf", "/"]));
+        let inner = unwrap_all_prefix_wrappers(&argv("builtin", &["source", ".env"]));
+        assert_eq!(inner, argv("source", &[".env"]));
+    }
+
+    #[test]
+    fn quoted_and_substituted_parens_stay_in_words() {
+        let b = parse(r#"echo "(a)" '(b)' $(echo (c)) <(ls)"#);
+        assert_eq!(b.segments.len(), 1);
+        assert_eq!(
+            b.segments[0].commands[0].args,
+            ["(a)", "(b)", "$(echo (c))", "<(ls)"]
+        );
+    }
+
+    #[test]
     fn read_word_advances_for_every_non_separator_byte() {
         // Forward-progress contract for `read_word`: when called after
         // the caller has filtered whitespace and the separator bytes,
         // it must always consume at least one byte. Walk every printable
-        // ASCII byte that is neither whitespace nor `|`/`&`/`;` and
-        // ensure the lexer terminates with at least one token.
+        // ASCII byte that is neither whitespace nor `|`/`&`/`;`/`(`/`)`
+        // and ensure the lexer terminates with at least one token.
         for byte in 0x21u8..=0x7eu8 {
-            if matches!(byte, b'|' | b'&' | b';') {
+            if matches!(byte, b'|' | b'&' | b';' | b'(' | b')') {
                 continue;
             }
             let buf = [byte];
