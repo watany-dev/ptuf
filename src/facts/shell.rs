@@ -2127,6 +2127,14 @@ mod tests {
         };
         // Each expansion is followed by the literal word itself.
         assert_eq!(words("{rm,-rf,/}"), ["rm", "-rf", "/", "{rm,-rf,/}"]);
+        // A one-term sequence still differs from the literal.
+        assert_eq!(words("echo {a..a}"), ["echo", "a", "{a..a}"]);
+        // `${a,b}` is parameter expansion (case modification).
+        assert_eq!(words("echo ${a,b}"), ["echo", "${a,b}"]);
+        // A lone `0` is not zero padding.
+        assert_eq!(words("echo {0..2}"), ["echo", "0", "1", "2", "{0..2}"]);
+        // Character ranges need letters.
+        assert_eq!(words("echo {!..#}"), ["echo", "{!..#}"]);
         assert_eq!(words("r{m,} -rf /"), ["rm", "r", "r{m,}", "-rf", "/"]);
         assert_eq!(
             words("rm -rf /{etc,usr}"),
