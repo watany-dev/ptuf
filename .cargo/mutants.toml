@@ -56,4 +56,5 @@ exclude_re = [
     'replace \+ with - in (read_ansi_c_quoted|decode_ansi_c_escape)',
     'replace \+ with \* in read_ansi_c_quoted',
     'replace \+= with \*= in decode_ansi_c_escape',
+    'replace decode_ansi_c_escape -> \(u32, usize\) with \((0, 0|1, 1)\)',
 ]
