@@ -630,7 +630,7 @@ fn tokenize(s: &str) -> TokenizeOutput {
             }
         }
         // Otherwise: read a word, honouring quotes.
-        let (word, advanced, word_subst, bodies) = read_word(&bytes[i..]);
+        let (word, advanced, word_subst, bodies, braces) = read_word_with_braces(&bytes[i..]);
         // Forward-progress invariant: every separator and whitespace
         // byte is consumed above, so `read_word` is always called on a
         // non-trivial first byte and must advance by at least 1. The
@@ -640,10 +640,27 @@ fn tokenize(s: &str) -> TokenizeOutput {
         if word_subst {
             saw_command_substitution = true;
         }
-        out.push(Token::Word {
-            text: word,
-            subst_bodies: bodies,
-        });
+        if braces.is_empty() {
+            out.push(Token::Word {
+                text: word,
+                subst_bodies: bodies,
+            });
+        } else {
+            // Brace expansion yields several words (`{rm,-rf,/}` is
+            // `rm -rf /`); substitution bodies ride on the first one.
+            // The literal word is kept after the expansion as well, so
+            // classifiers keyed on brace punctuation (`cat {a,b}.env` is
+            // a dotenv read) still see it.
+            let mut bodies = Some(bodies);
+            let expanded = brace_expand(&word, &braces);
+            let literal = (expanded.len() != 1 || expanded[0] != word).then_some(word);
+            for text in expanded.into_iter().chain(literal) {
+                out.push(Token::Word {
+                    text,
+                    subst_bodies: bodies.take().unwrap_or_default(),
+                });
+            }
+        }
         i += advanced;
     }
     TokenizeOutput {
@@ -727,6 +744,14 @@ fn read_heredoc_body(bytes: &[u8], tag: &str) -> HeredocBody {
 /// (`|`, `&`, `;`) before calling — under that contract this function
 /// always consumes at least one byte.
 fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
+    let (buf, i, saw_subst, bodies, _) = read_word_with_braces(bytes);
+    (buf, i, saw_subst, bodies)
+}
+
+/// [`read_word`] plus the byte offsets (into the returned word) of every
+/// *unquoted* `{` / `,` / `}`: the only ones brace expansion acts on.
+fn read_word_with_braces(bytes: &[u8]) -> (String, usize, bool, Vec<String>, Vec<usize>) {
+    let mut braces = Vec::new();
     let mut buf = String::new();
     let mut i = 0;
     let mut saw_subst = false;
@@ -831,9 +856,170 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
         let run = i;
         i += 1;
         i += plain_run_len(&bytes[i..]);
-        push_latin1(&mut buf, &bytes[run..i]);
+        let span = &bytes[run..i];
+        if memchr::memchr3(b'{', b',', b'}', span).is_some() {
+            for &b in span {
+                if matches!(b, b'{' | b',' | b'}') {
+                    braces.push(buf.len());
+                }
+                push_latin1(&mut buf, std::slice::from_ref(&b));
+            }
+        } else {
+            push_latin1(&mut buf, span);
+        }
     }
-    (buf, i, saw_subst, bodies)
+    (buf, i, saw_subst, bodies, braces)
+}
+
+/// Upper bound on the words one brace expansion may produce. Beyond it
+/// the remaining alternatives are dropped (bash itself would happily
+/// generate millions).
+const BRACE_EXPANSION_CAP: usize = 256;
+
+/// Bash brace expansion (`{a,b}`, `{1..3}`, `{a..c}`, nested, with
+/// prefix / suffix) applied to the unquoted braces at `active` byte
+/// offsets. `${…}` parameter expansions and brace pairs without a
+/// top-level comma or a valid sequence stay literal, as in bash.
+fn brace_expand(word: &str, active: &[usize]) -> Vec<String> {
+    // Each char paired with "is an unquoted brace / comma".
+    let marked: Vec<(char, bool)> = word
+        .char_indices()
+        .map(|(pos, c)| (c, active.binary_search(&pos).is_ok()))
+        .collect();
+    let mut out = Vec::new();
+    brace_expand_into(&marked, &mut out);
+    out.into_iter()
+        .map(|w| w.into_iter().map(|(c, _)| c).collect())
+        .collect()
+}
+
+fn brace_expand_into(word: &[(char, bool)], out: &mut Vec<Vec<(char, bool)>>) {
+    if out.len() >= BRACE_EXPANSION_CAP {
+        return;
+    }
+    let mut search = 0;
+    while let Some(open) = (search..word.len()).find(|&p| word[p] == ('{', true)) {
+        let mut depth = 0usize;
+        let mut commas = Vec::new();
+        let mut close = None;
+        for (p, &(c, active)) in word.iter().enumerate().skip(open + 1) {
+            if !active {
+                continue;
+            }
+            match c {
+                '{' => depth += 1,
+                '}' if depth == 0 => {
+                    close = Some(p);
+                    break;
+                },
+                '}' => depth -= 1,
+                ',' if depth == 0 => commas.push(p),
+                _ => {},
+            }
+        }
+        let Some(close) = close else {
+            break;
+        };
+        // `${…}` is parameter expansion, not brace expansion.
+        if open > 0 && word[open - 1].0 == '$' {
+            search = close + 1;
+            continue;
+        }
+        let alternatives: Vec<Vec<(char, bool)>> = if commas.is_empty() {
+            let body: String = word[open + 1..close].iter().map(|(c, _)| c).collect();
+            let Some(seq) = brace_sequence(&body) else {
+                search = open + 1;
+                continue;
+            };
+            seq.into_iter()
+                .map(|s| s.chars().map(|c| (c, false)).collect())
+                .collect()
+        } else {
+            let mut alts = Vec::new();
+            let mut start = open + 1;
+            for &c in commas.iter().chain(std::iter::once(&close)) {
+                alts.push(word[start..c].to_vec());
+                start = c + 1;
+            }
+            alts
+        };
+        for alt in alternatives {
+            let mut next = word[..open].to_vec();
+            next.extend(alt);
+            next.extend_from_slice(&word[close + 1..]);
+            brace_expand_into(&next, out);
+            if out.len() >= BRACE_EXPANSION_CAP {
+                return;
+            }
+        }
+        return;
+    }
+    out.push(word.to_vec());
+}
+
+/// `{x..y[..step]}` over integers or single ASCII letters. `None` when
+/// the body is not a valid sequence expression.
+fn brace_sequence(body: &str) -> Option<Vec<String>> {
+    let parts: Vec<&str> = body.split("..").collect();
+    if !(2..=3).contains(&parts.len()) {
+        return None;
+    }
+    let step: i64 = match parts.get(2) {
+        Some(s) => s.parse::<i64>().ok()?.checked_abs()?.max(1),
+        None => 1,
+    };
+    let step = usize::try_from(step).ok()?;
+    if let (Ok(a), Ok(b)) = (parts[0].parse::<i64>(), parts[1].parse::<i64>()) {
+        // A leading zero on either end zero-pads every term (`{01..3}`).
+        let padded = |p: &str| {
+            p.trim_start_matches('-').len() > 1 && p.trim_start_matches('-').starts_with('0')
+        };
+        let width = if padded(parts[0]) || padded(parts[1]) {
+            parts[0].len().max(parts[1].len())
+        } else {
+            0
+        };
+        let fmt = |n: i64| format!("{n:0width$}");
+        let seq: Vec<String> = if a <= b {
+            (a..=b)
+                .step_by(step)
+                .take(BRACE_EXPANSION_CAP)
+                .map(fmt)
+                .collect()
+        } else {
+            (b..=a)
+                .rev()
+                .step_by(step)
+                .take(BRACE_EXPANSION_CAP)
+                .map(fmt)
+                .collect()
+        };
+        return Some(seq);
+    }
+    let (a, b) = (
+        single_ascii_letter(parts[0])?,
+        single_ascii_letter(parts[1])?,
+    );
+    let seq: Vec<String> = if a <= b {
+        (a..=b)
+            .step_by(step)
+            .map(|c| char::from(c).to_string())
+            .collect()
+    } else {
+        (b..=a)
+            .rev()
+            .step_by(step)
+            .map(|c| char::from(c).to_string())
+            .collect()
+    };
+    Some(seq)
+}
+
+fn single_ascii_letter(s: &str) -> Option<u8> {
+    match s.as_bytes() {
+        [b] if b.is_ascii_alphabetic() => Some(*b),
+        _ => None,
+    }
 }
 
 /// Length of the leading run of plain word bytes (see
@@ -1928,6 +2114,83 @@ mod tests {
         assert_eq!(b.segments.len(), 1);
         assert_eq!(b.segments[0].commands.len(), 0);
         assert_eq!(b.segments[0].redirects.len(), 1);
+    }
+
+    #[test]
+    fn brace_expansion_matches_bash() {
+        let words = |cmd: &str| -> Vec<String> {
+            let b = parse(cmd);
+            let a = &b.segments[0].commands[0];
+            std::iter::once(a.head.clone())
+                .chain(a.args.iter().cloned())
+                .collect()
+        };
+        // Each expansion is followed by the literal word itself.
+        assert_eq!(words("{rm,-rf,/}"), ["rm", "-rf", "/", "{rm,-rf,/}"]);
+        assert_eq!(words("r{m,} -rf /"), ["rm", "r", "r{m,}", "-rf", "/"]);
+        assert_eq!(
+            words("rm -rf /{etc,usr}"),
+            ["rm", "-rf", "/etc", "/usr", "/{etc,usr}"]
+        );
+        assert_eq!(
+            words("echo a{b,c}d {c..a} {01..3} {1..10..4}"),
+            [
+                "echo",
+                "abd",
+                "acd",
+                "a{b,c}d",
+                "c",
+                "b",
+                "a",
+                "{c..a}",
+                "01",
+                "02",
+                "03",
+                "{01..3}",
+                "1",
+                "5",
+                "9",
+                "{1..10..4}"
+            ]
+        );
+        assert_eq!(
+            words("echo {a,{b,c}} {a,}{b,}"),
+            [
+                "echo",
+                "a",
+                "b",
+                "c",
+                "{a,{b,c}}",
+                "ab",
+                "a",
+                "b",
+                "{a,}{b,}"
+            ]
+        );
+        // Literal: no comma / sequence, quoted, escaped, or `${…}`.
+        assert_eq!(words("echo {} {a} {a,b"), ["echo", "{}", "{a}", "{a,b"]);
+        assert_eq!(
+            words(r#"echo '{a,b}' "{c,d}" \{e,f\}"#),
+            ["echo", "{a,b}", "{c,d}", "{e,f}"]
+        );
+        assert_eq!(
+            words("echo ${HOME} ${X:-{a,b}}"),
+            ["echo", "${HOME}", "${X:-{a,b}}"]
+        );
+    }
+
+    #[test]
+    fn brace_expansion_is_capped() {
+        let b = parse("echo {a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}");
+        assert_eq!(
+            b.segments[0].commands[0].args.len(),
+            BRACE_EXPANSION_CAP + 1
+        );
+        let b = parse("echo {1..100000}");
+        assert_eq!(
+            b.segments[0].commands[0].args.len(),
+            BRACE_EXPANSION_CAP + 1
+        );
     }
 
     #[test]
