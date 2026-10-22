@@ -202,7 +202,7 @@ guard / hook / 監査を 1 発で迂回する)。
 
 | Rule id | 対象 |
 | --- | --- |
-| `core.self_protection.binary` | ptuf 実行ファイル |
+| `core.self_protection.binary` | ptuf 実行ファイル。パッケージマネージャ経由の導入・削除・更新 (`cargo install/uninstall/binstall ptuf`、`npm/pnpm/yarn/bun install/uninstall/update … ptuf`、`brew install/uninstall/upgrade …/ptuf`) と `ptuf update` も対象 |
 | `core.self_protection.config` | config layer (`/etc`, `~/.config`, repo local) |
 | `core.self_protection.plugin` | config で参照された plugin YAML |
 | `core.self_protection.claude-settings` | `.claude/settings*.json` |
