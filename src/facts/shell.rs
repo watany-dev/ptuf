@@ -222,21 +222,17 @@ impl PrefixWrapper {
     /// at the first value flag: anything after it in the cluster is its
     /// inline value (`-uroot`), so the next token is not consumed.
     fn short_cluster_takes_next(&self, arg: &str) -> bool {
-        let Some(cluster) = arg.strip_prefix('-') else {
-            return false;
-        };
-        let mut chars = cluster.chars();
-        while let Some(flag) = chars.next() {
-            if self
-                .value_flags
-                .iter()
-                .filter_map(ValueFlag::short)
-                .any(|c| c == flag)
-            {
-                return chars.as_str().is_empty();
-            }
-        }
-        false
+        arg.strip_prefix('-').is_some_and(|cluster| {
+            cluster
+                .char_indices()
+                .find(|&(_, flag)| {
+                    self.value_flags
+                        .iter()
+                        .filter_map(ValueFlag::short)
+                        .any(|c| c == flag)
+                })
+                .is_some_and(|(i, flag)| i + flag.len_utf8() == cluster.len())
+        })
     }
 
     fn is_long_value_flag(&self, name: &str) -> bool {
@@ -251,7 +247,6 @@ impl PrefixWrapper {
     /// CMD`). For every other wrapper such a token is the command head
     /// and must not be skipped.
     fn skips_env_assignments(&self) -> bool {
-        // `sudo FOO=bar CMD` sets FOO for CMD just like `env` does.
         matches!(self.name, "env" | "sudo")
     }
 
