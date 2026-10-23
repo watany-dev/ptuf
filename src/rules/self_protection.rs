@@ -44,13 +44,16 @@ impl ConfigRule for SelfRule {
     }
 
     fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
-        let lifecycle = self.spec.kind == ProtectedKind::Binary
-            && facts.bash.as_ref().is_some_and(|b| {
-                b.commands()
-                    .into_iter()
-                    .any(|a| manages_ptuf_install(&unwrap_all_prefix_wrappers(a)))
-            });
-        if !facts.protected.contains(&self.spec.kind) && !lifecycle {
+        // The package-manager walk only runs when the path facts did not
+        // already flag the binary.
+        let hit = facts.protected.contains(&self.spec.kind)
+            || (self.spec.kind == ProtectedKind::Binary
+                && facts.bash.as_ref().is_some_and(|b| {
+                    b.commands()
+                        .into_iter()
+                        .any(|a| manages_ptuf_install(&unwrap_all_prefix_wrappers(a)))
+                }));
+        if !hit {
             return None;
         }
         let reason = reason::build(self.spec.id, self.spec.problem, self.spec.alternatives);
