@@ -43,7 +43,8 @@ exclude_re = [
     # Index-stalling mutants: the lexer stops advancing and the run only
     # ever times out instead of failing a test.
     'replace read_word_with_braces -> .* with .*vec!\["xyzzy"\.into\(\)\], vec!\[.*\]\)',
-    # `search = open + 1` (column 31) restarts the scan at or before the same
-    # `{` forever; the other `open + 1` sites in the function are killed.
-    ':\d+:31: replace \+ with [-*] in brace_expand_into',
+    # `p += 1` stalling, and `start = open + 1` re-entering the same group
+    # (exponential fan-out down to the nesting cap): both only time out.
+    'replace \+= with [-*]= in expand_range',
+    ':\d+:26: replace \+ with [-*] in brace_alternatives',
 ]

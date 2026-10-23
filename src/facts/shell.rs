@@ -873,89 +873,191 @@ fn read_word_with_braces(bytes: &[u8]) -> (String, usize, bool, Vec<String>, Vec
 
 /// Upper bound on the words one brace expansion may produce. Beyond it
 /// the remaining alternatives are dropped (bash itself would happily
-/// generate millions).
+/// generate millions). Duplicate words are merged first, so padding
+/// such as `{rm,-rf,/}{,}{,}…` cannot push real words past the cap.
 const BRACE_EXPANSION_CAP: usize = 256;
+
+/// Upper bound on the bytes one brace expansion may build. Once spent,
+/// later multi-word brace groups in the word stay literal (a known
+/// limit: only words that build megabytes of alternatives reach it).
+const BRACE_EXPANSION_BUDGET: usize = 4 << 20;
+
+/// Comma groups nested deeper than this stay literal.
+const BRACE_NESTING_MAX: usize = 64;
+
+/// Longest `{x..y..step}` body worth parsing: three `i64`s and two `..`.
+const BRACE_SEQUENCE_MAX: usize = 64;
+
+/// A matched pair of unquoted braces: the `}` position and the
+/// positions of its top-level commas.
+struct BraceGroup {
+    close: usize,
+    commas: Vec<usize>,
+}
+
+/// Brace groups keyed by the position of their `{`.
+type BraceGroups = std::collections::HashMap<usize, BraceGroup>;
 
 /// Bash brace expansion (`{a,b}`, `{1..3}`, `{a..c}`, nested, with
 /// prefix / suffix) applied to the unquoted braces at `active` byte
 /// offsets. `${…}` parameter expansions and brace pairs without a
 /// top-level comma or a valid sequence stay literal, as in bash.
+///
+/// Braces are paired in one pass, and the word is then expanded group
+/// by group from left to right, so the work is linear in the word plus
+/// the (capped) output.
 fn brace_expand(word: &str, active: &[usize]) -> Vec<String> {
-    // Each char paired with "is an unquoted brace / comma".
-    let marked: Vec<(char, bool)> = word
-        .char_indices()
-        .map(|(pos, c)| (c, active.binary_search(&pos).is_ok()))
-        .collect();
-    let mut out = Vec::new();
-    brace_expand_into(&marked, &mut out);
-    out.into_iter()
-        .map(|w| w.into_iter().map(|(c, _)| c).collect())
-        .collect()
+    let mut chars = Vec::new();
+    let mut is_active = Vec::new();
+    for (pos, c) in word.char_indices() {
+        chars.push(c);
+        is_active.push(active.binary_search(&pos).is_ok());
+    }
+    let groups = match_braces(&chars, &is_active);
+    let mut budget = BRACE_EXPANSION_BUDGET;
+    expand_range(&chars, &groups, 0..chars.len(), 0, &mut budget)
 }
 
-fn brace_expand_into(word: &[(char, bool)], out: &mut Vec<Vec<(char, bool)>>) {
-    if out.len() >= BRACE_EXPANSION_CAP {
-        return;
-    }
-    let mut search = 0;
-    while let Some(open) = (search..word.len()).find(|&p| word[p] == ('{', true)) {
-        let mut depth = 0usize;
-        let mut commas = Vec::new();
-        let mut close = None;
-        for (p, &(c, active)) in word.iter().enumerate().skip(open + 1) {
-            if !active {
-                continue;
-            }
-            match c {
-                '{' => depth += 1,
-                '}' if depth == 0 => {
-                    close = Some(p);
-                    break;
-                },
-                '}' => depth -= 1,
-                ',' if depth == 0 => commas.push(p),
-                _ => {},
-            }
-        }
-        let Some(close) = close else {
-            break;
-        };
-        // `${…}` is parameter expansion, not brace expansion.
-        if open > 0 && word[open - 1].0 == '$' {
-            // `word[close]` is the `}`, so the next `{` lies beyond it.
-            search = close;
+/// Pair every unquoted `{` with its `}` (an unmatched brace stays
+/// literal) and record each pair's top-level commas.
+fn match_braces(chars: &[char], is_active: &[bool]) -> BraceGroups {
+    let mut groups = BraceGroups::new();
+    let mut open: Vec<(usize, Vec<usize>)> = Vec::new();
+    for (p, (&c, &active)) in chars.iter().zip(is_active).enumerate() {
+        if !active {
             continue;
         }
-        let alternatives: Vec<Vec<(char, bool)>> = if commas.is_empty() {
-            let body: String = word[open + 1..close].iter().map(|(c, _)| c).collect();
-            let Some(seq) = brace_sequence(&body) else {
-                search = open + 1;
-                continue;
-            };
-            seq.into_iter()
-                .map(|s| s.chars().map(|c| (c, false)).collect())
-                .collect()
-        } else {
-            let mut alts = Vec::new();
-            let mut start = open + 1;
-            for &c in commas.iter().chain(std::iter::once(&close)) {
-                alts.push(word[start..c].to_vec());
-                start = c + 1;
-            }
-            alts
+        match c {
+            '{' => open.push((p, Vec::new())),
+            '}' => {
+                if let Some((start, commas)) = open.pop() {
+                    groups.insert(start, BraceGroup { close: p, commas });
+                }
+            },
+            ',' => {
+                if let Some((_, commas)) = open.last_mut() {
+                    commas.push(p);
+                }
+            },
+            _ => {},
+        }
+    }
+    groups
+}
+
+fn expand_range(
+    chars: &[char],
+    groups: &BraceGroups,
+    range: std::ops::Range<usize>,
+    depth: usize,
+    budget: &mut usize,
+) -> Vec<String> {
+    let mut acc = vec![String::new()];
+    // Literal text since the last multi-word group.
+    let mut pending = String::new();
+    let mut p = range.start;
+    while p < range.end {
+        let Some(group) = groups.get(&p) else {
+            pending.push(chars[p]);
+            p += 1;
+            continue;
         };
-        for alt in alternatives {
-            let mut next = word[..open].to_vec();
-            next.extend(alt);
-            next.extend_from_slice(&word[close + 1..]);
-            brace_expand_into(&next, out);
-            if out.len() >= BRACE_EXPANSION_CAP {
-                return;
+        // `${…}` is parameter expansion, not brace expansion.
+        if p > 0 && chars[p - 1] == '$' {
+            pending.extend(&chars[p..=group.close]);
+            p = group.close + 1;
+            continue;
+        }
+        match brace_alternatives(chars, groups, p, depth, budget) {
+            // Not an expansion: the `{` is literal, but braces inside it
+            // may still expand (`{a{b,c}}` is `{ab} {ac}`).
+            None => {
+                pending.push(chars[p]);
+                p += 1;
+                continue;
+            },
+            // One distinct word (`{,}`, `{a,a}`) is plain text.
+            Some(alternatives) if alternatives.len() == 1 => pending.push_str(&alternatives[0]),
+            Some(alternatives) => {
+                acc = brace_product(&acc, &pending, &alternatives, budget);
+                pending.clear();
+            },
+        }
+        p = group.close + 1;
+    }
+    // Keep at least one word; drop the rest once the budget is spent.
+    let cost = pending.len() + 1;
+    acc.truncate((*budget / cost).max(1));
+    *budget = budget.saturating_sub(acc.len() * cost);
+    for word in &mut acc {
+        word.push_str(&pending);
+    }
+    acc
+}
+
+/// The words a brace group at `open` stands for, or `None` when it is
+/// literal (no comma and no valid sequence, too deep, or out of budget).
+fn brace_alternatives(
+    chars: &[char],
+    groups: &BraceGroups,
+    open: usize,
+    depth: usize,
+    budget: &mut usize,
+) -> Option<Vec<String>> {
+    let group = groups.get(&open)?;
+    if *budget == 0 {
+        return None;
+    }
+    if group.commas.is_empty() {
+        let body = &chars[open + 1..group.close];
+        if body.len() > BRACE_SEQUENCE_MAX {
+            return None;
+        }
+        return brace_sequence(&body.iter().collect::<String>());
+    }
+    if depth >= BRACE_NESTING_MAX {
+        return None;
+    }
+    let mut alternatives = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut start = open + 1;
+    for &end in group.commas.iter().chain(std::iter::once(&group.close)) {
+        if alternatives.len() >= BRACE_EXPANSION_CAP {
+            break;
+        }
+        for word in expand_range(chars, groups, start..end, depth + 1, budget) {
+            if alternatives.len() < BRACE_EXPANSION_CAP && seen.insert(word.clone()) {
+                alternatives.push(word);
             }
         }
-        return;
+        start = end + 1;
     }
-    out.push(word.to_vec());
+    Some(alternatives)
+}
+
+/// Every `prefix + literal + alternative`, in bash order, without
+/// duplicates and within the cap and the byte budget.
+fn brace_product(
+    prefixes: &[String],
+    literal: &str,
+    alternatives: &[String],
+    budget: &mut usize,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for prefix in prefixes {
+        for alternative in alternatives {
+            if out.len() >= BRACE_EXPANSION_CAP || (*budget == 0 && !out.is_empty()) {
+                return out;
+            }
+            let word = format!("{prefix}{literal}{alternative}");
+            *budget = budget.saturating_sub(word.len() + 1);
+            if seen.insert(word.clone()) {
+                out.push(word);
+            }
+        }
+    }
+    out
 }
 
 /// `{x..y[..step]}` over integers or single ASCII letters. `None` when
@@ -970,6 +1072,18 @@ fn brace_sequence(body: &str) -> Option<Vec<String>> {
         None => 1,
     };
     let step = usize::try_from(step).ok()?;
+    // `a..=b` (or downward when `a > b`), every `step`-th term.
+    let terms = |a: i64, b: i64| -> Vec<i64> {
+        if a <= b {
+            (a..=b).step_by(step).take(BRACE_EXPANSION_CAP).collect()
+        } else {
+            (b..=a)
+                .rev()
+                .step_by(step)
+                .take(BRACE_EXPANSION_CAP)
+                .collect()
+        }
+    };
     if let (Ok(a), Ok(b)) = (parts[0].parse::<i64>(), parts[1].parse::<i64>()) {
         // A leading zero on either end zero-pads every term (`{01..3}`).
         let padded = |p: &str| {
@@ -980,40 +1094,24 @@ fn brace_sequence(body: &str) -> Option<Vec<String>> {
         } else {
             0
         };
-        let fmt = |n: i64| format!("{n:0width$}");
-        let seq: Vec<String> = if a <= b {
-            (a..=b)
-                .step_by(step)
-                .take(BRACE_EXPANSION_CAP)
-                .map(fmt)
-                .collect()
-        } else {
-            (b..=a)
-                .rev()
-                .step_by(step)
-                .take(BRACE_EXPANSION_CAP)
-                .map(fmt)
-                .collect()
-        };
-        return Some(seq);
+        return Some(
+            terms(a, b)
+                .into_iter()
+                .map(|n| format!("{n:0width$}"))
+                .collect(),
+        );
     }
     let (a, b) = (
         single_ascii_letter(parts[0])?,
         single_ascii_letter(parts[1])?,
     );
-    let seq: Vec<String> = if a <= b {
-        (a..=b)
-            .step_by(step)
+    Some(
+        terms(a.into(), b.into())
+            .into_iter()
+            .filter_map(|n| u8::try_from(n).ok())
             .map(|c| char::from(c).to_string())
-            .collect()
-    } else {
-        (b..=a)
-            .rev()
-            .step_by(step)
-            .map(|c| char::from(c).to_string())
-            .collect()
-    };
-    Some(seq)
+            .collect(),
+    )
 }
 
 fn single_ascii_letter(s: &str) -> Option<u8> {
@@ -2190,6 +2288,37 @@ mod tests {
             words("echo ${HOME} ${X:-{a,b}}"),
             ["echo", "${HOME}", "${X:-{a,b}}"]
         );
+    }
+
+    #[test]
+    fn brace_expansion_merges_duplicates_before_the_cap() {
+        // 3 * 2^100000 raw words, but only `rm`, `-rf`, `/` are distinct.
+        let cmd = format!("{{rm,-rf,/}}{}", "{,}".repeat(100_000));
+        let b = parse(&cmd);
+        let a = &b.segments[0].commands[0];
+        assert_eq!(a.head, "rm");
+        assert_eq!(a.args[..2], ["-rf", "/"]);
+    }
+
+    #[test]
+    fn brace_expansion_is_linear_on_pathological_words() {
+        // Nested comma-less pairs once rescanned every pair (quadratic)
+        // and recursed per group; they stay literal.
+        let word = format!("{}{}", "{".repeat(200_000), "}".repeat(200_000));
+        let b = parse(&format!("echo {word}"));
+        assert_eq!(b.segments[0].commands[0].args, [word]);
+        // Deep comma nesting stops expanding at `BRACE_NESTING_MAX`.
+        let depth = BRACE_NESTING_MAX + 10;
+        let word = format!("{}x{}", "{a,".repeat(depth), "}".repeat(depth));
+        let b = parse(&format!("echo {word}"));
+        let args = &b.segments[0].commands[0].args;
+        assert_eq!(args[0], "a");
+        assert!(args.iter().any(|a| a.starts_with("{a,")), "{args:?}");
+        assert!(!args.contains(&"x".to_string()), "{args:?}");
+        // The byte budget bounds copies of a huge literal tail.
+        let word = format!("{{a,b,c}}{}", "x".repeat(BRACE_EXPANSION_BUDGET / 2 + 1));
+        let b = parse(&format!("echo {word}"));
+        assert_eq!(b.segments[0].commands[0].args.len(), 2);
     }
 
     #[test]
