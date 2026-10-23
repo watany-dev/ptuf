@@ -907,72 +907,69 @@ fn push_latin1(buf: &mut String, bytes: &[u8]) {
 /// quoted spans, so a `)` or `"` inside `$(echo ')')` cannot close the
 /// group early and desynchronise the caller's quote state.
 fn absorb_parens(bytes: &[u8], i: &mut usize, buf: &mut String, bodies: Option<&mut Vec<String>>) {
-    let body_start = *i;
-    let Some(close) = find_group_close(bytes, body_start) else {
-        // Unterminated: still surface the remainder so its commands are
-        // re-parsed rather than hidden inside an opaque word.
-        push_latin1(buf, &bytes[body_start..]);
-        if let Some(bodies) = bodies {
-            let body = latin1_slice(&bytes[body_start..]);
-            if !body.is_empty() {
-                bodies.push(body);
-            }
-        }
-        *i = bytes.len();
-        return;
-    };
-    push_latin1(buf, &bytes[body_start..close]);
+    let close = find_group_close(bytes, *i);
+    // Unterminated: still surface the remainder so its commands are
+    // re-parsed rather than hidden inside an opaque word.
+    let body = &bytes[*i..close.unwrap_or(bytes.len())];
     if let Some(bodies) = bodies {
-        let body = latin1_slice(&bytes[body_start..close]);
+        let body = latin1_slice(body);
+        buf.push_str(&body);
         if !body.is_empty() {
             bodies.push(body);
         }
+    } else {
+        push_latin1(buf, body);
     }
-    buf.push(')');
-    *i = close + 1;
+    if let Some(close) = close {
+        buf.push(')');
+        *i = close + 1;
+    } else {
+        *i = bytes.len();
+    }
 }
 
 /// Index of the `)` that closes a group whose body starts at `start`,
 /// or `None` when the input ends first. Single quotes, double quotes
 /// (including a nested `$(…)` inside them), backquotes, and backslash
 /// escapes are skipped so their contents never count toward the depth.
+///
+/// Nesting is tracked on a heap stack rather than by recursion, so a
+/// hostile `$("$("$(…` chain cannot overflow the thread stack.
 fn find_group_close(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut depth: usize = 1;
+    // One entry per open context: `false` = a `(` group, `true` = a
+    // double-quoted span. The bottom entry is the group being closed.
+    let mut stack = vec![false];
     let mut i = start;
     while i < bytes.len() {
+        let in_quotes = *stack.last()?;
         match bytes[i] {
             b'\\' => i += 2,
-            b'\'' => i = memchr::memchr(b'\'', &bytes[i + 1..])? + i + 2,
-            b'"' => i = skip_double_quoted(bytes, i + 1)?,
             b'`' => i = skip_backquoted(bytes, i + 1)?,
+            b'"' if in_quotes => {
+                stack.pop();
+                i += 1;
+            },
+            b'$' if in_quotes && bytes.get(i + 1) == Some(&b'(') => {
+                stack.push(false);
+                i += 2;
+            },
+            _ if in_quotes => i += 1,
+            b'\'' => i = memchr::memchr(b'\'', &bytes[i + 1..])? + i + 2,
+            b'"' => {
+                stack.push(true);
+                i += 1;
+            },
             b'(' => {
-                depth += 1;
+                stack.push(false);
                 i += 1;
             },
             b')' => {
-                depth -= 1;
-                if depth == 0 {
+                stack.pop();
+                if stack.is_empty() {
                     return Some(i);
                 }
                 i += 1;
             },
-            _ => i += 1,
-        }
-    }
-    None
-}
-
-/// Skip a double-quoted span whose body starts at `start`; returns the
-/// index just past the closing `"`.
-fn skip_double_quoted(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut i = start;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' => i += 2,
-            b'"' => return Some(i + 1),
-            b'`' => i = skip_backquoted(bytes, i + 1)?,
-            // Resume on the closing `)`, a plain byte here.
-            b'$' if bytes.get(i + 1) == Some(&b'(') => i = find_group_close(bytes, i + 2)?,
             _ => i += 1,
         }
     }
@@ -1366,6 +1363,15 @@ mod tests {
             inner_redirects: Vec::new(),
             subst_argv: Vec::new(),
         }
+    }
+
+    #[test]
+    fn find_group_close_survives_deep_quote_nesting() {
+        // `$("$("$(…` used to recurse once per level and overflow the stack.
+        let deep = "$(\"".repeat(200_000);
+        assert_eq!(find_group_close(deep.as_bytes(), 2), None);
+        assert_eq!(find_group_close(br#"echo "a)$(x)b")"#, 0), Some(14));
+        assert_eq!(find_group_close(b"a (b) c) d", 0), Some(7));
     }
 
     #[test]
