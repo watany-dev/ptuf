@@ -88,9 +88,8 @@ fn normalize(
 ) -> (String, Value) {
     match raw_name {
         "Shell" | "Bash" | "shell" | "bash" => ("Bash".into(), reshape_bash(args, root)),
-        "Read" | "ReadFile" | "read" => ("Read".into(), reshape_path(args, root)),
         // `Grep` returns file contents, so it is a read of `path`.
-        "Grep" | "grep" => ("Read".into(), reshape_path(args, root)),
+        "Read" | "ReadFile" | "read" | "Grep" | "grep" => ("Read".into(), reshape_path(args, root)),
         "Write" | "write" => ("Write".into(), reshape_write(args, root)),
         // A delete clobbers the target like an overwrite (Kiro v3 maps
         // `delete_file` the same way).
