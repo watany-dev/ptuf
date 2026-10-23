@@ -102,15 +102,18 @@ pub(crate) fn resolve_with_env(raw: &str, base_dir: Option<&Path>, env: &dyn Env
 /// shapes `paths[]`, `files[].path`, and `items[].path`.
 pub(crate) fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathFact> {
     let (tool, tagged): (PathTool, Vec<(String, PathOrigin)>) = match input.tool_name.as_str() {
-        "Read" | "Edit" | "Write" => {
-            let tool = match input.tool_name.as_str() {
-                "Read" => PathTool::Read,
-                "Edit" => PathTool::Edit,
-                _ => PathTool::Write,
+        // Claude Code's `Grep` returns matching lines of the file (or
+        // tree) named by `path`, so it reads contents just like `Read`.
+        "Read" | "Edit" | "Write" | "Grep" => {
+            let (tool, key) = match input.tool_name.as_str() {
+                "Read" => (PathTool::Read, "file_path"),
+                "Grep" => (PathTool::Read, "path"),
+                "Edit" => (PathTool::Edit, "file_path"),
+                _ => (PathTool::Write, "file_path"),
             };
             let mut values: Vec<(String, PathOrigin)> = input
                 .tool_input
-                .get("file_path")
+                .get(key)
                 .and_then(serde_json::Value::as_str)
                 .map(|raw| (raw.to_owned(), PathOrigin::ToolInputDirect))
                 .into_iter()

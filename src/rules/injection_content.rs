@@ -13,7 +13,7 @@
 //! When the agent reads such a file the hidden payload becomes an
 //! indirect prompt injection.
 //!
-//! Scope: `Read` / `Edit`, path-bearing MCP tool calls, and Bash
+//! Scope: `Read` / `Edit` / `Grep`, path-bearing MCP tool calls, and Bash
 //! "reader" heads (`cat`, `head`, …) — i.e. the surfaces that pull file
 //! contents into the transcript. `Write` / `apply_patch` are out of
 //! scope because that content originates from the agent itself.
@@ -122,7 +122,7 @@ fn scan_candidates(facts: &Facts, input: &HookInput) -> Vec<PathBuf> {
     if input.tool_name == "Bash" {
         return bash_reader_targets(facts.bash.as_ref());
     }
-    if matches!(input.tool_name.as_str(), "Read" | "Edit") || input.is_mcp_tool() {
+    if matches!(input.tool_name.as_str(), "Read" | "Edit" | "Grep") || input.is_mcp_tool() {
         return facts
             .paths
             .iter()
@@ -330,6 +330,17 @@ mod tests {
     fn assert_silent(input: &HookInput) {
         let result = evaluate_for(input);
         assert!(result.is_none(), "expected None, got {result:?}");
+    }
+
+    #[test]
+    fn grep_over_a_file_with_hidden_chars_asks() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = write_file(&dir, "notes.txt", "hello\u{200B}world\n".as_bytes());
+        let input = HookInput {
+            tool_name: "Grep".into(),
+            tool_input: serde_json::json!({ "pattern": ".", "path": path.to_string_lossy() }),
+        };
+        assert_ask(&input);
     }
 
     #[test]
