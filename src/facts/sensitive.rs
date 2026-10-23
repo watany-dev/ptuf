@@ -122,7 +122,9 @@ fn build(pat: &str) -> Regex {
 // Anchors on the `.env` pattern include glob metacharacters,
 // brace-expansion punctuation, and `=` so `cat *.env`, `cat {a,b}.env`,
 // `cp ?.env`, `rm [abc].env`, and `dd if=.env` / `--env-file=.env` style
-// flag values are caught at the token boundary.
+// flag values are caught at the token boundary. `@` / `<` cover curl's
+// file references (`-d @.env`, `-F f=<.env`) and `:` covers scp-style
+// `host:.env`; `.npmrc` / `.pypirc` share those three plus `=`.
 //
 // `PROBES` is the single source of truth: declaration order is the order
 // `classify` reports matches in. Each entry pairs the variant's pattern
@@ -176,17 +178,17 @@ const PROBES: &[(SensitiveKind, &str, &str)] = &[
     (
         SensitiveKind::Dotenv,
         ".env",
-        r"(?:^|/|\s|[*?\[\]={},])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
+        r"(?:^|/|\s|[*?\[\]={},@<:])(?i-u:\.env)(?:\.[A-Za-z0-9_-]+)?\b",
     ),
     (
         SensitiveKind::Npmrc,
         ".npmrc",
-        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.npmrc)\b",
+        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.npmrc)\b",
     ),
     (
         SensitiveKind::Pypirc,
         ".pypirc",
-        r"(?:^|/|\s|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.pypirc)\b",
+        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.pypirc)\b",
     ),
     (SensitiveKind::Tfstate, ".tfstate", r"\S+(?i-u:\.tfstate)\b"),
     (SensitiveKind::PemBlob, "-----begin", PEM_PRIVATE_KEY_BEGIN),
@@ -511,6 +513,27 @@ mod tests {
         assert!(kinds("{.env,.env.local}").contains(&SensitiveKind::Dotenv));
         assert!(kinds("prefix{a,b}.env").contains(&SensitiveKind::Dotenv));
         assert!(kinds("{app,web}.env.production").contains(&SensitiveKind::Dotenv));
+    }
+
+    #[test]
+    fn classifies_dotenv_behind_curl_and_scp_file_references() {
+        for token in [
+            "@.env",
+            "k@.env",
+            "f=@.env",
+            "f=<.env",
+            "@.env.local",
+            "host:.env",
+        ] {
+            assert!(
+                kinds(token).contains(&SensitiveKind::Dotenv),
+                "missed {token:?}"
+            );
+        }
+        assert!(kinds("@.npmrc").contains(&SensitiveKind::Npmrc));
+        assert!(kinds("--userconfig=.npmrc").contains(&SensitiveKind::Npmrc));
+        assert!(kinds("@.pypirc").contains(&SensitiveKind::Pypirc));
+        assert!(!kinds("user@example.com").contains(&SensitiveKind::Dotenv));
     }
 
     #[test]
