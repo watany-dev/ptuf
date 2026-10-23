@@ -988,8 +988,8 @@ fn expand_range(
     // Keep at least one word; drop the rest once the budget is spent.
     let cost = pending.len() + 1;
     acc.truncate((*budget / cost).max(1));
-    *budget = budget.saturating_sub(acc.len() * cost);
     for word in &mut acc {
+        *budget = budget.saturating_sub(cost);
         word.push_str(&pending);
     }
     acc
@@ -1047,13 +1047,14 @@ fn brace_product(
     let mut seen = std::collections::HashSet::new();
     for prefix in prefixes {
         for alternative in alternatives {
-            if out.len() >= BRACE_EXPANSION_CAP || (*budget == 0 && !out.is_empty()) {
-                return out;
-            }
             let word = format!("{prefix}{literal}{alternative}");
             *budget = budget.saturating_sub(word.len() + 1);
             if seen.insert(word.clone()) {
                 out.push(word);
+            }
+            // Checked after the first word, so the product is never empty.
+            if out.len() >= BRACE_EXPANSION_CAP || *budget == 0 {
+                return out;
             }
         }
     }
@@ -2292,8 +2293,10 @@ mod tests {
 
     #[test]
     fn brace_expansion_merges_duplicates_before_the_cap() {
-        // 3 * 2^100000 raw words, but only `rm`, `-rf`, `/` are distinct.
-        let cmd = format!("{{rm,-rf,/}}{}", "{,}".repeat(100_000));
+        // 3 * 2^400000 raw words, but only `rm`, `-rf`, `/` are distinct.
+        // Enough groups that charging each one to the byte budget would
+        // exhaust it: single-word groups must be inlined for free.
+        let cmd = format!("{{rm,-rf,/}}{}", "{,}".repeat(400_000));
         let b = parse(&cmd);
         let a = &b.segments[0].commands[0];
         assert_eq!(a.head, "rm");
@@ -2315,6 +2318,12 @@ mod tests {
         assert_eq!(args[0], "a");
         assert!(args.iter().any(|a| a.starts_with("{a,")), "{args:?}");
         assert!(!args.contains(&"x".to_string()), "{args:?}");
+        // A sequence body of exactly `BRACE_SEQUENCE_MAX` bytes still
+        // expands (zero-padded to its width).
+        let (lo, hi) = ("0".repeat(30) + "1", "0".repeat(30) + "2");
+        assert_eq!(lo.len() + hi.len() + 2, BRACE_SEQUENCE_MAX);
+        let b = parse(&format!("echo {{{lo}..{hi}}}"));
+        assert_eq!(b.segments[0].commands[0].args[..2], [lo, hi]);
         // The byte budget bounds copies of a huge literal tail.
         let word = format!("{{a,b,c}}{}", "x".repeat(BRACE_EXPANSION_BUDGET / 2 + 1));
         let b = parse(&format!("echo {word}"));

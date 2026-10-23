@@ -47,4 +47,7 @@ exclude_re = [
     # (exponential fan-out down to the nesting cap): both only time out.
     'replace \+= with [-*]= in expand_range',
     ':\d+:26: replace \+ with [-*] in brace_alternatives',
+    # Letting over-long comma-less bodies reach `brace_sequence` brings
+    # back the quadratic rescan; the linear-time test then only times out.
+    'replace > with (==|<) in brace_alternatives',
 ]
