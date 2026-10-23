@@ -3,7 +3,7 @@
 //! commits.
 
 use crate::decision::{DecisionKind, Severity};
-use crate::facts::shell::Argv;
+use crate::facts::shell::{Argv, short_flag_cluster_contains};
 
 use super::argv::{args_after_subcommand, git_subcommand};
 use super::{GitRule, RuleSpec};
@@ -13,12 +13,15 @@ pub(super) fn matches_branch_delete_force(argv: &Argv) -> bool {
         return false;
     }
     let rest = args_after_subcommand(argv, "branch");
-    let short = |a: &&str, c: char| a.starts_with('-') && !a.starts_with("--") && a.contains(c);
+    let has = |long: &str, short: char| {
+        rest.iter()
+            .any(|a| *a == long || short_flag_cluster_contains(a, short))
+    };
     // `-D` is shorthand for `--delete --force`; the two halves may also
     // be spelled separately (`-d -f`, `-df`, `--delete --force`).
-    let capital_d = rest.iter().any(|a| short(a, 'D'));
-    let delete = rest.iter().any(|a| *a == "--delete" || short(a, 'd'));
-    let force = rest.iter().any(|a| *a == "--force" || short(a, 'f'));
+    let capital_d = rest.iter().any(|a| short_flag_cluster_contains(a, 'D'));
+    let delete = has("--delete", 'd');
+    let force = has("--force", 'f');
     capital_d || (delete && force)
 }
 
