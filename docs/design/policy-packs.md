@@ -237,6 +237,20 @@ guard / hook / 監査を 1 発で迂回する)。
 | `core.self_protection.cline-settings` | `<repo>/.clinerules/hooks/PreToolUse{,.ps1}`, `$HOME/Documents/Cline/Hooks/PreToolUse{,.ps1}` (Cline は wrapper スクリプト自体が hook 登録) |
 | `core.self_protection.hook-script` | Claude / Codex / Copilot / Kiro / Cursor の hook 設定の command が参照する実行ファイル |
 
+Bash からの書き込み先として、次のものを保護対象と照合する。
+
+- writer head (`rm` / `mv` / `cp` / `chmod` / `chown` / `tee` / `ln` / `sed`) の引数
+- redirect 先
+- ダウンローダの出力先
+  - `curl -o` / `--output`、および `-O` の URL basename (`--output-dir` 配下)
+  - `wget -O` / `--output-document`、および URL basename (`-P` 配下)
+  - `aria2c -o` (`-d` 配下)
+- git が上書き・削除する pathspec (`git checkout` / `git restore` / `git rm` / `git mv`)
+
+`rm` / `mv` については、保護対象の祖先ディレクトリも一致とみなす (`rm -rf .claude`、`mv ~/.config/ptuf x`)。ただし `/` と `$HOME` 自体は `core.filesystem.destructive-rm` の担当なので除く。
+
+相対パスは、同じ Bash 呼び出し内のリテラルな `cd` / `pushd` を順に追って解決する (`cd .claude && echo {} > settings.json`)。`cd $X` や `cd -` のように移動先が分からない場合は、以後の相対パスの書き込みをファイル名だけで照合する。
+
 ## `core.engine`
 
 | Rule id | Decision | hardDeny | severity | 対象 |
