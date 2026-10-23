@@ -155,6 +155,7 @@ Ask が Deny に demote される既存挙動が適用される)。
 | `core.git.no-verify` | deny | false | high |
 | `core.git.no-gpg-sign` | deny | false | medium |
 | `core.git.config-override-bypass` | deny | false | high |
+| `core.git.config-exec-command` | ask | false | high |
 | `core.git.env-bypass` | deny | false | high |
 | `core.git.push-mirror` | ask | false | high |
 | `core.git.push-delete-remote` | ask | false | high |
@@ -173,6 +174,17 @@ hook / signing / fsck bypass を block する rule (`core.git.no-verify` /
 `sudo -u root git ...` や `sudo --user=root git ...` のような
 value-taking option は、option 値を command head と誤認しないように
 unwrap してから評価し、`sudo doas git ...` のような多段ネストも 1 段ずつ剥がす。
+`core.git.config-override-bypass` は `git -c` / `--config` による 1 回限りの
+上書きに加えて、`git config [--global …] KEY VALUE` / `git config set KEY VALUE`
+による永続設定 (`core.hooksPath` / `commit.gpgsign false` 等) も deny する
+(`--unset` / `--get` などの読み取り・削除は対象外)。
+`core.git.config-exec-command` は git がシェルで実行する値を持つキー
+(`core.sshCommand` / `core.pager` / `core.editor` / `core.fsmonitor` /
+`credential.helper` / `diff.external` / `diff.*.textconv` / `filter.*.{clean,smudge,process}` /
+`gpg.program` / `sequence.editor` / `pager.*` / `!` 始まりの `alias.*` 等) を
+`-c` または `git config` で設定する呼び出しを Ask にする。値は inner shell として
+再 parse されるので、`git -c core.sshCommand='rm -rf /' fetch` は
+`core.filesystem.destructive-rm` で deny になる。
 `core.git.clean-fdx` は `git clean -fdx` だけでなく、`git clean -f -d -x` や
 `git clean --force -d -x` のように分割された flag も検出する。`-n` dry-run は
 発火しない。

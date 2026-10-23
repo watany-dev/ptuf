@@ -61,29 +61,6 @@ pub(super) fn args_after_subcommand<'a>(argv: &'a Argv, sub: &str) -> Vec<&'a st
     iter.collect()
 }
 
-/// Gather the values of git's `-c key=val` / `--config key=val` /
-/// `--config=key=val` global options.
-pub(super) fn config_overrides(argv: &Argv) -> impl Iterator<Item = &str> + '_ {
-    let mut iter = argv.args.iter();
-    std::iter::from_fn(move || {
-        while let Some(a) = iter.next() {
-            match a.as_str() {
-                "-c" | "--config" => {
-                    if let Some(v) = iter.next() {
-                        return Some(v.as_str());
-                    }
-                },
-                s => {
-                    if let Some(rest) = s.strip_prefix("--config=") {
-                        return Some(rest);
-                    }
-                },
-            }
-        }
-        None
-    })
-}
-
 #[derive(Clone, Copy)]
 pub(super) enum BypassMatch {
     Any,

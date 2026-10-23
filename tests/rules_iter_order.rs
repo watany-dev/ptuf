@@ -29,6 +29,7 @@ fn rules_iter_order_matches_fixture() {
         "core.git.no-verify",
         "core.git.no-gpg-sign",
         "core.git.config-override-bypass",
+        "core.git.config-exec-command",
         "core.git.env-bypass",
         "core.git.push-mirror",
         "core.git.push-delete-remote",
