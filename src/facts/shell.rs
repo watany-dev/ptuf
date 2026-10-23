@@ -857,7 +857,7 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
 /// Length of the leading run of plain word bytes (see
 /// [`is_plain_word_byte`]). Typical tokens end within the bytewise
 /// prefix scan; pathological megabyte words fall through to `memchr`
-/// SIMD sweeps over the 17-byte special set (six triples).
+/// SIMD sweeps over the 17-byte special set (five triples and a pair).
 fn plain_run_len(bytes: &[u8]) -> usize {
     let quick = bytes.len().min(64);
     let mut i = 0;
@@ -878,11 +878,13 @@ fn plain_run_len(bytes: &[u8]) -> usize {
         (b'&', b';', b'\\'),
         (b'<', b'>', b'$'),
         (b'\'', b'"', b'`'),
-        (b'(', b')', b'('),
     ] {
         if let Some(p) = memchr::memchr3(a, b, c, &rest[..end]) {
             end = p;
         }
+    }
+    if let Some(p) = memchr::memchr2(b'(', b')', &rest[..end]) {
+        end = p;
     }
     i + end
 }
@@ -1100,10 +1102,7 @@ const RESERVED_PREFIXES: &[&str] = &[
 
 fn peel_reserved_words(words: &mut std::collections::VecDeque<String>) {
     while words.len() > 1 {
-        let Some(first) = words.front().map(String::as_str) else {
-            break;
-        };
-        match first {
+        match words[0].as_str() {
             w if RESERVED_PREFIXES.contains(&w) => {
                 words.pop_front();
             },
