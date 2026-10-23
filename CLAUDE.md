@@ -44,12 +44,20 @@ fd / tempfile リーク・8 MiB stdin 境界・並列 hook と shared audit JSON
   `src/engine/**` に加え `src/plugin/dsl.rs` / `src/facts/shell.rs` / `src/config/merge.rs` /
   `src/self_paths.rs`、スコープは `.cargo/mutants.toml`) の mutation testing。
   `make mutants-diff` は `BASE` (既定 `origin/main`) からの差分行だけを変異させ、PR CI の
-  非ブロッキング `mutants-diff` job と同等。MISSED の棚卸しは `docs/design/mutants-inventory.md`。
+  `mutants-diff` job (MISSED で失敗するブロッキングゲート) と同等。テストの行を削った
+  ファイルは `scripts/mutants-diff.py` がファイル全体に広げて変異させる。nightly が失敗すると
+  `nightly-issue` job が追跡 issue を起票 / 追記する。MISSED の棚卸しは `docs/design/mutants-inventory.md`。
+- `make test-scripts` — `scripts/*.py` の stdlib-only unittest (`tests/scripts/`)。PR CI の
+  `test-scripts` job で実行する。
 - `make semver` — `cargo-semver-checks` で公開 API の SemVer 破壊を検知 (PR CI でも実行)。
 
 敵対的 bypass の回帰は `tests/bypass/corpus.jsonl` (版管理) に集約し、`make check` の
 `test` ステップで `tests/bypass_corpus.rs` が検証する。fuzz / 監査で新規 bypass を
 発見したら corpus に追記する。
+
+GitHub 側の設定 (main の ruleset / Required checks / environment / immutable releases) は
+`docs/repository-settings.md` にチェックリストとして置く。CI の job 名を変えたら同じ PR で
+Required checks も直す。
 
 ## アーキテクチャ規約
 
