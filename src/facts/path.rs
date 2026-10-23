@@ -4,6 +4,7 @@
 //! can inject a hermetic `HOME` (and the production path delegates to
 //! `crate::config::scope::SystemEnv`).
 
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use crate::config::scope::{EnvLookup, SystemEnv};
@@ -117,11 +118,12 @@ pub(crate) fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Ve
             // Batch reads (Kiro `operations[]` / `paths[]`, Cursor
             // `paths[]`, Cline `read_files`) only promote their first
             // entry to `file_path`; every other entry must be judged too.
-            for (raw, origin) in collect_batch_paths(&input.tool_input) {
-                if !values.iter().any(|(seen, _)| *seen == raw) {
-                    values.push((raw, origin));
-                }
-            }
+            let mut seen: HashSet<String> = values.iter().map(|(raw, _)| raw.clone()).collect();
+            values.extend(
+                collect_batch_paths(&input.tool_input)
+                    .into_iter()
+                    .filter(|(raw, _)| seen.insert(raw.clone())),
+            );
             (tool, values)
         },
         "apply_patch" => {
@@ -194,18 +196,7 @@ fn collect_mcp_paths(value: &serde_json::Value) -> Vec<(String, PathOrigin)> {
     for key in MCP_DIRECT_PATH_KEYS {
         push_tagged(value.get(*key), PathOrigin::ToolInputDirect, &mut out);
     }
-    for key in ["files", "items"] {
-        if let Some(items) = value.get(key).and_then(serde_json::Value::as_array) {
-            for item in items {
-                push_tagged(item.get("path"), PathOrigin::ToolInputNested, &mut out);
-            }
-        }
-    }
-    if let Some(paths) = value.get("paths").and_then(serde_json::Value::as_array) {
-        for item in paths {
-            push_tagged(Some(item), PathOrigin::ToolInputNested, &mut out);
-        }
-    }
+    push_nested_paths(value, &["files", "items"], &mut out);
     out
 }
 
@@ -213,19 +204,28 @@ fn collect_mcp_paths(value: &serde_json::Value) -> Vec<(String, PathOrigin)> {
 /// `operations[].path` / `files[].path` / `items[].path`.
 fn collect_batch_paths(value: &serde_json::Value) -> Vec<(String, PathOrigin)> {
     let mut out = Vec::new();
-    if let Some(paths) = value.get("paths").and_then(serde_json::Value::as_array) {
-        for item in paths {
-            push_tagged(Some(item), PathOrigin::ToolInputNested, &mut out);
-        }
-    }
-    for key in ["operations", "files", "items"] {
-        if let Some(items) = value.get(key).and_then(serde_json::Value::as_array) {
+    push_nested_paths(value, &["operations", "files", "items"], &mut out);
+    out
+}
+
+/// Push `<key>[].path` for each of `keys`, then the `paths[]` entries.
+fn push_nested_paths(
+    value: &serde_json::Value,
+    keys: &[&str],
+    out: &mut Vec<(String, PathOrigin)>,
+) {
+    for key in keys {
+        if let Some(items) = value.get(*key).and_then(serde_json::Value::as_array) {
             for item in items {
-                push_tagged(item.get("path"), PathOrigin::ToolInputNested, &mut out);
+                push_tagged(item.get("path"), PathOrigin::ToolInputNested, out);
             }
         }
     }
-    out
+    if let Some(paths) = value.get("paths").and_then(serde_json::Value::as_array) {
+        for item in paths {
+            push_tagged(Some(item), PathOrigin::ToolInputNested, out);
+        }
+    }
 }
 
 fn push_tagged(
