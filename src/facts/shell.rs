@@ -577,12 +577,13 @@ fn tokenize(s: &str) -> TokenizeOutput {
                     let nl = memchr::memchr(b'\n', &bytes[j..]).map_or(bytes.len(), |p| j + p);
                     (nl, nl)
                 });
-                let body = read_heredoc_body(&bytes[body_from.min(bytes.len())..], &tag);
+                let body_from = body_from.min(bytes.len());
+                let body = read_heredoc_body(&bytes[body_from..], &tag);
                 out.push(Token::Redirect(RedirectOp::Heredoc));
                 out.push(Token::HeredocBody(body.text));
                 saw_redirect = true;
                 saw_heredoc = true;
-                heredoc = Some((nl, body_from.min(bytes.len()) + body.consumed));
+                heredoc = Some((nl, body_from + body.consumed));
                 i = j;
                 continue;
             }
