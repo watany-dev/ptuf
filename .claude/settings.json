@@ -11,18 +11,5 @@
       "Bash(cargo:*)",
       "Bash(git:*)"
     ]
-  },
-  "hooks": {
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/stop-wrapup.sh"
-          }
-        ]
-      }
-    ]
   }
 }

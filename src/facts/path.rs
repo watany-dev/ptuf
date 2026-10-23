@@ -4,6 +4,7 @@
 //! can inject a hermetic `HOME` (and the production path delegates to
 //! `crate::config::scope::SystemEnv`).
 
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use crate::config::scope::{EnvLookup, SystemEnv};
@@ -37,12 +38,15 @@ pub enum PathOrigin {
     ToolInputDirect,
     /// Nested MCP carriers: `files[].path`, `items[].path`, `paths[]`.
     ToolInputNested,
-    /// `apply_patch` `*** Add/Update/Delete/Move` lines.
+    /// `apply_patch` `*** Add/Update/Delete/Move` lines, from the tool
+    /// or from a shell-level `apply_patch` / `applypatch` invocation.
     ApplyPatch,
     /// Bash redirect operand (`>`, `>>`, `<`, `2>`, `&>`). Surfaced
-    /// only by the engine — never emitted by `extract_all_with_env`
-    /// because Bash inputs do not carry a tool-level `file_path`.
+    /// only by the engine — never emitted by `extract_all_with_env`.
     BashRedirect,
+    /// File operand of a Bash reader / writer command (`cat FILE`,
+    /// `cp SRC DST`). Surfaced only by `core.workspace.outside-access`.
+    BashArgument,
 }
 
 /// File-path fact derived from a tool payload.
@@ -101,29 +105,54 @@ pub(crate) fn resolve_with_env(raw: &str, base_dir: Option<&Path>, env: &dyn Env
 /// shapes `paths[]`, `files[].path`, and `items[].path`.
 pub(crate) fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathFact> {
     let (tool, tagged): (PathTool, Vec<(String, PathOrigin)>) = match input.tool_name.as_str() {
-        "Read" | "Edit" | "Write" => {
-            let tool = match input.tool_name.as_str() {
-                "Read" => PathTool::Read,
-                "Edit" => PathTool::Edit,
-                _ => PathTool::Write,
+        // Claude Code's `Grep` returns matching lines of the file (or
+        // tree) named by `path`, so it reads contents just like `Read`.
+        "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Grep" => {
+            let (tool, key) = match input.tool_name.as_str() {
+                "Read" => (PathTool::Read, "file_path"),
+                "Grep" => (PathTool::Read, "path"),
+                "Edit" | "MultiEdit" => (PathTool::Edit, "file_path"),
+                "NotebookEdit" => (PathTool::Edit, "notebook_path"),
+                _ => (PathTool::Write, "file_path"),
             };
-            let values = input
+            let mut values: Vec<(String, PathOrigin)> = input
                 .tool_input
-                .get("file_path")
+                .get(key)
                 .and_then(serde_json::Value::as_str)
                 .map(|raw| (raw.to_owned(), PathOrigin::ToolInputDirect))
                 .into_iter()
                 .collect();
+            // Batch reads (Kiro `operations[]` / `paths[]`, Cursor
+            // `paths[]`, Cline `read_files`) only promote their first
+            // entry to `file_path`; every other entry must be judged too.
+            let mut seen: HashSet<String> = values.iter().map(|(raw, _)| raw.clone()).collect();
+            values.extend(
+                collect_batch_paths(&input.tool_input)
+                    .into_iter()
+                    .filter(|(raw, _)| seen.insert(raw.clone())),
+            );
             (tool, values)
         },
         "apply_patch" => {
             let values = input
-                .tool_input
-                .get("command")
-                .and_then(serde_json::Value::as_str)
+                .apply_patch_command()
                 .map(crate::facts::patch::paths)
                 .unwrap_or_default()
                 .into_iter()
+                .map(|raw| (raw, PathOrigin::ApplyPatch))
+                .collect();
+            (PathTool::ApplyPatch, values)
+        },
+        "Bash" => {
+            let Some(cmd) = input
+                .bash_command()
+                .filter(|c| crate::facts::patch::may_invoke_from_shell(c))
+            else {
+                return Vec::new();
+            };
+            let values = crate::facts::patch::bash_bodies(&crate::facts::shell::parse(cmd))
+                .iter()
+                .flat_map(|body| crate::facts::patch::paths(body))
                 .map(|raw| (raw, PathOrigin::ApplyPatch))
                 .collect();
             (PathTool::ApplyPatch, values)
@@ -186,19 +215,36 @@ fn collect_mcp_paths(value: &serde_json::Value) -> Vec<(String, PathOrigin)> {
     for key in MCP_DIRECT_PATH_KEYS {
         push_tagged(value.get(*key), PathOrigin::ToolInputDirect, &mut out);
     }
-    for key in ["files", "items"] {
-        if let Some(items) = value.get(key).and_then(serde_json::Value::as_array) {
+    push_nested_paths(value, &["files", "items"], &mut out);
+    out
+}
+
+/// Array-shaped path carriers on built-in file tools: `paths[]` plus
+/// `operations[].path` / `files[].path` / `items[].path`.
+fn collect_batch_paths(value: &serde_json::Value) -> Vec<(String, PathOrigin)> {
+    let mut out = Vec::new();
+    push_nested_paths(value, &["operations", "files", "items"], &mut out);
+    out
+}
+
+/// Push `<key>[].path` for each of `keys`, then the `paths[]` entries.
+fn push_nested_paths(
+    value: &serde_json::Value,
+    keys: &[&str],
+    out: &mut Vec<(String, PathOrigin)>,
+) {
+    for key in keys {
+        if let Some(items) = value.get(*key).and_then(serde_json::Value::as_array) {
             for item in items {
-                push_tagged(item.get("path"), PathOrigin::ToolInputNested, &mut out);
+                push_tagged(item.get("path"), PathOrigin::ToolInputNested, out);
             }
         }
     }
     if let Some(paths) = value.get("paths").and_then(serde_json::Value::as_array) {
         for item in paths {
-            push_tagged(Some(item), PathOrigin::ToolInputNested, &mut out);
+            push_tagged(Some(item), PathOrigin::ToolInputNested, out);
         }
     }
-    out
 }
 
 fn push_tagged(
@@ -457,6 +503,23 @@ mod tests {
     }
 
     #[test]
+    fn multiedit_and_notebookedit_extract_as_edit() {
+        let multi = input("MultiEdit", serde_json::json!("/etc/hosts"));
+        let p = extract_all(&multi);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].tool, PathTool::Edit);
+        assert_eq!(p[0].raw, "/etc/hosts");
+        let nb = HookInput {
+            tool_name: "NotebookEdit".into(),
+            tool_input: serde_json::json!({ "notebook_path": "/tmp/a.ipynb" }),
+        };
+        let p = extract_all(&nb);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].tool, PathTool::Edit);
+        assert_eq!(p[0].raw, "/tmp/a.ipynb");
+    }
+
+    #[test]
     fn extracts_path_tool_from_read_edit_write() {
         let env = MapEnv::with_home("/h");
         let cases = [
@@ -488,6 +551,27 @@ mod tests {
             let i = input("Read", serde_json::json!(raw));
             let fp = extract_with_env(&i, &env).unwrap();
             assert_eq!(fp.absolute, PathBuf::from(expect_abs), "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn batch_read_payloads_surface_every_path() {
+        let env = MapEnv::with_home("/h");
+        for tool_input in [
+            serde_json::json!({"file_path": "/a", "paths": ["/a", "/b"]}),
+            serde_json::json!({"file_path": "/a", "operations": [{"path": "/a"}, {"path": "/b"}]}),
+            serde_json::json!({"files": [{"path": "/a"}, {"path": "/b"}]}),
+            serde_json::json!({"items": [{"path": "/a"}, {"path": "/b"}]}),
+        ] {
+            let i = HookInput {
+                tool_name: "Read".into(),
+                tool_input: tool_input.clone(),
+            };
+            let raws: Vec<String> = extract_all_with_env(&i, &env)
+                .into_iter()
+                .map(|f| f.raw)
+                .collect();
+            assert_eq!(raws, vec!["/a", "/b"], "{tool_input}");
         }
     }
 
@@ -891,7 +975,10 @@ mod tests {
             tool in "[A-Z][A-Za-z]{0,8}",
             fp in file_path(),
         ) {
-            prop_assume!(!matches!(tool.as_str(), "Read" | "Edit" | "Write"));
+            prop_assume!(!matches!(
+                tool.as_str(),
+                "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit"
+            ));
             let i = HookInput {
                 tool_name: tool,
                 tool_input: serde_json::json!({ "file_path": fp }),

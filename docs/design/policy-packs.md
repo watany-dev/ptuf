@@ -13,7 +13,7 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 | `core.engine` | enabled | 動的コード評価 (`bash -c` / `eval` 等) の確認 |
 | `core.injection` | enabled | 読み込むファイル中身の不可視文字インジェクション検査 |
 | `core.project_hygiene` | disabled | lockfile / protected branch 規約 |
-| `core.workspace` | disabled | workspace 外への Read/Write/redirect/MCP path |
+| `core.workspace` | disabled | workspace 外への Read/Write/redirect/MCP path/Bash のファイル引数 |
 
 ## `core.filesystem`
 
@@ -42,6 +42,14 @@ inline `KEY=VALUE` 代入も跨ぐ)、`su -c '...'` の内側コードは再 par
 | Rule id | Decision | hardDeny | severity |
 | --- | --- | --- | --- |
 | `core.network.remote-script-pipe` | deny | true | critical |
+| `core.network.download-then-exec` | ask | false | high |
+
+`core.network.download-then-exec` は同じ Bash 呼び出しの中で fetcher
+(`curl` / `wget` / `aria2c` / `http` / `xh` 等) が書き出したファイル
+(`-o` / `--output` / `wget -O` / `--output-document` の値、`curl -O` と
+`wget URL` の URL basename、fetcher のある pipeline の `>` / `>>` 先) を、
+head (`./i.sh`, `/tmp/i.sh`) または interpreter / `source` / `.` の第 1
+引数として実行する場合に Ask を返す (`curl -o i.sh URL && sh i.sh`)。
 
 現在の対象は remote script pipe に限定される。例:
 
@@ -63,21 +71,23 @@ head は `head_basename` で basename 化するため `/usr/bin/curl ... | /bin/
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`nc`/`ncat`/`socat`/`telnet`/`scp`/`rsync`/`ftp`/`sftp`、および bash の `/dev/(tcp\|udp)/` への書き込み redirect) が共存。pipeline の redirect 先が機密 path の場合も対象。`ssh` は `ssh -i ~/.ssh/id_rsa host` 等の正当用途で偽陽性が多いため sink に含めない |
-| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする。書き込み本文 (`Write` content / `Edit` `new_string` / MCP `content` / `apply_patch` added 行) は実データ shape (PEM blob) のみ対象で、`~/.aws/credentials` 等の path 言及 (手順書の記載など) では発火しない |
-| `core.secrets.sensitive-bash-read` | ask | false | high | Bash の reader head (`cat`/`head`/`tail`/`source`/`.`/`grep`/`awk`/`sed`/`dd` 等) または `<` redirect が機密 path を読む |
+| `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`nc`/`ncat`/`socat`/`telnet`/`scp`/`rsync`/`ftp`/`sftp`、および bash の `/dev/(tcp\|udp)/` への書き込み redirect) が共存。pipeline の redirect 先が機密 path の場合も対象。アップロード CLI はサブコマンド付きで sink 扱い (`aws s3 cp/mv/sync`、`aws s3api put-object`、`gsutil cp/mv/rsync`、`gcloud storage cp/mv/rsync`、`az storage blob upload[-batch]`、`gh gist create/edit`、`gh release upload/create`、`rclone copy/copyto/move/moveto/sync/rcat`、`mc cp/mv/mirror/pipe`、`s3cmd put/sync`)。`ssh` は `ssh -i ~/.ssh/id_rsa host` 等の正当用途で偽陽性が多いため引数側では sink に含めず、同一 pipeline の上流コマンドが機密 path を参照する場合と、stdin redirect が機密 path の場合だけ sink として扱う |
+| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `MultiEdit` / `NotebookEdit` (`notebook_path`) / `Grep` (`path`) / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする。書き込み本文 (`Write` content / `Edit` `new_string` / `MultiEdit` `edits[].new_string` / `NotebookEdit` `new_source` / MCP `content` / `apply_patch` added 行) は実データ shape (PEM blob) のみ対象で、`~/.aws/credentials` 等の path 言及 (手順書の記載など) では発火しない |
+| `core.secrets.sensitive-bash-read` | ask | false | high | Bash の reader head (`cat`/`head`/`tail`/`source`/`.`/`grep`/`awk`/`sed`/`dd`/`jq`/`yq`/`diff`/`zcat`/`gzip`/`vim`/`nano` 等) または `<` redirect が機密 path を読む |
 
 機密分類は `~/.ssh/**`, `~/.aws/**`, `~/.config/gcloud/**`, `~/.kube/config`,
-`~/.docker/config.json`, SSH 秘密鍵 `id_{rsa,dsa,ecdsa,ed25519}`, `.env*`,
-`.npmrc`, `.pypirc`, `*.tfstate`, PEM blob など。
+`~/.docker/config.json`, SSH 秘密鍵 `id_{rsa,dsa,ecdsa,ed25519}`, `.env*` /
+`.envrc`, `.npmrc`, `.pypirc`, `*.tfstate`, `.netrc`, `.git-credentials`,
+`~/.gnupg/**`, `~/.config/gh/hosts.yml`, `~/.azure/**`, `.vault-token`,
+`*.key` / `*.p12` / `*.pfx`, PEM blob など。
 機密 path の分類器は `src/facts/sensitive.rs` の `PROBES` 1 系統のみ。
 Bash 系ルールは yes/no を返す `sensitive::matches` (`src/rules/patterns.rs` の
 `matches_sensitive_path` が委譲)、ファイルツール / MCP 系は typed な
 `classify` を使うが、どちらも同じ `PROBES` を引く。PEM blob の
 header / footer パターンは `PEM_PRIVATE_KEY_{BEGIN,END}` として audit redactor
 (`src/audit/redaction.rs`) とも共有する。
-`.npmrc` / `.pypirc` は `~/.npmrc` のようにパス境界 (`^` / `/` / 空白 /
-`~`・`$HOME`・`${HOME}` + `/`) に接する場合のみ機密とみなし、`data.npmrc`
+`.npmrc` / `.pypirc` / `.netrc` などの dotfile は `~/.npmrc` のようにパス境界
+(`^` / `/` / 空白 / `=`・`@`・`<`・`:` / `~`・`$HOME`・`${HOME}` + `/`) に接する場合のみ機密とみなし、`data.npmrc`
 のような lookalike は除外する。2 系統の一致は
 `pbt_sensitive_path_matches_classify` property (`src/rules/patterns.rs`) と
 engine レベルの `pbt_sensitive_path_parity_across_surfaces`
@@ -145,6 +155,7 @@ Ask が Deny に demote される既存挙動が適用される)。
 | `core.git.no-verify` | deny | false | high |
 | `core.git.no-gpg-sign` | deny | false | medium |
 | `core.git.config-override-bypass` | deny | false | high |
+| `core.git.config-exec-command` | ask | false | high |
 | `core.git.env-bypass` | deny | false | high |
 | `core.git.push-mirror` | ask | false | high |
 | `core.git.push-delete-remote` | ask | false | high |
@@ -163,6 +174,17 @@ hook / signing / fsck bypass を block する rule (`core.git.no-verify` /
 `sudo -u root git ...` や `sudo --user=root git ...` のような
 value-taking option は、option 値を command head と誤認しないように
 unwrap してから評価し、`sudo doas git ...` のような多段ネストも 1 段ずつ剥がす。
+`core.git.config-override-bypass` は `git -c` / `--config` による 1 回限りの
+上書きに加えて、`git config [--global …] KEY VALUE` / `git config set KEY VALUE`
+による永続設定 (`core.hooksPath` / `commit.gpgsign false` 等) も deny する
+(`--unset` / `--get` などの読み取り・削除は対象外)。
+`core.git.config-exec-command` は git がシェルで実行する値を持つキー
+(`core.sshCommand` / `core.pager` / `core.editor` / `core.fsmonitor` /
+`credential.helper` / `diff.external` / `diff.*.textconv` / `filter.*.{clean,smudge,process}` /
+`gpg.program` / `sequence.editor` / `pager.*` / `!` 始まりの `alias.*` 等) を
+`-c` または `git config` で設定する呼び出しを Ask にする。値は inner shell として
+再 parse されるので、`git -c core.sshCommand='rm -rf /' fetch` は
+`core.filesystem.destructive-rm` で deny になる。
 `core.git.clean-fdx` は `git clean -fdx` だけでなく、`git clean -f -d -x` や
 `git clean --force -d -x` のように分割された flag も検出する。`-n` dry-run は
 発火しない。
@@ -172,7 +194,7 @@ unwrap してから評価し、`sudo doas git ...` のような多段ネスト�
 意味的に同一) も Critical / hardDeny で捕捉する。
 `core.git.push-mirror` は `git push --mirror` を Ask する (全 ref を上書きする
 ため事実上のリポジトリ全力 force push)。
-`core.git.push-delete-remote` は `--delete` / `-d` フラグおよび
+`core.git.push-delete-remote` は `--prune`、`--delete` / `-d` フラグおよび
 `git push origin :foo` 形式の colon-prefix 削除 refspec を Ask する。
 `core.git.force-if-includes` は `--force-with-lease` と並ぶ新フラグで、
 同等の force-push リスクを持つため Ask とする。
@@ -202,7 +224,7 @@ guard / hook / 監査を 1 発で迂回する)。
 
 | Rule id | 対象 |
 | --- | --- |
-| `core.self_protection.binary` | ptuf 実行ファイル |
+| `core.self_protection.binary` | ptuf 実行ファイル。パッケージマネージャ経由の導入・削除・更新 (`cargo install/uninstall/binstall ptuf`、`npm/pnpm/yarn/bun install/uninstall/update … ptuf`、`brew install/uninstall/upgrade …/ptuf`) と `ptuf update` も対象 |
 | `core.self_protection.config` | config layer (`/etc`, `~/.config`, repo local) |
 | `core.self_protection.plugin` | config で参照された plugin YAML |
 | `core.self_protection.claude-settings` | `.claude/settings*.json` |
@@ -242,7 +264,7 @@ glob (`*` / `?` / `[…]`) を含む書き込み先は、保護対象と成分�
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.engine.dynamic-eval` | ask | false | medium | `bash -c …` / `sh -c` / `python -c` / `node -e` / `perl -e` / `ruby -c\|-e` / `eval …` 等の 2 段階実行 |
+| `core.engine.dynamic-eval` | ask | false | medium | `bash -c …` / `sh -c` / `python -c` / `node -e` / `perl -e` / `ruby -c\|-e` / `eval …` 等の 2 段階実行、およびコマンド名が実行時に決まる head (basename に `$` / 置換 / glob を含む: `$X …`, `$(echo rm) …`, `/bin/r? …`。`$HOME/bin/tool` のように basename が字句的なものは対象外) |
 
 shell wrapper (`bash -c`, `sh -c`, `eval`, `xargs`, `find -exec`) については、
 bounded depth の再 parse により inner command と redirect が既存 rule
@@ -259,18 +281,21 @@ opaque なので、`core.engine.dynamic-eval` が `Ask` を返してユーザに
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.injection.invisible-chars` | ask | false | high | `Read` / `Edit` / path を持つ MCP tool / Bash の reader head が読み込むファイルの中身に、人間のレビュアーには見えない文字が含まれる |
+| `core.injection.invisible-chars` | ask | false | high | `Read` / `Edit` / `MultiEdit` / `NotebookEdit` / `Grep` (`path`) / path を持つ MCP tool / Bash の reader head が読み込むファイルの中身に、人間のレビュアーには見えない文字が含まれる |
 
 ptuf の他 rule は tool 入力 (path 文字列・コマンド文字列) を判定するが、
 本 rule は唯一「対象ファイルを開いて中身を検査する」rule。レビュアーには
 無害に見えるファイルに不可視文字を仕込み、agent の context にだけ隠れた
 指示を流し込む間接プロンプトインジェクション (Trojan Source / ASCII
-smuggling) を検出する。検出カテゴリは 5 種:
+smuggling) を検出する。検出カテゴリは 6 種:
 
 - **zero-width / 不可視 Unicode** — ZWSP (U+200B), ZWNJ, ZWJ, WORD
   JOINER, 不可視数学演算子 (U+2061–2064), SOFT HYPHEN, COMBINING
-  GRAPHEME JOINER (U+034F), HANGUL filler 等。先頭の U+FEFF は正規の
-  BOM として除外する
+  GRAPHEME JOINER (U+034F), HANGUL filler、非推奨書式制御 (U+206A–206F)、
+  interlinear annotation (U+FFF9–FFFB)、音楽記号の書式 (U+1D173–1D17A)、
+  shorthand 書式制御 (U+1BCA0–1BCA3)、Khmer 固有母音 (U+17B4–17B5)、
+  未割り当ての Default_Ignorable (U+2065 / U+FFF0–FFF8 / U+E0080–E00FF /
+  U+E01F0–E0FFF) 等。先頭の U+FEFF は正規の BOM として除外する
 - **BiDi 制御文字** — U+202A–202E / U+2066–2069 の override / isolate と
   方向マーク LRM / RLM / ALM (U+200E / U+200F / U+061C) (Trojan Source)
 - **Unicode Tag 文字** — U+E0000–E007F (ASCII smuggling)
@@ -278,11 +303,16 @@ smuggling) を検出する。検出カテゴリは 5 種:
   (U+E0100–E01EF) (data smuggling)。標準の U+FE00–FE0F は絵文字異体字で
   多用されるため意図的に検出対象外
 - **C0/C1 制御文字** — TAB / LF / CR と NUL を除く制御バイト
+- **行 / 段落区切り** — U+2028 / U+2029。エディタによって改行に見えたり
+  見えなかったりする
 
 I/O は best-effort で fail-open する。ファイル欠如・権限エラー・非通常
-ファイル (ディレクトリ / FIFO / デバイス)・バイナリ (NUL バイトまたは
-denylist 拡張子)・非 UTF-8 はすべて `None` (素通り) になる。巨大ファイルは
-先頭 1 MiB のみ scan する。`Write` / `apply_patch` は agent 自身が書く
+ファイル (ディレクトリ / FIFO / デバイス)・バイナリ (denylist 拡張子、
+または NUL と不正 UTF-8 のバイトが 8 個以上かつ 10% 以上) はすべて `None`
+(素通り) になる。不正 UTF-8 や少数の NUL は読み飛ばし、その前後のテキストは
+最後まで検査する。8 MiB 以下のファイルは全体を、それより大きいファイルは
+先頭 1 MiB・末尾 1 MiB・`Read` の `offset` が指す行からの 1 MiB を scan
+する。`Write` / `apply_patch` は agent 自身が書く
 内容のため対象外。Bash は reader head (`cat` / `head` 等) の positional
 引数のみを対象とする。allowlist は `sensitive-bash-read` と共通だが、
 hex ダンプ系 (`xxd` / `od` / `hexdump`) は隠し文字を可視化するため対象から
@@ -324,7 +354,7 @@ Read も対象になるため、有効化すると外部 lib (`~/.cargo/registry
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.workspace.outside-access` | deny | false | medium | tool 入力 (`Read`/`Edit`/`Write`/`apply_patch`/MCP `path`) と Bash redirect target が workspace 境界の外を指す場合 |
+| `core.workspace.outside-access` | deny | false | medium | tool 入力 (`Read`/`Edit`/`Write`/`apply_patch`/MCP `path`) 、Bash redirect target、Bash の reader / writer コマンドのファイル引数が workspace 境界の外を指す場合 |
 
 境界は engine の `repo_root` (`.git` 探索結果) と
 `packs.core.workspace.additionalWorkspaces` の和集合。両方とも未設定なら
@@ -333,6 +363,15 @@ symlink を解決してから component 単位で `starts_with` 判定するた�
 `/work-evil` のような lookalike prefix では誤マッチしない。存在しない
 descendant については祖先まで遡って canonicalize し、`..` を自前で
 解決した正規化形を判定対象とする。
+
+Bash のファイル引数は、writer head (`cp` / `mv` / `tee` / `ln` /
+`install` / `rsync` / `touch` / `mkdir` / `rm` / `rmdir` / `unlink` /
+`chmod` / `chown` / `chgrp` / `truncate` / `shred` / `sponge`) と
+`sensitive-bash-read` の reader head の位置引数を対象にする。`grep` /
+`sed` / `awk` 系は最初の位置引数 (パターン / スクリプト) を除き、`tr` は
+対象外、`dd` は `if=` / `of=` の値を見る。`sudo` などの prefix wrapper、
+`bash -c`、`xargs`、`find -exec`、コマンド置換の中も対象。相対パスは
+ptuf のプロセスの cwd を基準に解決し、同じ行の `cd` は追跡しない。
 
 ```yaml
 packs:

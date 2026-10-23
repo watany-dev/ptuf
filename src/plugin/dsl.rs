@@ -233,11 +233,24 @@ fn expect_string_list(key: &str, value: &Value) -> Result<Vec<String>, CompileEr
     Ok(out)
 }
 
+/// Pipeline head match on basename. A trailing version suffix is also
+/// tried (`python3.12` / `node18` / `lua5.4` match `python` / `node` /
+/// `lua`), so versioned interpreter binaries need no enumeration.
+fn pipeline_head_matches(list: &[String], head: &str) -> bool {
+    let unversioned = head.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    let unversioned = if unversioned.is_empty() {
+        head
+    } else {
+        unversioned
+    };
+    list.iter().any(|h| h == head || h == unversioned)
+}
+
 /// True if `from` appears as a head (or prefix-unwrapped head) anywhere in
 /// this argv tree, including nested `inner_argv` / `subst_argv`.
 fn subst_tree_has_from(argv: &Argv, from: &[String]) -> bool {
     let unwrapped = unwrap_all_prefix_wrappers(argv);
-    if from.iter().any(|f| f == unwrapped.head_basename()) {
+    if pipeline_head_matches(from, unwrapped.head_basename()) {
         return true;
     }
     argv.inner_argv
@@ -264,9 +277,9 @@ fn walk_argv_for_pipeline_from_to(
 ) -> bool {
     let unwrapped = unwrap_all_prefix_wrappers(argv);
     let head = unwrapped.head_basename();
-    let matches_to = to.iter().any(|t| t == head);
+    let matches_to = pipeline_head_matches(to, head);
     if !*seen_from {
-        if from.iter().any(|f| f == head) {
+        if pipeline_head_matches(from, head) {
             *seen_from = true;
         }
     } else if matches_to {
@@ -337,10 +350,11 @@ pub(crate) fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> boo
             .url
             .as_ref()
             .is_some_and(|u| schemes.iter().any(|s| s.eq_ignore_ascii_case(&u.scheme))),
-        WhenNode::UrlHostAny(hosts) => facts
-            .url
-            .as_ref()
-            .is_some_and(|u| hosts.iter().any(|h| h.eq_ignore_ascii_case(&u.host))),
+        WhenNode::UrlHostAny(hosts) => facts.url.as_ref().is_some_and(|u| {
+            hosts
+                .iter()
+                .any(|h| crate::facts::url::host_matches(h, &u.host))
+        }),
         WhenNode::SensitivePathAny(kinds) => facts.sensitive.iter().any(|s| {
             let tag = s.kind.as_str();
             kinds.iter().any(|k| k == tag)
@@ -649,6 +663,16 @@ shell.pipeline:
     }
 
     #[test]
+    fn pipeline_head_matches_strips_version_suffix() {
+        let list = vec!["python".to_string(), "node".to_string(), ".".to_string()];
+        assert!(pipeline_head_matches(&list, "python3.12"));
+        assert!(pipeline_head_matches(&list, "node18"));
+        assert!(pipeline_head_matches(&list, "."));
+        assert!(!pipeline_head_matches(&list, "pythonx"));
+        assert!(!pipeline_head_matches(&list, "3.12"));
+    }
+
+    #[test]
     fn evaluate_shell_pipeline_misses_when_order_inverted() {
         let input = bash_input("bash | curl https://x");
         let facts = facts::extract(&input);
@@ -831,6 +855,26 @@ shell.pipeline:
             assert!(
                 evaluate(&node, &facts, &input),
                 "expected match for {cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shell_pipeline_from_to_ignores_process_subst_without_fetcher() {
+        let node = WhenNode::ShellPipelineFromTo {
+            from: vec!["curl".into()],
+            to: vec!["bash".into(), "source".into()],
+        };
+        for cmd in [
+            "bash <(cat local.sh)",
+            "source <(kubectl completion bash)",
+            "bash <(bash -c 'echo hi')",
+        ] {
+            let input = bash_input(cmd);
+            let facts = facts::extract(&input);
+            assert!(
+                !evaluate(&node, &facts, &input),
+                "expected no match for {cmd:?}"
             );
         }
     }
@@ -1133,6 +1177,35 @@ all:
         assert!(evaluate(&host, &facts, &input));
         let other = WhenNode::UrlHostAny(vec!["example.com".into()]);
         assert!(!evaluate(&other, &facts, &input));
+    }
+
+    #[test]
+    fn host_any_sees_through_alternate_url_spellings() {
+        // #329 / #330.
+        let deny = WhenNode::UrlHostAny(vec!["evil.com".into()]);
+        for url in [
+            "https://evil.com?@ok.com",
+            "https://evil.com#@ok.com",
+            "https://evil.com\\@ok.com",
+            "https://EVIL.com./x",
+            "https://evil%2ecom/x",
+            "https:/evil.com/x",
+            " https://evil.com/x",
+            "evil.com/x",
+        ] {
+            let input = HookInput {
+                tool_name: "WebFetch".into(),
+                tool_input: json!({ "url": url }),
+            };
+            let facts = facts::extract(&input);
+            assert!(evaluate(&deny, &facts, &input), "url={url}");
+        }
+        let metadata = WhenNode::UrlHostAny(vec!["169.254.169.254".into()]);
+        let input = HookInput {
+            tool_name: "WebFetch".into(),
+            tool_input: json!({ "url": "http://2852039166/latest/meta-data" }),
+        };
+        assert!(evaluate(&metadata, &facts::extract(&input), &input));
     }
 
     #[test]

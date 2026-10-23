@@ -8,6 +8,7 @@
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
+use crate::facts::shell::{Argv, unwrap_all_prefix_wrappers};
 use crate::hook_input::HookInput;
 use crate::reason;
 use crate::self_paths::ProtectedKind;
@@ -43,7 +44,16 @@ impl ConfigRule for SelfRule {
     }
 
     fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
-        if !facts.protected.contains(&self.spec.kind) {
+        // The package-manager walk only runs when the path facts did not
+        // already flag the binary.
+        let hit = facts.protected.contains(&self.spec.kind)
+            || (self.spec.kind == ProtectedKind::Binary
+                && facts.bash.as_ref().is_some_and(|b| {
+                    b.commands()
+                        .into_iter()
+                        .any(|a| manages_ptuf_install(&unwrap_all_prefix_wrappers(a)))
+                }));
+        if !hit {
             return None;
         }
         let reason = reason::build(self.spec.id, self.spec.problem, self.spec.alternatives);
@@ -54,11 +64,78 @@ impl ConfigRule for SelfRule {
     }
 }
 
+/// Package names ptuf is published under (crates.io / npm / Homebrew
+/// tap), compared after stripping an `@version` suffix and a tap prefix.
+const PTUF_PACKAGES: &[&str] = &["ptuf", "@watany-dev/ptuf"];
+
+/// Whether `argv` installs, removes, or replaces the ptuf binary through
+/// a package manager or `ptuf update` (`cargo uninstall ptuf`,
+/// `npm i -g ptuf@0.1.0`, `brew uninstall ptuf`). Any of these can drop
+/// the guardrail or swap in an older, weaker build.
+fn manages_ptuf_install(argv: &Argv) -> bool {
+    let positional: Vec<&str> = argv.positional().collect();
+    let names_ptuf = |args: &[&str]| args.iter().any(|a| is_ptuf_package(a));
+    match (argv.head_basename(), positional.split_first()) {
+        ("ptuf", Some((&"update", _))) => true,
+        ("cargo", Some((verb, rest))) => {
+            matches!(*verb, "install" | "uninstall" | "binstall") && names_ptuf(rest)
+        },
+        ("npm" | "pnpm" | "yarn" | "bun", Some((verb, rest))) => {
+            // `yarn global add ptuf`
+            let (verb, rest) = match (*verb, rest.split_first()) {
+                ("global", Some((v, r))) => (*v, r),
+                _ => (*verb, rest),
+            };
+            matches!(
+                verb,
+                "install"
+                    | "i"
+                    | "add"
+                    | "uninstall"
+                    | "un"
+                    | "remove"
+                    | "rm"
+                    | "r"
+                    | "update"
+                    | "up"
+                    | "upgrade"
+                    | "link"
+                    | "unlink"
+            ) && names_ptuf(rest)
+        },
+        ("brew", Some((verb, rest))) => {
+            matches!(
+                *verb,
+                "install"
+                    | "uninstall"
+                    | "remove"
+                    | "rm"
+                    | "reinstall"
+                    | "upgrade"
+                    | "link"
+                    | "unlink"
+            ) && names_ptuf(rest)
+        },
+        _ => false,
+    }
+}
+
+fn is_ptuf_package(arg: &str) -> bool {
+    // `ptuf@0.1.0`, `@watany-dev/ptuf@1`, `watany-dev/tap/ptuf`.
+    let name = match arg.rfind('@') {
+        Some(at) if at > 0 => &arg[..at],
+        _ => arg,
+    };
+    PTUF_PACKAGES.contains(&name)
+        || name.rsplit('/').next() == Some("ptuf") && name.contains("/tap/")
+}
+
 const BINARY: RuleSpec = RuleSpec {
     id: "core.self_protection.binary",
     kind: ProtectedKind::Binary,
-    problem: "The command targets the ptuf binary itself. Removing or replacing it would disable \
-         every guardrail in this and future sessions.",
+    problem: "The command targets the ptuf binary itself, directly or through a package manager \
+         or `ptuf update`. Removing, replacing, or downgrading it would disable or weaken every \
+         guardrail in this and future sessions.",
     alternatives: &[
         "Use the package manager / installer that owns the binary.",
         "If you really need to replace ptuf, do it from outside an agent session.",
@@ -271,6 +348,44 @@ mod tests {
     }
 
     #[test]
+    fn binary_rule_denies_package_manager_and_update_lifecycle() {
+        let eval = |cmd: &str| {
+            let input = HookInput {
+                tool_name: "Bash".into(),
+                tool_input: serde_json::json!({ "command": cmd }),
+            };
+            let facts = crate::facts::extract(&input);
+            BINARY_RULE.evaluate(&facts, &input)
+        };
+        for cmd in [
+            "cargo uninstall ptuf",
+            "cargo install ptuf --version 0.1.0 --force",
+            "cargo binstall ptuf",
+            "npm uninstall -g ptuf",
+            "npm i -g ptuf@0.1.0",
+            "npm update -g @watany-dev/ptuf",
+            "pnpm remove -g ptuf",
+            "yarn global add ptuf@0.1.0",
+            "sudo npm rm -g ptuf",
+            "brew uninstall watany-dev/tap/ptuf",
+            "brew upgrade ptuf",
+            "ptuf update --version v0.1.0 --force",
+            "PTUF_UPDATE_SKIP_ATTESTATION=1 ptuf update",
+        ] {
+            assert!(matches!(eval(cmd), Some(Decision::Deny { .. })), "{cmd}");
+        }
+        for cmd in [
+            "npm install lodash",
+            "cargo install ripgrep",
+            "ptuf check --tool Bash ls",
+            "brew install jq",
+            "npm install ptufx",
+        ] {
+            assert!(eval(cmd).is_none(), "{cmd}");
+        }
+    }
+
+    #[test]
     fn rules_carry_hard_deny_critical_metadata() {
         for rule in [
             &BINARY_RULE,
@@ -311,6 +426,27 @@ mod tests {
         let reason = d.reason().expect("reason for deny");
         assert!(reason.contains("core.self_protection.binary"));
         assert!(reason.contains("Safer alternative"));
+    }
+
+    #[test]
+    fn is_ptuf_package_requires_a_tap_for_slashed_names() {
+        for yes in [
+            "ptuf",
+            "ptuf@0.1.0",
+            "@watany-dev/ptuf",
+            "@watany-dev/ptuf@1",
+            "watany-dev/tap/ptuf",
+        ] {
+            assert!(is_ptuf_package(yes), "{yes}");
+        }
+        for no in [
+            "someone/ptuf",
+            "watany-dev/tap/other",
+            "ptuf-extra",
+            "@other/ptuf",
+        ] {
+            assert!(!is_ptuf_package(no), "{no}");
+        }
     }
 
     #[test]

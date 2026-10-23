@@ -1,8 +1,9 @@
 //! Minimal URL fact extraction for `WebFetch` payloads.
 //!
 //! No external `url`/`http` dependency: the parser splits a string into
-//! `scheme://host[:port][/path]` by hand and returns `None` when the
-//! shape is unrecognisable. This is enough for the policy questions
+//! `scheme://host[:port][/path]` by hand, following the WHATWG URL rules
+//! that decide which host a fetch connects to, and returns `None` when
+//! no host can be found. This is enough for the policy questions
 //! ptuf needs to ask (cloud-metadata host blocklist, scheme allowlist,
 //! prefix matching), and keeps the dependency surface flat.
 
@@ -18,36 +19,172 @@ pub struct Url {
     pub path: String,
 }
 
-/// Parse `s` into a [`Url`]. Returns `None` when `s` lacks a recognisable
-/// `scheme://host` prefix.
+/// Schemes WHATWG URL treats as "special": their authority may follow
+/// any run of `/` and `\\`, and `\\` ends the authority like `/`.
+const SPECIAL_SCHEMES: &[&str] = &["http", "https", "ws", "wss", "ftp"];
+
+/// Parse `s` into a [`Url`]. Returns `None` when `s` has no recognisable
+/// host.
+///
+/// The host is what a WHATWG URL parser (and so the fetching agent)
+/// would connect to, so `url.hostAny` cannot be sidestepped by an
+/// alternate spelling:
+/// - surrounding whitespace / C0 controls are trimmed and tab / newline
+///   removed;
+/// - the authority ends at the first `/`, `?`, `#` (and `\\` for
+///   special schemes), so `https://evil.com?@ok.com` is `evil.com`;
+/// - special schemes accept `https:/evil.com` and `https:evil.com`;
+/// - a string without a scheme (`evil.com/x`, `//evil.com`) is read as
+///   `https://`, which is what `WebFetch` does with it;
+/// - the host is percent-decoded, lowercased, stripped of one trailing
+///   dot, and numeric IPv4 forms (`0xa9.0xfe.0xa9.0xfe`, `2852039166`)
+///   are rewritten as dotted decimal.
+///
+/// Non-ASCII hosts are lowercased but not IDNA-mapped.
 pub(crate) fn parse(s: &str) -> Option<Url> {
-    let (scheme, rest) = s.split_once("://")?;
-    if scheme.is_empty() || !is_valid_scheme(scheme) {
-        return None;
-    }
-    let (authority, path) = match rest.find('/') {
-        Some(i) => (&rest[..i], &rest[i..]),
-        None => (rest, ""),
+    let cleaned: String = s
+        .trim_matches(|c: char| c <= ' ')
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    let (scheme, rest) = split_scheme(&cleaned)?;
+    let special = SPECIAL_SCHEMES.contains(&scheme.as_str());
+    let rest = if special {
+        rest.trim_start_matches(['/', '\\'])
+    } else {
+        rest.strip_prefix("//")?
     };
-    if authority.is_empty() {
-        return None;
-    }
+    let end = rest
+        .find(|c: char| matches!(c, '/' | '?' | '#') || (special && c == '\\'))
+        .unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(end);
     // Strip user-info (`user[:pass]@`) before host parsing.
     let authority = match authority.rfind('@') {
         Some(i) => &authority[i + 1..],
         None => authority,
     };
     let (host, port) = split_host_port(authority)?;
-    if host.is_empty() {
-        return None;
-    }
+    let host = normalize_host(host)?;
     Some(Url {
         raw: s.to_string(),
-        scheme: scheme.to_ascii_lowercase(),
-        host: host.to_ascii_lowercase(),
+        scheme,
+        host,
         port,
         path: path.to_string(),
     })
+}
+
+/// Split off a lowercased scheme. A string with no scheme, or whose
+/// non-special "scheme" is really `host:port` (`localhost:8080/x`), is
+/// read as `https`.
+fn split_scheme(s: &str) -> Option<(String, &str)> {
+    if let Some((scheme, rest)) = s.split_once(':')
+        && is_valid_scheme(scheme)
+    {
+        let scheme = scheme.to_ascii_lowercase();
+        if SPECIAL_SCHEMES.contains(&scheme.as_str())
+            || !rest.starts_with(|c: char| c.is_ascii_digit())
+        {
+            return Some((scheme, rest));
+        }
+    }
+    if s.is_empty() || s.starts_with(':') || s.contains("://") {
+        return None;
+    }
+    Some(("https".to_string(), s))
+}
+
+/// True when a configured host (`url.hostAny` entry) names the parsed
+/// `host`. The entry gets the same normalization as a parsed host, so
+/// `EVIL.com.` or `0xa9fea9fe` in a policy still match.
+pub(crate) fn host_matches(pattern: &str, host: &str) -> bool {
+    normalize_host(pattern.trim()).is_some_and(|p| p == host)
+}
+
+/// Canonical host: percent-decoded, lowercased, without a trailing dot,
+/// and with numeric IPv4 spellings rewritten as dotted decimal.
+fn normalize_host(host: &str) -> Option<String> {
+    if host.starts_with('[') {
+        return Some(host.to_ascii_lowercase());
+    }
+    let decoded = percent_decode(host)?;
+    let mut host = decoded.to_lowercase();
+    if host.len() > 1 && host.ends_with('.') {
+        host.pop();
+    }
+    if host.is_empty() || host.contains(['/', '\\', '?', '#', '@', ' ', '%']) {
+        return None;
+    }
+    Some(parse_ipv4(&host).unwrap_or(host))
+}
+
+fn percent_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && let Some(hex) = bytes.get(i + 1..i + 3)
+            && let Ok(hex) = std::str::from_utf8(hex)
+            && let Ok(byte) = u8::from_str_radix(hex, 16)
+        {
+            out.push(byte);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// WHATWG IPv4 parser: up to four dot-separated parts in decimal, hex
+/// (`0x`) or octal (leading `0`); the last part fills the remaining
+/// bytes. `None` when `host` is not an IPv4 address in that sense.
+fn parse_ipv4(host: &str) -> Option<String> {
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() > 4 {
+        return None;
+    }
+    let numbers: Vec<u64> = parts
+        .iter()
+        .map(|part| parse_ipv4_number(part))
+        .collect::<Option<_>>()?;
+    let (last, init) = numbers.split_last()?;
+    if init.iter().any(|&n| n > 255) {
+        return None;
+    }
+    let shift = 8 * (4 - init.len());
+    if shift < 32 && *last >= 1u64 << shift {
+        return None;
+    }
+    let mut value = *last;
+    for (i, &n) in init.iter().enumerate() {
+        value += n << (8 * (3 - i));
+    }
+    let value = u32::try_from(value).ok()?;
+    Some(std::net::Ipv4Addr::from(value).to_string())
+}
+
+fn parse_ipv4_number(part: &str) -> Option<u64> {
+    if part.is_empty() {
+        return None;
+    }
+    let (digits, radix) =
+        if let Some(hex) = part.strip_prefix("0x").or_else(|| part.strip_prefix("0X")) {
+            (hex, 16)
+        } else if part.len() > 1 && part.starts_with('0') {
+            (&part[1..], 8)
+        } else {
+            (part, 10)
+        };
+    if digits.is_empty() {
+        return Some(0);
+    }
+    if digits.len() > 12 {
+        return None;
+    }
+    u64::from_str_radix(digits, radix).ok()
 }
 
 fn is_valid_scheme(scheme: &str) -> bool {
@@ -71,6 +208,7 @@ fn split_host_port(authority: &str) -> Option<(&str, Option<u16>)> {
         return Some((host, port));
     }
     match authority.rfind(':') {
+        Some(i) if authority[i + 1..].is_empty() => Some((&authority[..i], None)),
         Some(i) => {
             let host = &authority[..i];
             let port: u16 = authority[i + 1..].parse().ok()?;
@@ -162,9 +300,79 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_scheme() {
-        assert!(parse("example.com/foo").is_none());
-        assert!(parse("//example.com/foo").is_none());
+    fn missing_scheme_reads_as_https() {
+        for raw in ["example.com/foo", "//example.com/foo", "localhost:8080/x"] {
+            let u = parse(raw).unwrap();
+            assert_eq!(u.scheme, "https", "raw={raw}");
+            assert!(
+                u.host == "example.com" || u.host == "localhost",
+                "raw={raw}"
+            );
+        }
+        assert_eq!(parse("localhost:8080/x").unwrap().port, Some(8080));
+    }
+
+    #[test]
+    fn authority_ends_at_query_fragment_and_backslash() {
+        // #329: an `@` past the authority is not userinfo.
+        for raw in [
+            "https://evil.com?@ok.com",
+            "https://evil.com#@ok.com",
+            "https://evil.com\\@ok.com",
+            "https://evil.com/@ok.com",
+        ] {
+            assert_eq!(parse(raw).unwrap().host, "evil.com", "raw={raw}");
+        }
+        // Non-special schemes keep `\\` in the authority.
+        assert_eq!(parse("foo://a\\b@c/").unwrap().host, "c");
+    }
+
+    #[test]
+    fn normalizes_alternate_host_spellings() {
+        // #330.
+        for raw in [
+            "https://EVIL.com./x",
+            "https://evil%2ecom/x",
+            "https://%65vil.com/x",
+            "https:/evil.com/x",
+            "https:evil.com/x",
+            "https:\\\\evil.com/x",
+            " https://evil.com/x",
+            "\thttps://evil.com/x\n",
+            "https://ev\nil.com/x",
+            "evil.com/x",
+            "https://evil.com:/x",
+        ] {
+            assert_eq!(parse(raw).unwrap().host, "evil.com", "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn host_matches_normalizes_pattern() {
+        let u = parse("http://0xa9fea9fe/latest").unwrap();
+        assert!(host_matches("169.254.169.254", &u.host));
+        assert!(host_matches("0xa9fea9fe", &u.host));
+        let u = parse("https://evil.com./x").unwrap();
+        assert!(host_matches("EVIL.COM.", &u.host));
+        assert!(!host_matches("ok.com", &u.host));
+    }
+
+    #[test]
+    fn normalizes_numeric_ipv4_hosts() {
+        for raw in [
+            "http://169.254.169.254/",
+            "http://2852039166/",
+            "http://0xa9.0xfe.0xa9.0xfe/",
+            "http://0251.0376.0251.0376/",
+            "http://169.254.43518/",
+            "http://169.16689662/",
+            "http://169.254.169.254./",
+        ] {
+            assert_eq!(parse(raw).unwrap().host, "169.254.169.254", "raw={raw}");
+        }
+        // Not an address: left as a name.
+        assert_eq!(parse("http://1.2.3.4.5/").unwrap().host, "1.2.3.4.5");
+        assert_eq!(parse("http://0x1g/").unwrap().host, "0x1g");
     }
 
     #[test]
@@ -175,7 +383,10 @@ mod tests {
 
     #[test]
     fn rejects_empty_authority() {
-        assert!(parse("http:///foo").is_none());
+        assert!(parse("foo:///bar").is_none());
+        assert!(parse("http://").is_none());
+        // Special schemes skip extra slashes, as browsers do.
+        assert_eq!(parse("http:///foo").unwrap().host, "foo");
     }
 
     #[test]
@@ -238,7 +449,7 @@ mod tests {
         #[test]
         fn pbt_canonical_urls_round_trip(
             scheme in "(?:https?|ftp)",
-            host in "[a-z][a-z0-9.-]{1,16}",
+            host in "[a-z][a-z0-9.-]{0,15}[a-z0-9]",
             path in "[a-z0-9/._-]{0,16}",
         ) {
             let s = format!("{scheme}://{host}/{path}");
@@ -257,11 +468,43 @@ mod tests {
             prop_assert_eq!(u.port, Some(port));
         }
 
-        // Strings without `://` always fail.
+        // A scheme-less `host/path` reads as `https://host/path`.
         #[test]
-        fn pbt_no_scheme_separator_fails(s in "[^:]{0,40}") {
-            prop_assume!(!s.contains("://"));
-            prop_assert!(parse(&s).is_none());
+        fn pbt_scheme_less_reads_as_https(
+            host in "[a-z][a-z0-9-]{0,12}\\.[a-z]{2,6}",
+            path in "[a-z0-9/._-]{0,16}",
+        ) {
+            let u = parse(&format!("{host}/{path}")).expect("parse");
+            prop_assert_eq!(u.scheme, "https");
+            prop_assert_eq!(u.host, host);
+        }
+
+        // Differential: for special-scheme URLs the `url` crate (a
+        // WHATWG implementation) accepts with an ASCII host, ptuf
+        // agrees on the host (modulo one trailing dot) and port.
+        #[test]
+        fn pbt_host_matches_whatwg(
+            scheme in "(?:https?|wss?|ftp)",
+            sep in "(?:://|:/|:|:///|:\\\\\\\\|:/\\\\)",
+            user in "(?:|[a-z]{1,4}(?::[a-z0-9]{0,4})?@)",
+            host in "(?:[a-zA-Z0-9%.-]{1,12}|[0-9x.]{1,15})",
+            port in "(?:|:[0-9]{1,4})",
+            tail in "(?:|[/?#\\\\][ -~]{0,12})",
+        ) {
+            let raw = format!("{scheme}{sep}{user}{host}{port}{tail}");
+            let Ok(oracle) = ::url::Url::parse(&raw) else {
+                return Ok(());
+            };
+            if matches!(oracle.host(), None | Some(::url::Host::Ipv6(_))) {
+                return Ok(());
+            }
+            let host = oracle.host_str().expect("host");
+            let want = host.strip_suffix('.').filter(|h| !h.is_empty()).unwrap_or(host);
+            let got = parse(&raw).expect("ptuf parses what WHATWG parses");
+            prop_assert_eq!(&got.host, want, "raw={}", raw);
+            // The `url` crate drops a scheme's default port.
+            let default = oracle.port_or_known_default();
+            prop_assert_eq!(got.port.or(default), default, "raw={}", raw);
         }
     }
 }

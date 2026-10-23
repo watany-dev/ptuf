@@ -12,6 +12,10 @@
 //!   3. HTTP basic auth (`https://user:pass@host/…`) — masks the
 //!      password component.
 //!   4. PEM-encoded blobs (`-----BEGIN … PRIVATE KEY-----`).
+//!   5. npm (`npm_…`) and Google API (`AIza…`) keys.
+//!   6. Credentials passed as option values: `--password VALUE` and
+//!      friends, `mysql -pVALUE`, `curl -u user:VALUE`,
+//!      `docker login -p VALUE`, and `npm config set <secret-key> VALUE`.
 //!
 //! All replacements emit the literal `***`. The redactor is intentionally
 //! conservative: false positives are preferable to leaking a credential
@@ -89,6 +93,84 @@ static JSON_SENSITIVE_KEY: LazyLock<Regex> = LazyLock::new(|| {
     )
     .expect("json sensitive key regex compiles")
 });
+
+// npm automation / publish token — `npm_` + 36 alnum.
+static NPM_TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bnpm_[A-Za-z0-9]{36}\b").expect("npm token"));
+
+// Google API key — `AIza` + 35 of `[0-9A-Za-z_-]`. No trailing `\b`:
+// the key may end in `-`.
+static GOOGLE_API_KEY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bAIza[0-9A-Za-z_-]{35}(?P<tail>[^0-9A-Za-z_-]|$)").expect("google api key")
+});
+
+/// Shell-ish value: a quoted string or a run up to whitespace / a
+/// command separator.
+const VALUE: &str = r#"(?:'[^']*'|"[^"]*"|[^\s;|&]+)"#;
+
+// Long options that take a credential as their next word. The `=` form
+// is already covered by SENSITIVE_KEY. `--password-stdin` and friends
+// do not match: the option must be followed by whitespace.
+static SECRET_FLAG: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"(?P<flag>(?:^|\s)--(?:password|passwd|pass|token|secret|api-key|apikey|access-token|auth-token|client-secret|passphrase))(?P<sep>\s+){VALUE}"
+    ))
+    .expect("secret flag")
+});
+
+/// One simple command: from a head word up to the next separator.
+fn command_segment(heads: &str) -> Regex {
+    Regex::new(&format!(r"\b(?:{heads})\b[^;|&\n]*")).expect("command segment")
+}
+
+// `mysql` family: `-pVALUE` (attached) is the password. A bare `-p`
+// prompts and is left alone.
+static MYSQL_SEGMENT: LazyLock<Regex> =
+    LazyLock::new(|| command_segment(r"mysql[a-z]*|mariadb[a-z-]*"));
+static MYSQL_PASSWORD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"(?P<lead>\s-p){VALUE}")).expect("mysql password"));
+
+// `curl -u user:pass` / `--user` / `--proxy-user` / `-U`: mask the part
+// after the first colon.
+static CURL_SEGMENT: LazyLock<Regex> = LazyLock::new(|| command_segment("curl"));
+static CURL_USER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?P<keep>\s(?:-u|-U|--user|--proxy-user)(?:\s+|=)?['"]?[^\s:;|&'"]*:)[^\s;|&'"]+"#,
+    )
+    .expect("curl user")
+});
+
+// Registry logins: `docker login -p VALUE` / `-pVALUE` / `-p=VALUE`.
+static LOGIN_SEGMENT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"\b(?:docker|podman|nerdctl|finch|buildah|skopeo|helm|oras)\b[^;|&\n]*?\blogin\b[^;|&\n]*",
+    )
+    .expect("login segment")
+});
+static LOGIN_PASSWORD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"(?P<lead>\s-p(?:\s+|=)?){VALUE}")).expect("login password")
+});
+
+// `npm config set //registry/:_authToken VALUE` and other
+// `config set <key> <value>` forms whose key names a secret.
+static CONFIG_SET: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"(?P<keep>\bconfig\s+set\s+[^\s=]*(?:[Tt][Oo][Kk][Ee][Nn]|[Aa][Uu][Tt][Hh]|[Pp][Aa][Ss][Ss]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])[^\s=]*\s+){VALUE}"
+    ))
+    .expect("config set")
+});
+
+/// Apply `inner` (whose `keep` / `lead` group survives) inside every
+/// match of `segment`.
+fn redact_within(text: &str, segment: &Regex, inner: &Regex, keep: &str) -> String {
+    segment
+        .replace_all(text, |seg: &regex::Captures| {
+            inner
+                .replace_all(&seg[0], format!("${{{keep}}}{PLACEHOLDER}"))
+                .into_owned()
+        })
+        .into_owned()
+}
 
 static BASIC_AUTH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.-]*://)(?P<user>[^:/@\s]+):(?P<pass>[^@\s]+)@")
@@ -192,6 +274,35 @@ pub(crate) fn redact_strict(input: &str) -> String {
     if input.contains("eyJ") {
         out = JWT.replace_all(&out, PLACEHOLDER).into_owned();
     }
+    if input.contains("npm_") {
+        out = NPM_TOKEN.replace_all(&out, PLACEHOLDER).into_owned();
+    }
+    if input.contains("AIza") {
+        // Keep the terminator the pattern consumed.
+        out = GOOGLE_API_KEY
+            .replace_all(&out, format!("{PLACEHOLDER}${{tail}}"))
+            .into_owned();
+    }
+
+    if input.contains("--") {
+        out = SECRET_FLAG
+            .replace_all(&out, format!("${{flag}}${{sep}}{PLACEHOLDER}"))
+            .into_owned();
+    }
+    if lower.contains("mysql") || lower.contains("mariadb") {
+        out = redact_within(&out, &MYSQL_SEGMENT, &MYSQL_PASSWORD, "lead");
+    }
+    if input.contains("curl") {
+        out = redact_within(&out, &CURL_SEGMENT, &CURL_USER, "keep");
+    }
+    if input.contains("login") {
+        out = redact_within(&out, &LOGIN_SEGMENT, &LOGIN_PASSWORD, "lead");
+    }
+    if input.contains("config") {
+        out = CONFIG_SET
+            .replace_all(&out, format!("${{keep}}{PLACEHOLDER}"))
+            .into_owned();
+    }
 
     out
 }
@@ -204,6 +315,92 @@ mod tests {
     const STRIPE_PREFIXES: &[&str] = &[
         "sk_live", "sk_test", "pk_live", "pk_test", "rk_live", "rk_test", "whsec",
     ];
+
+    #[test]
+    fn redacts_issue_325_table() {
+        let npm = format!("npm_{}", "A".repeat(36));
+        let aiza = format!("AIza{}", "B".repeat(35));
+        let cases: Vec<(String, String)> = vec![
+            (
+                "mysql -u root -pS3cretPass db".into(),
+                "mysql -u root -p*** db".into(),
+            ),
+            (
+                "mysqldump -h db -p'S3 cret' app > x.sql".into(),
+                "mysqldump -h db -p*** app > x.sql".into(),
+            ),
+            (
+                "mariadb -pX -e 'select 1'".into(),
+                "mariadb -p*** -e 'select 1'".into(),
+            ),
+            (
+                "curl -u admin:hunter2 https://x".into(),
+                "curl -u admin:*** https://x".into(),
+            ),
+            (
+                "curl -sS --user=admin:hunter2 https://x".into(),
+                "curl -sS --user=admin:*** https://x".into(),
+            ),
+            (
+                "curl -uadmin:hunter2 https://x".into(),
+                "curl -uadmin:*** https://x".into(),
+            ),
+            (
+                "curl -u 'admin:hunter2' https://x".into(),
+                "curl -u 'admin:***' https://x".into(),
+            ),
+            (
+                "docker login -p hunter2 -u me".into(),
+                "docker login -p *** -u me".into(),
+            ),
+            (
+                "podman login -phunter2 quay.io".into(),
+                "podman login -p*** quay.io".into(),
+            ),
+            (
+                "helm registry login r.io --username me --password hunter2".into(),
+                "helm registry login r.io --username me --password ***".into(),
+            ),
+            (
+                "gh auth login --token abc123".into(),
+                "gh auth login --token ***".into(),
+            ),
+            (
+                format!("npm config set //registry.npmjs.org/:_authToken {npm}"),
+                "npm config set //registry.npmjs.org/:_authToken ***".into(),
+            ),
+            (format!("echo {npm}"), "echo ***".into()),
+            (format!("echo {aiza}"), "echo ***".into()),
+            (format!("k={aiza}; x"), "k=***; x".into()),
+            (
+                "echo //r/:_authToken=abc > .npmrc".into(),
+                "echo //r/:_authToken=*** > .npmrc".into(),
+            ),
+            (
+                "curl -u admin:pw x | rk_live_ABCDEFGHIJKLMNOP".into(),
+                "curl -u admin:*** x | ***".into(),
+            ),
+        ];
+        for (input, want) in cases {
+            assert_eq!(redact_strict(&input), want, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn leaves_lookalike_options_alone() {
+        for s in [
+            "mkdir -p build/out",
+            "ssh -p22 host",
+            "mysql -u root -p db",
+            "docker run -u 1000:1000 img",
+            "docker run -p 8080:80 img",
+            "docker login --password-stdin -u me",
+            "curl -o out.txt https://x",
+            "npm config set registry https://r",
+        ] {
+            assert_eq!(redact_strict(s), s, "input: {s}");
+        }
+    }
 
     #[test]
     fn passes_through_benign_command() {
@@ -475,6 +672,12 @@ mod tests {
                 prop_assume!(!s.contains(&needle));
             }
             prop_assume!(!s.contains("eyJ"));
+            prop_assume!(!s.contains("npm_"));
+            prop_assume!(!s.contains("AIza"));
+            // No command whose option values get redacted.
+            for head in ["mysql", "mariadb", "curl", "login", "config", "--pass"] {
+                prop_assume!(!s.to_ascii_lowercase().contains(head));
+            }
             // No `KEY=VALUE` shape with sensitive substrings:
             let lower = s.to_lowercase();
             for needle in ["token", "key", "secret", "password", "credential", "private"] {

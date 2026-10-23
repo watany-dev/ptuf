@@ -127,7 +127,7 @@ allowlist は suppression できた場合に `allowlistId` (最終 decision が 
 | key | 型 | 説明 |
 | --- | --- | --- |
 | `enabled` | `bool` | 書き込みを有効化。閲覧 CLI (`ptuf audit`) は既存ファイルを読める。`--path` 未指定時は warning を出して表示する |
-| `path` | path | 出力先。`~/` / `$HOME` 展開あり、相対パスは config ファイル基準。省略時は既定パス |
+| `path` | path | 出力先。`~/` / `$HOME` 展開あり、相対パスは config ファイル基準。省略時は既定パス。プロジェクト層 (`.ptuf.yaml` / `.ptuf.local.yaml`) の値はリポジトリ配下 (`..` を含まない相対パス) に限り有効で、それ以外は無視して下位層 / 既定パスを使う。どの層でも、self-protection の保護対象 (hook 設定・config・plugin・binary) と一致する出力先には書き込まず warning を出す |
 | `includeAllowed` | `bool` | `Allow` を記録するか |
 | `includeDenied` | `bool` | `Deny` を記録するか |
 | `redaction` | `strict` / `off` | redaction mode |
@@ -231,11 +231,11 @@ rules:
 | `tool` | `string` | `tool_name` と一致 |
 | `toolAny` | `string[]` | `tool_name` がいずれかに一致 |
 | `shell.argv` | `{ headAny: [string] }` | command head がいずれかに一致。`bash -c`, `eval`, `xargs`, `find -exec` のような wrapper で surfaced した nested command も含む |
-| `shell.pipeline` | `{ from: { commandAny: [...] }, to: { commandAny: [...] } }` | pipeline に from→to の流れがある |
+| `shell.pipeline` | `{ from: { commandAny: [...] }, to: { commandAny: [...] } }` | pipeline に from→to の流れがある (head は basename で照合し、末尾の版番号 `[0-9.]+` を除いた名前でも照合する: `python3.12` は `python` に一致) |
 | `shell.ast` | — | **未サポート** — `capabilities.requires` では宣言できるが `when:` leaf には使えない |
 | `path.filePathPrefixAny` | `string[]` | 抽出 path を正規化し、prefix は祖先の directory alias (`/tmp` → `/private/tmp`) を辿ったうえで component 単位の `Path::starts_with` で判定。最終成分が別名へ飛ぶ symlink (`build-link` → `/`) は辿らない。文字列 prefix や部分一致 (`/home/me/proj` 対 `/home/me/proj-secrets`) では一致しない |
 | `url.schemeAny` | `string[]` | URL scheme が一致 |
-| `url.hostAny` | `string[]` | URL host が一致 |
+| `url.hostAny` | `string[]` | URL host が一致。host は WHATWG URL と同じ規則で取り出す (`?` / `#` / `\` で authority が終わる、scheme 省略は `https`、percent-decode・小文字化・末尾 `.` 除去、`2852039166` / `0xa9.0xfe.0xa9.0xfe` は dotted decimal に正規化)。設定側の値も同じ正規化をしてから比較する |
 | `sensitive.pathKindAny` | `string[]` | 機密分類が一致 |
 | `all` / `any` / `not` | nested | 論理結合 |
 
