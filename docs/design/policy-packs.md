@@ -64,7 +64,7 @@ head は `head_basename` で basename 化するため `/usr/bin/curl ... | /bin/
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
 | `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`nc`/`ncat`/`socat`/`telnet`/`scp`/`rsync`/`ftp`/`sftp`、および bash の `/dev/(tcp\|udp)/` への書き込み redirect) が共存。pipeline の redirect 先が機密 path の場合も対象。`ssh` は `ssh -i ~/.ssh/id_rsa host` 等の正当用途で偽陽性が多いため sink に含めない |
-| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `Grep` (`path`) / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする。書き込み本文 (`Write` content / `Edit` `new_string` / MCP `content` / `apply_patch` added 行) は実データ shape (PEM blob) のみ対象で、`~/.aws/credentials` 等の path 言及 (手順書の記載など) では発火しない |
+| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `MultiEdit` / `NotebookEdit` (`notebook_path`) / `Grep` (`path`) / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする。書き込み本文 (`Write` content / `Edit` `new_string` / `MultiEdit` `edits[].new_string` / `NotebookEdit` `new_source` / MCP `content` / `apply_patch` added 行) は実データ shape (PEM blob) のみ対象で、`~/.aws/credentials` 等の path 言及 (手順書の記載など) では発火しない |
 | `core.secrets.sensitive-bash-read` | ask | false | high | Bash の reader head (`cat`/`head`/`tail`/`source`/`.`/`grep`/`awk`/`sed`/`dd` 等) または `<` redirect が機密 path を読む |
 
 機密分類は `~/.ssh/**`, `~/.aws/**`, `~/.config/gcloud/**`, `~/.kube/config`,
@@ -238,7 +238,7 @@ opaque なので、`core.engine.dynamic-eval` が `Ask` を返してユーザに
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.injection.invisible-chars` | ask | false | high | `Read` / `Edit` / `Grep` (`path`) / path を持つ MCP tool / Bash の reader head が読み込むファイルの中身に、人間のレビュアーには見えない文字が含まれる |
+| `core.injection.invisible-chars` | ask | false | high | `Read` / `Edit` / `MultiEdit` / `NotebookEdit` / `Grep` (`path`) / path を持つ MCP tool / Bash の reader head が読み込むファイルの中身に、人間のレビュアーには見えない文字が含まれる |
 
 ptuf の他 rule は tool 入力 (path 文字列・コマンド文字列) を判定するが、
 本 rule は唯一「対象ファイルを開いて中身を検査する」rule。レビュアーには

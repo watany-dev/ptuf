@@ -50,7 +50,7 @@ impl ConfigRule for SensitiveRead {
     fn evaluate(&self, facts: &Facts, input: &HookInput) -> Option<Decision> {
         let is_file_tool = matches!(
             input.tool_name.as_str(),
-            "Read" | "Edit" | "Write" | "Grep" | "apply_patch",
+            "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Grep" | "apply_patch",
         ) || (input.is_mcp_tool() && !facts.paths.is_empty());
         if !is_file_tool {
             return None;
@@ -391,7 +391,10 @@ mod tests {
             tool in "[A-Z][A-Za-z]{0,8}",
             fp in file_path(),
         ) {
-            prop_assume!(!matches!(tool.as_str(), "Read" | "Edit" | "Write" | "Grep"));
+            prop_assume!(!matches!(
+                tool.as_str(),
+                "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Grep"
+            ));
             let input = HookInput {
                 tool_name: tool,
                 tool_input: serde_json::json!({ "file_path": fp }),

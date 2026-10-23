@@ -104,11 +104,12 @@ pub(crate) fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Ve
     let (tool, tagged): (PathTool, Vec<(String, PathOrigin)>) = match input.tool_name.as_str() {
         // Claude Code's `Grep` returns matching lines of the file (or
         // tree) named by `path`, so it reads contents just like `Read`.
-        "Read" | "Edit" | "Write" | "Grep" => {
+        "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Grep" => {
             let (tool, key) = match input.tool_name.as_str() {
                 "Read" => (PathTool::Read, "file_path"),
                 "Grep" => (PathTool::Read, "path"),
-                "Edit" => (PathTool::Edit, "file_path"),
+                "Edit" | "MultiEdit" => (PathTool::Edit, "file_path"),
+                "NotebookEdit" => (PathTool::Edit, "notebook_path"),
                 _ => (PathTool::Write, "file_path"),
             };
             let mut values: Vec<(String, PathOrigin)> = input
@@ -484,6 +485,23 @@ mod tests {
             tool_name: tool.into(),
             tool_input: serde_json::json!({ "file_path": file_path }),
         }
+    }
+
+    #[test]
+    fn multiedit_and_notebookedit_extract_as_edit() {
+        let multi = input("MultiEdit", serde_json::json!("/etc/hosts"));
+        let p = extract_all(&multi);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].tool, PathTool::Edit);
+        assert_eq!(p[0].raw, "/etc/hosts");
+        let nb = HookInput {
+            tool_name: "NotebookEdit".into(),
+            tool_input: serde_json::json!({ "notebook_path": "/tmp/a.ipynb" }),
+        };
+        let p = extract_all(&nb);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].tool, PathTool::Edit);
+        assert_eq!(p[0].raw, "/tmp/a.ipynb");
     }
 
     #[test]
@@ -942,7 +960,10 @@ mod tests {
             tool in "[A-Z][A-Za-z]{0,8}",
             fp in file_path(),
         ) {
-            prop_assume!(!matches!(tool.as_str(), "Read" | "Edit" | "Write"));
+            prop_assume!(!matches!(
+                tool.as_str(),
+                "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit"
+            ));
             let i = HookInput {
                 tool_name: tool,
                 tool_input: serde_json::json!({ "file_path": fp }),
