@@ -90,6 +90,12 @@ fn invalid_payload_deny(problem: &str) -> Decision {
     }
 }
 
+/// Normalise `body` with `agent`'s adapter, then reject a Bash call
+/// without a string command (see [`require_bash_command`]).
+fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
+    adapt_hook_input(agent, body).and_then(require_bash_command)
+}
+
 /// Parse stdin into a [`HookInput`] using the agent-specific schema.
 ///
 /// Claude Code and Codex both speak the snake_case
@@ -107,14 +113,13 @@ fn invalid_payload_deny(problem: &str) -> Decision {
 /// `beforeShellExecution` / `beforeReadFile` / `beforeMCPExecution`) with
 /// its own tool vocabulary, so its payload routes through
 /// `cli::cursor_input::parse`.
-fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
+fn adapt_hook_input(agent: HookAgent, body: &str) -> Result<HookInput, String> {
     // Every adapter fails with the shared `input_helpers::InputError`,
     // which this single consumer flattens to its rendered message.
     let adapted = match agent {
         HookAgent::ClaudeCode | HookAgent::Codex => {
             return serde_json::from_str::<HookInput>(body)
-                .map_err(|err| format!("hook payload is not valid JSON ({err})"))
-                .and_then(require_bash_command);
+                .map_err(|err| format!("hook payload is not valid JSON ({err})"));
         },
         HookAgent::Copilot => copilot_input::parse(body),
         HookAgent::KiroV2 => kiro_input::parse(body),
@@ -124,9 +129,7 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
         HookAgent::Pi => pi_input::parse(body),
         HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => opencode_input::parse(body),
     };
-    adapted
-        .map_err(|err| err.to_string())
-        .and_then(require_bash_command)
+    adapted.map_err(|err| err.to_string())
 }
 
 /// Every Bash rule reads `tool_input.command` as a string; without one

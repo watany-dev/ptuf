@@ -239,7 +239,9 @@ CLI 経路 (`hook`, `eval`) は config / plugin のロードに失敗すると
 `failClosed: false` でも変わらない。設定ファイル自体が読めない状況では、その設定を
 信用できないためである。
 
-`hook` はさらに stdin 読み取り失敗 / 8 MiB 上限超過 / JSON parse 失敗を
+`hook` はさらに stdin 読み取り失敗 / 8 MiB 上限超過 / JSON parse 失敗、
+および adapter 正規化後に `tool_name == "Bash"` なのに `tool_input.command` が
+文字列でない payload (配列・欠落・`tool_input` 自体が文字列など) を
 `core.engine.invalid-payload` で deny する (exit `2` + adapter の deny JSON)。
 Claude Code の hook 仕様では exit `1` が non-blocking warning として扱われ
 tool 実行を止めないため、これらの初期化エラーを exit `1` のまま放置すると
