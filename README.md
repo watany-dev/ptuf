@@ -42,7 +42,9 @@ ptuf ships with built-in rules that block, ask, or audit before the agent
 runs the call. A few examples of what fires by default:
 
 - **`core.filesystem.destructive-rm`** — blocks `rm -rf` against system
-  roots and `$HOME`. Stops `rm -rf /`, `rm -rf ~`, `rm -rf /etc`.
+  roots (including macOS `/System`, `/Users`, `/Volumes`), mount roots,
+  and any user's home. Stops `rm -rf /`, `rm -rf ~`, `rm -rf /etc`,
+  `rm -rf /home/alice`, `rm --recursive --force "${HOME:?}"`.
 - **`core.network.remote-script-pipe`** — blocks any fetcher piped into an
   interpreter. Stops `curl https://example.com/install.sh | bash`,
   `bash <(curl …)`, and `bash -c "$(curl …)"`.
