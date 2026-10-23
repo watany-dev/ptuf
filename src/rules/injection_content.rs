@@ -24,12 +24,17 @@
 //! `overrides.allow` in `.ptuf.yaml`.
 //!
 //! I/O is best-effort and fails open: a missing file, a permission
-//! error, a non-regular file (directory / FIFO / device), a binary
-//! payload, or a non-UTF-8 blob all yield `None` rather than blocking
-//! the call.
+//! error, a non-regular file (directory / FIFO / device), or a binary
+//! payload all yield `None` rather than blocking the call. Invalid
+//! UTF-8 and stray NUL bytes do not end the scan: the agent's `Read`
+//! renders them lossily and the rest of the text still reaches it.
+//!
+//! A file up to `FULL_SCAN_BYTES` is scanned whole. A larger file is
+//! scanned in `MAX_SCAN_BYTES` windows: its head, its tail, and the
+//! line a `Read` `offset` points at.
 
 use std::fs::File;
-use std::io::Read as _;
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::config::scope::SystemEnv;
@@ -47,11 +52,26 @@ pub(crate) struct InvisibleChars;
 
 const RULE_ID: &str = "core.injection.invisible-chars";
 
-/// Hard cap on how many bytes of any single file are read before
-/// scanning. A 1 MiB head keeps the PreToolUse hook fast even for
-/// multi-gigabyte files; an injection payload that needs to influence
-/// the model lives near the content a reviewer reads.
+/// Size of one scan window for a file larger than `FULL_SCAN_BYTES`.
+/// Windows keep the PreToolUse hook fast even for multi-gigabyte files.
 const MAX_SCAN_BYTES: u64 = 1024 * 1024;
+
+/// Files up to this size are scanned end to end.
+const FULL_SCAN_BYTES: u64 = 8 * 1024 * 1024;
+
+/// How far into a large file ptuf counts newlines to find the line a
+/// `Read` `offset` points at. Past this the offset window is skipped
+/// (the head and tail windows still run).
+const OFFSET_SEARCH_BYTES: u64 = 256 * 1024 * 1024;
+
+/// A window is binary when at least 1 / `BINARY_JUNK_RATIO` of its
+/// bytes are NUL or invalid UTF-8. A ratio, rather than "any NUL", so a
+/// single planted byte cannot switch the scan off.
+const BINARY_JUNK_RATIO: usize = 10;
+
+/// ...and at least this many bytes, so a short text file with one or
+/// two stray bytes is still scanned.
+const BINARY_JUNK_MIN: usize = 8;
 
 /// File extensions whose contents are binary by nature. Scanning them
 /// only wastes I/O — the C0/C1 detector would fire on almost every
@@ -71,6 +91,7 @@ enum Category {
     UnicodeTag,
     VariationSelector,
     ControlChar,
+    LineSeparator,
 }
 
 impl Category {
@@ -81,6 +102,10 @@ impl Category {
             Self::UnicodeTag => "Unicode Tag character (ASCII smuggling)",
             Self::VariationSelector => "Unicode variation selector (used to smuggle hidden data)",
             Self::ControlChar => "C0/C1 control character",
+            Self::LineSeparator => {
+                "Unicode line / paragraph separator (renders as a line break in some \
+                 editors and not in others)"
+            },
         }
     }
 }
@@ -90,7 +115,24 @@ impl Category {
 struct Finding {
     category: Category,
     codepoint: u32,
-    line: usize,
+    /// 1-based line, or `None` for a tail window whose line is unknown.
+    line: Option<usize>,
+    /// Byte offset of the character in the file.
+    byte: u64,
+}
+
+/// Where a scanned buffer sits in its file.
+#[derive(Debug, Clone, Copy)]
+struct Origin {
+    byte: u64,
+    line: Option<usize>,
+}
+
+impl Origin {
+    const START: Self = Self {
+        byte: 0,
+        line: Some(1),
+    };
 }
 
 impl ConfigRule for InvisibleChars {
@@ -107,9 +149,10 @@ impl ConfigRule for InvisibleChars {
     }
 
     fn evaluate(&self, facts: &Facts, input: &HookInput) -> Option<Decision> {
+        let offset = read_offset(input);
         let finding = scan_candidates(facts, input)
             .iter()
-            .find_map(|path| scan_file(path))?;
+            .find_map(|path| scan_file(path, offset))?;
         Some(Decision::Ask {
             rule_id: RULE_ID.into(),
             reason: build_reason(&finding),
@@ -134,6 +177,15 @@ fn scan_candidates(facts: &Facts, input: &HookInput) -> Vec<PathBuf> {
             .collect();
     }
     Vec::new()
+}
+
+/// Line a path tool starts reading at (`Read`'s `offset`). `None` for
+/// Bash and for calls without one.
+fn read_offset(input: &HookInput) -> Option<u64> {
+    if input.tool_name == "Bash" {
+        return None;
+    }
+    input.tool_input.get("offset")?.as_u64()
 }
 
 /// Positional file arguments of every reader-head command in a parsed
@@ -180,22 +232,76 @@ fn resolve_candidate(raw: &str) -> PathBuf {
 
 /// Open a file and return the first suspicious character, or `None`
 /// when the file is absent / binary / non-regular / unreadable.
-fn scan_file(path: &Path) -> Option<Finding> {
+fn scan_file(path: &Path, offset: Option<u64>) -> Option<Finding> {
     if has_binary_extension(path) {
         return None;
     }
     // `is_file()` rejects directories, FIFOs, and devices: opening a
     // FIFO and calling `read_to_end` would otherwise block forever.
-    if !std::fs::metadata(path).ok()?.is_file() {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
         return None;
     }
+    let mut file = File::open(path).ok()?;
+    let len = meta.len();
+    if len <= FULL_SCAN_BYTES {
+        return scan_window(&mut file, Origin::START, FULL_SCAN_BYTES);
+    }
+    if let Some(finding) = scan_window(&mut file, Origin::START, MAX_SCAN_BYTES) {
+        return Some(finding);
+    }
+    if let Some(origin) = offset.and_then(|line| locate_line(&mut file, line))
+        && let Some(finding) = scan_window(&mut file, origin, MAX_SCAN_BYTES)
+    {
+        return Some(finding);
+    }
+    let tail = Origin {
+        byte: len - MAX_SCAN_BYTES,
+        line: None,
+    };
+    scan_window(&mut file, tail, MAX_SCAN_BYTES)
+}
+
+/// Read up to `cap` bytes from `origin.byte` and scan them.
+fn scan_window(file: &mut File, origin: Origin, cap: u64) -> Option<Finding> {
+    file.seek(SeekFrom::Start(origin.byte)).ok()?;
     let mut buf = Vec::new();
-    File::open(path)
-        .ok()?
-        .take(MAX_SCAN_BYTES)
-        .read_to_end(&mut buf)
-        .ok()?;
-    scan_bytes(&buf)
+    file.take(cap).read_to_end(&mut buf).ok()?;
+    scan_bytes(&buf, origin)
+}
+
+/// Byte position of the line a `Read` `offset` names. Agents disagree
+/// on whether `offset` is 0- or 1-based, so the window starts one line
+/// early to cover both.
+fn locate_line(file: &mut File, offset: u64) -> Option<Origin> {
+    let target = usize::try_from(offset.saturating_sub(1).max(1)).ok()?;
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut reader = file.take(OFFSET_SEARCH_BYTES);
+    let mut chunk = vec![0u8; 64 * 1024];
+    let mut line = 1usize;
+    let mut base = 0u64;
+    loop {
+        if line == target {
+            return Some(Origin {
+                byte: base,
+                line: Some(line),
+            });
+        }
+        let n = reader.read(&mut chunk).ok()?;
+        if n == 0 {
+            return None;
+        }
+        for idx in memchr::memchr_iter(b'\n', &chunk[..n]) {
+            line += 1;
+            if line == target {
+                return Some(Origin {
+                    byte: base + idx as u64 + 1,
+                    line: Some(line),
+                });
+            }
+        }
+        base += n as u64;
+    }
 }
 
 fn has_binary_extension(path: &Path) -> bool {
@@ -205,32 +311,46 @@ fn has_binary_extension(path: &Path) -> bool {
         .is_some_and(|ext| BINARY_EXTENSIONS.contains(&ext.as_str()))
 }
 
-/// Scan a byte buffer. A NUL byte marks the payload as binary; an
-/// invalid-UTF-8 tail (e.g. a multibyte char split by the 1 MiB cap)
-/// is dropped so only the valid prefix is inspected.
-fn scan_bytes(buf: &[u8]) -> Option<Finding> {
-    if buf.contains(&0) {
+/// Scan a byte buffer lossily: invalid UTF-8 is skipped (the agent
+/// sees U+FFFD there) and NUL is ignored, but the text on either side
+/// is still inspected. Only a buffer that is mostly junk counts as
+/// binary and is skipped.
+fn scan_bytes(buf: &[u8], origin: Origin) -> Option<Finding> {
+    if looks_binary(buf) {
         return None;
     }
-    let text = match std::str::from_utf8(buf) {
-        Ok(text) => text,
-        Err(err) => std::str::from_utf8(&buf[..err.valid_up_to()]).ok()?,
-    };
-    let mut line = 1usize;
-    for (idx, ch) in text.char_indices() {
-        if ch == '\n' {
-            line += 1;
-            continue;
+    let mut line = origin.line;
+    let mut pos = 0usize;
+    for chunk in buf.utf8_chunks() {
+        for (idx, ch) in chunk.valid().char_indices() {
+            if ch == '\n' {
+                line = line.map(|n| n + 1);
+                continue;
+            }
+            let at_file_start = origin.byte == 0 && pos + idx == 0;
+            if let Some(category) = classify(ch, at_file_start) {
+                return Some(Finding {
+                    category,
+                    codepoint: u32::from(ch),
+                    line,
+                    byte: origin.byte + (pos + idx) as u64,
+                });
+            }
         }
-        if let Some(category) = classify(ch, idx == 0) {
-            return Some(Finding {
-                category,
-                codepoint: u32::from(ch),
-                line,
-            });
-        }
+        pos += chunk.valid().len() + chunk.invalid().len();
     }
     None
+}
+
+/// True when NUL and invalid-UTF-8 bytes make up at least
+/// 1 / `BINARY_JUNK_RATIO` of the buffer and number at least
+/// `BINARY_JUNK_MIN`.
+fn looks_binary(buf: &[u8]) -> bool {
+    let junk: usize = buf
+        .utf8_chunks()
+        .map(|c| c.invalid().len() + memchr::memchr_iter(0, c.valid().as_bytes()).count())
+        .sum();
+    junk >= BINARY_JUNK_MIN && junk * BINARY_JUNK_RATIO >= buf.len()
 }
 
 /// Classify a single character. `is_first_char` exempts a leading
@@ -243,18 +363,32 @@ fn classify(ch: char, is_first_char: bool) -> Option<Category> {
         // Zero-width / invisible format characters, including the
         // invisible math operators U+2061-2064 (U+2060 is WORD JOINER)
         // and U+034F COMBINING GRAPHEME JOINER.
+        // U+206A-206F are the deprecated format controls, U+FFF9-FFFB
+        // the interlinear annotation marks, U+1D173-1D17A the musical
+        // beam/tie/slur/phrase formats, U+1BCA0-1BCA3 the shorthand
+        // format controls, and U+17B4-17B5 the Khmer inherent vowels.
+        // Unassigned Default_Ignorable code points (U+2065, U+FFF0-FFF8,
+        // U+E0080-E00FF, U+E01F0-E0FFF) are hidden by renderers too.
         '\u{200B}'
         | '\u{200C}'
         | '\u{200D}'
-        | '\u{2060}'..='\u{2064}'
+        | '\u{2060}'..='\u{2065}'
+        | '\u{206A}'..='\u{206F}'
         | '\u{FEFF}'
         | '\u{00AD}'
         | '\u{034F}'
+        | '\u{17B4}'
+        | '\u{17B5}'
         | '\u{180E}'
         | '\u{115F}'
         | '\u{1160}'
         | '\u{3164}'
-        | '\u{FFA0}' => Some(Category::ZeroWidth),
+        | '\u{FFA0}'
+        | '\u{FFF0}'..='\u{FFFB}'
+        | '\u{1BCA0}'..='\u{1BCA3}'
+        | '\u{1D173}'..='\u{1D17A}'
+        | '\u{E0080}'..='\u{E00FF}'
+        | '\u{E01F0}'..='\u{E0FFF}' => Some(Category::ZeroWidth),
         // Strong BiDi overrides and isolates plus the directional marks
         // LRM / RLM / ALM (Trojan Source).
         '\u{202A}'..='\u{202E}'
@@ -274,19 +408,23 @@ fn classify(ch: char, is_first_char: bool) -> Option<Category> {
         | '\u{000C}'
         | '\u{000E}'..='\u{001F}'
         | '\u{007F}'..='\u{009F}' => Some(Category::ControlChar),
+        '\u{2028}' | '\u{2029}' => Some(Category::LineSeparator),
         _ => None,
     }
 }
 
 fn build_reason(finding: &Finding) -> String {
+    let location = match finding.line {
+        Some(line) => format!("on line {line}"),
+        None => format!("at byte offset {}", finding.byte),
+    };
     let problem = format!(
-        "The file ptuf is about to read contains a {} (U+{:04X}) on line {}. A character \
+        "The file ptuf is about to read contains a {} (U+{:04X}) {location}. A character \
          like this is invisible or misleading to a human reviewer but still enters the \
          agent's context, so a file that looks benign in review can carry hidden \
          instructions (an indirect prompt-injection / Trojan Source attack).",
         finding.category.label(),
         finding.codepoint,
-        finding.line,
     );
     reason::build(
         RULE_ID,
@@ -407,9 +545,39 @@ mod tests {
 
     #[test]
     fn silent_for_binary_with_nul() {
+        // Mostly NUL: a real binary blob, so its stray multibyte
+        // sequences are not reported.
         let dir = TempDir::new().expect("tempdir");
-        let path = write_file(&dir, "blob.dat", b"head\x00\xe2\x80\x8btail");
+        let mut bytes = vec![0u8; 64];
+        bytes.extend_from_slice(b"head\xe2\x80\x8btail");
+        let path = write_file(&dir, "blob.dat", &bytes);
         assert_silent(&read_input(&path));
+    }
+
+    #[test]
+    fn asks_despite_single_nul() {
+        // #326: one trailing NUL must not switch the scan off.
+        let dir = TempDir::new().expect("tempdir");
+        let path = write_file(&dir, "c.txt", b"hello\xe2\x80\x8bworld\n\x00");
+        assert_ask(&read_input(&path));
+    }
+
+    #[test]
+    fn asks_after_leading_invalid_utf8() {
+        // #326: an invalid byte before the payload must not hide it.
+        let dir = TempDir::new().expect("tempdir");
+        let path = write_file(&dir, "b.txt", b"\xff\nhello\xe2\x80\x8bworld\n");
+        assert_ask(&read_input(&path));
+    }
+
+    #[test]
+    fn asks_for_invisible_between_invalid_bytes() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut bytes = b"latin1 caf\xe9 text\n".to_vec();
+        bytes.extend_from_slice("x\u{2062}y\n".as_bytes());
+        bytes.push(0xFE);
+        let path = write_file(&dir, "mixed2.txt", &bytes);
+        assert_ask(&read_input(&path));
     }
 
     #[test]
@@ -532,13 +700,55 @@ mod tests {
     }
 
     #[test]
-    fn scans_only_head_of_huge_file() {
+    fn asks_for_invisible_past_first_mib() {
+        // #328: files up to FULL_SCAN_BYTES are scanned whole.
         let dir = TempDir::new().expect("tempdir");
-        // 1.5 MiB of clean ASCII, then a ZWSP past the 1 MiB cap.
         let mut bytes = vec![b'a'; 1024 * 1024 + 512 * 1024];
         bytes.extend_from_slice("\u{200B}".as_bytes());
         let path = write_file(&dir, "huge.txt", &bytes);
+        assert_ask(&read_input(&path));
+    }
+
+    fn large_file_with_payload_at(dir: &TempDir, name: &str, payload_line: usize) -> PathBuf {
+        // Lines of 16 bytes; the file is well past FULL_SCAN_BYTES.
+        let lines = usize::try_from(FULL_SCAN_BYTES / 16).expect("fits") + 200_000;
+        let mut bytes = Vec::with_capacity(lines * 16 + 32);
+        for n in 1..=lines {
+            if n == payload_line {
+                bytes.extend_from_slice("payload\u{200B}hidden\n".as_bytes());
+            } else {
+                bytes.extend_from_slice(b"aaaaaaaaaaaaaaa\n");
+            }
+        }
+        write_file(dir, name, &bytes)
+    }
+
+    #[test]
+    fn asks_for_invisible_at_read_offset_in_large_file() {
+        // #328: the payload sits in the middle of a large file, outside
+        // the head and tail windows; `Read` with `offset` still finds it.
+        let dir = TempDir::new().expect("tempdir");
+        let line = 300_000;
+        let path = large_file_with_payload_at(&dir, "mid.txt", line);
         assert_silent(&read_input(&path));
+        assert_ask(&HookInput {
+            tool_name: "Read".into(),
+            tool_input: serde_json::json!({
+                "file_path": path.to_string_lossy(),
+                "offset": line,
+                "limit": 10,
+            }),
+        });
+    }
+
+    #[test]
+    fn asks_for_invisible_in_tail_of_large_file() {
+        let dir = TempDir::new().expect("tempdir");
+        let lines = usize::try_from(FULL_SCAN_BYTES / 16).expect("fits") + 200_000;
+        let path = large_file_with_payload_at(&dir, "tail.txt", lines - 3);
+        let finding = scan_file(&path, None).expect("tail window finding");
+        assert_eq!(finding.line, None);
+        assert!(build_reason(&finding).contains("byte offset"));
     }
 
     #[test]
@@ -564,7 +774,8 @@ mod tests {
         let finding = Finding {
             category: Category::BidiControl,
             codepoint: 0x202E,
-            line: 7,
+            line: Some(7),
+            byte: 99,
         };
         let text = build_reason(&finding);
         assert!(text.contains("core.injection.invisible-chars"));
@@ -688,17 +899,106 @@ mod tests {
 
     #[test]
     fn allows_codepoints_adjacent_to_new_ranges() {
-        // U+2065 is right after the invisible math operators; U+E0090
-        // sits in the gap between the Tag block and the VS Supplement;
-        // U+E01F0 is right after the VS Supplement. None must fire.
+        // Visible neighbours of the flagged ranges must not fire.
         let dir = TempDir::new().expect("tempdir");
         for (name, ch) in [
-            ("past-math.txt", '\u{2065}'),
-            ("tag-gap.txt", '\u{E0090}'),
-            ("past-vs.txt", '\u{E01F0}'),
+            ("past-format.txt", '\u{2070}'),
+            ("before-anchor.txt", '\u{FFEE}'),
+            ("past-anchor.txt", '\u{FFFC}'),
+            ("before-music.txt", '\u{1D172}'),
+            ("past-music.txt", '\u{1D17B}'),
+            ("khmer.txt", '\u{17B6}'),
+            ("past-tags.txt", '\u{E1000}'),
         ] {
             let path = write_file(&dir, name, format!("x{ch}y\n").as_bytes());
             assert_silent(&read_input(&path));
+        }
+    }
+
+    #[test]
+    fn asks_for_default_ignorable_catalog_additions() {
+        // #327.
+        let dir = TempDir::new().expect("tempdir");
+        for ch in [
+            '\u{2065}',
+            '\u{206A}',
+            '\u{206F}',
+            '\u{FFF9}',
+            '\u{FFFB}',
+            '\u{1D173}',
+            '\u{1D17A}',
+            '\u{17B4}',
+            '\u{17B5}',
+            '\u{1BCA0}',
+            '\u{1BCA3}',
+            '\u{E0090}',
+            '\u{E01F0}',
+            '\u{E0FFF}',
+        ] {
+            let name = format!("di-{:X}.txt", u32::from(ch));
+            let path = write_file(&dir, &name, format!("x{ch}y\n").as_bytes());
+            assert_ask(&read_input(&path));
+        }
+    }
+
+    #[test]
+    fn bom_after_leading_invalid_byte_is_not_exempt() {
+        // Only a BOM at byte 0 of the file is a byte-order mark.
+        let finding = scan_bytes(b"\xff\xef\xbb\xbfx", Origin::START).expect("finding");
+        assert_eq!(finding.codepoint, 0xFEFF);
+        assert_eq!(finding.byte, 1);
+        let mid = Origin {
+            byte: 10,
+            line: None,
+        };
+        assert!(scan_bytes("\u{FEFF}x".as_bytes(), mid).is_some());
+    }
+
+    #[test]
+    fn finding_byte_counts_valid_and_invalid_bytes() {
+        let finding = scan_bytes("ab\u{fffd}".as_bytes(), Origin::START);
+        assert!(finding.is_none());
+        let mut bytes = b"ab\xffc".to_vec();
+        bytes.extend_from_slice("\u{200B}".as_bytes());
+        let finding = scan_bytes(&bytes, Origin::START).expect("finding");
+        assert_eq!(finding.byte, 4);
+        let origin = Origin {
+            byte: 100,
+            line: Some(7),
+        };
+        let finding = scan_bytes(&bytes, origin).expect("finding");
+        assert_eq!(finding.byte, 104);
+        assert_eq!(finding.line, Some(7));
+    }
+
+    #[test]
+    fn finding_line_counts_newlines_before_it() {
+        let finding = scan_bytes("a\nb\nc\u{200B}".as_bytes(), Origin::START).expect("finding");
+        assert_eq!(finding.line, Some(3));
+        assert_eq!(finding.byte, 5);
+    }
+
+    #[test]
+    fn locate_line_finds_byte_of_line_past_first_chunk() {
+        // 10-byte lines; line 6601 starts at byte 66000, beyond the
+        // 64 KiB read chunk. `offset` 6602 targets line 6601.
+        let dir = TempDir::new().expect("tempdir");
+        let path = write_file(&dir, "lines.txt", &b"123456789\n".repeat(7000));
+        let mut file = File::open(&path).expect("open");
+        let origin = locate_line(&mut file, 6602).expect("found");
+        assert_eq!(origin.byte, 66_000);
+        assert_eq!(origin.line, Some(6601));
+        let origin = locate_line(&mut file, 3).expect("found");
+        assert_eq!(origin.byte, 10);
+        assert!(locate_line(&mut file, 9000).is_none());
+    }
+
+    #[test]
+    fn line_separators_are_their_own_category() {
+        for ch in ['\u{2028}', '\u{2029}'] {
+            let text = format!("a{ch}b");
+            let finding = scan_bytes(text.as_bytes(), Origin::START).expect("finding");
+            assert_eq!(finding.category, Category::LineSeparator);
         }
     }
 
@@ -707,7 +1007,8 @@ mod tests {
         let finding = Finding {
             category: Category::VariationSelector,
             codepoint: 0xE0100,
-            line: 3,
+            line: Some(3),
+            byte: 42,
         };
         let text = build_reason(&finding);
         assert!(text.contains("core.injection.invisible-chars"));
@@ -740,13 +1041,31 @@ mod tests {
         // Printable ASCII plus TAB / LF / CR never trips the scanner.
         #[test]
         fn pbt_clean_ascii_never_flagged(text in "[ -~\n\t\r]{0,256}") {
-            prop_assert!(scan_bytes(text.as_bytes()).is_none());
+            prop_assert!(scan_bytes(text.as_bytes(), Origin::START).is_none());
+        }
+
+        // #326: one NUL or invalid byte anywhere in a text buffer never
+        // hides a ZWSP elsewhere in it.
+        #[test]
+        fn pbt_single_junk_byte_never_hides_payload(
+            text in "[ -~\n]{16,256}",
+            junk in prop_oneof![Just(0u8), 0x80u8..=0xFF],
+            junk_at in any::<prop::sample::Index>(),
+            payload_at in any::<prop::sample::Index>(),
+        ) {
+            // Junk first, so it can never land inside the payload.
+            let mut bytes = text.into_bytes();
+            let at = junk_at.index(bytes.len() + 1);
+            bytes.insert(at, junk);
+            let at = payload_at.index(bytes.len() + 1);
+            bytes.splice(at..at, "\u{200B}".bytes());
+            prop_assert!(scan_bytes(&bytes, Origin::START).is_some());
         }
 
         // The scanner never panics for arbitrary byte buffers.
         #[test]
         fn pbt_scan_bytes_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
-            let _ = scan_bytes(&bytes);
+            let _ = scan_bytes(&bytes, Origin::START);
         }
 
         // A hex-dump head yields no scan candidates regardless of its
@@ -770,7 +1089,7 @@ mod tests {
         fn pbt_standard_variation_selectors_never_flagged(
             text in "[ -~\u{FE00}-\u{FE0F}]{0,256}",
         ) {
-            prop_assert!(scan_bytes(text.as_bytes()).is_none());
+            prop_assert!(scan_bytes(text.as_bytes(), Origin::START).is_none());
         }
     }
 }
