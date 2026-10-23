@@ -216,9 +216,24 @@ jobs:
         with:
           persist-credentials: false
       - name: Install actionlint
-        run: bash <(curl -sL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.11
+        # Downloader pinned to a commit, not `main`, like every other action.
+        run: bash <(curl -sL https://raw.githubusercontent.com/rhysd/actionlint/393031adb9afb225ee52ae2ccd7a5af5525e03e8/scripts/download-actionlint.bash) 1.7.11
       - name: Run actionlint
         run: ./actionlint -color
+
+  test-scripts:
+    name: Test scripts
+    # stdlib-only unittests for the CI helper scripts (`make test-scripts`).
+    # They pin each gate's judging logic on small fixed inputs, so a gate
+    # that silently always passes fails here.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run script unittests
+        run: make test-scripts
 
   zizmor:
     name: zizmor
@@ -289,16 +304,19 @@ jobs:
         run: cargo semver-checks --baseline-rev "$(scripts/semver-baseline.sh)"
 
   mutants-diff:
-    name: Mutants (PR diff, non-blocking)
+    name: Mutants (PR diff)
     # Mutation testing restricted to the lines this PR changes (same
     # scope filter as `.cargo/mutants.toml`, so only the decision core is
-    # mutated). Informational: a MISSED mutant means a changed line whose
-    # behaviour no test verifies. Reported in the job summary, never fails
-    # the PR; the full scope runs nightly. Mirrors `make mutants-diff`.
+    # mutated). Blocking: a MISSED mutant means a changed line whose
+    # behaviour no test verifies — add the test, or exclude an equivalent
+    # mutant in `.cargo/mutants.toml` with a comment saying why.
+    # `scripts/mutants-diff.py` widens the diff to every source file
+    # whose tests lost a line, so a PR that only deletes or weakens tests
+    # is mutated too. The full scope runs nightly. Mirrors
+    # `make mutants-diff`.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    continue-on-error: true
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
@@ -318,14 +336,21 @@ jobs:
         run: |
           mkdir -p target
           git diff "origin/${BASE_REF}..." > target/mutants.diff
-          cargo mutants -j 2 --in-diff target/mutants.diff
+          python3 scripts/mutants-diff.py target/mutants.diff \
+            > target/mutants-widened.diff 2> target/mutants-widened.txt
+          cat target/mutants-widened.txt
+          cargo mutants -j 2 --in-diff target/mutants-widened.diff
       - name: Summarize missed mutants
         if: always()
         run: |
           {
             echo "### cargo-mutants (PR diff)"
+            if [ -s target/mutants-widened.txt ]; then
+              sed 's/^/- /' target/mutants-widened.txt
+            fi
             if [ -s mutants.out/missed.txt ]; then
               echo "Missed mutants: a test should have failed for each of these."
+              echo "Add the test, or exclude an equivalent mutant in .cargo/mutants.toml."
               echo '```'
               cat mutants.out/missed.txt
               echo '```'

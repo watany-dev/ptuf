@@ -273,10 +273,12 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   `src/config/merge.rs` / `src/self_paths.rs`) に限定する。生き残った
   (`MISSED`) ミュータントはテストが見逃す実バイパスに直結するため、
   example-based テストで潰す。`nightly.yml` の `mutants` job が full
-  スコープで実行し mutation report を artifact 出力する。PR では
+  スコープで実行し mutation report を artifact 出力する。失敗すると
+  `nightly-issue` job が追跡 issue を起票 / 追記する。PR では
   `ci.yml` の `mutants-diff` job (`make mutants-diff` 相当、
-  `--in-diff` で変更行のみ) を非ブロッキングで実行し、結果を step
-  summary に出す。MISSED の分類 (B / T / E) と issue との対応は
+  `--in-diff` で変更行のみ) をブロッキングで実行し、結果を step
+  summary に出す。テストの行を削ったファイルは `scripts/mutants-diff.py`
+  がファイル全体に広げる。MISSED の分類 (B / T / E) と issue との対応は
   `docs/design/mutants-inventory.md` で棚卸しする。
 - **Bypass 回帰コーパス (`make check` 内)**: `tests/bypass/corpus.jsonl`
   は版管理された敵対的入力の負テストスイートで、`tests/bypass_corpus.rs`

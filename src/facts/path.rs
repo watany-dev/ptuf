@@ -4,6 +4,7 @@
 //! can inject a hermetic `HOME` (and the production path delegates to
 //! `crate::config::scope::SystemEnv`).
 
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use crate::config::scope::{EnvLookup, SystemEnv};
@@ -101,20 +102,32 @@ pub(crate) fn resolve_with_env(raw: &str, base_dir: Option<&Path>, env: &dyn Env
 /// shapes `paths[]`, `files[].path`, and `items[].path`.
 pub(crate) fn extract_all_with_env(input: &HookInput, env: &dyn EnvLookup) -> Vec<PathFact> {
     let (tool, tagged): (PathTool, Vec<(String, PathOrigin)>) = match input.tool_name.as_str() {
-        "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
+        // Claude Code's `Grep` returns matching lines of the file (or
+        // tree) named by `path`, so it reads contents just like `Read`.
+        "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Grep" => {
             let (tool, key) = match input.tool_name.as_str() {
                 "Read" => (PathTool::Read, "file_path"),
+                "Grep" => (PathTool::Read, "path"),
                 "Edit" | "MultiEdit" => (PathTool::Edit, "file_path"),
                 "NotebookEdit" => (PathTool::Edit, "notebook_path"),
                 _ => (PathTool::Write, "file_path"),
             };
-            let values = input
+            let mut values: Vec<(String, PathOrigin)> = input
                 .tool_input
                 .get(key)
                 .and_then(serde_json::Value::as_str)
                 .map(|raw| (raw.to_owned(), PathOrigin::ToolInputDirect))
                 .into_iter()
                 .collect();
+            // Batch reads (Kiro `operations[]` / `paths[]`, Cursor
+            // `paths[]`, Cline `read_files`) only promote their first
+            // entry to `file_path`; every other entry must be judged too.
+            let mut seen: HashSet<String> = values.iter().map(|(raw, _)| raw.clone()).collect();
+            values.extend(
+                collect_batch_paths(&input.tool_input)
+                    .into_iter()
+                    .filter(|(raw, _)| seen.insert(raw.clone())),
+            );
             (tool, values)
         },
         "apply_patch" => {
@@ -187,19 +200,36 @@ fn collect_mcp_paths(value: &serde_json::Value) -> Vec<(String, PathOrigin)> {
     for key in MCP_DIRECT_PATH_KEYS {
         push_tagged(value.get(*key), PathOrigin::ToolInputDirect, &mut out);
     }
-    for key in ["files", "items"] {
-        if let Some(items) = value.get(key).and_then(serde_json::Value::as_array) {
+    push_nested_paths(value, &["files", "items"], &mut out);
+    out
+}
+
+/// Array-shaped path carriers on built-in file tools: `paths[]` plus
+/// `operations[].path` / `files[].path` / `items[].path`.
+fn collect_batch_paths(value: &serde_json::Value) -> Vec<(String, PathOrigin)> {
+    let mut out = Vec::new();
+    push_nested_paths(value, &["operations", "files", "items"], &mut out);
+    out
+}
+
+/// Push `<key>[].path` for each of `keys`, then the `paths[]` entries.
+fn push_nested_paths(
+    value: &serde_json::Value,
+    keys: &[&str],
+    out: &mut Vec<(String, PathOrigin)>,
+) {
+    for key in keys {
+        if let Some(items) = value.get(*key).and_then(serde_json::Value::as_array) {
             for item in items {
-                push_tagged(item.get("path"), PathOrigin::ToolInputNested, &mut out);
+                push_tagged(item.get("path"), PathOrigin::ToolInputNested, out);
             }
         }
     }
     if let Some(paths) = value.get("paths").and_then(serde_json::Value::as_array) {
         for item in paths {
-            push_tagged(Some(item), PathOrigin::ToolInputNested, &mut out);
+            push_tagged(Some(item), PathOrigin::ToolInputNested, out);
         }
     }
-    out
 }
 
 fn push_tagged(
@@ -506,6 +536,27 @@ mod tests {
             let i = input("Read", serde_json::json!(raw));
             let fp = extract_with_env(&i, &env).unwrap();
             assert_eq!(fp.absolute, PathBuf::from(expect_abs), "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn batch_read_payloads_surface_every_path() {
+        let env = MapEnv::with_home("/h");
+        for tool_input in [
+            serde_json::json!({"file_path": "/a", "paths": ["/a", "/b"]}),
+            serde_json::json!({"file_path": "/a", "operations": [{"path": "/a"}, {"path": "/b"}]}),
+            serde_json::json!({"files": [{"path": "/a"}, {"path": "/b"}]}),
+            serde_json::json!({"items": [{"path": "/a"}, {"path": "/b"}]}),
+        ] {
+            let i = HookInput {
+                tool_name: "Read".into(),
+                tool_input: tool_input.clone(),
+            };
+            let raws: Vec<String> = extract_all_with_env(&i, &env)
+                .into_iter()
+                .map(|f| f.raw)
+                .collect();
+            assert_eq!(raws, vec!["/a", "/b"], "{tool_input}");
         }
     }
 
