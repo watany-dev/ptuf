@@ -395,6 +395,8 @@ impl ProtectedPaths {
                 Candidate::Exact(p) => self.match_path(p),
                 Candidate::Ancestor(p) => self.match_path(p).or_else(|| self.match_descendant(p)),
                 Candidate::Basename(name) => self.match_basename(name),
+                Candidate::Suffix(tail) => self.match_suffix(tail),
+                Candidate::Glob(pattern, tree) => self.match_glob(pattern, *tree),
             };
             if let Some(kind) = kind {
                 out.push_unique(kind);
@@ -428,6 +430,14 @@ impl ProtectedPaths {
             )
     }
 
+    /// The kind of the first protected path (in `match_path` order)
+    /// satisfying `pred`.
+    fn find_kind(&self, mut pred: impl FnMut(&Path) -> bool) -> Option<ProtectedKind> {
+        self.tagged_targets()
+            .find(|(_, target)| pred(target))
+            .map(|(kind, _)| kind)
+    }
+
     /// A protected path lives *under* `dir`, so removing or moving `dir`
     /// (`rm -rf .claude`, `mv ~/.config/ptuf x`) takes it along.
     fn match_descendant(&self, dir: &Path) -> Option<ProtectedKind> {
@@ -440,22 +450,27 @@ impl ProtectedPaths {
             return None;
         }
         let canonical = dir.canonicalize().ok();
-        self.tagged_targets()
-            .find(|(_, target)| {
-                (target.starts_with(&lexical) && *target != lexical)
-                    || canonical
-                        .as_deref()
-                        .is_some_and(|c| target.starts_with(c) && *target != c)
-            })
-            .map(|(kind, _)| kind)
+        self.find_kind(|target| {
+            (target.starts_with(&lexical) && target != lexical)
+                || canonical
+                    .as_deref()
+                    .is_some_and(|c| target.starts_with(c) && target != c)
+        })
+    }
+
+    fn match_suffix(&self, tail: &Path) -> Option<ProtectedKind> {
+        self.find_kind(|target| target.ends_with(tail))
+    }
+
+    fn match_glob(&self, pattern: &Path, tree: bool) -> Option<ProtectedKind> {
+        let pattern = lexical_normalize(pattern);
+        self.find_kind(|target| path_glob_matches(&pattern, target, tree))
     }
 
     /// A relative write after a `cd` ptuf could not follow (`cd $X`,
     /// `cd -`): match on the file name alone.
     fn match_basename(&self, name: &std::ffi::OsStr) -> Option<ProtectedKind> {
-        self.tagged_targets()
-            .find(|(_, target)| target.file_name() == Some(name))
-            .map(|(kind, _)| kind)
+        self.find_kind(|target| target.file_name() == Some(name))
     }
 
     /// Which protected file, if any, `candidate` names (string-equal or
@@ -474,9 +489,7 @@ impl ProtectedPaths {
                 .as_deref()
                 == Some(target)
         };
-        self.tagged_targets()
-            .find(|(_, target)| matches(target))
-            .map(|(kind, _)| kind)
+        self.find_kind(|target| matches(target))
     }
 }
 
@@ -624,10 +637,45 @@ enum Candidate {
     /// A relative path written after an unresolvable `cd`; only its file
     /// name is known.
     Basename(std::ffi::OsString),
+    /// A path whose leading part is decided at run time (`$DIR/.claude/
+    /// settings.json`): the literal trailing components must end a
+    /// protected path.
+    Suffix(PathBuf),
+    /// A path with shell glob characters (`.clau*/settings.json`), which
+    /// bash expands before the write; matched against protected paths
+    /// component by component. The flag marks a tree writer (`rm -rf
+    /// .c*`), which also takes everything under a matching directory.
+    Glob(PathBuf, bool),
 }
 
 /// Writer heads whose positional arguments are write targets.
 const WRITER_HEADS: &[&str] = &["rm", "mv", "cp", "chmod", "chown", "tee", "ln", "sed"];
+
+/// Writer heads that rewrite their file arguments in place:
+/// `sponge FILE`, `patch FILE`, `ed FILE`, `ex FILE`.
+const EDITOR_WRITER_HEADS: &[&str] = &["sponge", "patch", "ed", "ex"];
+
+/// Whether this interpreter call edits its file arguments in place:
+/// `awk -i inplace …` / `gawk -i inplace …`, `perl -i …` / `perl -pi
+/// …`, `ruby -i …`.
+fn edits_in_place(argv: &crate::facts::shell::Argv) -> bool {
+    match argv.head_basename() {
+        "awk" | "gawk" => {
+            argv.args
+                .windows(2)
+                .any(|w| w[0] == "-i" && w[1] == "inplace")
+                || argv
+                    .args
+                    .iter()
+                    .any(|a| a == "-iinplace" || a == "--include=inplace")
+        },
+        "perl" | "ruby" => argv
+            .args
+            .iter()
+            .any(|a| crate::facts::shell::short_flag_cluster_contains(a, 'i')),
+        _ => false,
+    }
+}
 
 /// Writer heads that remove or move a directory tree.
 const TREE_WRITER_HEADS: &[&str] = &["rm", "mv"];
@@ -685,7 +733,19 @@ fn bash_candidates(
     // Set once a `cd` target is not a literal path.
     let mut lost_cwd = false;
     let push = |raw: &str, cwd: Option<&Path>, lost: bool, tree: bool, out: &mut Vec<Candidate>| {
+        let expanded = expand_cwd_references(raw, cwd);
+        let raw = expanded.as_str();
+        if let Some(name) = which_lookup(raw) {
+            out.push(Candidate::Basename(name.into()));
+            return;
+        }
         let resolved = crate::facts::path::resolve_with_env(raw, cwd, env);
+        if let Some(tail) = literal_tail(raw) {
+            out.push(Candidate::Suffix(tail));
+        }
+        if raw.contains(['*', '?', '[']) {
+            out.push(Candidate::Glob(resolved.clone(), tree));
+        }
         if lost
             && !Path::new(raw).is_absolute()
             && !raw.starts_with(['~', '$'])
@@ -721,7 +781,10 @@ fn bash_candidates(
                 }
                 continue;
             }
-            if WRITER_HEADS.contains(&head) {
+            if WRITER_HEADS.contains(&head)
+                || EDITOR_WRITER_HEADS.contains(&head)
+                || edits_in_place(&argv)
+            {
                 let tree = TREE_WRITER_HEADS.contains(&head);
                 for a in argv.positional() {
                     push(a, cwd.as_deref(), lost_cwd, tree, out);
@@ -736,12 +799,15 @@ fn bash_candidates(
         }
         // Redirect targets in this segment, resolved against the
         // followed cwd (the engine's own redirect facts use the root).
-        if cwd.as_deref() != base_dir || lost_cwd {
-            for r in &pipe.redirects {
-                if !matches!(r.op, crate::facts::shell::RedirectOp::Heredoc) && !r.target.is_empty()
-                {
-                    push(&r.target, cwd.as_deref(), lost_cwd, false, out);
-                }
+        // Dynamic or glob targets need the same treatment even at the
+        // root.
+        let moved = cwd.as_deref() != base_dir || lost_cwd;
+        for r in &pipe.redirects {
+            if !matches!(r.op, crate::facts::shell::RedirectOp::Heredoc)
+                && !r.target.is_empty()
+                && (moved || r.target.contains(['$', '*', '?', '[']))
+            {
+                push(&r.target, cwd.as_deref(), lost_cwd, false, out);
             }
         }
     }
@@ -856,6 +922,156 @@ fn git_path_writes(argv: &crate::facts::shell::Argv) -> Vec<&str> {
         out.push(a);
     }
     out
+}
+
+/// Replace references to the current directory (`$PWD`, `${PWD}`,
+/// `$(pwd)`) with the directory the shell is in.
+fn expand_cwd_references(raw: &str, cwd: Option<&Path>) -> String {
+    let Some(cwd) = cwd.and_then(Path::to_str).filter(|_| raw.contains('$')) else {
+        return raw.to_owned();
+    };
+    let mut out = raw.to_owned();
+    for token in ["${PWD}", "$(pwd)", "$(pwd -P)", "$(pwd -L)"] {
+        out = out.replace(token, cwd);
+    }
+    // `$PWD` only when not the prefix of a longer name (`$PWDX`).
+    let mut result = String::with_capacity(out.len());
+    let mut rest = out.as_str();
+    while let Some(pos) = rest.find("$PWD") {
+        let after = &rest[pos + 4..];
+        result.push_str(&rest[..pos]);
+        if after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+            result.push_str("$PWD");
+        } else {
+            result.push_str(cwd);
+        }
+        rest = after;
+    }
+    result.push_str(rest);
+    result
+}
+
+/// `$(which X)` / `$(command -v X)` / `$(type -P X)` as a whole word:
+/// the command `X` resolves to, known here only by name.
+fn which_lookup(raw: &str) -> Option<&str> {
+    let inner = raw.strip_prefix("$(")?.strip_suffix(')')?;
+    let mut words = inner.split_whitespace();
+    let name = match (words.next()?, words.next()?) {
+        ("which", name) => name,
+        ("command", "-v") | ("type", "-P" | "-p") => words.next()?,
+        _ => return None,
+    };
+    words.next().is_none().then_some(name)
+}
+
+/// The literal components after the last run-time-decided one (`$X`,
+/// `$(…)`) of `raw`, when at least two remain (`$D/.claude/settings.json`
+/// → `.claude/settings.json`). A lone file name (`$D/config.yaml`) is
+/// too generic to match on.
+fn literal_tail(raw: &str) -> Option<PathBuf> {
+    if !raw.contains('$') {
+        return None;
+    }
+    let comps: Vec<&str> = raw
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect();
+    let last_dynamic = comps
+        .iter()
+        .rposition(|c| c.contains(['$', '(', ')', '`']))?;
+    let tail = &comps[last_dynamic + 1..];
+    (tail.len() >= 2).then(|| tail.iter().collect())
+}
+
+/// Component-wise glob match (`*`, `?`, `[…]` within one component).
+/// With `prefix`, the pattern may also match a leading directory of
+/// `target` (the target sits under a matched directory).
+fn path_glob_matches(pattern: &Path, target: &Path, prefix: bool) -> bool {
+    let p: Vec<_> = pattern.components().collect();
+    let t: Vec<_> = target.components().collect();
+    let len_ok = if prefix {
+        p.len() <= t.len()
+    } else {
+        p.len() == t.len()
+    };
+    len_ok
+        && p.iter().zip(&t).all(|(pc, tc)| {
+            match (pc.as_os_str().to_str(), tc.as_os_str().to_str()) {
+                (Some(pc), Some(tc)) => fnmatch(pc.as_bytes(), tc.as_bytes()),
+                _ => pc == tc,
+            }
+        })
+}
+
+/// Shell pattern match of one path component: `*`, `?`, `[set]` /
+/// `[!set]` / `[^set]` with ranges. A leading `.` is not matched by a
+/// wildcard, as in bash without `dotglob`.
+fn fnmatch(pattern: &[u8], text: &[u8]) -> bool {
+    if text.first() == Some(&b'.') && pattern.first() != Some(&b'.') {
+        return false;
+    }
+    fnmatch_from(pattern, text)
+}
+
+/// Iterative wildcard match: each `*` remembers where it started, and a
+/// mismatch retries from there with one more text byte consumed. Every
+/// other element consumes exactly one byte, so this is O(pattern × text)
+/// with no recursion (a naive recursive `*` is exponential).
+fn fnmatch_from(pattern: &[u8], text: &[u8]) -> bool {
+    let (mut p, mut t) = (0, 0);
+    // (pattern index after the last `*`, text index it is retried at)
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        if pattern.get(p) == Some(&b'*') {
+            p += 1;
+            star = Some((p, t));
+            continue;
+        }
+        if let Some(next) = match_one(pattern, p, text[t]) {
+            p = next;
+            t += 1;
+            continue;
+        }
+        let Some((star_p, star_t)) = star else {
+            return false;
+        };
+        p = star_p;
+        t = star_t + 1;
+        star = Some((star_p, t));
+    }
+    pattern[p..].iter().all(|&b| b == b'*')
+}
+
+/// When the single-byte pattern element at `p` (`?`, `[set]`, or a
+/// literal) matches `c`, the index just past that element.
+fn match_one(pattern: &[u8], p: usize, c: u8) -> Option<usize> {
+    match *pattern.get(p)? {
+        b'?' => Some(p + 1),
+        b'[' => {
+            let mut i = p + 1;
+            let negate = matches!(pattern.get(i), Some(b'!' | b'^'));
+            if negate {
+                i += 1;
+            }
+            let start = i;
+            let mut matched = false;
+            while i < pattern.len() && (pattern[i] != b']' || i == start) {
+                if i + 2 < pattern.len() && pattern[i + 1] == b'-' && pattern[i + 2] != b']' {
+                    matched |= (pattern[i]..=pattern[i + 2]).contains(&c);
+                    i += 3;
+                } else {
+                    matched |= pattern[i] == c;
+                    i += 1;
+                }
+            }
+            if i >= pattern.len() {
+                // Unterminated `[`: literal.
+                return (c == b'[').then_some(p + 1);
+            }
+            (matched != negate).then_some(i + 1)
+        },
+        literal => (literal == c).then_some(p + 1),
+    }
 }
 
 /// Drop `.` components so `/repo/./.claude/` compares equal to
@@ -1377,6 +1593,181 @@ mod tests {
         }
         assert!(bash_kinds(&p, "cd src && echo x > a.txt").is_empty());
         assert!(bash_kinds(&p, "cd .claude && echo x > notes.txt").is_empty());
+    }
+
+    #[test]
+    fn classify_resolves_cwd_references_and_which_lookups() {
+        let p = ProtectedPaths {
+            binary: Some(PathBuf::from("/usr/local/bin/ptuf")),
+            ..repo_protected()
+        };
+        for cmd in [
+            "echo {} > $PWD/.claude/settings.json",
+            "echo {} > ${PWD}/.claude/settings.json",
+            "echo {} > \"$(pwd)/.claude/settings.json\"",
+            "echo x > $OUT/.claude/settings.json",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
+                "{cmd}"
+            );
+        }
+        for cmd in [
+            "rm $(which ptuf)",
+            "cp /bin/true $(command -v ptuf)",
+            "rm $(type -P ptuf)",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::Binary),
+                "{cmd}"
+            );
+        }
+        for cmd in [
+            "echo x > $OUT/config.yaml",
+            "rm $(which node)",
+            "cp a \"$PWD/out.txt\"",
+        ] {
+            assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn classify_matches_glob_write_targets() {
+        let p = repo_protected();
+        for cmd in [
+            "echo {} > .clau*/settings.json",
+            "echo {} > .claude/settings.js?n",
+            "echo {} > .claude/[s]ettings.json",
+            "rm .claude/*.json",
+            "rm -rf .c*",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
+                "{cmd}"
+            );
+        }
+        for cmd in [
+            "rm *.txt",
+            "rm -rf src/*",
+            "echo hi > out*.log",
+            "rm .claude/*.md",
+        ] {
+            assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn classify_matches_in_place_editors() {
+        let p = repo_protected();
+        for cmd in [
+            "jq . .claude/settings.json | sponge .claude/settings.json",
+            "patch .claude/settings.json < p",
+            "ed .claude/settings.json",
+            "awk -i inplace '{}' .claude/settings.json",
+            "gawk -iinplace '{}' .claude/settings.json",
+            "perl -pi -e 's/a/b/' .claude/settings.json",
+            "ruby -i -pe '1' .claude/settings.json",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
+                "{cmd}"
+            );
+        }
+        assert!(bash_kinds(&p, "awk '{print}' .claude/settings.json").is_empty());
+        assert!(bash_kinds(&p, "perl -ne 'print' .claude/settings.json").is_empty());
+    }
+
+    #[test]
+    fn fnmatch_follows_shell_rules() {
+        assert!(fnmatch(b"*.json", b"settings.json"));
+        assert!(fnmatch(b"se?tings.js[a-z]n", b"settings.json"));
+        assert!(fnmatch(b"[!x]*", b"settings"));
+        assert!(!fnmatch(b"*", b".claude"));
+        assert!(fnmatch(b".c*", b".claude"));
+        assert!(fnmatch(b"a[", b"a["));
+        assert!(!fnmatch(b"[^s]*", b"settings"));
+        // `]` first in a set is a member, not the terminator.
+        assert!(fnmatch(b"[]a]", b"]"));
+        assert!(fnmatch(b"[]a]", b"a"));
+        // The negation marker is not itself a member.
+        assert!(fnmatch(b"[!a]", b"!"));
+        assert!(!fnmatch(b"[!a]", b"a"));
+        // `?` needs a character.
+        assert!(!fnmatch(b"a?", b"a"));
+        // A range after the negation marker is still a range.
+        assert!(!fnmatch(b"[!a-c]", b"b"));
+        assert!(fnmatch(b"[!a-c]", b"d"));
+        assert!(fnmatch(b"[xa-c]", b"b"));
+        // A trailing `-` before `]` is a member, not a range.
+        assert!(!fnmatch(b"[!xa-]", b"-"));
+        assert!(fnmatch(b"[!xa-]", b"b"));
+        // An unterminated `[` (even one ending in `-`) is a literal.
+        assert!(fnmatch(b"[a-", b"[a-"));
+        assert!(!fnmatch(b"[ab", b"xab"));
+        // `*` backtracks to the latest star only, so a pathological
+        // pattern stays polynomial (the recursive form was exponential).
+        let pattern = "*a".repeat(40) + "b";
+        assert!(!fnmatch(pattern.as_bytes(), "a".repeat(400).as_bytes()));
+        assert!(fnmatch(b"*a*b*c", b"xxaxxbxxc"));
+        assert!(!fnmatch(b"*a*b*c", b"xxaxxcxxb"));
+        assert!(fnmatch(b"a**", b"a"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_glob_matches_compares_non_utf8_components_exactly() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = |b: &[u8]| PathBuf::from(std::ffi::OsStr::from_bytes(b));
+        let pat = path(b"/a/\xff/*.json");
+        assert!(path_glob_matches(&pat, &path(b"/a/\xff/x.json"), false));
+        assert!(!path_glob_matches(&pat, &path(b"/a/\xfe/x.json"), false));
+    }
+
+    #[test]
+    fn path_glob_matches_respects_length_unless_prefix() {
+        let pat = Path::new("/a/*");
+        assert!(path_glob_matches(pat, Path::new("/a/b"), false));
+        assert!(!path_glob_matches(pat, Path::new("/a/b/c"), false));
+        assert!(path_glob_matches(pat, Path::new("/a/b/c"), true));
+        assert!(!path_glob_matches(pat, Path::new("/a"), true));
+    }
+
+    #[test]
+    fn literal_tail_skips_dot_and_empty_components() {
+        assert_eq!(
+            literal_tail("$D/./.claude//settings.json"),
+            Some(PathBuf::from(".claude/settings.json")),
+        );
+        assert_eq!(literal_tail("$D/config.yaml"), None);
+        assert_eq!(literal_tail(".claude/settings.json"), None);
+    }
+
+    #[test]
+    fn expand_cwd_references_leaves_longer_names() {
+        let cwd = Some(Path::new("/w"));
+        assert_eq!(expand_cwd_references("$PWD/a", cwd), "/w/a");
+        assert_eq!(expand_cwd_references("$PWD_X/a", cwd), "$PWD_X/a");
+        assert_eq!(expand_cwd_references("$PWDX/a", cwd), "$PWDX/a");
+        assert_eq!(expand_cwd_references("${PWD}/a", cwd), "/w/a");
+    }
+
+    #[test]
+    fn edits_in_place_needs_the_inplace_extension() {
+        let argv = |cmd: &str| crate::facts::shell::parse(cmd).segments[0].commands[0].clone();
+        assert!(edits_in_place(&argv("awk -i inplace '{print}' f")));
+        assert!(!edits_in_place(&argv("awk -i lib.awk '{print}' f")));
+        assert!(!edits_in_place(&argv("awk -f inplace f")));
+        assert!(edits_in_place(&argv("perl -pi -e 1 f")));
+        assert!(!edits_in_place(&argv("perl --include f")));
+    }
+
+    #[test]
+    fn heredoc_body_is_not_a_write_target() {
+        let p = repo_protected();
+        let cmd = "cat <<EOF\n$HOME/.claude/settings.json\n.claude/settings.json\nEOF\n";
+        assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+        let cmd = "cd sub && cat <<EOF\n../.claude/settings.json\nEOF\n";
+        assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
     }
 
     #[test]

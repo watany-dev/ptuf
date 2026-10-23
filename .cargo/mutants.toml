@@ -101,4 +101,11 @@ exclude_re = [
     # The alternatives cap only saves work: `brace_product` caps the
     # output again, so one extra alternative is unobservable.
     'replace < with <= in brace_alternatives',
+    # Index arithmetic that stops advancing (`pos * 4` at 0, `i *= 1`) loops
+    # forever instead of failing a test; the run only ever times out.
+    # `t = star_t + 1` likewise retries the same text byte forever.
+    'replace \+ with \* in (expand_cwd_references|fnmatch_from)',
+    'replace \+= with [-*]= in (fnmatch_from|match_one)',
+    # Never seeing a `*` (or seeing one everywhere) stalls the star loop.
+    ':\d+:27: replace == with != in fnmatch_from',
 ]
