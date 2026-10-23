@@ -472,45 +472,9 @@ impl ProtectedPaths {
                 .as_deref()
                 == Some(target)
         };
-        if let Some(b) = &self.binary
-            && matches(b)
-        {
-            return Some(ProtectedKind::Binary);
-        }
-        if self.configs.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::Config);
-        }
-        if self.plugins.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::Plugin);
-        }
-        if self.claude_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::ClaudeSettings);
-        }
-        if self.codex_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::CodexSettings);
-        }
-        if self.copilot_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::CopilotSettings);
-        }
-        if self.kiro_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::KiroSettings);
-        }
-        if self.pi_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::PiSettings);
-        }
-        if self.opencode_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::OpencodeSettings);
-        }
-        if self.cursor_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::CursorSettings);
-        }
-        if self.cline_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::ClineSettings);
-        }
-        if self.hook_scripts.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::HookScript);
-        }
-        None
+        self.tagged_targets()
+            .find(|(_, target)| matches(target))
+            .map(|(kind, _)| kind)
     }
 }
 
@@ -680,15 +644,10 @@ fn candidate_targets<'a>(
     let mut out = Vec::new();
     // Edit / Write / Read all expose `file_path`.
     for fp in paths {
-        if fp.absolute.is_relative() {
-            if let Some(base) = base_dir {
-                out.push(Candidate::Exact(base.join(&fp.absolute)));
-            } else {
-                out.push(Candidate::Exact(fp.absolute.clone()));
-            }
-        } else {
-            out.push(Candidate::Exact(fp.absolute.clone()));
-        }
+        out.push(Candidate::Exact(match base_dir {
+            Some(root) if fp.absolute.is_relative() => root.join(&fp.absolute),
+            _ => fp.absolute.clone(),
+        }));
     }
     // Bash invocations carry destinations as positional args; collect
     // every positional that looks like a path. Don't try to interpret
@@ -749,9 +708,7 @@ fn bash_candidates(
             let head = argv.head_basename();
             if matches!(head, "cd" | "pushd") {
                 match argv.positional().next() {
-                    Some(dir)
-                        if !dir.starts_with('$') && dir != "-" && !dir.starts_with(['+', '-']) =>
-                    {
+                    Some(dir) if !dir.starts_with(['$', '+', '-']) => {
                         let next = crate::facts::path::resolve_with_env(dir, cwd.as_deref(), env);
                         cwd = Some(next);
                     },
