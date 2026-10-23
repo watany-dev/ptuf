@@ -1,0 +1,3 @@
+# Required review from code owners is enforced by the main branch ruleset;
+# see "main branch ruleset" in docs/repository-settings.md.
+* @watany-dev

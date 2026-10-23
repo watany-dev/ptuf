@@ -361,7 +361,7 @@ exit $LASTEXITCODE
       {
         "type": "command",
         "command": "/usr/local/bin/ptuf hook cursor",
-        "matcher": "Shell|Bash|Read|ReadFile|Write|Edit|MCP|WebFetch|Fetch|mcp__.*",
+        "matcher": "Shell|Bash|Read|ReadFile|Grep|Write|Edit|Delete|MCP|WebFetch|Fetch|mcp__.*",
         "timeout": 10,
         "failClosed": true
       }
@@ -758,7 +758,7 @@ Cline の file hook payload は `hookName` envelope に包まれており、2 �
 | Cline tool 名 | canonical |
 | --- | --- |
 | `execute_command` / `run_command` / `run_commands` / `bash` | `Bash` |
-| `read_file` / `read_files` | `Read` |
+| `read_file` / `read_files` / `search_files` | `Read` |
 | `editor` / `replace_in_file` / `edit_file` | `Edit` |
 | `write_file` | `Write` |
 | `apply_patch` | `apply_patch` |
@@ -801,7 +801,9 @@ canonical shape に正規化する。
 | --- | --- |
 | `Shell` / `Bash` | `Bash` |
 | `Read` / `ReadFile` | `Read` |
+| `Grep` | `Read` (`path` を `file_path` へ。結果にファイル内容が載るため) |
 | `Write` | `Write` |
+| `Delete` / `DeleteFile` | `Write` (`path` を `file_path` へ。Kiro v3 `delete_file` と同じ扱い) |
 | `Edit` | `Edit` |
 | `WebFetch` / `Fetch` | `WebFetch` |
 | `MCP` / `mcp__*` | `mcp__<server>__<tool>` |
