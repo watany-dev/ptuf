@@ -91,17 +91,16 @@ impl ConfigRule for DynamicEval {
 
 fn invokes_dynamic_eval(argv: &Argv) -> bool {
     let argv = unwrap_all_prefix_wrappers(argv);
-    matches_dynamic_eval(&argv) || has_dynamic_head(&argv.head)
+    matches_dynamic_eval(&argv) || has_dynamic_head(argv.head_basename())
 }
 
-/// True when the command name is decided by the shell at run time, so
+/// True when the command name (basename) is decided by the shell at run time, so
 /// no head table can match it: a parameter / command substitution in
 /// the basename (`$X`, `${X:-rm}`, `$(echo rm)`; a backtick body leaves
 /// its inner words, hence the whitespace check) or a glob (`/bin/r?`,
 /// `/usr/bin/[r]m`). A variable directory with a literal basename
 /// (`$HOME/bin/tool`) is not dynamic: rules still match `tool`.
-fn has_dynamic_head(head: &str) -> bool {
-    let base = crate::facts::shell::head_basename(head);
+fn has_dynamic_head(base: &str) -> bool {
     if base.is_empty() || base == "[" || base == "[[" {
         return false;
     }
