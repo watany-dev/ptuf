@@ -66,4 +66,17 @@ exclude_re = [
     'replace \+ with \* in read_ansi_c_quoted',
     'replace \+= with \*= in decode_ansi_c_escape',
     'replace decode_ansi_c_escape -> \(u32, usize\) with .*',
+    # Index-stalling mutants: the lexer stops advancing and the run only
+    # ever times out instead of failing a test.
+    'replace read_word_with_braces -> .* with .*vec!\["xyzzy"\.into\(\)\], vec!\[.*\]\)',
+    # `p += 1` stalling, and `start = open + 1` re-entering the same group
+    # (exponential fan-out down to the nesting cap): both only time out.
+    'replace \+= with [-*]= in expand_range',
+    ':\d+:26: replace \+ with [-*] in brace_alternatives',
+    # Letting over-long comma-less bodies reach `brace_sequence` brings
+    # back the quadratic rescan; the linear-time test then only times out.
+    'replace > with (==|<) in brace_alternatives',
+    # The alternatives cap only saves work: `brace_product` caps the
+    # output again, so one extra alternative is unobservable.
+    'replace < with <= in brace_alternatives',
 ]
