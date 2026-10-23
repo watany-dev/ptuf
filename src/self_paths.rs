@@ -430,6 +430,14 @@ impl ProtectedPaths {
             )
     }
 
+    /// The kind of the first protected path (in `match_path` order)
+    /// satisfying `pred`.
+    fn find_kind(&self, mut pred: impl FnMut(&Path) -> bool) -> Option<ProtectedKind> {
+        self.tagged_targets()
+            .find(|(_, target)| pred(target))
+            .map(|(kind, _)| kind)
+    }
+
     /// A protected path lives *under* `dir`, so removing or moving `dir`
     /// (`rm -rf .claude`, `mv ~/.config/ptuf x`) takes it along.
     fn match_descendant(&self, dir: &Path) -> Option<ProtectedKind> {
@@ -442,35 +450,27 @@ impl ProtectedPaths {
             return None;
         }
         let canonical = dir.canonicalize().ok();
-        self.tagged_targets()
-            .find(|(_, target)| {
-                (target.starts_with(&lexical) && *target != lexical)
-                    || canonical
-                        .as_deref()
-                        .is_some_and(|c| target.starts_with(c) && *target != c)
-            })
-            .map(|(kind, _)| kind)
+        self.find_kind(|target| {
+            (target.starts_with(&lexical) && target != lexical)
+                || canonical
+                    .as_deref()
+                    .is_some_and(|c| target.starts_with(c) && target != c)
+        })
     }
 
     fn match_suffix(&self, tail: &Path) -> Option<ProtectedKind> {
-        self.tagged_targets()
-            .find(|(_, target)| target.ends_with(tail))
-            .map(|(kind, _)| kind)
+        self.find_kind(|target| target.ends_with(tail))
     }
 
     fn match_glob(&self, pattern: &Path, tree: bool) -> Option<ProtectedKind> {
         let pattern = lexical_normalize(pattern);
-        self.tagged_targets()
-            .find(|(_, target)| path_glob_matches(&pattern, target, tree))
-            .map(|(kind, _)| kind)
+        self.find_kind(|target| path_glob_matches(&pattern, target, tree))
     }
 
     /// A relative write after a `cd` ptuf could not follow (`cd $X`,
     /// `cd -`): match on the file name alone.
     fn match_basename(&self, name: &std::ffi::OsStr) -> Option<ProtectedKind> {
-        self.tagged_targets()
-            .find(|(_, target)| target.file_name() == Some(name))
-            .map(|(kind, _)| kind)
+        self.find_kind(|target| target.file_name() == Some(name))
     }
 
     fn match_path(&self, candidate: &Path) -> Option<ProtectedKind> {
@@ -487,45 +487,7 @@ impl ProtectedPaths {
                 .as_deref()
                 == Some(target)
         };
-        if let Some(b) = &self.binary
-            && matches(b)
-        {
-            return Some(ProtectedKind::Binary);
-        }
-        if self.configs.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::Config);
-        }
-        if self.plugins.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::Plugin);
-        }
-        if self.claude_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::ClaudeSettings);
-        }
-        if self.codex_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::CodexSettings);
-        }
-        if self.copilot_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::CopilotSettings);
-        }
-        if self.kiro_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::KiroSettings);
-        }
-        if self.pi_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::PiSettings);
-        }
-        if self.opencode_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::OpencodeSettings);
-        }
-        if self.cursor_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::CursorSettings);
-        }
-        if self.cline_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::ClineSettings);
-        }
-        if self.hook_scripts.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::HookScript);
-        }
-        None
+        self.find_kind(|target| matches(target))
     }
 }
 
@@ -708,7 +670,7 @@ fn edits_in_place(argv: &crate::facts::shell::Argv) -> bool {
         "perl" | "ruby" => argv
             .args
             .iter()
-            .any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains('i')),
+            .any(|a| crate::facts::shell::short_flag_cluster_contains(a, 'i')),
         _ => false,
     }
 }
@@ -730,15 +692,10 @@ fn candidate_targets<'a>(
     let mut out = Vec::new();
     // Edit / Write / Read all expose `file_path`.
     for fp in paths {
-        if fp.absolute.is_relative() {
-            if let Some(base) = base_dir {
-                out.push(Candidate::Exact(base.join(&fp.absolute)));
-            } else {
-                out.push(Candidate::Exact(fp.absolute.clone()));
-            }
-        } else {
-            out.push(Candidate::Exact(fp.absolute.clone()));
-        }
+        out.push(Candidate::Exact(match base_dir {
+            Some(root) if fp.absolute.is_relative() => root.join(&fp.absolute),
+            _ => fp.absolute.clone(),
+        }));
     }
     // Bash invocations carry destinations as positional args; collect
     // every positional that looks like a path. Don't try to interpret
@@ -811,9 +768,7 @@ fn bash_candidates(
             let head = argv.head_basename();
             if matches!(head, "cd" | "pushd") {
                 match argv.positional().next() {
-                    Some(dir)
-                        if !dir.starts_with('$') && dir != "-" && !dir.starts_with(['+', '-']) =>
-                    {
+                    Some(dir) if !dir.starts_with(['$', '+', '-']) => {
                         let next = crate::facts::path::resolve_with_env(dir, cwd.as_deref(), env);
                         cwd = Some(next);
                     },
@@ -969,7 +924,7 @@ fn git_path_writes(argv: &crate::facts::shell::Argv) -> Vec<&str> {
 /// Replace references to the current directory (`$PWD`, `${PWD}`,
 /// `$(pwd)`) with the directory the shell is in.
 fn expand_cwd_references(raw: &str, cwd: Option<&Path>) -> String {
-    let Some(cwd) = cwd.and_then(Path::to_str) else {
+    let Some(cwd) = cwd.and_then(Path::to_str).filter(|_| raw.contains('$')) else {
         return raw.to_owned();
     };
     let mut out = raw.to_owned();
@@ -1055,17 +1010,43 @@ fn fnmatch(pattern: &[u8], text: &[u8]) -> bool {
     fnmatch_from(pattern, text)
 }
 
+/// Iterative wildcard match: each `*` remembers where it started, and a
+/// mismatch retries from there with one more text byte consumed. Every
+/// other element consumes exactly one byte, so this is O(pattern × text)
+/// with no recursion (a naive recursive `*` is exponential).
 fn fnmatch_from(pattern: &[u8], text: &[u8]) -> bool {
-    match pattern.first() {
-        None => text.is_empty(),
-        Some(b'*') => (0..=text.len()).any(|i| fnmatch_from(&pattern[1..], &text[i..])),
-        Some(b'?') => !text.is_empty() && fnmatch_from(&pattern[1..], &text[1..]),
-        Some(b'[') => {
-            let Some((&c, rest_text)) = text.split_first() else {
-                return false;
-            };
-            let mut i = 1;
-            let negate = matches!(pattern.get(1), Some(b'!' | b'^'));
+    let (mut p, mut t) = (0, 0);
+    // (pattern index after the last `*`, text index it is retried at)
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        if pattern.get(p) == Some(&b'*') {
+            p += 1;
+            star = Some((p, t));
+            continue;
+        }
+        if let Some(next) = match_one(pattern, p, text[t]) {
+            p = next;
+            t += 1;
+            continue;
+        }
+        let Some((star_p, star_t)) = star else {
+            return false;
+        };
+        p = star_p;
+        t = star_t + 1;
+        star = Some((star_p, t));
+    }
+    pattern[p..].iter().all(|&b| b == b'*')
+}
+
+/// When the single-byte pattern element at `p` (`?`, `[set]`, or a
+/// literal) matches `c`, the index just past that element.
+fn match_one(pattern: &[u8], p: usize, c: u8) -> Option<usize> {
+    match *pattern.get(p)? {
+        b'?' => Some(p + 1),
+        b'[' => {
+            let mut i = p + 1;
+            let negate = matches!(pattern.get(i), Some(b'!' | b'^'));
             if negate {
                 i += 1;
             }
@@ -1082,11 +1063,11 @@ fn fnmatch_from(pattern: &[u8], text: &[u8]) -> bool {
             }
             if i >= pattern.len() {
                 // Unterminated `[`: literal.
-                return c == b'[' && fnmatch_from(&pattern[1..], rest_text);
+                return (c == b'[').then_some(p + 1);
             }
-            matched != negate && fnmatch_from(&pattern[i + 1..], rest_text)
+            (matched != negate).then_some(i + 1)
         },
-        Some(&p) => text.first() == Some(&p) && fnmatch_from(&pattern[1..], &text[1..]),
+        literal => (literal == c).then_some(p + 1),
     }
 }
 
@@ -1720,6 +1701,13 @@ mod tests {
         // An unterminated `[` (even one ending in `-`) is a literal.
         assert!(fnmatch(b"[a-", b"[a-"));
         assert!(!fnmatch(b"[ab", b"xab"));
+        // `*` backtracks to the latest star only, so a pathological
+        // pattern stays polynomial (the recursive form was exponential).
+        let pattern = "*a".repeat(40) + "b";
+        assert!(!fnmatch(pattern.as_bytes(), "a".repeat(400).as_bytes()));
+        assert!(fnmatch(b"*a*b*c", b"xxaxxbxxc"));
+        assert!(!fnmatch(b"*a*b*c", b"xxaxxcxxb"));
+        assert!(fnmatch(b"a**", b"a"));
     }
 
     #[cfg(unix)]

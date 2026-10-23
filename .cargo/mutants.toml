@@ -42,6 +42,7 @@ exclude_re = [
     'replace Engine::builder -> EngineBuilder with Default::default\(\)',
     # Index arithmetic that stops advancing (`pos * 4` at 0, `i *= 1`) loops
     # forever instead of failing a test; the run only ever times out.
-    'replace \+ with \* in expand_cwd_references',
-    'replace \+= with \*= in fnmatch_from',
+    # `t = star_t + 1` likewise retries the same text byte forever.
+    'replace \+ with \* in (expand_cwd_references|fnmatch_from)',
+    'replace \+= with \*= in (fnmatch_from|match_one)',
 ]
