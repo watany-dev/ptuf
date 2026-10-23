@@ -782,6 +782,17 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
             absorb_parens(bytes, &mut i, &mut buf, Some(&mut bodies));
             continue;
         }
+        // ANSI-C quoting `$'…'`: decode the escapes like bash does, and
+        // honour `\'` so an escaped quote does not end the span early.
+        if c == b'$' && bytes.get(i + 1) == Some(&b'\'') {
+            i = read_ansi_c_quoted(bytes, i + 2, &mut buf);
+            continue;
+        }
+        // Locale quoting `$"…"` is a plain double-quoted span here.
+        if c == b'$' && bytes.get(i + 1) == Some(&b'"') {
+            i += 1;
+            continue;
+        }
         // Unquoted `$(…)`: balance-absorb and capture body (ADR 0008).
         if c == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
             saw_subst = true;
@@ -861,6 +872,79 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
         push_latin1(&mut buf, &bytes[run..i]);
     }
     (buf, i, saw_subst, bodies)
+}
+
+/// Decode the body of an ANSI-C quoted span (`$'…'`) starting at
+/// `start` (just past the opening `'`) into `buf`, returning the index
+/// just past the closing `'` (or the input length when unterminated).
+/// Escapes follow bash: `\a \b \e \E \f \n \r \t \v \\ \' \" \?`,
+/// `\NNN` (octal), `\xHH`, `\uHHHH`, `\UHHHHHHHH`, and `\cX`. A decoded
+/// NUL ends the word's value, as in bash; the rest of the span is skipped.
+fn read_ansi_c_quoted(bytes: &[u8], start: usize, buf: &mut String) -> usize {
+    let mut i = start;
+    let mut truncated = false;
+    while i < bytes.len() && bytes[i] != b'\'' {
+        let (decoded, next) = if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            decode_ansi_c_escape(bytes, i + 1)
+        } else {
+            (u32::from(bytes[i]), i + 1)
+        };
+        i = next;
+        truncated |= decoded == 0;
+        if !truncated {
+            buf.push(char::from_u32(decoded).unwrap_or(char::REPLACEMENT_CHARACTER));
+        }
+    }
+    if i < bytes.len() {
+        i += 1; // closing quote
+    }
+    i
+}
+
+/// Decode one escape whose letter is at `bytes[i]` (just past the `\`).
+/// Returns the code point (bytes from `\NNN` / `\xHH` keep their Latin-1
+/// value, matching [`push_latin1`]) and the index after the escape.
+fn decode_ansi_c_escape(bytes: &[u8], i: usize) -> (u32, usize) {
+    let digits = |from: usize, max: usize, radix: u32| -> (u32, usize) {
+        let mut value = 0_u32;
+        let mut j = from;
+        while j < bytes.len() && j - from < max {
+            let Some(d) = char::from(bytes[j]).to_digit(radix) else {
+                break;
+            };
+            value = value.saturating_mul(radix).saturating_add(d);
+            j += 1;
+        }
+        (value, j)
+    };
+    let simple = |v: u8| (u32::from(v), i + 1);
+    let hex = |max: usize| match digits(i + 1, max, 16) {
+        // No hex digits: bash keeps the escape literally.
+        (_, j) if j == i + 1 => (u32::from(b'\\'), i),
+        found => found,
+    };
+    match bytes[i] {
+        b'a' => simple(0x07),
+        b'b' => simple(0x08),
+        b'e' | b'E' => simple(0x1b),
+        b'f' => simple(0x0c),
+        b'n' => simple(b'\n'),
+        b'r' => simple(b'\r'),
+        b't' => simple(b'\t'),
+        b'v' => simple(0x0b),
+        b'0'..=b'7' => {
+            let (v, j) = digits(i, 3, 8);
+            (v & 0xff, j)
+        },
+        b'x' => hex(2),
+        b'u' => hex(4),
+        b'U' => hex(8),
+        b'c' if i + 1 < bytes.len() => (u32::from(bytes[i + 1] & 0x1f), i + 2),
+        // `\\`, `\'`, `\"`, `\?` decode to the byte itself; any other
+        // escape is kept with its backslash.
+        b'\\' | b'\'' | b'"' | b'?' => simple(bytes[i]),
+        _ => (u32::from(b'\\'), i),
+    }
 }
 
 /// Length of the leading run of plain word bytes (see
@@ -2562,5 +2646,62 @@ mod tests {
             b.segments[0].commands[0].subst_argv,
             vec![argv("rm", &["-rf", "/"])]
         );
+    }
+
+    #[test]
+    fn ansi_c_quote_honours_escaped_quote() {
+        let b = parse("echo $'a\\'b' ; rm -rf /");
+        assert_eq!(b.segments.len(), 2);
+        assert_eq!(b.segments[0].commands[0], argv("echo", &["a'b"]));
+        assert_eq!(b.segments[1].commands[0], argv("rm", &["-rf", "/"]));
+    }
+
+    #[test]
+    fn ansi_c_quote_decodes_escapes() {
+        for (cmd, head) in [
+            ("$'rm' -rf /", "rm"),
+            ("$'\\x72m' -rf /", "rm"),
+            ("$'\\162m' -rf /", "rm"),
+            ("$'\\u0072m' -rf /", "rm"),
+            ("$'\\U00000072m' -rf /", "rm"),
+            // `\u` takes at most four hex digits, `\U` at most eight.
+            ("$'\\u00721'", "r1"),
+            ("$'\\U000000721'", "r1"),
+            ("$'r\\cJm'", "r\nm"),
+            ("$'\\q'", "\\q"),
+            ("$'\\x'", "\\x"),
+            ("$'a\\0b'", "a"),
+            ("$'\\a\\b\\e\\E\\f\\v'", "\u{7}\u{8}\u{1b}\u{1b}\u{c}\u{b}"),
+            ("$'1\\n2\\r3\\t4'", "1\n2\r3\t4"),
+            // Octal takes at most three digits, hex `\x` at most two.
+            ("$'\\1621'", "r1"),
+            ("$'\\x41B'", "AB"),
+            ("$'\\162'", "r"),
+            ("$'\\x72'", "r"),
+            // A trailing lone backslash in an unterminated span.
+            ("$'ab\\", "ab\\"),
+            // Digits running into the end of an unterminated span.
+            ("$'\\162", "r"),
+            ("$'\\x72", "r"),
+        ] {
+            assert_eq!(parse(cmd).segments[0].commands[0].head, head, "{cmd:?}");
+        }
+        assert_eq!(parse("$\"rm\" -rf /").segments[0].commands[0].head, "rm");
+    }
+
+    #[test]
+    fn ansi_c_helpers_stop_at_the_end_of_input() {
+        let mut buf = String::new();
+        // Unterminated: the index is the input length, never past it.
+        assert_eq!(read_ansi_c_quoted(b"ab", 0, &mut buf), 2);
+        assert_eq!(buf, "ab");
+        // Hex digits running into the end of input.
+        assert_eq!(decode_ansi_c_escape(b"x72", 0), (0x72, 3));
+        assert_eq!(decode_ansi_c_escape(b"x7", 0), (0x7, 2));
+        // `\c` with nothing after it is kept literally.
+        assert_eq!(decode_ansi_c_escape(b"c", 0), (u32::from(b'\\'), 0));
+        assert_eq!(decode_ansi_c_escape(b"cJ", 0), (0x0a, 2));
+        // `\u` takes at most four hex digits.
+        assert_eq!(decode_ansi_c_escape(b"u00410", 0), (0x41, 5));
     }
 }

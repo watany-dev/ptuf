@@ -59,4 +59,11 @@ exclude_re = [
     ':\d+:20: replace \+= with \*= in skip_backquoted',
     'replace \+ with - in find_group_close',
     'replace skip_(double_quoted|backquoted) -> Option<usize> with Some\([01]\)',
+    # Index arithmetic in the ANSI-C (`$'…'`) decoder: stepping backwards
+    # or not at all only ever spins until the per-mutant timeout.
+    'replace read_ansi_c_quoted -> usize with [01]',
+    'replace \+ with - in (read_ansi_c_quoted|decode_ansi_c_escape)',
+    'replace \+ with \* in read_ansi_c_quoted',
+    'replace \+= with \*= in decode_ansi_c_escape',
+    'replace decode_ansi_c_escape -> \(u32, usize\) with .*',
 ]
