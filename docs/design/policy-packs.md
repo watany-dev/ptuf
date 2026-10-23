@@ -13,7 +13,7 @@ ptuf は built-in pack を持つ。pack は config の `packs.<name>.enabled` �
 | `core.engine` | enabled | 動的コード評価 (`bash -c` / `eval` 等) の確認 |
 | `core.injection` | enabled | 読み込むファイル中身の不可視文字インジェクション検査 |
 | `core.project_hygiene` | disabled | lockfile / protected branch 規約 |
-| `core.workspace` | disabled | workspace 外への Read/Write/redirect/MCP path |
+| `core.workspace` | disabled | workspace 外への Read/Write/redirect/MCP path/Bash のファイル引数 |
 
 ## `core.filesystem`
 
@@ -345,7 +345,7 @@ Read も対象になるため、有効化すると外部 lib (`~/.cargo/registry
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.workspace.outside-access` | deny | false | medium | tool 入力 (`Read`/`Edit`/`Write`/`apply_patch`/MCP `path`) と Bash redirect target が workspace 境界の外を指す場合 |
+| `core.workspace.outside-access` | deny | false | medium | tool 入力 (`Read`/`Edit`/`Write`/`apply_patch`/MCP `path`) 、Bash redirect target、Bash の reader / writer コマンドのファイル引数が workspace 境界の外を指す場合 |
 
 境界は engine の `repo_root` (`.git` 探索結果) と
 `packs.core.workspace.additionalWorkspaces` の和集合。両方とも未設定なら
@@ -354,6 +354,15 @@ symlink を解決してから component 単位で `starts_with` 判定するた�
 `/work-evil` のような lookalike prefix では誤マッチしない。存在しない
 descendant については祖先まで遡って canonicalize し、`..` を自前で
 解決した正規化形を判定対象とする。
+
+Bash のファイル引数は、writer head (`cp` / `mv` / `tee` / `ln` /
+`install` / `rsync` / `touch` / `mkdir` / `rm` / `rmdir` / `unlink` /
+`chmod` / `chown` / `chgrp` / `truncate` / `shred` / `sponge`) と
+`sensitive-bash-read` の reader head の位置引数を対象にする。`grep` /
+`sed` / `awk` 系は最初の位置引数 (パターン / スクリプト) を除き、`tr` は
+対象外、`dd` は `if=` / `of=` の値を見る。`sudo` などの prefix wrapper、
+`bash -c`、`xargs`、`find -exec`、コマンド置換の中も対象。相対パスは
+ptuf のプロセスの cwd を基準に解決し、同じ行の `cd` は追跡しない。
 
 ```yaml
 packs:

@@ -44,6 +44,9 @@ pub enum PathOrigin {
     /// Bash redirect operand (`>`, `>>`, `<`, `2>`, `&>`). Surfaced
     /// only by the engine — never emitted by `extract_all_with_env`.
     BashRedirect,
+    /// File operand of a Bash reader / writer command (`cat FILE`,
+    /// `cp SRC DST`). Surfaced only by `core.workspace.outside-access`.
+    BashArgument,
 }
 
 /// File-path fact derived from a tool payload.
