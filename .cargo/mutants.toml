@@ -39,5 +39,31 @@ exclude_re = [
     'replace \+= with \-= in tokenize',
     'replace \+= with \*= in tokenize',
     'replace \+= with [-*]= in (read_word|read_heredoc_body|absorb_parens|plain_run_len)',
+    # `plain_run_len` is a fast path: returning 0 only makes the caller
+    # take the byte-at-a-time loop (equivalent; see mutants-inventory.md).
+    'replace plain_run_len -> usize with 0',
+    # A `read_word` that consumes nothing stalls the lexer, and one that
+    # returns a fixed substitution body re-parses it forever: both only
+    # ever time out.
+    'replace read_word -> .* with \(.*, 0, (true|false), .*\)',
+    'replace read_word -> .* with .*vec!\["xyzzy"\.into\(\)\]\)',
+    # Stepping a lexer index backwards re-reads the same bytes forever.
+    'replace \+ with - in (tokenize|read_word|read_heredoc_body|absorb_parens)',
     'replace Engine::builder -> EngineBuilder with Default::default\(\)',
+    # The quote-aware `$(…)` scanners: an index that steps backwards or not
+    # at all (including stubs that return a fixed early index) spins until
+    # the per-mutant timeout. `skip_backquoted`'s escape step (column 24) is
+    # still mutated and killed by a direct test.
+    'replace \+= with -= in (find_group_close|skip_double_quoted|skip_backquoted)',
+    'replace \+= with \*= in (find_group_close|skip_double_quoted)',
+    ':\d+:20: replace \+= with \*= in skip_backquoted',
+    'replace \+ with - in find_group_close',
+    'replace skip_(double_quoted|backquoted) -> Option<usize> with Some\([01]\)',
+    # Index arithmetic in the ANSI-C (`$'…'`) decoder: stepping backwards
+    # or not at all only ever spins until the per-mutant timeout.
+    'replace read_ansi_c_quoted -> usize with [01]',
+    'replace \+ with - in (read_ansi_c_quoted|decode_ansi_c_escape)',
+    'replace \+ with \* in read_ansi_c_quoted',
+    'replace \+= with \*= in decode_ansi_c_escape',
+    'replace decode_ansi_c_escape -> \(u32, usize\) with .*',
 ]

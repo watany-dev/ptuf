@@ -244,7 +244,7 @@ ptuf init cursor --no-verify
 
 The installer adds (or updates, idempotently) a `version: 1`
 `hooks.preToolUse` entry pointing at `<absolute>/ptuf hook cursor`, with a
-`matcher` of `Shell|Bash|Read|ReadFile|Write|Edit|MCP|WebFetch|Fetch|mcp__.*`,
+`matcher` of `Shell|Bash|Read|ReadFile|Grep|Write|Edit|Delete|MCP|WebFetch|Fetch|mcp__.*`,
 a `timeout` of `10`, and `failClosed: true`. Existing ptuf entries are
 detected by the `hook cursor` command tail; other hooks in the file are
 preserved. The `--scope` / `--root` / `--hooks` flags are Cursor-only and
