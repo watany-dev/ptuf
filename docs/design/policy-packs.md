@@ -42,6 +42,14 @@ inline `KEY=VALUE` 代入も跨ぐ)、`su -c '...'` の内側コードは再 par
 | Rule id | Decision | hardDeny | severity |
 | --- | --- | --- | --- |
 | `core.network.remote-script-pipe` | deny | true | critical |
+| `core.network.download-then-exec` | ask | false | high |
+
+`core.network.download-then-exec` は同じ Bash 呼び出しの中で fetcher
+(`curl` / `wget` / `aria2c` / `http` / `xh` 等) が書き出したファイル
+(`-o` / `--output` / `wget -O` / `--output-document` の値、`curl -O` と
+`wget URL` の URL basename、fetcher のある pipeline の `>` / `>>` 先) を、
+head (`./i.sh`, `/tmp/i.sh`) または interpreter / `source` / `.` の第 1
+引数として実行する場合に Ask を返す (`curl -o i.sh URL && sh i.sh`)。
 
 現在の対象は remote script pipe に限定される。例:
 
@@ -63,21 +71,23 @@ head は `head_basename` で basename 化するため `/usr/bin/curl ... | /bin/
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`nc`/`ncat`/`socat`/`telnet`/`scp`/`rsync`/`ftp`/`sftp`、および bash の `/dev/(tcp\|udp)/` への書き込み redirect) が共存。pipeline の redirect 先が機密 path の場合も対象。`ssh` は `ssh -i ~/.ssh/id_rsa host` 等の正当用途で偽陽性が多いため sink に含めない |
-| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする。書き込み本文 (`Write` content / `Edit` `new_string` / MCP `content` / `apply_patch` added 行) は実データ shape (PEM blob) のみ対象で、`~/.aws/credentials` 等の path 言及 (手順書の記載など) では発火しない |
-| `core.secrets.sensitive-bash-read` | ask | false | high | Bash の reader head (`cat`/`head`/`tail`/`source`/`.`/`grep`/`awk`/`sed`/`dd` 等) または `<` redirect が機密 path を読む |
+| `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`nc`/`ncat`/`socat`/`telnet`/`scp`/`rsync`/`ftp`/`sftp`、および bash の `/dev/(tcp\|udp)/` への書き込み redirect) が共存。pipeline の redirect 先が機密 path の場合も対象。アップロード CLI はサブコマンド付きで sink 扱い (`aws s3 cp/mv/sync`、`aws s3api put-object`、`gsutil cp/mv/rsync`、`gcloud storage cp/mv/rsync`、`az storage blob upload[-batch]`、`gh gist create/edit`、`gh release upload/create`、`rclone copy/copyto/move/moveto/sync/rcat`、`mc cp/mv/mirror/pipe`、`s3cmd put/sync`)。`ssh` は `ssh -i ~/.ssh/id_rsa host` 等の正当用途で偽陽性が多いため引数側では sink に含めず、同一 pipeline の上流コマンドが機密 path を参照する場合と、stdin redirect が機密 path の場合だけ sink として扱う |
+| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `MultiEdit` / `NotebookEdit` (`notebook_path`) / `Grep` (`path`) / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする。書き込み本文 (`Write` content / `Edit` `new_string` / `MultiEdit` `edits[].new_string` / `NotebookEdit` `new_source` / MCP `content` / `apply_patch` added 行) は実データ shape (PEM blob) のみ対象で、`~/.aws/credentials` 等の path 言及 (手順書の記載など) では発火しない |
+| `core.secrets.sensitive-bash-read` | ask | false | high | Bash の reader head (`cat`/`head`/`tail`/`source`/`.`/`grep`/`awk`/`sed`/`dd`/`jq`/`yq`/`diff`/`zcat`/`gzip`/`vim`/`nano` 等) または `<` redirect が機密 path を読む |
 
 機密分類は `~/.ssh/**`, `~/.aws/**`, `~/.config/gcloud/**`, `~/.kube/config`,
-`~/.docker/config.json`, SSH 秘密鍵 `id_{rsa,dsa,ecdsa,ed25519}`, `.env*`,
-`.npmrc`, `.pypirc`, `*.tfstate`, PEM blob など。
+`~/.docker/config.json`, SSH 秘密鍵 `id_{rsa,dsa,ecdsa,ed25519}`, `.env*` /
+`.envrc`, `.npmrc`, `.pypirc`, `*.tfstate`, `.netrc`, `.git-credentials`,
+`~/.gnupg/**`, `~/.config/gh/hosts.yml`, `~/.azure/**`, `.vault-token`,
+`*.key` / `*.p12` / `*.pfx`, PEM blob など。
 機密 path の分類器は `src/facts/sensitive.rs` の `PROBES` 1 系統のみ。
 Bash 系ルールは yes/no を返す `sensitive::matches` (`src/rules/patterns.rs` の
 `matches_sensitive_path` が委譲)、ファイルツール / MCP 系は typed な
 `classify` を使うが、どちらも同じ `PROBES` を引く。PEM blob の
 header / footer パターンは `PEM_PRIVATE_KEY_{BEGIN,END}` として audit redactor
 (`src/audit/redaction.rs`) とも共有する。
-`.npmrc` / `.pypirc` は `~/.npmrc` のようにパス境界 (`^` / `/` / 空白 /
-`~`・`$HOME`・`${HOME}` + `/`) に接する場合のみ機密とみなし、`data.npmrc`
+`.npmrc` / `.pypirc` / `.netrc` などの dotfile は `~/.npmrc` のようにパス境界
+(`^` / `/` / 空白 / `=`・`@`・`<`・`:` / `~`・`$HOME`・`${HOME}` + `/`) に接する場合のみ機密とみなし、`data.npmrc`
 のような lookalike は除外する。2 系統の一致は
 `pbt_sensitive_path_matches_classify` property (`src/rules/patterns.rs`) と
 engine レベルの `pbt_sensitive_path_parity_across_surfaces`
@@ -219,7 +229,7 @@ guard / hook / 監査を 1 発で迂回する)。
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.engine.dynamic-eval` | ask | false | medium | `bash -c …` / `sh -c` / `python -c` / `node -e` / `perl -e` / `ruby -c\|-e` / `eval …` 等の 2 段階実行 |
+| `core.engine.dynamic-eval` | ask | false | medium | `bash -c …` / `sh -c` / `python -c` / `node -e` / `perl -e` / `ruby -c\|-e` / `eval …` 等の 2 段階実行、およびコマンド名が実行時に決まる head (basename に `$` / 置換 / glob を含む: `$X …`, `$(echo rm) …`, `/bin/r? …`。`$HOME/bin/tool` のように basename が字句的なものは対象外) |
 
 shell wrapper (`bash -c`, `sh -c`, `eval`, `xargs`, `find -exec`) については、
 bounded depth の再 parse により inner command と redirect が既存 rule
@@ -236,7 +246,7 @@ opaque なので、`core.engine.dynamic-eval` が `Ask` を返してユーザに
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.injection.invisible-chars` | ask | false | high | `Read` / `Edit` / path を持つ MCP tool / Bash の reader head が読み込むファイルの中身に、人間のレビュアーには見えない文字が含まれる |
+| `core.injection.invisible-chars` | ask | false | high | `Read` / `Edit` / `MultiEdit` / `NotebookEdit` / `Grep` (`path`) / path を持つ MCP tool / Bash の reader head が読み込むファイルの中身に、人間のレビュアーには見えない文字が含まれる |
 
 ptuf の他 rule は tool 入力 (path 文字列・コマンド文字列) を判定するが、
 本 rule は唯一「対象ファイルを開いて中身を検査する」rule。レビュアーには
