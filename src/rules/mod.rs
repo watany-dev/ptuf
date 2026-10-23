@@ -4,6 +4,7 @@ use crate::{Decision, HookInput};
 
 pub(crate) mod builtin_dsl;
 pub(crate) mod destructive_rm;
+pub(crate) mod download_exec;
 pub(crate) mod dynamic_eval;
 pub(crate) mod git;
 pub(crate) mod injection_content;
@@ -83,6 +84,7 @@ static RULES: &[&(dyn ConfigRule + Sync)] = &[
     &self_protection::CURSOR_SETTINGS_RULE,
     &self_protection::CLINE_SETTINGS_RULE,
     &sensitive_read::SensitiveRead,
+    &download_exec::DownloadThenExec,
     &injection_content::InvisibleChars,
     &project_hygiene::LockMismatchPnpm,
     &project_hygiene::LockMismatchUv,
@@ -353,6 +355,7 @@ rules:
         "core.secrets.sensitive-path-to-network",
         "core.secrets.sensitive-bash-read",
         "core.engine.dynamic-eval",
+        "core.network.download-then-exec",
         "core.git.force-push",
         "core.git.force-push-with-lease",
         "core.git.reset-hard",

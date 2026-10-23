@@ -145,7 +145,7 @@ impl Argv {
         head_basename(&self.head)
     }
 
-    fn collect_commands<'a>(&'a self, out: &mut Vec<&'a Self>) {
+    pub(crate) fn collect_commands<'a>(&'a self, out: &mut Vec<&'a Self>) {
         out.push(self);
         for inner in &self.inner_argv {
             inner.collect_commands(out);
@@ -217,13 +217,22 @@ struct PrefixWrapper {
 }
 
 impl PrefixWrapper {
-    fn short_value_flag(&self, arg: &str) -> Option<char> {
-        let flag = arg.strip_prefix('-')?.chars().next()?;
-        self.value_flags
-            .iter()
-            .filter_map(ValueFlag::short)
-            .any(|c| c == flag)
-            .then_some(flag)
+    /// Whether the short-flag cluster `arg` (`-u`, `-nHu`) ends in a
+    /// value-taking flag whose value is the *next* token. Scanning stops
+    /// at the first value flag: anything after it in the cluster is its
+    /// inline value (`-uroot`), so the next token is not consumed.
+    fn short_cluster_takes_next(&self, arg: &str) -> bool {
+        arg.strip_prefix('-').is_some_and(|cluster| {
+            cluster
+                .char_indices()
+                .find(|&(_, flag)| {
+                    self.value_flags
+                        .iter()
+                        .filter_map(ValueFlag::short)
+                        .any(|c| c == flag)
+                })
+                .is_some_and(|(i, flag)| i + flag.len_utf8() == cluster.len())
+        })
     }
 
     fn is_long_value_flag(&self, name: &str) -> bool {
@@ -234,11 +243,21 @@ impl PrefixWrapper {
     }
 
     /// Whether inline `KEY=VALUE` assignments sit between this wrapper's
-    /// flags and the inner command. Only `env FOO=bar CMD` does this; for
-    /// every other wrapper such a token is the command head and must not
-    /// be skipped.
+    /// flags and the inner command (`env FOO=bar CMD`, `sudo FOO=bar
+    /// CMD`). For every other wrapper such a token is the command head
+    /// and must not be skipped.
     fn skips_env_assignments(&self) -> bool {
-        self.name == "env"
+        matches!(self.name, "env" | "sudo")
+    }
+
+    /// `command -v CMD` / `command -V CMD` only print how CMD would be
+    /// resolved; they never run it, so they do not unwrap.
+    fn is_lookup_only(&self, args: &[String]) -> bool {
+        self.name == "command"
+            && args
+                .iter()
+                .take_while(|a| a.starts_with('-') && a.as_str() != "--")
+                .any(|a| a.contains(['v', 'V']))
     }
 }
 
@@ -287,6 +306,8 @@ const ENV_VALUE_FLAGS: &[ValueFlag] = &[
     Both('u', "unset"),
     Both('C', "chdir"),
     Both('S', "split-string"),
+    // BSD / macOS `env -P altpath` searches `altpath` for the utility.
+    Short('P'),
 ];
 
 const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
@@ -312,11 +333,21 @@ const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
         name: "env",
         value_flags: ENV_VALUE_FLAGS,
     },
-    // `command CMD` runs CMD; its own `-p`/`-v`/`-V` are valueless. Even
-    // the lookup-only `command -v curl` unwraps to `curl` — the deny-safe
-    // over-approximation this filter prefers (cf. `RUN0_VALUE_FLAGS`).
+    // `command CMD` runs CMD; its own `-p`/`-v`/`-V` are valueless. The
+    // lookup-only `command -v curl` / `-V` never runs CMD and does not
+    // unwrap (`PrefixWrapper::is_lookup_only`).
     PrefixWrapper {
         name: "command",
+        value_flags: &[],
+    },
+    // `exec [-cl] [-a NAME] CMD` replaces the shell with CMD.
+    PrefixWrapper {
+        name: "exec",
+        value_flags: &[Short('a')],
+    },
+    // `builtin NAME` runs a shell builtin (`builtin source .env`).
+    PrefixWrapper {
+        name: "builtin",
         value_flags: &[],
     },
 ];
@@ -342,6 +373,9 @@ pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
     let wrapper = PREFIX_WRAPPERS
         .iter()
         .find(|w| w.name == head_basename(&argv.head))?;
+    if wrapper.is_lookup_only(&argv.args) {
+        return None;
+    }
 
     let mut i = 0;
     while i < argv.args.len() {
@@ -368,10 +402,7 @@ pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
             i += 1;
             continue;
         }
-        if let Some(value_flag) = wrapper.short_value_flag(arg)
-            && arg.len() == 2
-            && arg.ends_with(value_flag)
-        {
+        if wrapper.short_cluster_takes_next(arg) {
             i += 1;
         }
         i += 1;
@@ -473,10 +504,53 @@ fn tokenize(s: &str) -> TokenizeOutput {
     let mut saw_process_substitution = false;
     let bytes = s.as_bytes();
     let mut i = 0;
+    // Heredoc bodies start on the line *after* their `<<TAG` operator;
+    // the rest of the operator's line is still command text. While a
+    // body is pending, `heredoc` holds (newline ending that line, offset
+    // just past the last body) so the lexer can jump over the bodies.
+    let mut heredoc: Option<(usize, usize)> = None;
     while i < bytes.len() {
+        if let Some((nl, resume)) = heredoc
+            && i > nl
+        {
+            // The line ended inside a word (e.g. a quoted newline);
+            // skip the bodies anyway.
+            i = i.max(resume);
+            heredoc = None;
+            continue;
+        }
         let c = bytes[i];
+        // A newline ends a command like `;`, except right after an
+        // operator that expects more input (`a |⏎ b`, `a &&⏎ b`).
+        if c == b'\n' {
+            if !matches!(
+                out.last(),
+                None | Some(Token::Pipe | Token::And | Token::Or | Token::Semi)
+            ) {
+                out.push(Token::Semi);
+            }
+            i += 1;
+            if let Some((nl, resume)) = heredoc.take()
+                && i == nl + 1
+            {
+                i = resume;
+            }
+            continue;
+        }
         if c.is_ascii_whitespace() {
             i += 1;
+            continue;
+        }
+        // `\⏎` is a line continuation: both bytes vanish.
+        if c == b'\\' && bytes.get(i + 1) == Some(&b'\n') {
+            i += 2;
+            continue;
+        }
+        // `#` at the start of a word comments out the rest of the line
+        // (`echo x #; rm -rf /` runs only `echo x`). Mid-word `#`
+        // (`a#b`, `$#`, `${#x}`) never reaches here.
+        if c == b'#' {
+            i = memchr::memchr(b'\n', &bytes[i..]).map_or(bytes.len(), |n| i + n);
             continue;
         }
         if c == b'|' {
@@ -501,16 +575,50 @@ fn tokenize(s: &str) -> TokenizeOutput {
                 i += 2;
                 continue;
             }
-            // Lone `&` (background operator). ptuf does not model
-            // background semantics; skip it so the lexer always makes
-            // forward progress. Without this, `read_word` would return
-            // (empty, 0 bytes) and `tokenize` would infinite-loop.
+            // Lone `&` (background operator) ends a command like `;`
+            // (`a & rm -rf /` runs both). Right after a redirect (`>&2`,
+            // `2>&1`) it is fd duplication, and after `|` it is `|&`;
+            // both stay inside the current command.
+            if !matches!(out.last(), Some(Token::Redirect(_) | Token::Pipe)) {
+                out.push(Token::Semi);
+            }
             i += 1;
             continue;
         }
-        if c == b';' {
+        // `;` and unquoted `(` / `)` (subshells, function definitions
+        // `f() {`, case patterns `x)`) end a command. Process / command
+        // substitution openers (`<(`, `>(`, `$(`) never reach here: they
+        // are absorbed as words below or inside `read_word`.
+        if matches!(c, b';' | b'(' | b')') {
             out.push(Token::Semi);
             i += 1;
+            continue;
+        }
+        // Here-string: `<<< WORD`. The operand is one ordinary word, so a
+        // following `;` / `&&` / `|` still separates commands. Surfaced
+        // like a heredoc (the word is stdin content, not a file), with any
+        // `$(…)` bodies kept so subst_argv still sees them.
+        if bytes[i..].starts_with(b"<<<") {
+            let mut j = i + 3;
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            // An empty tail reads as an empty word.
+            let (word, advanced, word_subst, bodies) = read_word(&bytes[j..]);
+            out.push(Token::Redirect(RedirectOp::Heredoc));
+            out.push(Token::HeredocBody(word));
+            if word_subst {
+                saw_command_substitution = true;
+            }
+            if !bodies.is_empty() {
+                out.push(Token::Word {
+                    text: String::new(),
+                    subst_bodies: bodies,
+                });
+            }
+            saw_redirect = true;
+            saw_heredoc = true;
+            i = j + advanced;
             continue;
         }
         // Heredoc: `<<TAG` or `<<-TAG` (must precede the bare `<` arm).
@@ -525,12 +633,20 @@ fn tokenize(s: &str) -> TokenizeOutput {
             let (tag, tag_len, _, _) = read_word(&bytes[j..]);
             if !tag.is_empty() {
                 j += tag_len;
-                let body = read_heredoc_body(&bytes[j..], &tag);
+                // The body begins after this line (or after the previous
+                // heredoc's body when one line opens several).
+                let (nl, body_from) = heredoc.unwrap_or_else(|| {
+                    let nl = memchr::memchr(b'\n', &bytes[j..]).map_or(bytes.len(), |p| j + p);
+                    (nl, nl)
+                });
+                let body_from = body_from.min(bytes.len());
+                let body = read_heredoc_body(&bytes[body_from..], &tag);
                 out.push(Token::Redirect(RedirectOp::Heredoc));
                 out.push(Token::HeredocBody(body.text));
                 saw_redirect = true;
                 saw_heredoc = true;
-                i = j + body.consumed;
+                heredoc = Some((nl, body_from + body.consumed));
+                i = j;
                 continue;
             }
             // Empty tag: degrade gracefully and emit a plain `<` redirect
@@ -630,7 +746,7 @@ fn tokenize(s: &str) -> TokenizeOutput {
             }
         }
         // Otherwise: read a word, honouring quotes.
-        let (word, advanced, word_subst, bodies) = read_word(&bytes[i..]);
+        let (word, advanced, word_subst, bodies, braces) = read_word_with_braces(&bytes[i..]);
         // Forward-progress invariant: every separator and whitespace
         // byte is consumed above, so `read_word` is always called on a
         // non-trivial first byte and must advance by at least 1. The
@@ -640,10 +756,27 @@ fn tokenize(s: &str) -> TokenizeOutput {
         if word_subst {
             saw_command_substitution = true;
         }
-        out.push(Token::Word {
-            text: word,
-            subst_bodies: bodies,
-        });
+        if braces.is_empty() {
+            out.push(Token::Word {
+                text: word,
+                subst_bodies: bodies,
+            });
+        } else {
+            // Brace expansion yields several words (`{rm,-rf,/}` is
+            // `rm -rf /`); substitution bodies ride on the first one.
+            // The literal word is kept after the expansion as well, so
+            // classifiers keyed on brace punctuation (`cat {a,b}.env` is
+            // a dotenv read) still see it.
+            let mut bodies = Some(bodies);
+            let expanded = brace_expand(&word, &braces);
+            let literal = (expanded.len() != 1 || expanded[0] != word).then_some(word);
+            for text in expanded.into_iter().chain(literal) {
+                out.push(Token::Word {
+                    text,
+                    subst_bodies: bodies.take().unwrap_or_default(),
+                });
+            }
+        }
         i += advanced;
     }
     TokenizeOutput {
@@ -727,6 +860,14 @@ fn read_heredoc_body(bytes: &[u8], tag: &str) -> HeredocBody {
 /// (`|`, `&`, `;`) before calling — under that contract this function
 /// always consumes at least one byte.
 fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
+    let (buf, i, saw_subst, bodies, _) = read_word_with_braces(bytes);
+    (buf, i, saw_subst, bodies)
+}
+
+/// [`read_word`] plus the byte offsets (into the returned word) of every
+/// *unquoted* `{` / `,` / `}`: the only ones brace expansion acts on.
+fn read_word_with_braces(bytes: &[u8]) -> (String, usize, bool, Vec<String>, Vec<usize>) {
+    let mut braces = Vec::new();
     let mut buf = String::new();
     let mut i = 0;
     let mut saw_subst = false;
@@ -740,7 +881,10 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
             break;
         }
         if c == b'\\' && i + 1 < bytes.len() {
-            buf.push(bytes[i + 1] as char);
+            // `\⏎` is a line continuation, not an escaped newline.
+            if bytes[i + 1] != b'\n' {
+                buf.push(bytes[i + 1] as char);
+            }
             i += 2;
             continue;
         }
@@ -755,6 +899,29 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
             absorb_parens(bytes, &mut i, &mut buf, Some(&mut bodies));
             continue;
         }
+        // ANSI-C quoting `$'…'`: decode the escapes like bash does, and
+        // honour `\'` so an escaped quote does not end the span early.
+        if c == b'$' && bytes.get(i + 1) == Some(&b'\'') {
+            i = read_ansi_c_quoted(bytes, i + 2, &mut buf);
+            continue;
+        }
+        // Locale quoting `$"…"` is a plain double-quoted span here.
+        if c == b'$' && bytes.get(i + 1) == Some(&b'"') {
+            i += 1;
+            continue;
+        }
+        // Unquoted `$IFS` / `${IFS…}` expands to field separators, so it
+        // splits words (`rm${IFS}-rf${IFS}/` runs `rm -rf /`). End the
+        // current word before it; at a word start, consume it and yield
+        // an empty word (dropped by `parse_argv`).
+        if c == b'$'
+            && let Some(len) = ifs_expansion_len(&bytes[i..])
+        {
+            if i == 0 {
+                i = len;
+            }
+            break;
+        }
         // Unquoted `$(…)`: balance-absorb and capture body (ADR 0008).
         if c == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
             saw_subst = true;
@@ -763,6 +930,10 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
             i += 2;
             absorb_parens(bytes, &mut i, &mut buf, Some(&mut bodies));
             continue;
+        }
+        // A bare `(` / `)` is a command boundary (see `tokenize`).
+        if matches!(c, b'(' | b')') {
+            break;
         }
         if c == b'\'' || c == b'"' || c == b'`' {
             if c == b'`' {
@@ -780,7 +951,7 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
                     push_latin1(&mut buf, &bytes[i..=i]);
                     i += 1;
                 }
-                let body = latin1_slice(&bytes[body_start..i]);
+                let body = unescape_backquoted(&bytes[body_start..i]);
                 if !body.is_empty() {
                     bodies.push(body);
                 }
@@ -831,15 +1002,368 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
         let run = i;
         i += 1;
         i += plain_run_len(&bytes[i..]);
-        push_latin1(&mut buf, &bytes[run..i]);
+        let span = &bytes[run..i];
+        if memchr::memchr3(b'{', b',', b'}', span).is_some() {
+            for &b in span {
+                if matches!(b, b'{' | b',' | b'}') {
+                    braces.push(buf.len());
+                }
+                push_latin1(&mut buf, std::slice::from_ref(&b));
+            }
+        } else {
+            push_latin1(&mut buf, span);
+        }
     }
-    (buf, i, saw_subst, bodies)
+    (buf, i, saw_subst, bodies, braces)
+}
+
+/// Upper bound on the words one brace expansion may produce. Beyond it
+/// the remaining alternatives are dropped (bash itself would happily
+/// generate millions). Duplicate words are merged first, so padding
+/// such as `{rm,-rf,/}{,}{,}…` cannot push real words past the cap.
+const BRACE_EXPANSION_CAP: usize = 256;
+
+/// Upper bound on the bytes one brace expansion may build. Once spent,
+/// later multi-word brace groups in the word stay literal (a known
+/// limit: only words that build megabytes of alternatives reach it).
+const BRACE_EXPANSION_BUDGET: usize = 4 << 20;
+
+/// Comma groups nested deeper than this stay literal.
+const BRACE_NESTING_MAX: usize = 64;
+
+/// Longest `{x..y..step}` body worth parsing: three `i64`s and two `..`.
+const BRACE_SEQUENCE_MAX: usize = 64;
+
+/// A matched pair of unquoted braces: the `}` position and the
+/// positions of its top-level commas.
+struct BraceGroup {
+    close: usize,
+    commas: Vec<usize>,
+}
+
+/// Brace groups keyed by the position of their `{`.
+type BraceGroups = std::collections::HashMap<usize, BraceGroup>;
+
+/// Bash brace expansion (`{a,b}`, `{1..3}`, `{a..c}`, nested, with
+/// prefix / suffix) applied to the unquoted braces at `active` byte
+/// offsets. `${…}` parameter expansions and brace pairs without a
+/// top-level comma or a valid sequence stay literal, as in bash.
+///
+/// Braces are paired in one pass, and the word is then expanded group
+/// by group from left to right, so the work is linear in the word plus
+/// the (capped) output.
+fn brace_expand(word: &str, active: &[usize]) -> Vec<String> {
+    let mut chars = Vec::new();
+    let mut is_active = Vec::new();
+    for (pos, c) in word.char_indices() {
+        chars.push(c);
+        is_active.push(active.binary_search(&pos).is_ok());
+    }
+    let groups = match_braces(&chars, &is_active);
+    let mut budget = BRACE_EXPANSION_BUDGET;
+    expand_range(&chars, &groups, 0..chars.len(), 0, &mut budget)
+}
+
+/// Pair every unquoted `{` with its `}` (an unmatched brace stays
+/// literal) and record each pair's top-level commas.
+fn match_braces(chars: &[char], is_active: &[bool]) -> BraceGroups {
+    let mut groups = BraceGroups::new();
+    let mut open: Vec<(usize, Vec<usize>)> = Vec::new();
+    for (p, (&c, &active)) in chars.iter().zip(is_active).enumerate() {
+        if !active {
+            continue;
+        }
+        match c {
+            '{' => open.push((p, Vec::new())),
+            '}' => {
+                if let Some((start, commas)) = open.pop() {
+                    groups.insert(start, BraceGroup { close: p, commas });
+                }
+            },
+            ',' => {
+                if let Some((_, commas)) = open.last_mut() {
+                    commas.push(p);
+                }
+            },
+            _ => {},
+        }
+    }
+    groups
+}
+
+fn expand_range(
+    chars: &[char],
+    groups: &BraceGroups,
+    range: std::ops::Range<usize>,
+    depth: usize,
+    budget: &mut usize,
+) -> Vec<String> {
+    let mut acc = vec![String::new()];
+    // Literal text since the last multi-word group.
+    let mut pending = String::new();
+    let mut p = range.start;
+    while p < range.end {
+        let Some(group) = groups.get(&p) else {
+            pending.push(chars[p]);
+            p += 1;
+            continue;
+        };
+        // `${…}` is parameter expansion, not brace expansion.
+        if p > 0 && chars[p - 1] == '$' {
+            pending.extend(&chars[p..=group.close]);
+            p = group.close + 1;
+            continue;
+        }
+        match brace_alternatives(chars, groups, p, depth, budget) {
+            // Not an expansion: the `{` is literal, but braces inside it
+            // may still expand (`{a{b,c}}` is `{ab} {ac}`).
+            None => {
+                pending.push(chars[p]);
+                p += 1;
+                continue;
+            },
+            // One distinct word (`{,}`, `{a,a}`) is plain text.
+            Some(alternatives) if alternatives.len() == 1 => pending.push_str(&alternatives[0]),
+            Some(alternatives) => {
+                acc = brace_product(&acc, &pending, &alternatives, budget);
+                pending.clear();
+            },
+        }
+        p = group.close + 1;
+    }
+    // Keep at least one word; drop the rest once the budget is spent.
+    let cost = pending.len() + 1;
+    acc.truncate((*budget / cost).max(1));
+    for word in &mut acc {
+        *budget = budget.saturating_sub(cost);
+        word.push_str(&pending);
+    }
+    acc
+}
+
+/// The words a brace group at `open` stands for, or `None` when it is
+/// literal (no comma and no valid sequence, too deep, or out of budget).
+fn brace_alternatives(
+    chars: &[char],
+    groups: &BraceGroups,
+    open: usize,
+    depth: usize,
+    budget: &mut usize,
+) -> Option<Vec<String>> {
+    let group = groups.get(&open)?;
+    if *budget == 0 {
+        return None;
+    }
+    if group.commas.is_empty() {
+        let body = &chars[open + 1..group.close];
+        if body.len() > BRACE_SEQUENCE_MAX {
+            return None;
+        }
+        return brace_sequence(&body.iter().collect::<String>());
+    }
+    if depth >= BRACE_NESTING_MAX {
+        return None;
+    }
+    let mut alternatives = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut start = open + 1;
+    for &end in group.commas.iter().chain(std::iter::once(&group.close)) {
+        if alternatives.len() >= BRACE_EXPANSION_CAP {
+            break;
+        }
+        for word in expand_range(chars, groups, start..end, depth + 1, budget) {
+            if alternatives.len() < BRACE_EXPANSION_CAP && seen.insert(word.clone()) {
+                alternatives.push(word);
+            }
+        }
+        start = end + 1;
+    }
+    Some(alternatives)
+}
+
+/// Every `prefix + literal + alternative`, in bash order, without
+/// duplicates and within the cap and the byte budget.
+fn brace_product(
+    prefixes: &[String],
+    literal: &str,
+    alternatives: &[String],
+    budget: &mut usize,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for prefix in prefixes {
+        for alternative in alternatives {
+            let word = format!("{prefix}{literal}{alternative}");
+            *budget = budget.saturating_sub(word.len().max(1));
+            if seen.insert(word.clone()) {
+                out.push(word);
+            }
+            // Checked after the first word, so the product is never empty.
+            if out.len() >= BRACE_EXPANSION_CAP || *budget == 0 {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+/// `{x..y[..step]}` over integers or single ASCII letters. `None` when
+/// the body is not a valid sequence expression.
+fn brace_sequence(body: &str) -> Option<Vec<String>> {
+    let parts: Vec<&str> = body.split("..").collect();
+    if !(2..=3).contains(&parts.len()) {
+        return None;
+    }
+    let step: i64 = match parts.get(2) {
+        Some(s) => s.parse::<i64>().ok()?.checked_abs()?.max(1),
+        None => 1,
+    };
+    let step = usize::try_from(step).ok()?;
+    // `a..=b` (or downward when `a > b`), every `step`-th term.
+    let terms = |a: i64, b: i64| -> Vec<i64> {
+        if a <= b {
+            (a..=b).step_by(step).take(BRACE_EXPANSION_CAP).collect()
+        } else {
+            (b..=a)
+                .rev()
+                .step_by(step)
+                .take(BRACE_EXPANSION_CAP)
+                .collect()
+        }
+    };
+    if let (Ok(a), Ok(b)) = (parts[0].parse::<i64>(), parts[1].parse::<i64>()) {
+        // A leading zero on either end zero-pads every term (`{01..3}`).
+        let padded = |p: &str| {
+            p.trim_start_matches('-').len() > 1 && p.trim_start_matches('-').starts_with('0')
+        };
+        let width = if padded(parts[0]) || padded(parts[1]) {
+            parts[0].len().max(parts[1].len())
+        } else {
+            0
+        };
+        return Some(
+            terms(a, b)
+                .into_iter()
+                .map(|n| format!("{n:0width$}"))
+                .collect(),
+        );
+    }
+    let (a, b) = (
+        single_ascii_letter(parts[0])?,
+        single_ascii_letter(parts[1])?,
+    );
+    Some(
+        terms(a.into(), b.into())
+            .into_iter()
+            .filter_map(|n| u8::try_from(n).ok())
+            .map(|c| char::from(c).to_string())
+            .collect(),
+    )
+}
+
+fn single_ascii_letter(s: &str) -> Option<u8> {
+    match s.as_bytes() {
+        [b] if b.is_ascii_alphabetic() => Some(*b),
+        _ => None,
+    }
+}
+
+/// Decode the body of an ANSI-C quoted span (`$'…'`) starting at
+/// `start` (just past the opening `'`) into `buf`, returning the index
+/// just past the closing `'` (or the input length when unterminated).
+/// Escapes follow bash: `\a \b \e \E \f \n \r \t \v \\ \' \" \?`,
+/// `\NNN` (octal), `\xHH`, `\uHHHH`, `\UHHHHHHHH`, and `\cX`. A decoded
+/// NUL ends the word's value, as in bash; the rest of the span is skipped.
+fn read_ansi_c_quoted(bytes: &[u8], start: usize, buf: &mut String) -> usize {
+    let mut i = start;
+    let mut truncated = false;
+    while i < bytes.len() && bytes[i] != b'\'' {
+        let (decoded, next) = if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            decode_ansi_c_escape(bytes, i + 1)
+        } else {
+            (u32::from(bytes[i]), i + 1)
+        };
+        i = next;
+        truncated |= decoded == 0;
+        if !truncated {
+            buf.push(char::from_u32(decoded).unwrap_or(char::REPLACEMENT_CHARACTER));
+        }
+    }
+    if i < bytes.len() {
+        i += 1; // closing quote
+    }
+    i
+}
+
+/// Decode one escape whose letter is at `bytes[i]` (just past the `\`).
+/// Returns the code point (bytes from `\NNN` / `\xHH` keep their Latin-1
+/// value, matching [`push_latin1`]) and the index after the escape.
+fn decode_ansi_c_escape(bytes: &[u8], i: usize) -> (u32, usize) {
+    let digits = |from: usize, max: usize, radix: u32| -> (u32, usize) {
+        let mut value = 0_u32;
+        let mut j = from;
+        while j < bytes.len() && j - from < max {
+            let Some(d) = char::from(bytes[j]).to_digit(radix) else {
+                break;
+            };
+            value = value.saturating_mul(radix).saturating_add(d);
+            j += 1;
+        }
+        (value, j)
+    };
+    let simple = |v: u8| (u32::from(v), i + 1);
+    let hex = |max: usize| match digits(i + 1, max, 16) {
+        // No hex digits: bash keeps the escape literally.
+        (_, j) if j == i + 1 => (u32::from(b'\\'), i),
+        found => found,
+    };
+    match bytes[i] {
+        b'a' => simple(0x07),
+        b'b' => simple(0x08),
+        b'e' | b'E' => simple(0x1b),
+        b'f' => simple(0x0c),
+        b'n' => simple(b'\n'),
+        b'r' => simple(b'\r'),
+        b't' => simple(b'\t'),
+        b'v' => simple(0x0b),
+        b'0'..=b'7' => {
+            let (v, j) = digits(i, 3, 8);
+            (v & 0xff, j)
+        },
+        b'x' => hex(2),
+        b'u' => hex(4),
+        b'U' => hex(8),
+        b'c' if i + 1 < bytes.len() => (u32::from(bytes[i + 1] & 0x1f), i + 2),
+        // `\\`, `\'`, `\"`, `\?` decode to the byte itself; any other
+        // escape is kept with its backslash.
+        b'\\' | b'\'' | b'"' | b'?' => simple(bytes[i]),
+        _ => (u32::from(b'\\'), i),
+    }
+}
+
+/// Byte length of a `$IFS` / `${IFS}` / `${IFS<op>…}` expansion at the
+/// start of `bytes`, or `None` when `bytes` does not start with one.
+fn ifs_expansion_len(bytes: &[u8]) -> Option<usize> {
+    if let Some(rest) = bytes.strip_prefix(b"$IFS") {
+        return (!rest.first().copied().is_some_and(is_name_byte)).then_some(4);
+    }
+    let rest = bytes.strip_prefix(b"${IFS")?;
+    // `${IFS}` or `${IFS<op>…}`, but not `${IFSX}`.
+    match rest.first() {
+        Some(&b) if !is_name_byte(b) => memchr::memchr(b'}', rest).map(|p| 5 + p + 1),
+        _ => None,
+    }
+}
+
+/// A byte that continues a shell parameter name.
+const fn is_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// Length of the leading run of plain word bytes (see
 /// [`is_plain_word_byte`]). Typical tokens end within the bytewise
 /// prefix scan; pathological megabyte words fall through to `memchr`
-/// SIMD sweeps over the 15-byte special set (five triples).
+/// SIMD sweeps over the 17-byte special set (five triples and a pair).
 fn plain_run_len(bytes: &[u8]) -> usize {
     let quick = bytes.len().min(64);
     let mut i = 0;
@@ -865,6 +1389,9 @@ fn plain_run_len(bytes: &[u8]) -> usize {
             end = p;
         }
     }
+    if let Some(p) = memchr::memchr2(b'(', b')', &rest[..end]) {
+        end = p;
+    }
     i + end
 }
 
@@ -877,7 +1404,7 @@ const fn is_plain_word_byte(b: u8) -> bool {
     !(b.is_ascii_whitespace()
         || matches!(
             b,
-            b'|' | b'&' | b';' | b'\\' | b'<' | b'>' | b'$' | b'\'' | b'"' | b'`'
+            b'|' | b'&' | b';' | b'\\' | b'<' | b'>' | b'$' | b'\'' | b'"' | b'`' | b'(' | b')'
         ))
 }
 
@@ -902,36 +1429,114 @@ fn push_latin1(buf: &mut String, bytes: &[u8]) {
 /// Balance-absorb a parenthesised group. `*i` points at the first byte
 /// *after* the opening `(`. Appends through the matching `)` into `buf`.
 /// When `bodies` is `Some`, also pushes the inner slice for subst re-entry.
+///
+/// The matching `)` is found with [`find_group_close`], which skips
+/// quoted spans, so a `)` or `"` inside `$(echo ')')` cannot close the
+/// group early and desynchronise the caller's quote state.
 fn absorb_parens(bytes: &[u8], i: &mut usize, buf: &mut String, bodies: Option<&mut Vec<String>>) {
-    let body_start = *i;
-    let mut depth: usize = 1;
-    while *i < bytes.len() && depth > 0 {
-        let run = *i;
-        *i += memchr::memchr2(b'(', b')', &bytes[*i..]).unwrap_or(bytes.len() - *i);
-        push_latin1(buf, &bytes[run..*i]);
-        if *i >= bytes.len() {
-            break;
+    let close = find_group_close(bytes, *i);
+    // Unterminated: still surface the remainder so its commands are
+    // re-parsed rather than hidden inside an opaque word.
+    let body = &bytes[*i..close.unwrap_or(bytes.len())];
+    if let Some(bodies) = bodies {
+        let body = latin1_slice(body);
+        buf.push_str(&body);
+        if !body.is_empty() {
+            bodies.push(body);
         }
-        let pc = bytes[*i];
-        if pc == b'(' {
-            depth += 1;
-        } else {
-            depth -= 1;
-            if depth == 0 {
-                if let Some(bodies) = bodies {
-                    let body = latin1_slice(&bytes[body_start..*i]);
-                    if !body.is_empty() {
-                        bodies.push(body);
-                    }
-                }
-                buf.push(')');
-                *i += 1;
-                break;
-            }
-        }
-        buf.push(pc as char);
-        *i += 1;
+    } else {
+        push_latin1(buf, body);
     }
+    if let Some(close) = close {
+        buf.push(')');
+        *i = close + 1;
+    } else {
+        *i = bytes.len();
+    }
+}
+
+/// Index of the `)` that closes a group whose body starts at `start`,
+/// or `None` when the input ends first. Single quotes, double quotes
+/// (including a nested `$(…)` inside them), backquotes, and backslash
+/// escapes are skipped so their contents never count toward the depth.
+///
+/// Nesting is tracked on a heap stack rather than by recursion, so a
+/// hostile `$("$("$(…` chain cannot overflow the thread stack.
+fn find_group_close(bytes: &[u8], start: usize) -> Option<usize> {
+    // One entry per open context: `false` = a `(` group, `true` = a
+    // double-quoted span. The bottom entry is the group being closed.
+    let mut stack = vec![false];
+    let mut i = start;
+    while i < bytes.len() {
+        let in_quotes = *stack.last()?;
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'`' => i = skip_backquoted(bytes, i + 1)?,
+            b'"' if in_quotes => {
+                stack.pop();
+                i += 1;
+            },
+            b'$' if in_quotes && bytes.get(i + 1) == Some(&b'(') => {
+                stack.push(false);
+                i += 2;
+            },
+            _ if in_quotes => i += 1,
+            b'\'' => i = memchr::memchr(b'\'', &bytes[i + 1..])? + i + 2,
+            b'"' => {
+                stack.push(true);
+                i += 1;
+            },
+            b'(' => {
+                stack.push(false);
+                i += 1;
+            },
+            b')' => {
+                stack.pop();
+                if stack.is_empty() {
+                    return Some(i);
+                }
+                i += 1;
+            },
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Skip a backquoted span whose body starts at `start`; returns the
+/// index just past the closing `` ` ``.
+fn skip_backquoted(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'`' => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Body of a `` `…` `` substitution as bash runs it: inside backquotes
+/// `\\`, `` \` `` and `\$` lose their backslash, so a nested
+/// `` \`cmd\` `` becomes a real substitution when the body is re-parsed.
+/// Every other backslash is kept.
+fn unescape_backquoted(bytes: &[u8]) -> String {
+    if memchr::memchr(b'\\', bytes).is_none() {
+        return latin1_slice(bytes);
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && matches!(bytes[i + 1], b'\\' | b'`' | b'$') {
+            out.push(bytes[i + 1]);
+            i += 2;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    latin1_slice(&out)
 }
 
 /// Decode a byte slice the same way [`push_latin1`] appends — ASCII as
@@ -1045,6 +1650,7 @@ fn parse_argv(words: Vec<(String, Vec<String>)>, nesting_budget: usize) -> Argv 
             None => break,
         }
     }
+    peel_reserved_words(&mut words);
     let head = words.pop_front().unwrap_or_default();
     let mut argv = Argv {
         env_assignments,
@@ -1067,6 +1673,46 @@ fn parse_argv(words: Vec<(String, Vec<String>)>, nesting_budget: usize) -> Argv 
         }
     }
     argv
+}
+
+/// Reserved words that introduce (or close) a compound command and are
+/// followed directly by the command they wrap: `if cmd`, `then cmd`,
+/// `do cmd`, `{ cmd`, `! cmd`, `time cmd`, ... Peeling them makes the
+/// real command the head, so `if true; then rm -rf /; fi` and
+/// `{ rm -rf /; }` are checked like the bare `rm -rf /`.
+const RESERVED_PREFIXES: &[&str] = &[
+    "{", "}", "!", "if", "then", "elif", "else", "while", "until", "do", "done", "fi", "esac",
+];
+
+fn peel_reserved_words(words: &mut std::collections::VecDeque<String>) {
+    while words.len() > 1 {
+        match words[0].as_str() {
+            w if RESERVED_PREFIXES.contains(&w) => {
+                words.pop_front();
+            },
+            // `time [-p] cmd`
+            "time" => {
+                words.pop_front();
+                if words.front().is_some_and(|w| w == "-p") {
+                    words.pop_front();
+                }
+            },
+            // `coproc cmd` / `coproc NAME { cmd; }`
+            "coproc" => {
+                words.pop_front();
+                if words.get(1).is_some_and(|w| w == "{") {
+                    words.pop_front();
+                }
+            },
+            // `function NAME { cmd; }`: the body follows the name (a
+            // `()` after the name is already a command boundary).
+            "function" => {
+                words.pop_front();
+                words.pop_front();
+            },
+            _ => break,
+        }
+    }
 }
 
 fn augment_inner_commands(argv: &mut Argv, nesting_budget: usize) {
@@ -1312,6 +1958,22 @@ mod tests {
             inner_redirects: Vec::new(),
             subst_argv: Vec::new(),
         }
+    }
+
+    #[test]
+    fn find_group_close_survives_deep_quote_nesting() {
+        // `$("$("$(…` used to recurse once per level and overflow the stack.
+        let deep = "$(\"".repeat(200_000);
+        assert_eq!(find_group_close(deep.as_bytes(), 2), None);
+        assert_eq!(find_group_close(br#"echo "a)$(x)b")"#, 0), Some(14));
+        assert_eq!(find_group_close(b"a (b) c) d", 0), Some(7));
+    }
+
+    #[test]
+    fn skip_backquoted_steps_over_escaped_backquotes() {
+        // `\`` inside a backquoted span is a literal backquote, not the close.
+        assert_eq!(skip_backquoted(b"a\\`b`x", 0), Some(5));
+        assert_eq!(skip_backquoted(b"ab\\`", 0), None);
     }
 
     #[test]
@@ -1854,6 +2516,38 @@ mod tests {
     }
 
     #[test]
+    fn here_string_operand_is_one_word_and_does_not_swallow_the_rest() {
+        let b = parse("cat <<< x; rm -rf /");
+        assert_eq!(b.segments.len(), 2);
+        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::Heredoc);
+        assert_eq!(b.segments[0].redirects[0].target, "x");
+        assert_eq!(b.segments[1].commands[0], argv("rm", &["-rf", "/"]));
+
+        let b = parse("grep a <<<\"q w\" && ls");
+        assert_eq!(b.segments[0].commands[0], argv("grep", &["a"]));
+        assert_eq!(b.segments[0].redirects[0].target, "q w");
+        assert_eq!(b.segments[1].commands[0].head, "ls");
+
+        // A dangling `<<<` (with or without trailing blanks) is an empty
+        // operand.
+        for cmd in ["cat <<<", "cat <<<  "] {
+            let b = parse(cmd);
+            assert_eq!(b.segments[0].commands[0].head, "cat", "{cmd:?}");
+            assert_eq!(b.segments[0].redirects[0].target, "", "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn here_string_surfaces_command_substitution_bodies() {
+        let b = parse("cat <<< \"$(rm -rf /)\"");
+        assert!(b.has_command_substitution);
+        assert_eq!(
+            b.segments[0].commands[0].subst_argv,
+            vec![argv("rm", &["-rf", "/"])]
+        );
+    }
+
+    #[test]
     fn flags_process_substitution_input() {
         let b = parse("diff <(a) <(b)");
         assert!(b.has_process_substitution);
@@ -1936,14 +2630,341 @@ mod tests {
     }
 
     #[test]
+    fn compound_commands_expose_inner_heads() {
+        for cmd in [
+            "(rm -rf /)",
+            "(cd x && rm -rf /)",
+            "{ rm -rf /; }",
+            "if true; then rm -rf /; fi",
+            "if false; then :; else rm -rf /; fi",
+            "for i in 1; do rm -rf /; done",
+            "while false; do rm -rf /; done",
+            "until true; do rm -rf /; done",
+            "! rm -rf /",
+            "time -p rm -rf /",
+            "f(){ rm -rf /; }; f",
+            "f() { rm -rf /; }",
+            "function f { rm -rf /; }",
+            "case x in x) rm -rf /;; esac",
+            "coproc rm -rf /",
+            "coproc N { rm -rf /; }",
+        ] {
+            let b = parse(cmd);
+            assert!(
+                b.commands()
+                    .iter()
+                    .any(|a| a.head == "rm" && a.args == ["-rf", "/"]),
+                "{cmd:?} -> {b:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lone_reserved_word_stays_the_head() {
+        // Nothing follows `done` / `}` to promote, so the word itself
+        // remains the command rather than vanishing.
+        for word in ["done", "}", "fi"] {
+            let b = parse(word);
+            let heads: Vec<&str> = b.commands().iter().map(|a| a.head.as_str()).collect();
+            assert_eq!(heads, [word], "{word:?} -> {b:?}");
+        }
+    }
+
+    #[test]
+    fn exec_and_builtin_unwrap_like_command() {
+        let inner = unwrap_all_prefix_wrappers(&argv("exec", &["-a", "x", "rm", "-rf", "/"]));
+        assert_eq!(inner, argv("rm", &["-rf", "/"]));
+        let inner = unwrap_all_prefix_wrappers(&argv("builtin", &["source", ".env"]));
+        assert_eq!(inner, argv("source", &[".env"]));
+    }
+
+    #[test]
+    fn quoted_and_substituted_parens_stay_in_words() {
+        let b = parse(r#"echo "(a)" '(b)' $(echo (c)) <(ls)"#);
+        assert_eq!(b.segments.len(), 1);
+        assert_eq!(
+            b.segments[0].commands[0].args,
+            ["(a)", "(b)", "$(echo (c))", "<(ls)"]
+        );
+    }
+
+    #[test]
+    fn unquoted_ifs_splits_words() {
+        for cmd in [
+            "rm$IFS-rf$IFS/",
+            "rm${IFS}-rf${IFS}/",
+            "rm${IFS:0:1}-rf${IFS:0:1}/",
+            "${IFS}rm -rf /",
+        ] {
+            let b = parse(cmd);
+            let a = &b.segments[0].commands[0];
+            assert_eq!(
+                (a.head.as_str(), a.args.clone()),
+                ("rm", vec!["-rf".to_string(), "/".to_string()]),
+                "{cmd:?}"
+            );
+        }
+        assert_eq!(
+            parse(r#"echo "$IFS""#).segments[0].commands[0].args,
+            ["$IFS"]
+        );
+        assert_eq!(parse("echo $IFSX").segments[0].commands[0].args, ["$IFSX"]);
+        for word in ["a${IFSX}b", "a${IFS_}b", "a${IFS1:-x}b"] {
+            assert_eq!(
+                parse(&format!("echo {word}")).segments[0].commands[0].args,
+                [word],
+            );
+        }
+        assert_eq!(ifs_expansion_len(b"${IFS}x"), Some(6));
+        assert_eq!(ifs_expansion_len(b"${IFS:- }x"), Some(9));
+    }
+
+    #[test]
+    fn brace_expansion_matches_bash() {
+        let words = |cmd: &str| -> Vec<String> {
+            let b = parse(cmd);
+            let a = &b.segments[0].commands[0];
+            std::iter::once(a.head.clone())
+                .chain(a.args.iter().cloned())
+                .collect()
+        };
+        // Each expansion is followed by the literal word itself.
+        assert_eq!(words("{rm,-rf,/}"), ["rm", "-rf", "/", "{rm,-rf,/}"]);
+        // A one-term sequence still differs from the literal.
+        assert_eq!(words("echo {a..a}"), ["echo", "a", "{a..a}"]);
+        // `${a,b}` is parameter expansion (case modification).
+        assert_eq!(words("echo ${a,b}"), ["echo", "${a,b}"]);
+        // A lone `0` is not zero padding.
+        assert_eq!(words("echo {0..2}"), ["echo", "0", "1", "2", "{0..2}"]);
+        assert_eq!(
+            words("echo {0..10..5}"),
+            ["echo", "0", "5", "10", "{0..10..5}"]
+        );
+        // Character ranges need letters.
+        assert_eq!(words("echo {!..#}"), ["echo", "{!..#}"]);
+        assert_eq!(words("r{m,} -rf /"), ["rm", "r", "r{m,}", "-rf", "/"]);
+        assert_eq!(
+            words("rm -rf /{etc,usr}"),
+            ["rm", "-rf", "/etc", "/usr", "/{etc,usr}"]
+        );
+        assert_eq!(
+            words("echo a{b,c}d {c..a} {01..3} {1..10..4}"),
+            [
+                "echo",
+                "abd",
+                "acd",
+                "a{b,c}d",
+                "c",
+                "b",
+                "a",
+                "{c..a}",
+                "01",
+                "02",
+                "03",
+                "{01..3}",
+                "1",
+                "5",
+                "9",
+                "{1..10..4}"
+            ]
+        );
+        assert_eq!(
+            words("echo {a,{b,c}} {a,}{b,}"),
+            [
+                "echo",
+                "a",
+                "b",
+                "c",
+                "{a,{b,c}}",
+                "ab",
+                "a",
+                "b",
+                "{a,}{b,}"
+            ]
+        );
+        // Literal: no comma / sequence, quoted, escaped, or `${…}`.
+        assert_eq!(words("echo {} {a} {a,b"), ["echo", "{}", "{a}", "{a,b"]);
+        assert_eq!(
+            words(r#"echo '{a,b}' "{c,d}" \{e,f\}"#),
+            ["echo", "{a,b}", "{c,d}", "{e,f}"]
+        );
+        assert_eq!(
+            words("echo ${HOME} ${X:-{a,b}}"),
+            ["echo", "${HOME}", "${X:-{a,b}}"]
+        );
+    }
+
+    #[test]
+    fn brace_expansion_merges_duplicates_before_the_cap() {
+        // 3 * 2^100000 raw words, but only `rm`, `-rf`, `/` are distinct.
+        let cmd = format!("{{rm,-rf,/}}{}", "{,}".repeat(100_000));
+        let b = parse(&cmd);
+        let a = &b.segments[0].commands[0];
+        assert_eq!(a.head, "rm");
+        assert_eq!(a.args[..2], ["-rf", "/"]);
+        // Single-word groups are inlined for free: charging each one to
+        // the byte budget (two 100-byte words per group) would exhaust it
+        // and leave the trailing groups literal.
+        let stem = "x".repeat(100);
+        let b = parse(&format!("echo {stem}{{a,b}}{}", "{,}".repeat(100_000)));
+        assert_eq!(
+            b.segments[0].commands[0].args[..2],
+            [format!("{stem}a"), format!("{stem}b")]
+        );
+    }
+
+    #[test]
+    fn brace_expansion_is_linear_on_pathological_words() {
+        // Nested comma-less pairs once rescanned every pair (quadratic)
+        // and recursed per group; they stay literal.
+        let word = format!("{}{}", "{".repeat(200_000), "}".repeat(200_000));
+        let b = parse(&format!("echo {word}"));
+        assert_eq!(b.segments[0].commands[0].args, [word]);
+        // Deep comma nesting stops expanding at `BRACE_NESTING_MAX`.
+        let depth = BRACE_NESTING_MAX + 10;
+        let word = format!("{}x{}", "{a,".repeat(depth), "}".repeat(depth));
+        let b = parse(&format!("echo {word}"));
+        let args = &b.segments[0].commands[0].args;
+        assert_eq!(args[0], "a");
+        assert!(args.iter().any(|a| a.starts_with("{a,")), "{args:?}");
+        assert!(!args.contains(&"x".to_string()), "{args:?}");
+        // A sequence body of exactly `BRACE_SEQUENCE_MAX` bytes still
+        // expands (zero-padded to its width).
+        let (lo, hi) = ("0".repeat(30) + "1", "0".repeat(30) + "2");
+        assert_eq!(lo.len() + hi.len() + 2, BRACE_SEQUENCE_MAX);
+        let b = parse(&format!("echo {{{lo}..{hi}}}"));
+        assert_eq!(b.segments[0].commands[0].args[..2], [lo, hi]);
+        // The byte budget bounds copies of a huge literal tail.
+        let word = format!("{{a,b,c}}{}", "x".repeat(BRACE_EXPANSION_BUDGET / 2 + 1));
+        let b = parse(&format!("echo {word}"));
+        assert_eq!(b.segments[0].commands[0].args.len(), 2);
+    }
+
+    #[test]
+    fn brace_expansion_is_capped() {
+        // One group with more alternatives than the cap.
+        let alts: Vec<String> = (0..300).map(|n| format!("w{n}")).collect();
+        let b = parse(&format!("echo {{{}}}", alts.join(",")));
+        assert_eq!(
+            b.segments[0].commands[0].args.len(),
+            BRACE_EXPANSION_CAP + 1
+        );
+        let b = parse("echo {a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}");
+        assert_eq!(
+            b.segments[0].commands[0].args.len(),
+            BRACE_EXPANSION_CAP + 1
+        );
+        let b = parse("echo {1..100000}");
+        assert_eq!(
+            b.segments[0].commands[0].args.len(),
+            BRACE_EXPANSION_CAP + 1
+        );
+    }
+
+    #[test]
+    fn nested_escaped_backticks_are_reparsed() {
+        let b = parse("echo `echo \\`rm -rf /\\``");
+        assert!(
+            b.commands()
+                .iter()
+                .any(|a| a.head == "rm" && a.args == ["-rf", "/"]),
+            "{b:?}"
+        );
+        assert_eq!(unescape_backquoted(br"a \\ \` \$ \n"), r"a \ ` $ \n");
+    }
+
+    #[test]
+    fn newline_separates_commands() {
+        for cmd in [
+            "echo a\nrm -rf /",
+            "true\r\nrm -rf /",
+            "echo a &&\n rm -rf /",
+            "rm \\\n -rf /",
+            "echo x # c\nrm -rf /",
+            "cat <<EOF\nhello\nEOF\nrm -rf /",
+            "cat <<A <<B\na\nA\nb\nB\nrm -rf /",
+        ] {
+            let b = parse(cmd);
+            assert!(
+                b.commands()
+                    .iter()
+                    .any(|a| a.head == "rm" && a.args == ["-rf", "/"]),
+                "{cmd:?} -> {b:?}"
+            );
+        }
+        // A pipe continues across the newline.
+        let b = parse("curl x |\n bash");
+        assert_eq!(b.segments.len(), 1);
+        assert_eq!(b.segments[0].commands.len(), 2);
+    }
+
+    #[test]
+    fn heredoc_body_starts_on_the_next_line() {
+        let b = parse("cat <<EOF | sh\necho hi\nEOF\n");
+        assert_eq!(b.segments.len(), 1);
+        let p = &b.segments[0];
+        assert_eq!(p.commands.len(), 2);
+        assert_eq!(p.commands[1].head, "sh");
+        assert_eq!(p.redirects[0].target, "echo hi\n");
+        // The body itself is not parsed as commands.
+        let b = parse("cat <<EOF\nrm -rf /\nEOF\necho ok");
+        assert!(!b.commands().iter().any(|a| a.head == "rm"));
+    }
+
+    #[test]
+    fn lone_ampersand_separates_commands() {
+        let b = parse("echo a & rm -rf /");
+        assert!(
+            b.commands()
+                .iter()
+                .any(|a| a.head == "rm" && a.args == ["-rf", "/"])
+        );
+        // fd duplication and `|&` stay inside the command / pipeline.
+        let b = parse("curl x 2>&1 | bash");
+        assert_eq!(b.segments.len(), 1);
+        assert_eq!(b.segments[0].commands.len(), 2);
+        let b = parse("make >&2 |& tee log");
+        assert_eq!(b.segments.len(), 1);
+        assert_eq!(b.segments[0].commands.len(), 2);
+    }
+
+    #[test]
+    fn backslash_escapes_and_continuations_in_words() {
+        let b = parse("echo a\\ b \\x");
+        assert_eq!(b.segments[0].commands[0].args, ["a b", "x"]);
+        let b = parse("echo a \\\n b");
+        assert_eq!(b.segments[0].commands[0].args, ["a", "b"]);
+        let b = parse("echo a\\\nb");
+        assert_eq!(b.segments[0].commands[0].args, ["ab"]);
+    }
+
+    #[test]
+    fn word_initial_hash_starts_a_comment() {
+        assert_eq!(parse("#rm -rf /").segments.len(), 0);
+        let b = parse("echo x # comment\nrm -rf /");
+        assert_eq!(b.segments.len(), 2);
+        assert_eq!(b.segments[1].commands[0].head, "rm");
+        let b = parse("echo x #; rm -rf /");
+        assert_eq!(b.segments.len(), 1);
+        assert_eq!(b.segments[0].commands[0].args, ["x"]);
+        let b = parse("echo a#b ${#x} $#");
+        assert_eq!(b.segments[0].commands[0].args, ["a#b", "${#x}", "$#"]);
+        // `\⏎` vanishes before word splitting, so a `#` right after it
+        // still starts a word and therefore a comment.
+        let b = parse("echo x \\\n#; rm -rf /");
+        assert_eq!(b.segments.len(), 1, "{b:?}");
+        assert_eq!(b.segments[0].commands[0].args, ["x"]);
+    }
+
+    #[test]
     fn read_word_advances_for_every_non_separator_byte() {
         // Forward-progress contract for `read_word`: when called after
         // the caller has filtered whitespace and the separator bytes,
         // it must always consume at least one byte. Walk every printable
-        // ASCII byte that is neither whitespace nor `|`/`&`/`;` and
-        // ensure the lexer terminates with at least one token.
+        // ASCII byte that is neither whitespace nor `|`/`&`/`;`/`(`/`)`
+        // and ensure the lexer terminates with at least one token.
         for byte in 0x21u8..=0x7eu8 {
-            if matches!(byte, b'|' | b'&' | b';') {
+            if matches!(byte, b'|' | b'&' | b';' | b'(' | b')') {
                 continue;
             }
             let buf = [byte];
@@ -2015,9 +3036,7 @@ mod tests {
             ("command", &["bash"], "bash", &[]),
             ("env", &["rm", "-rf", "/"], "rm", &["-rf", "/"]),
             ("command", &["rm", "-rf", "/"], "rm", &["-rf", "/"]),
-            // `command -v curl` is lookup-only, but the deny-safe
-            // over-approximation still unwraps it to `curl`.
-            ("command", &["-v", "curl"], "curl", &[]),
+            ("command", &["-p", "rm", "-rf", "/"], "rm", &["-rf", "/"]),
         ];
         for &(wrapper, args, head, rest) in cases {
             let inner = unwrap_prefix_wrapper(&argv(wrapper, args))
@@ -2027,13 +3046,49 @@ mod tests {
     }
 
     #[test]
-    fn unwrap_prefix_wrapper_non_env_does_not_skip_inline_assignments() {
-        // Only `env` may skip `KEY=VALUE` tokens; other wrappers treat
+    fn command_lookup_flags_do_not_unwrap() {
+        // `command -v` / `-V` print how CMD resolves; they never run it.
+        for args in [
+            &["-v", "curl"][..],
+            &["-V", "rm", "-rf", "/"],
+            &["-pv", "rm"],
+        ] {
+            assert!(
+                unwrap_prefix_wrapper(&argv("command", args)).is_none(),
+                "{args:?}"
+            );
+        }
+        // Only flags before CMD count: `-v` after it belongs to CMD.
+        for args in [&["rm", "-v", "-rf", "/"][..], &["-p", "--", "rm", "-v"]] {
+            let inner = unwrap_prefix_wrapper(&argv("command", args)).expect("unwraps");
+            assert_eq!(inner.head, "rm", "{args:?}");
+        }
+    }
+
+    #[test]
+    fn unwrap_prefix_wrapper_inline_assignments_only_for_env_and_sudo() {
+        // `env` and `sudo` skip `KEY=VALUE` tokens; other wrappers treat
         // them as the command head.
         let inner = unwrap_prefix_wrapper(&argv("sudo", &["FOO=bar", "rm", "-rf", "/"]))
-            .expect("sudo keeps FOO=bar as the inner head");
+            .expect("sudo unwraps");
+        assert_eq!(inner, argv("rm", &["-rf", "/"]));
+        let inner = unwrap_prefix_wrapper(&argv("doas", &["FOO=bar", "rm", "-rf", "/"]))
+            .expect("doas keeps FOO=bar as the inner head");
         assert_eq!(inner.head, "FOO=bar");
-        assert_eq!(inner.args, vec!["rm", "-rf", "/"]);
+    }
+
+    #[test]
+    fn unwrap_prefix_wrapper_short_clusters_ending_in_value_flag() {
+        for (wrapper, args) in [
+            ("sudo", &["-nHu", "root", "rm", "-rf", "/"][..]),
+            ("sudo", &["-uroot", "rm", "-rf", "/"]),
+            ("sudo", &["-nu", "root", "-g", "wheel", "rm", "-rf", "/"]),
+            ("env", &["-P", "/bin", "rm", "-rf", "/"]),
+            ("env", &["-iP", "/bin", "rm", "-rf", "/"]),
+        ] {
+            let inner = unwrap_all_prefix_wrappers(&argv(wrapper, args));
+            assert_eq!(inner, argv("rm", &["-rf", "/"]), "{wrapper} {args:?}");
+        }
     }
 
     #[test]
@@ -2369,6 +3424,139 @@ mod tests {
         fn pbt_parse_terminates_on_arbitrary_bytes(bytes in arbitrary_utf8_bytes()) {
             let s = String::from_utf8_lossy(&bytes).into_owned();
             let _ = parse(&s);
+        }
+    }
+
+    #[test]
+    fn command_substitution_close_skips_quoted_parens() {
+        for cmd in [
+            "echo $(echo ')'); rm -rf /",
+            "echo \"$(echo \")\")\"; rm -rf /",
+            "echo \"$(echo '(')\" ; rm -rf /",
+            "echo $(echo `echo )`); rm -rf /",
+            "echo $(echo \\)) ; rm -rf /",
+            "echo $(echo \"$(echo \")\")\"); rm -rf /",
+            "echo $(echo \"$x\"); rm -rf /",
+            "echo $(echo \"`echo \"x\"`\"); rm -rf /",
+            "echo $(echo \"a\\\")b\"); rm -rf /",
+            "echo $( (echo a) ); rm -rf /",
+            "echo $( (echo (a)) ); rm -rf /",
+        ] {
+            let b = parse(cmd);
+            assert_eq!(b.segments.len(), 2, "{cmd:?} -> {b:?}");
+            assert_eq!(
+                b.segments[1].commands[0],
+                argv("rm", &["-rf", "/"]),
+                "{cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_substitution_bodies_are_exact() {
+        let b = parse("echo $(echo \\)) ; rm -rf /");
+        assert_eq!(
+            b.segments[0].commands[0].subst_argv,
+            vec![argv("echo", &[")"])]
+        );
+        // The whole substitution stays one word, however its body nests
+        // quotes, backquotes and parentheses.
+        for word in [
+            "$(a)b",
+            "$( (echo a) )",
+            "$( (echo (a)) )",
+            "$(echo \"$(echo \")\")\")",
+            "$(echo \"`echo \"x\"`\")",
+            "$(echo \"`echo \")\"`\")",
+            "$(echo \"a\\\")b\")",
+            "$(echo \"$x)\")",
+        ] {
+            let b = parse(&format!("echo {word} x"));
+            assert_eq!(b.segments[0].commands[0].args, [word, "x"], "{word:?}");
+        }
+    }
+
+    #[test]
+    fn unterminated_quote_inside_substitution_does_not_panic() {
+        for cmd in ["echo $(echo \"abc", "echo $(echo \"a\\", "echo $(echo \"`x"] {
+            let b = parse(cmd);
+            assert_eq!(b.segments[0].commands[0].head, "echo", "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn unterminated_command_substitution_still_surfaces_body() {
+        let b = parse("echo $(rm -rf /");
+        assert_eq!(
+            b.segments[0].commands[0].subst_argv,
+            vec![argv("rm", &["-rf", "/"])]
+        );
+    }
+
+    #[test]
+    fn ansi_c_quote_honours_escaped_quote() {
+        let b = parse("echo $'a\\'b' ; rm -rf /");
+        assert_eq!(b.segments.len(), 2);
+        assert_eq!(b.segments[0].commands[0], argv("echo", &["a'b"]));
+        assert_eq!(b.segments[1].commands[0], argv("rm", &["-rf", "/"]));
+    }
+
+    #[test]
+    fn ansi_c_quote_decodes_escapes() {
+        for (cmd, head) in [
+            ("$'rm' -rf /", "rm"),
+            ("$'\\x72m' -rf /", "rm"),
+            ("$'\\162m' -rf /", "rm"),
+            ("$'\\u0072m' -rf /", "rm"),
+            ("$'\\U00000072m' -rf /", "rm"),
+            // `\u` takes at most four hex digits, `\U` at most eight.
+            ("$'\\u00721'", "r1"),
+            ("$'\\U000000721'", "r1"),
+            ("$'r\\cJm'", "r\nm"),
+            ("$'\\q'", "\\q"),
+            ("$'\\x'", "\\x"),
+            ("$'a\\0b'", "a"),
+            ("$'\\a\\b\\e\\E\\f\\v'", "\u{7}\u{8}\u{1b}\u{1b}\u{c}\u{b}"),
+            ("$'1\\n2\\r3\\t4'", "1\n2\r3\t4"),
+            // Octal takes at most three digits, hex `\x` at most two.
+            ("$'\\1621'", "r1"),
+            ("$'\\x41B'", "AB"),
+            ("$'\\162'", "r"),
+            ("$'\\x72'", "r"),
+            // A trailing lone backslash in an unterminated span.
+            ("$'ab\\", "ab\\"),
+            // Digits running into the end of an unterminated span.
+            ("$'\\162", "r"),
+            ("$'\\x72", "r"),
+        ] {
+            assert_eq!(parse(cmd).segments[0].commands[0].head, head, "{cmd:?}");
+        }
+        assert_eq!(parse("$\"rm\" -rf /").segments[0].commands[0].head, "rm");
+    }
+
+    #[test]
+    fn ansi_c_helpers_stop_at_the_end_of_input() {
+        let mut buf = String::new();
+        // Unterminated: the index is the input length, never past it.
+        assert_eq!(read_ansi_c_quoted(b"ab", 0, &mut buf), 2);
+        assert_eq!(buf, "ab");
+        // Hex digits running into the end of input.
+        assert_eq!(decode_ansi_c_escape(b"x72", 0), (0x72, 3));
+        assert_eq!(decode_ansi_c_escape(b"x7", 0), (0x7, 2));
+        // `\c` with nothing after it is kept literally.
+        assert_eq!(decode_ansi_c_escape(b"c", 0), (u32::from(b'\\'), 0));
+        assert_eq!(decode_ansi_c_escape(b"cJ", 0), (0x0a, 2));
+        // `\u` takes at most four hex digits.
+        assert_eq!(decode_ansi_c_escape(b"u00410", 0), (0x41, 5));
+    }
+
+    #[test]
+    fn plain_word_bytes_exclude_shell_syntax() {
+        for &b in b"aZ0/.-{}*\xC3" {
+            assert!(is_plain_word_byte(b), "{b}");
+        }
+        for &b in b" \t\n|&;\\<>$'\"`()" {
+            assert!(!is_plain_word_byte(b), "{b}");
         }
     }
 }

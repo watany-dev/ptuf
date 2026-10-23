@@ -353,8 +353,23 @@ mod tests {
     }
 
     #[test]
+    fn branch_delete_asks_for_separate_delete_and_force() {
+        for cmd in [
+            "git branch -d -f feature",
+            "git branch -df feature",
+            "git branch -fd feature",
+            "git branch --delete --force feature",
+            "git branch -d --force feature",
+        ] {
+            assert_decision(&BRANCH_DELETE_FORCE_RULE, cmd, DecisionKind::Ask);
+        }
+    }
+
+    #[test]
     fn branch_delete_allows_lowercase_d() {
         assert_allow(&BRANCH_DELETE_FORCE_RULE, "git branch -d feature");
+        assert_allow(&BRANCH_DELETE_FORCE_RULE, "git branch -f feature main");
+        assert_allow(&BRANCH_DELETE_FORCE_RULE, "git branch --delete=force");
     }
 
     #[test]

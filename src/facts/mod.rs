@@ -148,11 +148,34 @@ fn collect_sensitive(
     if let Some(s) = event.content {
         sensitive::classify_content_into(s, &mut out);
     }
+    // `MultiEdit` carries one body per `edits[].new_string`, which a
+    // single borrowed `content` cannot express.
+    if event.tool == "MultiEdit"
+        && let Some(edits) = event
+            .inputs
+            .get("edits")
+            .and_then(serde_json::Value::as_array)
+    {
+        for body in edits
+            .iter()
+            .filter_map(|e| e.get("new_string").and_then(serde_json::Value::as_str))
+        {
+            sensitive::classify_content_into(body, &mut out);
+        }
+    }
 
     if let Some(cmd) = patch_command
         && let Some(body) = patch::added_content(cmd)
     {
         sensitive::classify_content_into(&body, &mut out);
+    }
+    // Only parse for patch bodies when the line can reach `apply_patch`.
+    if let Some(b) = bash.filter(|_| event.command.is_some_and(patch::may_invoke_from_shell)) {
+        for body in patch::bash_bodies(b) {
+            if let Some(added) = patch::added_content(&body) {
+                sensitive::classify_content_into(&added, &mut out);
+            }
+        }
     }
 
     out
@@ -244,6 +267,37 @@ mod tests {
                 .iter()
                 .any(|s| s.kind == sensitive::SensitiveKind::PemBlob)
         );
+    }
+
+    #[test]
+    fn extract_collects_sensitive_from_multiedit_and_notebookedit() {
+        let multi = HookInput {
+            tool_name: "MultiEdit".into(),
+            tool_input: serde_json::json!({
+                "file_path": "/tmp/notes.md",
+                "edits": [
+                    {"old_string": "a", "new_string": "b"},
+                    {"old_string": "c", "new_string": "-----BEGIN RSA PRIVATE KEY-----\n..."}
+                ]
+            }),
+        };
+        let nb = HookInput {
+            tool_name: "NotebookEdit".into(),
+            tool_input: serde_json::json!({
+                "notebook_path": "/tmp/x.ipynb",
+                "new_source": "-----BEGIN RSA PRIVATE KEY-----\n..."
+            }),
+        };
+        for i in [multi, nb] {
+            let f = extract(&i);
+            assert!(
+                f.sensitive
+                    .iter()
+                    .any(|s| s.kind == sensitive::SensitiveKind::PemBlob),
+                "{}",
+                i.tool_name
+            );
+        }
     }
 
     #[test]

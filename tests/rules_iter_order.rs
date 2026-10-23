@@ -52,6 +52,7 @@ fn rules_iter_order_matches_fixture() {
         "core.self_protection.cursor-settings",
         "core.self_protection.cline-settings",
         "core.secrets.sensitive-read",
+        "core.network.download-then-exec",
         "core.injection.invisible-chars",
         "core.project_hygiene.lock-mismatch-pnpm",
         "core.project_hygiene.lock-mismatch-uv",
