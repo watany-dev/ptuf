@@ -807,6 +807,18 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
             i += 1;
             continue;
         }
+        // Unquoted `$IFS` / `${IFS…}` expands to field separators, so it
+        // splits words (`rm${IFS}-rf${IFS}/` runs `rm -rf /`). End the
+        // current word before it; at a word start, consume it and yield
+        // an empty word (dropped by `parse_argv`).
+        if c == b'$'
+            && let Some(len) = ifs_expansion_len(&bytes[i..])
+        {
+            if i == 0 {
+                i = len;
+            }
+            break;
+        }
         // Unquoted `$(…)`: balance-absorb and capture body (ADR 0008).
         if c == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
             saw_subst = true;
@@ -963,6 +975,25 @@ fn decode_ansi_c_escape(bytes: &[u8], i: usize) -> (u32, usize) {
         b'\\' | b'\'' | b'"' | b'?' => simple(bytes[i]),
         _ => (u32::from(b'\\'), i),
     }
+}
+
+/// Byte length of a `$IFS` / `${IFS}` / `${IFS<op>…}` expansion at the
+/// start of `bytes`, or `None` when `bytes` does not start with one.
+fn ifs_expansion_len(bytes: &[u8]) -> Option<usize> {
+    if let Some(rest) = bytes.strip_prefix(b"$IFS") {
+        return (!rest.first().copied().is_some_and(is_name_byte)).then_some(4);
+    }
+    let rest = bytes.strip_prefix(b"${IFS")?;
+    // `${IFS}` or `${IFS<op>…}`, but not `${IFSX}`.
+    match rest.first() {
+        Some(&b) if !is_name_byte(b) => memchr::memchr(b'}', rest).map(|p| 5 + p + 1),
+        _ => None,
+    }
+}
+
+/// A byte that continues a shell parameter name.
+const fn is_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// Length of the leading run of plain word bytes (see
@@ -2264,6 +2295,37 @@ mod tests {
             b.segments[0].commands[0].args,
             ["(a)", "(b)", "$(echo (c))", "<(ls)"]
         );
+    }
+
+    #[test]
+    fn unquoted_ifs_splits_words() {
+        for cmd in [
+            "rm$IFS-rf$IFS/",
+            "rm${IFS}-rf${IFS}/",
+            "rm${IFS:0:1}-rf${IFS:0:1}/",
+            "${IFS}rm -rf /",
+        ] {
+            let b = parse(cmd);
+            let a = &b.segments[0].commands[0];
+            assert_eq!(
+                (a.head.as_str(), a.args.clone()),
+                ("rm", vec!["-rf".to_string(), "/".to_string()]),
+                "{cmd:?}"
+            );
+        }
+        assert_eq!(
+            parse(r#"echo "$IFS""#).segments[0].commands[0].args,
+            ["$IFS"]
+        );
+        assert_eq!(parse("echo $IFSX").segments[0].commands[0].args, ["$IFSX"]);
+        for word in ["a${IFSX}b", "a${IFS_}b", "a${IFS1:-x}b"] {
+            assert_eq!(
+                parse(&format!("echo {word}")).segments[0].commands[0].args,
+                [word],
+            );
+        }
+        assert_eq!(ifs_expansion_len(b"${IFS}x"), Some(6));
+        assert_eq!(ifs_expansion_len(b"${IFS:- }x"), Some(9));
     }
 
     #[test]
