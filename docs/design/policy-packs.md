@@ -194,7 +194,7 @@ unwrap してから評価し、`sudo doas git ...` のような多段ネスト�
 意味的に同一) も Critical / hardDeny で捕捉する。
 `core.git.push-mirror` は `git push --mirror` を Ask する (全 ref を上書きする
 ため事実上のリポジトリ全力 force push)。
-`core.git.push-delete-remote` は `--delete` / `-d` フラグおよび
+`core.git.push-delete-remote` は `--prune`、`--delete` / `-d` フラグおよび
 `git push origin :foo` 形式の colon-prefix 削除 refspec を Ask する。
 `core.git.force-if-includes` は `--force-with-lease` と並ぶ新フラグで、
 同等の force-push リスクを持つため Ask とする。

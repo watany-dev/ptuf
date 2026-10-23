@@ -1180,6 +1180,18 @@ mod tests {
     }
 
     #[test]
+    fn push_delete_asks_prune() {
+        for cmd in [
+            "git push --prune origin",
+            "git push origin --prune",
+            "git push --prune origin 'refs/heads/*:refs/heads/*'",
+        ] {
+            assert_decision(&PUSH_DELETE_REMOTE_RULE, cmd, DecisionKind::Ask);
+        }
+        assert_allow(&PUSH_DELETE_REMOTE_RULE, "git fetch --prune");
+    }
+
+    #[test]
     fn push_delete_asks_short_flag() {
         assert_decision(
             &PUSH_DELETE_REMOTE_RULE,
