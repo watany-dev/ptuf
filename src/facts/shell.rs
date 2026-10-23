@@ -939,6 +939,9 @@ fn absorb_parens(bytes: &[u8], i: &mut usize, buf: &mut String, bodies: Option<&
 /// `` \`cmd\` `` becomes a real substitution when the body is re-parsed.
 /// Every other backslash is kept.
 fn unescape_backquoted(bytes: &[u8]) -> String {
+    if memchr::memchr(b'\\', bytes).is_none() {
+        return latin1_slice(bytes);
+    }
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
