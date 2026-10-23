@@ -350,10 +350,11 @@ pub(crate) fn evaluate(node: &WhenNode, facts: &Facts, input: &HookInput) -> boo
             .url
             .as_ref()
             .is_some_and(|u| schemes.iter().any(|s| s.eq_ignore_ascii_case(&u.scheme))),
-        WhenNode::UrlHostAny(hosts) => facts
-            .url
-            .as_ref()
-            .is_some_and(|u| hosts.iter().any(|h| h.eq_ignore_ascii_case(&u.host))),
+        WhenNode::UrlHostAny(hosts) => facts.url.as_ref().is_some_and(|u| {
+            hosts
+                .iter()
+                .any(|h| crate::facts::url::host_matches(h, &u.host))
+        }),
         WhenNode::SensitivePathAny(kinds) => facts.sensitive.iter().any(|s| {
             let tag = s.kind.as_str();
             kinds.iter().any(|k| k == tag)
@@ -1176,6 +1177,35 @@ all:
         assert!(evaluate(&host, &facts, &input));
         let other = WhenNode::UrlHostAny(vec!["example.com".into()]);
         assert!(!evaluate(&other, &facts, &input));
+    }
+
+    #[test]
+    fn host_any_sees_through_alternate_url_spellings() {
+        // #329 / #330.
+        let deny = WhenNode::UrlHostAny(vec!["evil.com".into()]);
+        for url in [
+            "https://evil.com?@ok.com",
+            "https://evil.com#@ok.com",
+            "https://evil.com\\@ok.com",
+            "https://EVIL.com./x",
+            "https://evil%2ecom/x",
+            "https:/evil.com/x",
+            " https://evil.com/x",
+            "evil.com/x",
+        ] {
+            let input = HookInput {
+                tool_name: "WebFetch".into(),
+                tool_input: json!({ "url": url }),
+            };
+            let facts = facts::extract(&input);
+            assert!(evaluate(&deny, &facts, &input), "url={url}");
+        }
+        let metadata = WhenNode::UrlHostAny(vec!["169.254.169.254".into()]);
+        let input = HookInput {
+            tool_name: "WebFetch".into(),
+            tool_input: json!({ "url": "http://2852039166/latest/meta-data" }),
+        };
+        assert!(evaluate(&metadata, &facts::extract(&input), &input));
     }
 
     #[test]

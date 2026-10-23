@@ -47,6 +47,7 @@ toml_edit = "0.25"
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std", "bit-set"] }
 tempfile = "3"
+url = "2"
 
 [lints.rust]
 unsafe_code = "forbid"
