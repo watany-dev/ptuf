@@ -14,6 +14,7 @@ description: >
   use for non-coding requests (general knowledge, prose, translation,
   summaries, recipes).
 argument-hint: "[lite|full|ultra]"
+disable-model-invocation: true
 license: MIT
 ---
 

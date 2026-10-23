@@ -37,7 +37,7 @@ CI additionally runs `tarpaulin` (95% coverage floor), an MSRV build on Rust
 1.93.0 (`cargo build`, `cargo test --no-run`, and `cargo doc` — not merely
 `cargo check`), `cargo-semver-checks` (public-API SemVer gate), `actionlint`,
 `cargo-machete`, and `zizmor` (workflow security audit). A daily scheduled
-`cargo audit` workflow catches newly-published RustSec advisories outside the
+`cargo deny check advisories` workflow (`audit.yml`) catches newly-published RustSec advisories outside the
 PR loop, and a scheduled `Nightly` workflow runs coverage-guided fuzzing and
 mutation testing (see below). The MSRV is the floor — do not raise it without
 prior discussion.

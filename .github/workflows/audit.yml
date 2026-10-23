@@ -2,7 +2,7 @@ name: Security audit
 
 on:
   schedule:
-    # Every day at 06:00 UTC. cargo-deny advisories run only on PR/push,
+    # Every day at 06:00 UTC. The ci.yml cargo-deny job runs only on PR/push,
     # so this catches newly-published RustSec advisories on quiet weeks.
     - cron: "0 6 * * *"
   workflow_dispatch:
@@ -20,18 +20,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  cargo-audit:
-    name: cargo-audit
+  advisories:
+    name: cargo-deny advisories
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+      # Same action and pin as the `security` job in ci.yml, so the
+      # advisory ignore list lives only in deny.toml.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          tool: cargo-audit@0.22.1
-      - name: Run cargo audit
-        run: cargo audit --deny warnings
+          command: check advisories
