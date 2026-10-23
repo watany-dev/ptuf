@@ -47,6 +47,16 @@ pub(crate) enum Expectation {
     ShouldSkip,
 }
 
+impl Expectation {
+    /// The decision this expectation stands for in reports.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::ShouldTrigger => "deny",
+            Self::ShouldSkip => "allow",
+        }
+    }
+}
+
 /// Aggregated result of running every test case in a plugin file.
 #[derive(Debug)]
 pub(crate) struct RunReport {
@@ -77,10 +87,7 @@ impl RunReport {
             .map(|case| {
                 serde_json::json!({
                     "ruleId": case.rule_id,
-                    "expect": match case.expectation {
-                        Expectation::ShouldTrigger => "deny",
-                        Expectation::ShouldSkip => "allow",
-                    },
+                    "expect": case.expectation.label(),
                     "passed": case.passed,
                     "command": case.command,
                     "got": case.got.as_ref().map(decision_label),
@@ -109,10 +116,7 @@ impl RunReport {
         )?;
         for case in &self.cases {
             let mark = if case.passed { "ok " } else { "FAIL" };
-            let label = match case.expectation {
-                Expectation::ShouldTrigger => "deny",
-                Expectation::ShouldSkip => "allow",
-            };
+            let label = case.expectation.label();
             writeln!(out, "  {mark} {} [{label}] {}", case.rule_id, case.command)?;
             if !case.passed {
                 match &case.got {
