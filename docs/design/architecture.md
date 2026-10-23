@@ -156,7 +156,7 @@ Cline 入力は CLI 層の `src/cli/cline_input.rs` で SDK 形 (`tool_call`) �
 legacy 形 (`preToolUse`) の両 envelope を正規化する。`tool_call` がある場合は
 `hookName == "tool_call"` を要求して優先採用し、無ければ `preToolUse` を
 `hookName ∈ {"PreToolUse","tool_call"}` で採用する。tool 名 mapping
-(`run_commands` / `execute_command` / `bash`→`Bash`、`read_files`→`Read`、
+(`run_commands` / `execute_command` / `bash`→`Bash`、`read_files` / `search_files`→`Read`、
 `write_file`→`Write`、`use_mcp_tool`→`mcp__server__tool` 等) を適用し、
 alias キー (`command` / `file_path` / `content` 等) を非破壊的に正規化する。
 
@@ -170,7 +170,7 @@ enforce 対象は `preToolUse` (tool 名を canonical 形へ正規化) /
 `beforeShellExecution`→`Bash` / `beforeReadFile`→`Read` /
 `beforeMCPExecution`→`mcp__server__tool` で、それ以外の event は MVP では
 `core.engine.invalid-payload` で fail-closed する。tool 名 mapping
-(`Shell` / `Bash`→`Bash`、`Read` / `ReadFile`→`Read`、`Write`→`Write`、
+(`Shell` / `Bash`→`Bash`、`Read` / `ReadFile` / `Grep`→`Read`、`Write` / `Delete`→`Write`、
 `Edit`→`Edit`、`Fetch`→`WebFetch`、`MCP` / `mcp__*`→`mcp__server__tool`) を
 適用し、`tool_input` (camelCase `toolInput` / root も読む) の `command` /
 `file_path` / `content` / `old_string` / `new_string` を alias から非破壊的に
@@ -239,7 +239,9 @@ CLI 経路 (`hook`, `eval`) は config / plugin のロードに失敗すると
 `failClosed: false` でも変わらない。設定ファイル自体が読めない状況では、その設定を
 信用できないためである。
 
-`hook` はさらに stdin 読み取り失敗 / 8 MiB 上限超過 / JSON parse 失敗を
+`hook` はさらに stdin 読み取り失敗 / 8 MiB 上限超過 / JSON parse 失敗、
+および adapter 正規化後に `tool_name == "Bash"` なのに `tool_input.command` が
+文字列でない payload (配列・欠落・`tool_input` 自体が文字列など) を
 `core.engine.invalid-payload` で deny する (exit `2` + adapter の deny JSON)。
 Claude Code の hook 仕様では exit `1` が non-blocking warning として扱われ
 tool 実行を止めないため、これらの初期化エラーを exit `1` のまま放置すると

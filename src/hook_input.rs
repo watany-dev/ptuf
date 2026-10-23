@@ -96,12 +96,13 @@ impl HookInput {
     }
 
     /// Body the agent intends to write: `Write::content` /
-    /// `Edit::new_string`, or the generic `content` field for `mcp__*`
+    /// `Edit::new_string` / `NotebookEdit::new_source`, or the generic `content` field for `mcp__*`
     /// tool calls. Returns `None` for tools that don't write.
     pub fn write_payload(&self) -> Option<&str> {
         match self.tool_name.as_str() {
             "Write" => self.tool_input.get("content")?.as_str(),
             "Edit" => self.tool_input.get("new_string")?.as_str(),
+            "NotebookEdit" => self.tool_input.get("new_source")?.as_str(),
             name if is_mcp(name) => self.tool_input.get("content")?.as_str(),
             _ => None,
         }
