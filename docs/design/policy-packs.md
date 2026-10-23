@@ -42,6 +42,14 @@ inline `KEY=VALUE` 代入も跨ぐ)、`su -c '...'` の内側コードは再 par
 | Rule id | Decision | hardDeny | severity |
 | --- | --- | --- | --- |
 | `core.network.remote-script-pipe` | deny | true | critical |
+| `core.network.download-then-exec` | ask | false | high |
+
+`core.network.download-then-exec` は同じ Bash 呼び出しの中で fetcher
+(`curl` / `wget` / `aria2c` / `http` / `xh` 等) が書き出したファイル
+(`-o` / `--output` / `wget -O` / `--output-document` の値、`curl -O` と
+`wget URL` の URL basename、fetcher のある pipeline の `>` / `>>` 先) を、
+head (`./i.sh`, `/tmp/i.sh`) または interpreter / `source` / `.` の第 1
+引数として実行する場合に Ask を返す (`curl -o i.sh URL && sh i.sh`)。
 
 現在の対象は remote script pipe に限定される。例:
 
