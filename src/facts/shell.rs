@@ -513,6 +513,33 @@ fn tokenize(s: &str) -> TokenizeOutput {
             i += 1;
             continue;
         }
+        // Here-string: `<<< WORD`. The operand is one ordinary word, so a
+        // following `;` / `&&` / `|` still separates commands. Surfaced
+        // like a heredoc (the word is stdin content, not a file), with any
+        // `$(…)` bodies kept so subst_argv still sees them.
+        if bytes[i..].starts_with(b"<<<") {
+            let mut j = i + 3;
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            // An empty tail reads as an empty word.
+            let (word, advanced, word_subst, bodies) = read_word(&bytes[j..]);
+            out.push(Token::Redirect(RedirectOp::Heredoc));
+            out.push(Token::HeredocBody(word));
+            if word_subst {
+                saw_command_substitution = true;
+            }
+            if !bodies.is_empty() {
+                out.push(Token::Word {
+                    text: String::new(),
+                    subst_bodies: bodies,
+                });
+            }
+            saw_redirect = true;
+            saw_heredoc = true;
+            i = j + advanced;
+            continue;
+        }
         // Heredoc: `<<TAG` or `<<-TAG` (must precede the bare `<` arm).
         if c == b'<' && i + 1 < bytes.len() && bytes[i + 1] == b'<' {
             let mut j = i + 2;
@@ -986,36 +1013,92 @@ fn push_latin1(buf: &mut String, bytes: &[u8]) {
 /// Balance-absorb a parenthesised group. `*i` points at the first byte
 /// *after* the opening `(`. Appends through the matching `)` into `buf`.
 /// When `bodies` is `Some`, also pushes the inner slice for subst re-entry.
+///
+/// The matching `)` is found with [`find_group_close`], which skips
+/// quoted spans, so a `)` or `"` inside `$(echo ')')` cannot close the
+/// group early and desynchronise the caller's quote state.
 fn absorb_parens(bytes: &[u8], i: &mut usize, buf: &mut String, bodies: Option<&mut Vec<String>>) {
-    let body_start = *i;
-    let mut depth: usize = 1;
-    while *i < bytes.len() && depth > 0 {
-        let run = *i;
-        *i += memchr::memchr2(b'(', b')', &bytes[*i..]).unwrap_or(bytes.len() - *i);
-        push_latin1(buf, &bytes[run..*i]);
-        if *i >= bytes.len() {
-            break;
+    let close = find_group_close(bytes, *i);
+    // Unterminated: still surface the remainder so its commands are
+    // re-parsed rather than hidden inside an opaque word.
+    let body = &bytes[*i..close.unwrap_or(bytes.len())];
+    if let Some(bodies) = bodies {
+        let body = latin1_slice(body);
+        buf.push_str(&body);
+        if !body.is_empty() {
+            bodies.push(body);
         }
-        let pc = bytes[*i];
-        if pc == b'(' {
-            depth += 1;
-        } else {
-            depth -= 1;
-            if depth == 0 {
-                if let Some(bodies) = bodies {
-                    let body = latin1_slice(&bytes[body_start..*i]);
-                    if !body.is_empty() {
-                        bodies.push(body);
-                    }
-                }
-                buf.push(')');
-                *i += 1;
-                break;
-            }
-        }
-        buf.push(pc as char);
-        *i += 1;
+    } else {
+        push_latin1(buf, body);
     }
+    if let Some(close) = close {
+        buf.push(')');
+        *i = close + 1;
+    } else {
+        *i = bytes.len();
+    }
+}
+
+/// Index of the `)` that closes a group whose body starts at `start`,
+/// or `None` when the input ends first. Single quotes, double quotes
+/// (including a nested `$(…)` inside them), backquotes, and backslash
+/// escapes are skipped so their contents never count toward the depth.
+///
+/// Nesting is tracked on a heap stack rather than by recursion, so a
+/// hostile `$("$("$(…` chain cannot overflow the thread stack.
+fn find_group_close(bytes: &[u8], start: usize) -> Option<usize> {
+    // One entry per open context: `false` = a `(` group, `true` = a
+    // double-quoted span. The bottom entry is the group being closed.
+    let mut stack = vec![false];
+    let mut i = start;
+    while i < bytes.len() {
+        let in_quotes = *stack.last()?;
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'`' => i = skip_backquoted(bytes, i + 1)?,
+            b'"' if in_quotes => {
+                stack.pop();
+                i += 1;
+            },
+            b'$' if in_quotes && bytes.get(i + 1) == Some(&b'(') => {
+                stack.push(false);
+                i += 2;
+            },
+            _ if in_quotes => i += 1,
+            b'\'' => i = memchr::memchr(b'\'', &bytes[i + 1..])? + i + 2,
+            b'"' => {
+                stack.push(true);
+                i += 1;
+            },
+            b'(' => {
+                stack.push(false);
+                i += 1;
+            },
+            b')' => {
+                stack.pop();
+                if stack.is_empty() {
+                    return Some(i);
+                }
+                i += 1;
+            },
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Skip a backquoted span whose body starts at `start`; returns the
+/// index just past the closing `` ` ``.
+fn skip_backquoted(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'`' => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 /// Decode a byte slice the same way [`push_latin1`] appends — ASCII as
@@ -1391,6 +1474,22 @@ mod tests {
             inner_redirects: Vec::new(),
             subst_argv: Vec::new(),
         }
+    }
+
+    #[test]
+    fn find_group_close_survives_deep_quote_nesting() {
+        // `$("$("$(…` used to recurse once per level and overflow the stack.
+        let deep = "$(\"".repeat(200_000);
+        assert_eq!(find_group_close(deep.as_bytes(), 2), None);
+        assert_eq!(find_group_close(br#"echo "a)$(x)b")"#, 0), Some(14));
+        assert_eq!(find_group_close(b"a (b) c) d", 0), Some(7));
+    }
+
+    #[test]
+    fn skip_backquoted_steps_over_escaped_backquotes() {
+        // `\`` inside a backquoted span is a literal backquote, not the close.
+        assert_eq!(skip_backquoted(b"a\\`b`x", 0), Some(5));
+        assert_eq!(skip_backquoted(b"ab\\`", 0), None);
     }
 
     #[test]
@@ -1933,60 +2032,35 @@ mod tests {
     }
 
     #[test]
-    fn ansi_c_quote_honours_escaped_quote() {
-        let b = parse("echo $'a\\'b' ; rm -rf /");
+    fn here_string_operand_is_one_word_and_does_not_swallow_the_rest() {
+        let b = parse("cat <<< x; rm -rf /");
         assert_eq!(b.segments.len(), 2);
-        assert_eq!(b.segments[0].commands[0], argv("echo", &["a'b"]));
+        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::Heredoc);
+        assert_eq!(b.segments[0].redirects[0].target, "x");
         assert_eq!(b.segments[1].commands[0], argv("rm", &["-rf", "/"]));
-    }
 
-    #[test]
-    fn ansi_c_quote_decodes_escapes() {
-        for (cmd, head) in [
-            ("$'rm' -rf /", "rm"),
-            ("$'\\x72m' -rf /", "rm"),
-            ("$'\\162m' -rf /", "rm"),
-            ("$'\\u0072m' -rf /", "rm"),
-            ("$'\\U00000072m' -rf /", "rm"),
-            // `\u` takes at most four hex digits, `\U` at most eight.
-            ("$'\\u00721'", "r1"),
-            ("$'\\U000000721'", "r1"),
-            ("$'r\\cJm'", "r\nm"),
-            ("$'\\q'", "\\q"),
-            ("$'\\x'", "\\x"),
-            ("$'a\\0b'", "a"),
-            ("$'\\a\\b\\e\\E\\f\\v'", "\u{7}\u{8}\u{1b}\u{1b}\u{c}\u{b}"),
-            ("$'1\\n2\\r3\\t4'", "1\n2\r3\t4"),
-            // Octal takes at most three digits, hex `\x` at most two.
-            ("$'\\1621'", "r1"),
-            ("$'\\x41B'", "AB"),
-            ("$'\\162'", "r"),
-            ("$'\\x72'", "r"),
-            // A trailing lone backslash in an unterminated span.
-            ("$'ab\\", "ab\\"),
-            // Digits running into the end of an unterminated span.
-            ("$'\\162", "r"),
-            ("$'\\x72", "r"),
-        ] {
-            assert_eq!(parse(cmd).segments[0].commands[0].head, head, "{cmd:?}");
+        let b = parse("grep a <<<\"q w\" && ls");
+        assert_eq!(b.segments[0].commands[0], argv("grep", &["a"]));
+        assert_eq!(b.segments[0].redirects[0].target, "q w");
+        assert_eq!(b.segments[1].commands[0].head, "ls");
+
+        // A dangling `<<<` (with or without trailing blanks) is an empty
+        // operand.
+        for cmd in ["cat <<<", "cat <<<  "] {
+            let b = parse(cmd);
+            assert_eq!(b.segments[0].commands[0].head, "cat", "{cmd:?}");
+            assert_eq!(b.segments[0].redirects[0].target, "", "{cmd:?}");
         }
-        assert_eq!(parse("$\"rm\" -rf /").segments[0].commands[0].head, "rm");
     }
 
     #[test]
-    fn ansi_c_helpers_stop_at_the_end_of_input() {
-        let mut buf = String::new();
-        // Unterminated: the index is the input length, never past it.
-        assert_eq!(read_ansi_c_quoted(b"ab", 0, &mut buf), 2);
-        assert_eq!(buf, "ab");
-        // Hex digits running into the end of input.
-        assert_eq!(decode_ansi_c_escape(b"x72", 0), (0x72, 3));
-        assert_eq!(decode_ansi_c_escape(b"x7", 0), (0x7, 2));
-        // `\c` with nothing after it is kept literally.
-        assert_eq!(decode_ansi_c_escape(b"c", 0), (u32::from(b'\\'), 0));
-        assert_eq!(decode_ansi_c_escape(b"cJ", 0), (0x0a, 2));
-        // `\u` takes at most four hex digits.
-        assert_eq!(decode_ansi_c_escape(b"u00410", 0), (0x41, 5));
+    fn here_string_surfaces_command_substitution_bodies() {
+        let b = parse("cat <<< \"$(rm -rf /)\"");
+        assert!(b.has_command_substitution);
+        assert_eq!(
+            b.segments[0].commands[0].subst_argv,
+            vec![argv("rm", &["-rf", "/"])]
+        );
     }
 
     #[test]
@@ -2506,5 +2580,128 @@ mod tests {
             let s = String::from_utf8_lossy(&bytes).into_owned();
             let _ = parse(&s);
         }
+    }
+
+    #[test]
+    fn command_substitution_close_skips_quoted_parens() {
+        for cmd in [
+            "echo $(echo ')'); rm -rf /",
+            "echo \"$(echo \")\")\"; rm -rf /",
+            "echo \"$(echo '(')\" ; rm -rf /",
+            "echo $(echo `echo )`); rm -rf /",
+            "echo $(echo \\)) ; rm -rf /",
+            "echo $(echo \"$(echo \")\")\"); rm -rf /",
+            "echo $(echo \"$x\"); rm -rf /",
+            "echo $(echo \"`echo \"x\"`\"); rm -rf /",
+            "echo $(echo \"a\\\")b\"); rm -rf /",
+            "echo $( (echo a) ); rm -rf /",
+            "echo $( (echo (a)) ); rm -rf /",
+        ] {
+            let b = parse(cmd);
+            assert_eq!(b.segments.len(), 2, "{cmd:?} -> {b:?}");
+            assert_eq!(
+                b.segments[1].commands[0],
+                argv("rm", &["-rf", "/"]),
+                "{cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_substitution_bodies_are_exact() {
+        let b = parse("echo $(echo \\)) ; rm -rf /");
+        assert_eq!(
+            b.segments[0].commands[0].subst_argv,
+            vec![argv("echo", &[")"])]
+        );
+        // The whole substitution stays one word, however its body nests
+        // quotes, backquotes and parentheses.
+        for word in [
+            "$(a)b",
+            "$( (echo a) )",
+            "$( (echo (a)) )",
+            "$(echo \"$(echo \")\")\")",
+            "$(echo \"`echo \"x\"`\")",
+            "$(echo \"`echo \")\"`\")",
+            "$(echo \"a\\\")b\")",
+            "$(echo \"$x)\")",
+        ] {
+            let b = parse(&format!("echo {word} x"));
+            assert_eq!(b.segments[0].commands[0].args, [word, "x"], "{word:?}");
+        }
+    }
+
+    #[test]
+    fn unterminated_quote_inside_substitution_does_not_panic() {
+        for cmd in ["echo $(echo \"abc", "echo $(echo \"a\\", "echo $(echo \"`x"] {
+            let b = parse(cmd);
+            assert_eq!(b.segments[0].commands[0].head, "echo", "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn unterminated_command_substitution_still_surfaces_body() {
+        let b = parse("echo $(rm -rf /");
+        assert_eq!(
+            b.segments[0].commands[0].subst_argv,
+            vec![argv("rm", &["-rf", "/"])]
+        );
+    }
+
+    #[test]
+    fn ansi_c_quote_honours_escaped_quote() {
+        let b = parse("echo $'a\\'b' ; rm -rf /");
+        assert_eq!(b.segments.len(), 2);
+        assert_eq!(b.segments[0].commands[0], argv("echo", &["a'b"]));
+        assert_eq!(b.segments[1].commands[0], argv("rm", &["-rf", "/"]));
+    }
+
+    #[test]
+    fn ansi_c_quote_decodes_escapes() {
+        for (cmd, head) in [
+            ("$'rm' -rf /", "rm"),
+            ("$'\\x72m' -rf /", "rm"),
+            ("$'\\162m' -rf /", "rm"),
+            ("$'\\u0072m' -rf /", "rm"),
+            ("$'\\U00000072m' -rf /", "rm"),
+            // `\u` takes at most four hex digits, `\U` at most eight.
+            ("$'\\u00721'", "r1"),
+            ("$'\\U000000721'", "r1"),
+            ("$'r\\cJm'", "r\nm"),
+            ("$'\\q'", "\\q"),
+            ("$'\\x'", "\\x"),
+            ("$'a\\0b'", "a"),
+            ("$'\\a\\b\\e\\E\\f\\v'", "\u{7}\u{8}\u{1b}\u{1b}\u{c}\u{b}"),
+            ("$'1\\n2\\r3\\t4'", "1\n2\r3\t4"),
+            // Octal takes at most three digits, hex `\x` at most two.
+            ("$'\\1621'", "r1"),
+            ("$'\\x41B'", "AB"),
+            ("$'\\162'", "r"),
+            ("$'\\x72'", "r"),
+            // A trailing lone backslash in an unterminated span.
+            ("$'ab\\", "ab\\"),
+            // Digits running into the end of an unterminated span.
+            ("$'\\162", "r"),
+            ("$'\\x72", "r"),
+        ] {
+            assert_eq!(parse(cmd).segments[0].commands[0].head, head, "{cmd:?}");
+        }
+        assert_eq!(parse("$\"rm\" -rf /").segments[0].commands[0].head, "rm");
+    }
+
+    #[test]
+    fn ansi_c_helpers_stop_at_the_end_of_input() {
+        let mut buf = String::new();
+        // Unterminated: the index is the input length, never past it.
+        assert_eq!(read_ansi_c_quoted(b"ab", 0, &mut buf), 2);
+        assert_eq!(buf, "ab");
+        // Hex digits running into the end of input.
+        assert_eq!(decode_ansi_c_escape(b"x72", 0), (0x72, 3));
+        assert_eq!(decode_ansi_c_escape(b"x7", 0), (0x7, 2));
+        // `\c` with nothing after it is kept literally.
+        assert_eq!(decode_ansi_c_escape(b"c", 0), (u32::from(b'\\'), 0));
+        assert_eq!(decode_ansi_c_escape(b"cJ", 0), (0x0a, 2));
+        // `\u` takes at most four hex digits.
+        assert_eq!(decode_ansi_c_escape(b"u00410", 0), (0x41, 5));
     }
 }

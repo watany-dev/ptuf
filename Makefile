@@ -1,4 +1,4 @@
-.PHONY: build test test-opencode lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants mutants-diff semver tools tools-deny install-hooks
+.PHONY: build test test-opencode test-scripts lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants mutants-diff semver tools tools-deny install-hooks
 
 # Keep these aligned with .github/workflows/ci.yml and nightly.yml:
 # - CARGO_DENY_VERSION must match the cargo-deny pinned in
@@ -23,6 +23,11 @@ build:
 
 test:
 	cargo test --locked
+
+# stdlib-only unittests for scripts/*.py (requires Python 3.10+).
+# Not part of `make check`; CI runs it in the `test-scripts` job.
+test-scripts:
+	python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 
 # Executes the generated TypeScript callbacks (requires Node 24).
 test-opencode:
@@ -120,7 +125,9 @@ fuzz-soak: tools
 #               (`-f` is ignored while .cargo/mutants.toml sets
 #               examine_globs). Results: mutants.out/.
 # mutants-diff: only the mutants on lines changed since BASE (default
-#               origin/main). Mirrors the non-blocking PR `mutants-diff` job.
+#               origin/main), widened by scripts/mutants-diff.py to every
+#               source file whose tests lost a line. Mirrors the PR
+#               `mutants-diff` job, which fails on a missed mutant.
 MUTANTS_ENV  = CARGO_PROFILE_DEV_DEBUG=0
 MUTANTS_JOBS ?= 2
 BASE         ?= origin/main
@@ -131,7 +138,8 @@ mutants: tools
 mutants-diff: tools
 	mkdir -p target
 	git diff $(BASE)... > target/mutants.diff
-	$(MUTANTS_ENV) cargo mutants -j $(MUTANTS_JOBS) --in-diff target/mutants.diff $(ARGS)
+	python3 scripts/mutants-diff.py target/mutants.diff > target/mutants-widened.diff
+	$(MUTANTS_ENV) cargo mutants -j $(MUTANTS_JOBS) --in-diff target/mutants-widened.diff $(ARGS)
 
 # Public-API SemVer gate. Compares the working tree's exported surface
 # against the last release tag (see scripts/semver-baseline.sh); fails on
