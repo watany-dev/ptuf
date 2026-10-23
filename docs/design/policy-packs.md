@@ -64,20 +64,22 @@ head は `head_basename` で basename 化するため `/usr/bin/curl ... | /bin/
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
 | `core.secrets.sensitive-path-to-network` | deny | true | critical | 同一 pipeline (segment) 上で機密 path 参照と network sink (`curl`/`wget`/`nc`/`ncat`/`socat`/`telnet`/`scp`/`rsync`/`ftp`/`sftp`、および bash の `/dev/(tcp\|udp)/` への書き込み redirect) が共存。pipeline の redirect 先が機密 path の場合も対象。`ssh` は `ssh -i ~/.ssh/id_rsa host` 等の正当用途で偽陽性が多いため sink に含めない |
-| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする。書き込み本文 (`Write` content / `Edit` `new_string` / MCP `content` / `apply_patch` added 行) は実データ shape (PEM blob) のみ対象で、`~/.aws/credentials` 等の path 言及 (手順書の記載など) では発火しない |
+| `core.secrets.sensitive-read` | deny | true | high | `Read` / `Edit` / `Write` / `MultiEdit` / `NotebookEdit` (`notebook_path`) / `Grep` (`path`) / `apply_patch`、または path を持つ MCP tool で機密 path を直接対象にする。書き込み本文 (`Write` content / `Edit` `new_string` / `MultiEdit` `edits[].new_string` / `NotebookEdit` `new_source` / MCP `content` / `apply_patch` added 行) は実データ shape (PEM blob) のみ対象で、`~/.aws/credentials` 等の path 言及 (手順書の記載など) では発火しない |
 | `core.secrets.sensitive-bash-read` | ask | false | high | Bash の reader head (`cat`/`head`/`tail`/`source`/`.`/`grep`/`awk`/`sed`/`dd` 等) または `<` redirect が機密 path を読む |
 
 機密分類は `~/.ssh/**`, `~/.aws/**`, `~/.config/gcloud/**`, `~/.kube/config`,
-`~/.docker/config.json`, SSH 秘密鍵 `id_{rsa,dsa,ecdsa,ed25519}`, `.env*`,
-`.npmrc`, `.pypirc`, `*.tfstate`, PEM blob など。
+`~/.docker/config.json`, SSH 秘密鍵 `id_{rsa,dsa,ecdsa,ed25519}`, `.env*` /
+`.envrc`, `.npmrc`, `.pypirc`, `*.tfstate`, `.netrc`, `.git-credentials`,
+`~/.gnupg/**`, `~/.config/gh/hosts.yml`, `~/.azure/**`, `.vault-token`,
+`*.key` / `*.p12` / `*.pfx`, PEM blob など。
 機密 path の分類器は `src/facts/sensitive.rs` の `PROBES` 1 系統のみ。
 Bash 系ルールは yes/no を返す `sensitive::matches` (`src/rules/patterns.rs` の
 `matches_sensitive_path` が委譲)、ファイルツール / MCP 系は typed な
 `classify` を使うが、どちらも同じ `PROBES` を引く。PEM blob の
 header / footer パターンは `PEM_PRIVATE_KEY_{BEGIN,END}` として audit redactor
 (`src/audit/redaction.rs`) とも共有する。
-`.npmrc` / `.pypirc` は `~/.npmrc` のようにパス境界 (`^` / `/` / 空白 /
-`~`・`$HOME`・`${HOME}` + `/`) に接する場合のみ機密とみなし、`data.npmrc`
+`.npmrc` / `.pypirc` / `.netrc` などの dotfile は `~/.npmrc` のようにパス境界
+(`^` / `/` / 空白 / `=`・`@`・`<`・`:` / `~`・`$HOME`・`${HOME}` + `/`) に接する場合のみ機密とみなし、`data.npmrc`
 のような lookalike は除外する。2 系統の一致は
 `pbt_sensitive_path_matches_classify` property (`src/rules/patterns.rs`) と
 engine レベルの `pbt_sensitive_path_parity_across_surfaces`
@@ -236,7 +238,7 @@ opaque なので、`core.engine.dynamic-eval` が `Ask` を返してユーザに
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.injection.invisible-chars` | ask | false | high | `Read` / `Edit` / path を持つ MCP tool / Bash の reader head が読み込むファイルの中身に、人間のレビュアーには見えない文字が含まれる |
+| `core.injection.invisible-chars` | ask | false | high | `Read` / `Edit` / `MultiEdit` / `NotebookEdit` / `Grep` (`path`) / path を持つ MCP tool / Bash の reader head が読み込むファイルの中身に、人間のレビュアーには見えない文字が含まれる |
 
 ptuf の他 rule は tool 入力 (path 文字列・コマンド文字列) を判定するが、
 本 rule は唯一「対象ファイルを開いて中身を検査する」rule。レビュアーには

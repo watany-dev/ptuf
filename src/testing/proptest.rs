@@ -288,7 +288,7 @@ pub(crate) fn protected_kind() -> impl Strategy<Value = ProtectedKind> {
     ]
 }
 
-/// All eleven `SensitiveKind` variants drawn uniformly.
+/// All `SensitiveKind` variants drawn uniformly.
 pub(crate) fn sensitive_kind() -> impl Strategy<Value = SensitiveKind> {
     prop_oneof![
         Just(SensitiveKind::SshDir),
@@ -302,6 +302,15 @@ pub(crate) fn sensitive_kind() -> impl Strategy<Value = SensitiveKind> {
         Just(SensitiveKind::Pypirc),
         Just(SensitiveKind::Tfstate),
         Just(SensitiveKind::PemBlob),
+        Just(SensitiveKind::Netrc),
+        Just(SensitiveKind::GitCredentials),
+        Just(SensitiveKind::GnupgDir),
+        Just(SensitiveKind::GhHosts),
+        Just(SensitiveKind::AzureDir),
+        Just(SensitiveKind::VaultToken),
+        Just(SensitiveKind::KeyFile),
+        Just(SensitiveKind::P12File),
+        Just(SensitiveKind::PfxFile),
     ]
 }
 
