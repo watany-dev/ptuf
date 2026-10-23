@@ -3,7 +3,7 @@
 //! `git -c` / `--config` or a persistent `git config` write), and which
 //! of those values git will run as a shell command.
 
-use crate::facts::shell::{Argv, unwrap_all_prefix_wrappers};
+use crate::facts::shell::{Argv, head_basename, unwrap_all_prefix_wrappers};
 
 /// Global `git` options that take the next token as their value.
 const GLOBAL_VALUE_FLAGS: &[&str] = &[
@@ -112,6 +112,11 @@ fn subcommand(argv: &Argv) -> Option<(usize, &str)> {
 /// `--config key=value`, `--config=key=value`, and a persistent
 /// `git config [scope] key value` / `git config set key value`.
 pub(crate) fn config_assignments(argv: &Argv) -> Vec<(String, String)> {
+    // Every parsed command passes through here; skip the wrapper-unwrap
+    // clone unless `git` can be the head (`git …`, `sudo git …`).
+    if argv.head_basename() != "git" && !argv.args.iter().any(|a| head_basename(a) == "git") {
+        return Vec::new();
+    }
     let argv = unwrap_all_prefix_wrappers(argv);
     if argv.head_basename() != "git" {
         return Vec::new();
@@ -168,11 +173,21 @@ fn persistent_assignment(args: &[String]) -> Option<(String, String)> {
 
 /// Whether git runs `value` of `key` as a shell command.
 pub(crate) fn is_exec_assignment(key: &str, value: &str) -> bool {
+    exec_payload(key, value).is_some()
+}
+
+/// The shell code git runs for `key = value`, if any: the value itself
+/// for exec keys, or an alias body with its leading `!` stripped.
+fn exec_payload<'v>(key: &str, value: &'v str) -> Option<&'v str> {
     let key = key.to_ascii_lowercase();
     if key.starts_with("alias.") {
-        return value.trim_start().starts_with('!');
+        let body = value.trim_start();
+        return body.starts_with('!').then(|| body.trim_start_matches('!'));
     }
-    EXEC_KEYS.iter().any(|p| key_matches(p, &key))
+    EXEC_KEYS
+        .iter()
+        .any(|p| key_matches(p, &key))
+        .then_some(value)
 }
 
 fn key_matches(pattern: &str, key: &str) -> bool {
@@ -192,15 +207,8 @@ fn key_matches(pattern: &str, key: &str) -> bool {
 /// the values of exec keys, with an alias's leading `!` stripped.
 pub(crate) fn exec_payloads(argv: &Argv) -> Vec<String> {
     config_assignments(argv)
-        .into_iter()
-        .filter(|(k, v)| is_exec_assignment(k, v))
-        .map(|(k, v)| {
-            if k.to_ascii_lowercase().starts_with("alias.") {
-                v.trim_start().trim_start_matches('!').to_owned()
-            } else {
-                v
-            }
-        })
+        .iter()
+        .filter_map(|(k, v)| exec_payload(k, v).map(str::to_owned))
         .collect()
 }
 
