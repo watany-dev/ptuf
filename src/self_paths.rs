@@ -692,10 +692,11 @@ fn candidate_targets<'a>(
     let mut out = Vec::new();
     // Edit / Write / Read all expose `file_path`.
     for fp in paths {
-        out.push(Candidate::Exact(match base_dir {
-            Some(root) if fp.absolute.is_relative() => root.join(&fp.absolute),
-            _ => fp.absolute.clone(),
-        }));
+        // `join` keeps an absolute path as is.
+        out.push(Candidate::Exact(base_dir.map_or_else(
+            || fp.absolute.clone(),
+            |root| root.join(&fp.absolute),
+        )));
     }
     // Bash invocations carry destinations as positional args; collect
     // every positional that looks like a path. Don't try to interpret
