@@ -52,7 +52,7 @@ runs the call. A few examples of what fires by default:
 - **`core.secrets.sensitive-read`** — blocks `Read`/`Edit`/`Write`/`Grep`/
   `apply_patch` and path-bearing MCP calls against credential files
   (`.env`, `~/.aws/credentials`, `id_rsa`, `*.pem`, `.npmrc`,
-  `.tfstate`) so they never enter the agent's transcript.
+  `.tfstate`, `.netrc`, `.git-credentials`, `*.key`) so they never enter the agent's transcript.
 - **`core.secrets.sensitive-bash-read`** — asks before Bash readers
   (`cat`, `head`, `source`, `awk`, `<` redirect, …) target a credentials
   file, even without a network sink. Catches `cat .env`, `source .env`,

@@ -132,6 +132,9 @@ pub(crate) enum UpdateError {
         url: String,
         code: i32,
     },
+    /// A `--version` value or `Location` tag that is not a release
+    /// version. Refused before it reaches a URL or a command line.
+    InvalidTag(String),
 }
 
 impl std::fmt::Display for UpdateError {
@@ -181,6 +184,10 @@ impl std::fmt::Display for UpdateError {
             Self::DownloadFailed { url, code } => {
                 write!(f, "failed to download installer from {url} (exit {code})")
             },
+            Self::InvalidTag(tag) => write!(
+                f,
+                "invalid release version {tag:?}; expected e.g. v1.2.3 or 1.2.3-rc.1",
+            ),
         }
     }
 }
@@ -195,7 +202,8 @@ impl std::error::Error for UpdateError {
             | Self::UpdaterExitCode { .. }
             | Self::AttestationToolMissing { .. }
             | Self::AttestationFailed { .. }
-            | Self::DownloadFailed { .. } => None,
+            | Self::DownloadFailed { .. }
+            | Self::InvalidTag(_) => None,
         }
     }
 }
@@ -327,6 +335,34 @@ fn fetch_latest_tag<S: Spawner>(spawner: &S) -> Result<String, UpdateError> {
     }
     let body = String::from_utf8_lossy(&outcome.stdout);
     parse_redirect_tag(&body)
+}
+
+/// True for a release tag: `v?MAJOR.MINOR.PATCH` with an optional
+/// `-prerelease` of `[0-9A-Za-z.-]`. Anything else (quotes, `/`, `..`,
+/// whitespace) would be spliced into a download URL and, on Windows, a
+/// PowerShell command string, so it is rejected up front.
+fn is_release_tag(tag: &str) -> bool {
+    let bare = strip_v_prefix(tag);
+    let (core, pre) = match bare.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (bare, None),
+    };
+    let parts: Vec<&str> = core.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && pre.is_none_or(|pre| {
+            !pre.is_empty()
+                && pre
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        })
+}
+
+/// Quote `s` as a PowerShell single-quoted string literal.
+fn powershell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
 }
 
 /// Strip a leading `v` from a tag string for cargo's `--version` flag,
@@ -464,7 +500,11 @@ pub(crate) fn build_prebuilt_plan(
                     args: vec![
                         "-NoProfile".to_string(),
                         "-Command".to_string(),
-                        format!("iwr -useb '{url}' -OutFile '{tmp}'"),
+                        format!(
+                            "iwr -useb {} -OutFile {}",
+                            powershell_quote(&url),
+                            powershell_quote(&tmp),
+                        ),
                     ],
                 },
                 verify: (!skip_attestation).then(|| build_attestation_verify(&tmp)),
@@ -498,16 +538,38 @@ fn build_attestation_verify(tmp: &str) -> InstallerCommand {
     }
 }
 
-/// Compute a process-unique tmp path for the prebuilt installer script.
-/// Uses `<system tmp>/ptuf-update-<pid>/installer.{sh,ps1}` so concurrent
-/// `ptuf update` invocations from the same shell don't collide.
+/// Compute a fresh tmp path for the prebuilt installer script:
+/// `<system tmp>/ptuf-update-<pid>-<nonce>/installer.{sh,ps1}`. The
+/// directory does not exist yet; `run_prebuilt_plan` creates it with
+/// `create_private_dir`, which refuses an existing one, so a directory
+/// another user planted at a guessed name is never reused.
 fn installer_tmp_path(platform: Platform) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("ptuf-update-{}", std::process::id()));
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let nonce = nanos
+        ^ COUNTER
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9E37_79B9);
+    let dir = std::env::temp_dir().join(format!("ptuf-update-{}-{nonce:08x}", std::process::id()));
     let name = match platform {
         Platform::Unix => "installer.sh",
         Platform::Windows => "installer.ps1",
     };
     dir.join(name)
+}
+
+/// Create `dir` as a new directory only this user can enter (0700 on
+/// Unix). Fails when `dir` already exists, whoever owns it: accepting
+/// an existing directory would let another local user swap the
+/// installer between `gh attestation verify` and its execution.
+fn create_private_dir(dir: &std::path::Path) -> io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
 }
 
 /// Top-level entry: drive the `ptuf update` flow against the injected
@@ -592,6 +654,10 @@ where
             },
         },
     };
+    if !is_release_tag(&tag) {
+        let _ = writeln!(stderr, "ptuf update: {}", UpdateError::InvalidTag(tag));
+        return 1;
+    }
     let normalised = strip_v_prefix(&tag);
 
     if opts.check {
@@ -697,7 +763,7 @@ fn run_prebuilt_plan<S: Spawner, W: Write>(
 ) -> u8 {
     if let Some(parent) = plan.tmp_path.parent()
         && !parent.as_os_str().is_empty()
-        && let Err(err) = std::fs::create_dir_all(parent)
+        && let Err(err) = create_private_dir(parent)
     {
         let _ = writeln!(
             stderr,
@@ -1075,6 +1141,117 @@ mod tests {
     }
 
     #[test]
+    fn powershell_download_command_quotes_url_and_path() {
+        // #332: defense in depth behind `is_release_tag`.
+        let tmp = PathBuf::from("C:\\Users\\o'brien\\ptuf.ps1");
+        let plan = build_prebuilt_plan("v1';calc;'", Platform::Windows, &tmp, true);
+        let cmd = &plan.download.args[2];
+        assert!(cmd.contains("v1'';calc;''"), "cmd: {cmd}");
+        assert!(cmd.contains("o''brien"), "cmd: {cmd}");
+    }
+
+    #[test]
+    fn is_release_tag_accepts_only_versions() {
+        for ok in [
+            "v0.2.0",
+            "0.2.0",
+            "v10.20.30",
+            "v1.2.3-rc.1",
+            "1.0.0-beta-2",
+        ] {
+            assert!(is_release_tag(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "v1",
+            "v1.2",
+            "v1.2.3.4",
+            "latest",
+            "v1';Start-Process calc;'",
+            "../v1.2.3",
+            "v1.2.3/../../x",
+            "v1.2.3-",
+            "v1.2.3 ",
+            "v1..3",
+            "v1.2.x",
+        ] {
+            assert!(!is_release_tag(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn run_rejects_invalid_pinned_version() {
+        let spawner = RecordingSpawner::new(vec![]);
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_with_platform(
+            UpdateOptions {
+                version: Some("v1';Start-Process calc;'".to_string()),
+                force: true,
+                ..UpdateOptions::default()
+            },
+            &spawner,
+            &system_locator(),
+            Platform::Windows,
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 1);
+        assert!(String::from_utf8_lossy(&err).contains("invalid release version"));
+        assert!(
+            spawner.calls().iter().all(|c| c.program != "powershell"),
+            "no installer step may run",
+        );
+    }
+
+    #[test]
+    fn run_rejects_invalid_redirect_tag() {
+        let spawner = RecordingSpawner::new(vec![ok(&redirect_headers("v1.2.3/../../evil"))]);
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_with_platform(
+            UpdateOptions {
+                force: true,
+                ..UpdateOptions::default()
+            },
+            &spawner,
+            &system_locator(),
+            Platform::Unix,
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 1);
+        assert!(String::from_utf8_lossy(&err).contains("invalid release version"));
+    }
+
+    #[test]
+    fn installer_tmp_dirs_are_fresh_and_private() {
+        // #331: two calls never share a directory, and an existing
+        // directory is refused rather than reused.
+        let a = installer_tmp_path(Platform::Unix);
+        let b = installer_tmp_path(Platform::Unix);
+        assert_ne!(a.parent(), b.parent());
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let planted = dir.path().join("planted");
+        std::fs::create_dir(&planted).expect("plant");
+        assert_eq!(
+            create_private_dir(&planted).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists,
+        );
+        let fresh = dir.path().join("fresh");
+        create_private_dir(&fresh).expect("create");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&fresh)
+                .expect("meta")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "mode {mode:o}");
+        }
+    }
+
+    #[test]
     fn build_prebuilt_plan_includes_verify_when_attestation_required() {
         let tmp = PathBuf::from("/tmp/ptuf-installer.sh");
         let plan = build_prebuilt_plan("v0.2.0", Platform::Unix, &tmp, false);
@@ -1360,6 +1537,7 @@ mod tests {
                 url: "https://example.com/installer.sh".to_string(),
                 code: 22,
             },
+            UpdateError::InvalidTag("v1';x".to_string()),
         ];
         for err in cases {
             let s = err.to_string();
