@@ -342,9 +342,10 @@ fn scan_bytes(buf: &[u8], origin: Origin) -> Option<Finding> {
 /// 1 / `BINARY_JUNK_RATIO` of the buffer and number at least
 /// `BINARY_JUNK_MIN`.
 fn looks_binary(buf: &[u8]) -> bool {
-    let nul = memchr::memchr_iter(0, buf).count();
-    let invalid: usize = buf.utf8_chunks().map(|c| c.invalid().len()).sum();
-    let junk = nul + invalid;
+    let junk: usize = buf
+        .utf8_chunks()
+        .map(|c| c.invalid().len() + memchr::memchr_iter(0, c.valid().as_bytes()).count())
+        .sum();
     junk >= BINARY_JUNK_MIN && junk * BINARY_JUNK_RATIO >= buf.len()
 }
 
