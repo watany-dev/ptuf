@@ -4,9 +4,9 @@
 //! `outside-access` denies any `Read` / `Edit` / `Write` / `apply_patch`
 //! / MCP `path` / Bash redirect target / Bash reader or writer file
 //! operand (`cat FILE`, `cp SRC DST`, `tee FILE`, `dd of=FILE`) whose
-//! canonical destination falls outside the boundary set. The boundary set comes from the engine's
-//! `repo_root` plus `packs.core.workspace.additionalWorkspaces` from the
-//! merged config.
+//! canonical destination falls outside the boundary set. The boundary
+//! set comes from the engine's `repo_root` plus
+//! `packs.core.workspace.additionalWorkspaces` from the merged config.
 //!
 //! Path resolution applies `canonicalize` to both candidate and
 //! boundary so symlinks and `..` traversals are collapsed before the
