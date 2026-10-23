@@ -19,10 +19,12 @@ Cloudflare のアカウント設定を監査する API ツールではない。
 | ツール | 読込先 |
 | --- | --- |
 | Claude Code | `.claude/skills/security-audit/SKILL.md` |
-| Codex | `.codex/skills/security-audit/SKILL.md` |
+| Codex | `.agents/skills/security-audit/SKILL.md` |
+| 従来の Codex 共有設定 | `.codex/skills/security-audit/SKILL.md` |
 
 実体は `.claude/skills/security-audit/`。
-既存の `.codex/skills -> ../.claude/skills` で Codex も同じ実体を参照する。
+`.agents/skills/security-audit` はその実体への相対シンボリックリンク。
+既存の `.codex/skills -> ../.claude/skills` でも同じ実体を参照する。
 
 ## 使い方
 

@@ -26,3 +26,11 @@ When a skill calls another skill, read its `.agents/skills/<name>/SKILL.md` and
 follow those steps in the current task.
 
 Start a new Codex session in this repository if it has not discovered the skills.
+
+## Security audit
+
+Invoke `$security-audit` in Codex or `/security-audit` in Claude Code to use
+[Cloudflare's official security audit skill](https://github.com/cloudflare/security-audit-skill).
+Automatic invocation is disabled for both tools. `.agents/skills/security-audit`
+is a symlink to `.claude/skills/security-audit`, so both read the same files; see
+its [installation notes](../../.claude/skills/security-audit/INSTALLATION.ja.md).
