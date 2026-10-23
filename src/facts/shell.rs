@@ -1048,7 +1048,7 @@ fn brace_product(
     for prefix in prefixes {
         for alternative in alternatives {
             let word = format!("{prefix}{literal}{alternative}");
-            *budget = budget.saturating_sub(word.len() + 1);
+            *budget = budget.saturating_sub(word.len().max(1));
             if seen.insert(word.clone()) {
                 out.push(word);
             }
@@ -2332,6 +2332,13 @@ mod tests {
 
     #[test]
     fn brace_expansion_is_capped() {
+        // One group with more alternatives than the cap.
+        let alts: Vec<String> = (0..300).map(|n| format!("w{n}")).collect();
+        let b = parse(&format!("echo {{{}}}", alts.join(",")));
+        assert_eq!(
+            b.segments[0].commands[0].args.len(),
+            BRACE_EXPANSION_CAP + 1
+        );
         let b = parse("echo {a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}");
         assert_eq!(
             b.segments[0].commands[0].args.len(),
