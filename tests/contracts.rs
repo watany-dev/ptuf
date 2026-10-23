@@ -78,17 +78,15 @@ fn npm_layout_init_dry_run_uses_native_binary_path() {
     perms.set_mode(0o755);
     std::fs::set_permissions(&native, perms).expect("chmod native");
 
-    let mut child = spawn_retrying_etxtbsy(|| {
-        Command::new(&native)
-            .args(["--json", "init", "codex", "--dry-run"])
-            .current_dir(dir.path())
-            .env("HOME", dir.path())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-    })
-    .expect("spawn npm-layout ptuf");
+    let mut command = Command::new(&native);
+    command
+        .args(["--json", "init", "codex", "--dry-run"])
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = spawn_retrying_etxtbsy(|| command.spawn()).expect("spawn npm-layout ptuf");
     drop(child.stdin.take());
     let output = child.wait_with_output().expect("wait");
     let code = output.status.code().expect("exit code");
