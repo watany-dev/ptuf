@@ -458,7 +458,9 @@ impl ProtectedPaths {
             .map(|(kind, _)| kind)
     }
 
-    fn match_path(&self, candidate: &Path) -> Option<ProtectedKind> {
+    /// Which protected file, if any, `candidate` names (string-equal or
+    /// equal after canonicalisation).
+    pub(crate) fn match_path(&self, candidate: &Path) -> Option<ProtectedKind> {
         // `candidate` is constant across every target list, so its
         // `canonicalize` (a syscall) is computed lazily at most once
         // per call instead of once per (candidate, target) pair.

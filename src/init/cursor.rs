@@ -24,7 +24,7 @@ const TMP_BASENAME: &str = "hooks.json";
 /// the hook; the alternation covers ptuf's canonical tool vocabulary plus
 /// the `mcp__*` family.
 pub(crate) const DEFAULT_MATCHER: &str =
-    "Shell|Bash|Read|ReadFile|Write|Edit|MCP|WebFetch|Fetch|mcp__.*";
+    "Shell|Bash|Read|ReadFile|Grep|Write|Edit|Delete|MCP|WebFetch|Fetch|mcp__.*";
 
 /// Default repo-relative (and home-relative) path for the Cursor hook
 /// file.

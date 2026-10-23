@@ -2,16 +2,19 @@
 //!
 //! - `core.git.no-verify` — skips pre-commit / commit-msg / pre-push hooks.
 //! - `core.git.no-gpg-sign` — disables required commit/tag signing.
-//! - `core.git.config-override-bypass` — `git -c <key>=<value>` that turns
-//!   off hooks / signing / fsck for a single invocation.
+//! - `core.git.config-override-bypass` — `git -c <key>=<value>` (or a
+//!   persistent `git config <key> <value>`) that turns off hooks /
+//!   signing / fsck.
+//! - `core.git.config-exec-command` — sets a config key whose value git
+//!   runs as a shell command (`core.sshCommand`, `core.pager`,
+//!   `alias.x='!…'`, …).
 //! - `core.git.env-bypass` — inline `HUSKY=0` / `LEFTHOOK=0` / `SKIP=` etc.
 
 use crate::decision::{DecisionKind, Severity};
 use crate::facts::shell::Argv;
 
 use super::argv::{
-    BypassMatch, args_after_subcommand, bypass_value_matches, config_overrides, git_subcommand,
-    matches_env_keys,
+    BypassMatch, args_after_subcommand, bypass_value_matches, git_subcommand, matches_env_keys,
 };
 use super::{GitRule, RuleSpec};
 
@@ -109,22 +112,24 @@ pub(super) fn matches_config_override_bypass(argv: &Argv) -> bool {
     let Some(sub) = git_subcommand(argv) else {
         return false;
     };
-    if !BYPASS_SCOPE_SUBCOMMANDS.contains(&sub) {
+    // `git config KEY VALUE` persists the same bypass for every later
+    // invocation, so it counts regardless of the scope list.
+    if !BYPASS_SCOPE_SUBCOMMANDS.contains(&sub) && sub != "config" {
         return false;
     }
-    for raw in config_overrides(argv) {
-        let Some(eq) = raw.find('=') else {
-            continue;
-        };
-        let key = raw[..eq].trim();
-        let value = &raw[eq + 1..];
-        for (target_key, mode) in CONFIG_BYPASS_KEYS {
-            if key.eq_ignore_ascii_case(target_key) && bypass_value_matches(*mode, value) {
-                return true;
-            }
-        }
-    }
-    false
+    crate::facts::git::config_assignments(argv)
+        .iter()
+        .any(|(key, value)| {
+            CONFIG_BYPASS_KEYS.iter().any(|(target_key, mode)| {
+                key.eq_ignore_ascii_case(target_key) && bypass_value_matches(*mode, value)
+            })
+        })
+}
+
+pub(super) fn matches_config_exec_command(argv: &Argv) -> bool {
+    crate::facts::git::config_assignments(argv)
+        .iter()
+        .any(|(key, value)| crate::facts::git::is_exec_assignment(key, value))
 }
 
 pub(super) fn matches_env_bypass(argv: &Argv) -> bool {
@@ -177,6 +182,22 @@ const CONFIG_OVERRIDE_BYPASS: RuleSpec = RuleSpec {
     ],
 };
 
+const CONFIG_EXEC_COMMAND: RuleSpec = RuleSpec {
+    id: "core.git.config-exec-command",
+    severity: Severity::High,
+    decision_kind: DecisionKind::Ask,
+    hard_deny: false,
+    matcher: matches_config_exec_command,
+    problem: "This git invocation sets a config key whose value git runs as a shell command \
+         (core.sshCommand, core.pager, core.editor, credential.helper, diff/filter drivers, \
+         `alias.x='!…'`, …). The command runs outside what ptuf can inspect, either now \
+         (`git -c`) or on every later git call (`git config`).",
+    alternatives: &[
+        "Run the intended command directly so it can be checked.",
+        "Show the configured command to the user before approving.",
+    ],
+};
+
 const ENV_BYPASS: RuleSpec = RuleSpec {
     id: "core.git.env-bypass",
     severity: Severity::High,
@@ -199,3 +220,6 @@ pub(crate) static CONFIG_OVERRIDE_BYPASS_RULE: GitRule = GitRule {
     spec: &CONFIG_OVERRIDE_BYPASS,
 };
 pub(crate) static ENV_BYPASS_RULE: GitRule = GitRule { spec: &ENV_BYPASS };
+pub(crate) static CONFIG_EXEC_COMMAND_RULE: GitRule = GitRule {
+    spec: &CONFIG_EXEC_COMMAND,
+};
