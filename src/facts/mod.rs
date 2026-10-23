@@ -153,7 +153,8 @@ fn collect_sensitive(
     {
         sensitive::classify_content_into(&body, &mut out);
     }
-    if let Some(b) = bash {
+    // Only parse for patch bodies when the line can reach `apply_patch`.
+    if let Some(b) = bash.filter(|_| event.command.is_some_and(patch::may_invoke_from_shell)) {
         for body in patch::bash_bodies(b) {
             if let Some(added) = patch::added_content(&body) {
                 sensitive::classify_content_into(&added, &mut out);

@@ -28,8 +28,8 @@ pub(crate) fn bash_bodies(bash: &Bash) -> Vec<String> {
             let argv = shell::unwrap_all_prefix_wrappers(c);
             if SHELL_HEADS.contains(&argv.head_basename()) {
                 hit = true;
-                if let Some(first) = argv.args.iter().find(|a| !a.starts_with('-')) {
-                    out.push(first.clone());
+                if let Some(first) = argv.positional().next() {
+                    out.push(first.to_owned());
                 }
             }
         }
