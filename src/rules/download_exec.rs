@@ -101,17 +101,18 @@ impl ConfigRule for DownloadThenExec {
 /// of a `>` / `>>` redirect on a pipeline that runs a fetcher.
 fn downloaded_paths(bash: &Bash) -> Vec<String> {
     let mut out = Vec::new();
+    let mut cmds = Vec::new();
     for pipe in &bash.segments {
-        let mut has_fetcher = false;
+        cmds.clear();
         for c in &pipe.commands {
-            let mut cmds = Vec::new();
             c.collect_commands(&mut cmds);
-            for c in cmds {
-                let argv = unwrap_all_prefix_wrappers(c);
-                if is_head(FETCHER_HEADS, argv.head_basename()) {
-                    has_fetcher = true;
-                    fetcher_outputs(&argv, &mut out);
-                }
+        }
+        let mut has_fetcher = false;
+        for c in &cmds {
+            let argv = unwrap_all_prefix_wrappers(c);
+            if is_head(FETCHER_HEADS, argv.head_basename()) {
+                has_fetcher = true;
+                fetcher_outputs(&argv, &mut out);
             }
         }
         if has_fetcher {
