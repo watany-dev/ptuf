@@ -53,7 +53,7 @@ P1 として削除)。embed 利用者は `Engine::builder()` 直接利用も可�
 | --- | --- |
 | `bash` | `Bash` tool の `command` を parse した command / segment / pipeline。`Pipeline.redirects` で `>` / `>>` / `<` / `2>` / `&>` / heredoc の operator と target を保持する。`Bash::has_command_substitution` / `has_redirect` / `has_heredoc` / `has_process_substitution` で `` ` … ` `` / `$(…)` / リダイレクト / heredoc / `<(…)` `>(…)` の存在を surface する。`Argv.inner_argv` / `inner_code` / `inner_redirects` は `bash -c`, `su -c`, `eval`, `xargs`, `find -exec` の内側 command と redirect を bounded depth で再 parse し、既存 rule と self-protection が inspectable な形に連結する。`Argv.subst_argv` は `` `…` `` / `$(…)` / `<(…)` / `>(…)` 本体を同じ budget で再 parse した列で、`inner_argv` には混ぜない (ADR 0008 / ADR 0003 C)。`Bash::commands()` は両者を flatten する。rule / plugin DSL は評価前に `unwrap_all_prefix_wrappers` で `sudo` / `env` / `timeout` 等の prefix を全層 peel する (`unwrap_prefix_wrapper` は 1 層) |
 | `path` | 先頭の file path (`Read` / `Edit` / `Write` / MCP の top-level `path`)。`PathFact` として `raw` / `expanded` / `absolute` / `canonical_or_raw` / `origin` を保持する |
-| `paths` | tool 入力 (`Read` / `Edit` / `Write` / `apply_patch` / MCP) 由来の全 `PathFact`。`Read` / `Edit` / `Write` の `paths[]` (string array) と `operations[].path` (object array) も canonical な `file_path` と並んで重複排除しつつ収集する (Kiro batch read/write 経路用)。Bash redirect target はここには含まれない (engine が self-protection 用に別 slice として供給する) |
+| `paths` | tool 入力 (`Read` / `Edit` / `Write` / `apply_patch` / MCP) 由来の全 `PathFact`。`Read` / `Edit` / `Write` の `paths[]` (string array) と `operations[].path` (object array) も canonical な `file_path` と並んで重複排除しつつ収集する (Kiro batch read/write 経路用)。Bash の head が `apply_patch` / `applypatch` の場合 (Codex が shell から横取りして内部 apply_patch として実行する形) は、第 1 引数と heredoc 本文を patch として解釈した path も `ApplyPatch` として入る。`apply_patch` tool の本文は `command` → `input` → `patch` の順で読む。Bash redirect target はここには含まれない (engine が self-protection 用に別 slice として供給する) |
 | `url` | `WebFetch` または MCP の top-level `url` |
 | `sensitive` | path / URL / write payload などから検出した機密分類 |
 | `protected` | self-protection 対象との一致。engine 側で `Facts.paths` と Bash redirect target (`Pipeline.redirects[].target` に加え wrapper 由来の `Argv.inner_redirects[].target`) を `ProtectedPaths::classify_input_prepared` に二本のスライスとして渡して補完する。戻り値は固定長の `ProtectedKinds` (`[ProtectedKind; 12] + len`) で、中間 path clone や `ProtectedKind` 用 heap allocation は発生させない |
@@ -156,7 +156,7 @@ Cline 入力は CLI 層の `src/cli/cline_input.rs` で SDK 形 (`tool_call`) �
 legacy 形 (`preToolUse`) の両 envelope を正規化する。`tool_call` がある場合は
 `hookName == "tool_call"` を要求して優先採用し、無ければ `preToolUse` を
 `hookName ∈ {"PreToolUse","tool_call"}` で採用する。tool 名 mapping
-(`run_commands` / `execute_command` / `bash`→`Bash`、`read_files`→`Read`、
+(`run_commands` / `execute_command` / `bash`→`Bash`、`read_files` / `search_files`→`Read`、
 `write_file`→`Write`、`use_mcp_tool`→`mcp__server__tool` 等) を適用し、
 alias キー (`command` / `file_path` / `content` 等) を非破壊的に正規化する。
 
@@ -170,7 +170,7 @@ enforce 対象は `preToolUse` (tool 名を canonical 形へ正規化) /
 `beforeShellExecution`→`Bash` / `beforeReadFile`→`Read` /
 `beforeMCPExecution`→`mcp__server__tool` で、それ以外の event は MVP では
 `core.engine.invalid-payload` で fail-closed する。tool 名 mapping
-(`Shell` / `Bash`→`Bash`、`Read` / `ReadFile`→`Read`、`Write`→`Write`、
+(`Shell` / `Bash`→`Bash`、`Read` / `ReadFile` / `Grep`→`Read`、`Write` / `Delete`→`Write`、
 `Edit`→`Edit`、`Fetch`→`WebFetch`、`MCP` / `mcp__*`→`mcp__server__tool`) を
 適用し、`tool_input` (camelCase `toolInput` / root も読む) の `command` /
 `file_path` / `content` / `old_string` / `new_string` を alias から非破壊的に
@@ -239,7 +239,9 @@ CLI 経路 (`hook`, `eval`) は config / plugin のロードに失敗すると
 `failClosed: false` でも変わらない。設定ファイル自体が読めない状況では、その設定を
 信用できないためである。
 
-`hook` はさらに stdin 読み取り失敗 / 8 MiB 上限超過 / JSON parse 失敗を
+`hook` はさらに stdin 読み取り失敗 / 8 MiB 上限超過 / JSON parse 失敗、
+および adapter 正規化後に `tool_name == "Bash"` なのに `tool_input.command` が
+文字列でない payload (配列・欠落・`tool_input` 自体が文字列など) を
 `core.engine.invalid-payload` で deny する (exit `2` + adapter の deny JSON)。
 Claude Code の hook 仕様では exit `1` が non-blocking warning として扱われ
 tool 実行を止めないため、これらの初期化エラーを exit `1` のまま放置すると
