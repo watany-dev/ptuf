@@ -929,36 +929,92 @@ fn push_latin1(buf: &mut String, bytes: &[u8]) {
 /// Balance-absorb a parenthesised group. `*i` points at the first byte
 /// *after* the opening `(`. Appends through the matching `)` into `buf`.
 /// When `bodies` is `Some`, also pushes the inner slice for subst re-entry.
+///
+/// The matching `)` is found with [`find_group_close`], which skips
+/// quoted spans, so a `)` or `"` inside `$(echo ')')` cannot close the
+/// group early and desynchronise the caller's quote state.
 fn absorb_parens(bytes: &[u8], i: &mut usize, buf: &mut String, bodies: Option<&mut Vec<String>>) {
-    let body_start = *i;
-    let mut depth: usize = 1;
-    while *i < bytes.len() && depth > 0 {
-        let run = *i;
-        *i += memchr::memchr2(b'(', b')', &bytes[*i..]).unwrap_or(bytes.len() - *i);
-        push_latin1(buf, &bytes[run..*i]);
-        if *i >= bytes.len() {
-            break;
+    let close = find_group_close(bytes, *i);
+    // Unterminated: still surface the remainder so its commands are
+    // re-parsed rather than hidden inside an opaque word.
+    let body = &bytes[*i..close.unwrap_or(bytes.len())];
+    if let Some(bodies) = bodies {
+        let body = latin1_slice(body);
+        buf.push_str(&body);
+        if !body.is_empty() {
+            bodies.push(body);
         }
-        let pc = bytes[*i];
-        if pc == b'(' {
-            depth += 1;
-        } else {
-            depth -= 1;
-            if depth == 0 {
-                if let Some(bodies) = bodies {
-                    let body = latin1_slice(&bytes[body_start..*i]);
-                    if !body.is_empty() {
-                        bodies.push(body);
-                    }
-                }
-                buf.push(')');
-                *i += 1;
-                break;
-            }
-        }
-        buf.push(pc as char);
-        *i += 1;
+    } else {
+        push_latin1(buf, body);
     }
+    if let Some(close) = close {
+        buf.push(')');
+        *i = close + 1;
+    } else {
+        *i = bytes.len();
+    }
+}
+
+/// Index of the `)` that closes a group whose body starts at `start`,
+/// or `None` when the input ends first. Single quotes, double quotes
+/// (including a nested `$(…)` inside them), backquotes, and backslash
+/// escapes are skipped so their contents never count toward the depth.
+///
+/// Nesting is tracked on a heap stack rather than by recursion, so a
+/// hostile `$("$("$(…` chain cannot overflow the thread stack.
+fn find_group_close(bytes: &[u8], start: usize) -> Option<usize> {
+    // One entry per open context: `false` = a `(` group, `true` = a
+    // double-quoted span. The bottom entry is the group being closed.
+    let mut stack = vec![false];
+    let mut i = start;
+    while i < bytes.len() {
+        let in_quotes = *stack.last()?;
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'`' => i = skip_backquoted(bytes, i + 1)?,
+            b'"' if in_quotes => {
+                stack.pop();
+                i += 1;
+            },
+            b'$' if in_quotes && bytes.get(i + 1) == Some(&b'(') => {
+                stack.push(false);
+                i += 2;
+            },
+            _ if in_quotes => i += 1,
+            b'\'' => i = memchr::memchr(b'\'', &bytes[i + 1..])? + i + 2,
+            b'"' => {
+                stack.push(true);
+                i += 1;
+            },
+            b'(' => {
+                stack.push(false);
+                i += 1;
+            },
+            b')' => {
+                stack.pop();
+                if stack.is_empty() {
+                    return Some(i);
+                }
+                i += 1;
+            },
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Skip a backquoted span whose body starts at `start`; returns the
+/// index just past the closing `` ` ``.
+fn skip_backquoted(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'`' => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 /// Decode a byte slice the same way [`push_latin1`] appends — ASCII as
@@ -1334,6 +1390,22 @@ mod tests {
             inner_redirects: Vec::new(),
             subst_argv: Vec::new(),
         }
+    }
+
+    #[test]
+    fn find_group_close_survives_deep_quote_nesting() {
+        // `$("$("$(…` used to recurse once per level and overflow the stack.
+        let deep = "$(\"".repeat(200_000);
+        assert_eq!(find_group_close(deep.as_bytes(), 2), None);
+        assert_eq!(find_group_close(br#"echo "a)$(x)b")"#, 0), Some(14));
+        assert_eq!(find_group_close(b"a (b) c) d", 0), Some(7));
+    }
+
+    #[test]
+    fn skip_backquoted_steps_over_escaped_backquotes() {
+        // `\`` inside a backquoted span is a literal backquote, not the close.
+        assert_eq!(skip_backquoted(b"a\\`b`x", 0), Some(5));
+        assert_eq!(skip_backquoted(b"ab\\`", 0), None);
     }
 
     #[test]
@@ -2424,5 +2496,71 @@ mod tests {
             let s = String::from_utf8_lossy(&bytes).into_owned();
             let _ = parse(&s);
         }
+    }
+
+    #[test]
+    fn command_substitution_close_skips_quoted_parens() {
+        for cmd in [
+            "echo $(echo ')'); rm -rf /",
+            "echo \"$(echo \")\")\"; rm -rf /",
+            "echo \"$(echo '(')\" ; rm -rf /",
+            "echo $(echo `echo )`); rm -rf /",
+            "echo $(echo \\)) ; rm -rf /",
+            "echo $(echo \"$(echo \")\")\"); rm -rf /",
+            "echo $(echo \"$x\"); rm -rf /",
+            "echo $(echo \"`echo \"x\"`\"); rm -rf /",
+            "echo $(echo \"a\\\")b\"); rm -rf /",
+            "echo $( (echo a) ); rm -rf /",
+            "echo $( (echo (a)) ); rm -rf /",
+        ] {
+            let b = parse(cmd);
+            assert_eq!(b.segments.len(), 2, "{cmd:?} -> {b:?}");
+            assert_eq!(
+                b.segments[1].commands[0],
+                argv("rm", &["-rf", "/"]),
+                "{cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_substitution_bodies_are_exact() {
+        let b = parse("echo $(echo \\)) ; rm -rf /");
+        assert_eq!(
+            b.segments[0].commands[0].subst_argv,
+            vec![argv("echo", &[")"])]
+        );
+        // The whole substitution stays one word, however its body nests
+        // quotes, backquotes and parentheses.
+        for word in [
+            "$(a)b",
+            "$( (echo a) )",
+            "$( (echo (a)) )",
+            "$(echo \"$(echo \")\")\")",
+            "$(echo \"`echo \"x\"`\")",
+            "$(echo \"`echo \")\"`\")",
+            "$(echo \"a\\\")b\")",
+            "$(echo \"$x)\")",
+        ] {
+            let b = parse(&format!("echo {word} x"));
+            assert_eq!(b.segments[0].commands[0].args, [word, "x"], "{word:?}");
+        }
+    }
+
+    #[test]
+    fn unterminated_quote_inside_substitution_does_not_panic() {
+        for cmd in ["echo $(echo \"abc", "echo $(echo \"a\\", "echo $(echo \"`x"] {
+            let b = parse(cmd);
+            assert_eq!(b.segments[0].commands[0].head, "echo", "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn unterminated_command_substitution_still_surfaces_body() {
+        let b = parse("echo $(rm -rf /");
+        assert_eq!(
+            b.segments[0].commands[0].subst_argv,
+            vec![argv("rm", &["-rf", "/"])]
+        );
     }
 }

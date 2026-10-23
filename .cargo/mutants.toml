@@ -50,4 +50,13 @@ exclude_re = [
     # Stepping a lexer index backwards re-reads the same bytes forever.
     'replace \+ with - in (tokenize|read_word|read_heredoc_body|absorb_parens)',
     'replace Engine::builder -> EngineBuilder with Default::default\(\)',
+    # The quote-aware `$(…)` scanners: an index that steps backwards or not
+    # at all (including stubs that return a fixed early index) spins until
+    # the per-mutant timeout. `skip_backquoted`'s escape step (column 24) is
+    # still mutated and killed by a direct test.
+    'replace \+= with -= in (find_group_close|skip_double_quoted|skip_backquoted)',
+    'replace \+= with \*= in (find_group_close|skip_double_quoted)',
+    ':\d+:20: replace \+= with \*= in skip_backquoted',
+    'replace \+ with - in find_group_close',
+    'replace skip_(double_quoted|backquoted) -> Option<usize> with Some\([01]\)',
 ]
