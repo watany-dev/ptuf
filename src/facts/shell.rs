@@ -863,15 +863,9 @@ fn read_ansi_c_quoted(bytes: &[u8], start: usize, buf: &mut String) -> usize {
             (u32::from(bytes[i]), i + 1)
         };
         i = next;
-        if decoded == 0 {
-            truncated = true;
-        }
-        if truncated {
-            continue;
-        }
-        match char::from_u32(decoded) {
-            Some(ch) => buf.push(ch),
-            None => buf.push(char::REPLACEMENT_CHARACTER),
+        truncated |= decoded == 0;
+        if !truncated {
+            buf.push(char::from_u32(decoded).unwrap_or(char::REPLACEMENT_CHARACTER));
         }
     }
     if i < bytes.len() {
@@ -897,6 +891,11 @@ fn decode_ansi_c_escape(bytes: &[u8], i: usize) -> (u32, usize) {
         (value, j)
     };
     let simple = |v: u8| (u32::from(v), i + 1);
+    let hex = |max: usize| match digits(i + 1, max, 16) {
+        // No hex digits: bash keeps the escape literally.
+        (_, j) if j == i + 1 => (u32::from(b'\\'), i),
+        found => found,
+    };
     match bytes[i] {
         b'a' => simple(0x07),
         b'b' => simple(0x08),
@@ -910,20 +909,9 @@ fn decode_ansi_c_escape(bytes: &[u8], i: usize) -> (u32, usize) {
             let (v, j) = digits(i, 3, 8);
             (v & 0xff, j)
         },
-        b'x' | b'u' | b'U' => {
-            let max = match bytes[i] {
-                b'x' => 2,
-                b'u' => 4,
-                _ => 8,
-            };
-            let (v, j) = digits(i + 1, max, 16);
-            if j == i + 1 {
-                // No hex digits: bash keeps the escape literally.
-                (u32::from(b'\\'), i)
-            } else {
-                (v, j)
-            }
-        },
+        b'x' => hex(2),
+        b'u' => hex(4),
+        b'U' => hex(8),
         b'c' if i + 1 < bytes.len() => (u32::from(bytes[i + 1] & 0x1f), i + 2),
         // `\\`, `\'`, `\"`, `\?` decode to the byte itself; any other
         // escape is kept with its backslash.
