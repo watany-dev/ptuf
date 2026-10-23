@@ -786,10 +786,10 @@ fn user_layer_relative_plugin_path_resolves_against_config_dir() {
 fn tilde_audit_path_expands_home() {
     let fix = full_stack(LayerYaml::empty());
     std::fs::write(
-        fix.repo_root.join(".ptuf.yaml"),
+        fix.config_dir.join("config.yaml"),
         "version: 1\naudit:\n  path: ~/from-tilde.jsonl\n  enabled: true\n  includeDenied: true\n",
     )
-    .expect("project yaml");
+    .expect("user yaml");
     let (code, _stdout, stderr) = run_with_four_layers(
         &fix,
         &["hook", "claude-code"],
@@ -799,6 +799,26 @@ fn tilde_audit_path_expands_home() {
     let expanded = fix.root.path().join("from-tilde.jsonl");
     let body = std::fs::read_to_string(&expanded).expect("tilde-expanded audit path");
     assert_ne!(body.len(), 0);
+}
+
+#[test]
+fn project_layer_audit_path_outside_repo_is_ignored() {
+    // A cloned repository must not choose an arbitrary file for ptuf to
+    // append to (#324): the project-layer value is dropped and the
+    // default path applies instead.
+    let fix = full_stack(LayerYaml::empty());
+    std::fs::write(
+        fix.repo_root.join(".ptuf.yaml"),
+        "version: 1\naudit:\n  path: ~/outside-repo.jsonl\n  enabled: true\n  includeDenied: true\n",
+    )
+    .expect("project yaml");
+    let (code, _stdout, stderr) = run_with_four_layers(
+        &fix,
+        &["hook", "claude-code"],
+        r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#,
+    );
+    assert_eq!(code, 2, "stderr: {stderr}");
+    assert!(!fix.root.path().join("outside-repo.jsonl").exists());
 }
 
 /// Return an audit path whose sink can never be opened: the parent is
