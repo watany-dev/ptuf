@@ -78,6 +78,12 @@ audit:
 - OpenAI 系 key (`sk-…`)、AWS Access Key ID (`AKIA…`)、JWT 3-segment
 - URL 中の basic auth password
 - PEM blob (`-----BEGIN … PRIVATE KEY-----`)
+- npm token (`npm_…`)、Google API key (`AIza…`)
+- option の値として渡す credential: `--password` / `--passwd` / `--pass` /
+  `--token` / `--secret` / `--api-key` / `--client-secret` /
+  `--passphrase` 等の次の語、`mysql` / `mariadb` 系の `-pVALUE`、`curl` の
+  `-u` / `--user` / `--proxy-user` の `:` 以降、`docker` / `podman` /
+  `helm` 等の `login` の `-p VALUE`、`config set <秘密らしい key> VALUE`
 
 `redaction: off` も実装されているが、意図的な opt-in 用である。
 
