@@ -178,6 +178,21 @@ fn build(pat: &str) -> Regex {
 pub(crate) const PEM_PRIVATE_KEY_BEGIN: &str = r"-----BEGIN\s+(?:[A-Z]+\s+)*PRIVATE\s+KEY-----";
 pub(crate) const PEM_PRIVATE_KEY_END: &str = r"-----END\s+(?:[A-Z]+\s+)*PRIVATE\s+KEY-----";
 
+/// Pattern for a credentials file or directory under `$HOME`: the name
+/// must start a path component, follow a `=` / `@` / `<` / `:` value
+/// boundary, or sit right under `~`, `$HOME` or `${HOME}`. `$tail` is
+/// what has to follow the name.
+macro_rules! home_dotfile {
+    ($name:literal, $tail:literal) => {
+        concat!(
+            r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:",
+            $name,
+            ")",
+            $tail
+        )
+    };
+}
+
 const PROBES: &[(SensitiveKind, &str, &str)] = &[
     (
         SensitiveKind::SshDir,
@@ -229,32 +244,32 @@ const PROBES: &[(SensitiveKind, &str, &str)] = &[
     (
         SensitiveKind::Netrc,
         ".netrc",
-        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.netrc)\b",
+        home_dotfile!(r"\.netrc", r"\b"),
     ),
     (
         SensitiveKind::GitCredentials,
         ".git-credentials",
-        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.git-credentials)\b",
+        home_dotfile!(r"\.git-credentials", r"\b"),
     ),
     (
         SensitiveKind::GnupgDir,
         ".gnupg",
-        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.gnupg)(?:/|$|\b)",
+        home_dotfile!(r"\.gnupg", r"(?:/|$|\b)"),
     ),
     (
         SensitiveKind::GhHosts,
         ".config/gh",
-        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.config/gh/hosts\.ya?ml)\b",
+        home_dotfile!(r"\.config/gh/hosts\.ya?ml", r"\b"),
     ),
     (
         SensitiveKind::AzureDir,
         ".azure",
-        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.azure)(?:/|$|\b)",
+        home_dotfile!(r"\.azure", r"(?:/|$|\b)"),
     ),
     (
         SensitiveKind::VaultToken,
         ".vault-token",
-        r"(?:^|/|\s|[=@<:]|(?:~|\$HOME|\$\{HOME\})/)(?i-u:\.vault-token)\b",
+        home_dotfile!(r"\.vault-token", r"\b"),
     ),
     (
         SensitiveKind::KeyFile,
