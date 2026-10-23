@@ -236,7 +236,7 @@ opaque なので、`core.engine.dynamic-eval` が `Ask` を返してユーザに
 
 | Rule id | Decision | hardDeny | severity | 対象 |
 | --- | --- | --- | --- | --- |
-| `core.injection.invisible-chars` | ask | false | high | `Read` / `Edit` / path を持つ MCP tool / Bash の reader head が読み込むファイルの中身に、人間のレビュアーには見えない文字が含まれる |
+| `core.injection.invisible-chars` | ask | false | high | `Read` / `Edit` / `Grep` (`path`) / path を持つ MCP tool / Bash の reader head が読み込むファイルの中身に、人間のレビュアーには見えない文字が含まれる |
 
 ptuf の他 rule は tool 入力 (path 文字列・コマンド文字列) を判定するが、
 本 rule は唯一「対象ファイルを開いて中身を検査する」rule。レビュアーには
