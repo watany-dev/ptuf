@@ -9,10 +9,13 @@ T (テスト不足) の消化状況は #264 で追跡する。
 
 | 層 | コマンド | タイミング | ブロッキング |
 |---|---|---|---|
-| diff | `make mutants-diff` (`BASE=origin/main`) | PR CI (`ci.yml` の `mutants-diff` job) | しない (`continue-on-error`、結果は step summary と artifact) |
-| full | `make mutants` | nightly (`nightly.yml` の `mutants` job) | しない (report を artifact に出力) |
+| diff | `make mutants-diff` (`BASE=origin/main`) | PR CI (`ci.yml` の `mutants-diff` job) | する (MISSED で失敗。結果は step summary と artifact) |
+| full | `make mutants` | nightly (`nightly.yml` の `mutants` job) | しない (report を artifact に出力し、失敗時は `nightly-issue` job が追跡 issue に MISSED を追記) |
 | 範囲指定 | `make mutants ARGS="--no-config -f src/self_paths.rs"` | 手動 | - |
 
+- diff 層は `scripts/mutants-diff.py` で差分を広げる。テストの行が削られた (または弱められた)
+  ファイルは、変更行だけでなくファイル全体を変異させる。テストだけを削る PR が素通りしないため。
+  広げた範囲も `examine_globs` で絞られる。
 - `CARGO_PROFILE_DEV_DEBUG=0` で debuginfo を落とし、mutant ごとのビルドを軽くする
   (`Makefile` の `MUTANTS_ENV`)。
 - `.cargo/mutants.toml` に `examine_globs` があると `-f` が効かず、常にフルスコープ

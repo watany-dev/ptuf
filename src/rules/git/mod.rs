@@ -26,7 +26,8 @@ mod stash;
 
 pub(crate) use branch::BRANCH_DELETE_FORCE_RULE;
 pub(crate) use bypass::{
-    CONFIG_OVERRIDE_BYPASS_RULE, ENV_BYPASS_RULE, NO_GPG_SIGN_RULE, NO_VERIFY_RULE,
+    CONFIG_EXEC_COMMAND_RULE, CONFIG_OVERRIDE_BYPASS_RULE, ENV_BYPASS_RULE, NO_GPG_SIGN_RULE,
+    NO_VERIFY_RULE,
 };
 pub(crate) use clean::CLEAN_FDX_RULE;
 pub(crate) use env_redirect::{ENV_CREDENTIAL_HIJACK_RULE, ENV_PATH_REDIRECT_RULE};
@@ -352,8 +353,23 @@ mod tests {
     }
 
     #[test]
+    fn branch_delete_asks_for_separate_delete_and_force() {
+        for cmd in [
+            "git branch -d -f feature",
+            "git branch -df feature",
+            "git branch -fd feature",
+            "git branch --delete --force feature",
+            "git branch -d --force feature",
+        ] {
+            assert_decision(&BRANCH_DELETE_FORCE_RULE, cmd, DecisionKind::Ask);
+        }
+    }
+
+    #[test]
     fn branch_delete_allows_lowercase_d() {
         assert_allow(&BRANCH_DELETE_FORCE_RULE, "git branch -d feature");
+        assert_allow(&BRANCH_DELETE_FORCE_RULE, "git branch -f feature main");
+        assert_allow(&BRANCH_DELETE_FORCE_RULE, "git branch --delete=force");
     }
 
     #[test]
@@ -998,8 +1014,7 @@ mod tests {
     }
 
     // The static rule slice only uses Deny / Ask, so the Monitor and
-    // Allow arms in `evaluate()` and the `-c`-with-no-value arm of
-    // `config_overrides` are otherwise unreachable. Synthetic specs
+    // Allow arms in `evaluate()` are otherwise unreachable. Synthetic specs
     // exercise them without affecting any production behavior.
     static MONITOR_FORCE_PUSH_SPEC: RuleSpec = RuleSpec {
         id: "test.git.monitor",
@@ -1044,6 +1059,47 @@ mod tests {
     }
 
     #[test]
+    fn config_override_bypass_catches_persistent_git_config() {
+        for cmd in [
+            "git config core.hooksPath /dev/null",
+            "git config --global core.hooksPath .nohooks",
+            "git config set core.hooksPath /dev/null",
+            "git config commit.gpgsign false",
+        ] {
+            assert_decision(&CONFIG_OVERRIDE_BYPASS_RULE, cmd, DecisionKind::Deny);
+        }
+        assert_allow(
+            &CONFIG_OVERRIDE_BYPASS_RULE,
+            "git config --unset core.hooksPath",
+        );
+        assert_allow(
+            &CONFIG_OVERRIDE_BYPASS_RULE,
+            "git config commit.gpgsign true",
+        );
+        assert_allow(
+            &CONFIG_OVERRIDE_BYPASS_RULE,
+            "git config --get core.hooksPath",
+        );
+    }
+
+    #[test]
+    fn config_exec_command_asks_for_shell_running_keys() {
+        for cmd in [
+            "git -c core.sshCommand='ssh -i k' fetch",
+            "git -c core.pager=less log",
+            "git -c alias.x='!echo hi' x",
+            "git config alias.x '!echo hi'",
+            "git config core.sshCommand 'ssh -v'",
+            "git config --global credential.helper store",
+        ] {
+            assert_decision(&CONFIG_EXEC_COMMAND_RULE, cmd, DecisionKind::Ask);
+        }
+        assert_allow(&CONFIG_EXEC_COMMAND_RULE, "git config alias.st status");
+        assert_allow(&CONFIG_EXEC_COMMAND_RULE, "git config user.name x");
+        assert_allow(&CONFIG_EXEC_COMMAND_RULE, "git log");
+    }
+
+    #[test]
     fn config_overrides_skip_dangling_dash_c_with_no_value() {
         // `git -c` with no following value would normally be rejected
         // by git itself, but the override iterator's loop must still
@@ -1051,8 +1107,8 @@ mod tests {
         let input = bash("git -c commit");
         let facts = crate::facts::extract(&input);
         // CONFIG_OVERRIDE_BYPASS_RULE inspects the override list; just
-        // confirming evaluate doesn't panic exercises the `iter.next()
-        // returned None` arm of `config_overrides`.
+        // confirming evaluate doesn't panic exercises the dangling `-c`
+        // arm of `facts::git::config_assignments`.
         let _ = CONFIG_OVERRIDE_BYPASS_RULE.evaluate(&facts, &input);
     }
 
