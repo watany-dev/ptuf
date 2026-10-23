@@ -165,13 +165,13 @@ fn is_destructive_literal(arg: &str) -> bool {
     if let Some(rest) = home_rest(&normalized) {
         // The home itself, or a glob over its direct children (`~/*`,
         // `~/.*`), empties the whole home directory.
-        return rest.is_empty() || segment_has_glob(rest.split('/').next().unwrap_or(""));
+        return rest.is_empty() || leading_segment_has_glob(rest);
     }
     if let Some(user) = HOME_PARENTS
         .iter()
         .find_map(|p| normalized.strip_prefix(p).and_then(|r| r.strip_prefix('/')))
         && !user.is_empty()
-        && (!user.contains('/') || segment_has_glob(user.split('/').next().unwrap_or("")))
+        && (!user.contains('/') || leading_segment_has_glob(user))
     {
         return true;
     }
@@ -215,6 +215,9 @@ fn home_rest(path: &str) -> Option<&str> {
 /// can substitute it (`-`, `=`, `+`, with or without `:`). `${HOME:?}`
 /// and friends therefore compare as `${HOME}`.
 fn expansion_candidates(arg: &str) -> Vec<String> {
+    if !arg.contains("${") {
+        return vec![arg.to_owned()];
+    }
     let mut out = vec![String::new()];
     let mut rest = arg;
     while let Some(start) = rest.find("${") {
@@ -261,7 +264,12 @@ fn first_segment_has_glob(path: &str) -> bool {
     let Some(rest) = path.strip_prefix('/') else {
         return false;
     };
-    segment_has_glob(rest.split('/').next().unwrap_or(""))
+    leading_segment_has_glob(rest)
+}
+
+/// Whether the first `/`-separated segment of a relative path globs.
+fn leading_segment_has_glob(path: &str) -> bool {
+    segment_has_glob(path.split('/').next().unwrap_or(""))
 }
 
 fn segment_has_glob(segment: &str) -> bool {
