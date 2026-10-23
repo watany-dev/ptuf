@@ -852,19 +852,19 @@ fn read_word(bytes: &[u8]) -> (String, usize, bool, Vec<String>) {
 /// start of `bytes`, or `None` when `bytes` does not start with one.
 fn ifs_expansion_len(bytes: &[u8]) -> Option<usize> {
     if let Some(rest) = bytes.strip_prefix(b"$IFS") {
-        let ident = rest
-            .first()
-            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
-        return (!ident).then_some(4);
+        return (!rest.first().copied().is_some_and(is_name_byte)).then_some(4);
     }
     let rest = bytes.strip_prefix(b"${IFS")?;
     // `${IFS}` or `${IFS<op>…}`, but not `${IFSX}`.
     match rest.first() {
-        Some(b) if !(b.is_ascii_alphanumeric() || *b == b'_') => {
-            memchr::memchr(b'}', rest).map(|p| 5 + p + 1)
-        },
+        Some(&b) if !is_name_byte(b) => memchr::memchr(b'}', rest).map(|p| 5 + p + 1),
         _ => None,
     }
+}
+
+/// A byte that continues a shell parameter name.
+const fn is_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// Length of the leading run of plain word bytes (see
