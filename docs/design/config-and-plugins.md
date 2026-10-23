@@ -235,7 +235,7 @@ rules:
 | `shell.ast` | — | **未サポート** — `capabilities.requires` では宣言できるが `when:` leaf には使えない |
 | `path.filePathPrefixAny` | `string[]` | 抽出 path を正規化し、prefix は祖先の directory alias (`/tmp` → `/private/tmp`) を辿ったうえで component 単位の `Path::starts_with` で判定。最終成分が別名へ飛ぶ symlink (`build-link` → `/`) は辿らない。文字列 prefix や部分一致 (`/home/me/proj` 対 `/home/me/proj-secrets`) では一致しない |
 | `url.schemeAny` | `string[]` | URL scheme が一致 |
-| `url.hostAny` | `string[]` | URL host が一致 |
+| `url.hostAny` | `string[]` | URL host が一致。host は WHATWG URL と同じ規則で取り出す (`?` / `#` / `\` で authority が終わる、scheme 省略は `https`、percent-decode・小文字化・末尾 `.` 除去、`2852039166` / `0xa9.0xfe.0xa9.0xfe` は dotted decimal に正規化)。設定側の値も同じ正規化をしてから比較する |
 | `sensitive.pathKindAny` | `string[]` | 機密分類が一致 |
 | `all` / `any` / `not` | nested | 論理結合 |
 

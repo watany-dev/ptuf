@@ -80,10 +80,13 @@ pub(crate) fn parse(s: &str) -> Option<Url> {
 fn split_scheme(s: &str) -> Option<(String, &str)> {
     if let Some((scheme, rest)) = s.split_once(':')
         && is_valid_scheme(scheme)
-        && (SPECIAL_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str())
-            || !rest.starts_with(|c: char| c.is_ascii_digit()))
     {
-        return Some((scheme.to_ascii_lowercase(), rest));
+        let scheme = scheme.to_ascii_lowercase();
+        if SPECIAL_SCHEMES.contains(&scheme.as_str())
+            || !rest.starts_with(|c: char| c.is_ascii_digit())
+        {
+            return Some((scheme, rest));
+        }
     }
     if s.is_empty() || s.starts_with(':') || s.contains("://") {
         return None;
@@ -143,10 +146,10 @@ fn parse_ipv4(host: &str) -> Option<String> {
     if parts.len() > 4 {
         return None;
     }
-    let mut numbers = Vec::with_capacity(parts.len());
-    for part in &parts {
-        numbers.push(parse_ipv4_number(part)?);
-    }
+    let numbers: Vec<u64> = parts
+        .iter()
+        .map(|part| parse_ipv4_number(part))
+        .collect::<Option<_>>()?;
     let (last, init) = numbers.split_last()?;
     if init.iter().any(|&n| n > 255) {
         return None;
