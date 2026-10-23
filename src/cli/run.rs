@@ -90,6 +90,12 @@ fn invalid_payload_deny(problem: &str) -> Decision {
     }
 }
 
+/// Normalise `body` with `agent`'s adapter, then reject a Bash call
+/// without a string command (see [`require_bash_command`]).
+fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
+    adapt_hook_input(agent, body).and_then(require_bash_command)
+}
+
 /// Parse stdin into a [`HookInput`] using the agent-specific schema.
 ///
 /// Claude Code and Codex both speak the snake_case
@@ -107,7 +113,7 @@ fn invalid_payload_deny(problem: &str) -> Decision {
 /// `beforeShellExecution` / `beforeReadFile` / `beforeMCPExecution`) with
 /// its own tool vocabulary, so its payload routes through
 /// `cli::cursor_input::parse`.
-fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
+fn adapt_hook_input(agent: HookAgent, body: &str) -> Result<HookInput, String> {
     // Every adapter fails with the shared `input_helpers::InputError`,
     // which this single consumer flattens to its rendered message.
     let adapted = match agent {
@@ -124,6 +130,16 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
         HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => opencode_input::parse(body),
     };
     adapted.map_err(|err| err.to_string())
+}
+
+/// Every Bash rule reads `tool_input.command` as a string; without one
+/// the parser never runs and the call would sail through as allow.
+/// Treat that shape as an invalid payload so it fails closed instead.
+fn require_bash_command(input: HookInput) -> Result<HookInput, String> {
+    if input.tool_name == "Bash" && input.bash_command().is_none() {
+        return Err("hook payload Bash tool_input.command must be a string".into());
+    }
+    Ok(input)
 }
 
 pub(super) fn run_check<W1: Write, W2: Write>(
@@ -1066,6 +1082,36 @@ mod tests {
         assert_eq!(code, 0);
         assert_eq!(out.len(), 0);
         assert!(err.is_empty(), "unexpected stderr: {err}");
+    }
+
+    #[test]
+    fn hook_fails_closed_when_bash_command_is_not_a_string() {
+        for (agent, payload) in [
+            (
+                "codex",
+                r#"{"tool_name":"Bash","tool_input":{"command":["bash","-lc","rm -rf /"]}}"#,
+            ),
+            (
+                "claude-code",
+                r#"{"tool_name":"Bash","tool_input":{"cmd":"rm -rf /"}}"#,
+            ),
+            (
+                "claude-code",
+                r#"{"tool_name":"Bash","tool_input":"rm -rf /"}"#,
+            ),
+            ("claude-code", r#"{"tool_name":"Bash"}"#),
+            (
+                "cline",
+                r#"{"hookName":"tool_call","tool_call":{"name":"execute_command","input":{}}}"#,
+            ),
+        ] {
+            // Cline blocks with exit 0 + `cancel: true`, so judge by the rule.
+            let (_code, out, err) = run_with(&["hook", agent], payload);
+            assert!(
+                err.contains(INVALID_PAYLOAD_RULE),
+                "{agent} {payload}: {out} {err}"
+            );
+        }
     }
 
     #[test]
@@ -2626,6 +2672,12 @@ rules:
         let mut denied = original.clone();
         denied.set_mode(0o000);
         std::fs::set_permissions(&path, denied).unwrap();
+        // root (or CAP_DAC_OVERRIDE) ignores the mode bits, so the file stays
+        // readable and there is no read error to observe.
+        if std::fs::File::open(&path).is_ok() {
+            let _ = std::fs::set_permissions(&path, original);
+            return;
+        }
         let path_s = path.to_string_lossy().into_owned();
         let (code, stdout, stderr) = run_with(&["audit", "--path", &path_s], "");
         let _ = std::fs::set_permissions(&path, original);

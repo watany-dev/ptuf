@@ -127,7 +127,7 @@ allowlist は suppression できた場合に `allowlistId` (最終 decision が 
 | key | 型 | 説明 |
 | --- | --- | --- |
 | `enabled` | `bool` | 書き込みを有効化。閲覧 CLI (`ptuf audit`) は既存ファイルを読める。`--path` 未指定時は warning を出して表示する |
-| `path` | path | 出力先。`~/` / `$HOME` 展開あり、相対パスは config ファイル基準。省略時は既定パス |
+| `path` | path | 出力先。`~/` / `$HOME` 展開あり、相対パスは config ファイル基準。省略時は既定パス。プロジェクト層 (`.ptuf.yaml` / `.ptuf.local.yaml`) の値はリポジトリ配下 (`..` を含まない相対パス) に限り有効で、それ以外は無視して下位層 / 既定パスを使う。どの層でも、self-protection の保護対象 (hook 設定・config・plugin・binary) と一致する出力先には書き込まず warning を出す |
 | `includeAllowed` | `bool` | `Allow` を記録するか |
 | `includeDenied` | `bool` | `Deny` を記録するか |
 | `redaction` | `strict` / `off` | redaction mode |
