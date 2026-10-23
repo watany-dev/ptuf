@@ -873,7 +873,7 @@ fn read_word_with_braces(bytes: &[u8]) -> (String, usize, bool, Vec<String>, Vec
                     push_latin1(&mut buf, &bytes[i..=i]);
                     i += 1;
                 }
-                let body = latin1_slice(&bytes[body_start..i]);
+                let body = unescape_backquoted(&bytes[body_start..i]);
                 if !body.is_empty() {
                     bodies.push(body);
                 }
@@ -1437,6 +1437,28 @@ fn skip_backquoted(bytes: &[u8], start: usize) -> Option<usize> {
         }
     }
     None
+}
+
+/// Body of a `` `…` `` substitution as bash runs it: inside backquotes
+/// `\\`, `` \` `` and `\$` lose their backslash, so a nested
+/// `` \`cmd\` `` becomes a real substitution when the body is re-parsed.
+/// Every other backslash is kept.
+fn unescape_backquoted(bytes: &[u8]) -> String {
+    if memchr::memchr(b'\\', bytes).is_none() {
+        return latin1_slice(bytes);
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && matches!(bytes[i + 1], b'\\' | b'`' | b'$') {
+            out.push(bytes[i + 1]);
+            i += 2;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    latin1_slice(&out)
 }
 
 /// Decode a byte slice the same way [`push_latin1`] appends — ASCII as
@@ -2754,6 +2776,18 @@ mod tests {
             b.segments[0].commands[0].args.len(),
             BRACE_EXPANSION_CAP + 1
         );
+    }
+
+    #[test]
+    fn nested_escaped_backticks_are_reparsed() {
+        let b = parse("echo `echo \\`rm -rf /\\``");
+        assert!(
+            b.commands()
+                .iter()
+                .any(|a| a.head == "rm" && a.args == ["-rf", "/"]),
+            "{b:?}"
+        );
+        assert_eq!(unescape_backquoted(br"a \\ \` \$ \n"), r"a \ ` $ \n");
     }
 
     #[test]
