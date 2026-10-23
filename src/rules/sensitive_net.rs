@@ -249,6 +249,9 @@ mod tests {
         assert_allow("aws s3 ls");
         assert_allow("gh gist create notes.md");
         assert_allow("aws s3 cp build/ s3://bucket/ --recursive");
+        // Subcommand words only count under their own head.
+        assert_allow("make cp .env");
+        assert_allow("gh cp .env");
     }
 
     #[test]
