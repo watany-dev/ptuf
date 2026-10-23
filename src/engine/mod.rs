@@ -490,7 +490,7 @@ fn audit_sink_from_config(
     };
     // Appending JSONL to a hook registration, config, plugin, or the
     // binary would corrupt the very files self-protection guards.
-    if let Some(kind) = protected.protects(&path) {
+    if let Some(kind) = protected.match_path(&path) {
         return (
             Box::new(NoopSink),
             Some(format!(
