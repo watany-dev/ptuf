@@ -79,6 +79,29 @@ fn check_denies_destructive_rm_with_exit_two() {
 }
 
 #[test]
+fn json_check_emits_single_json_object() {
+    // #333: the global `--json` flag must change `check`'s output.
+    let (code, stdout, stderr) = run(&["--json", "check", "--tool", "Bash", "rm -rf /"], "");
+    assert_eq!(code, 2);
+    let body: serde_json::Value = serde_json::from_str(stdout.trim()).expect("stdout is JSON");
+    assert_eq!(body["decision"], "deny");
+    assert_eq!(body["ruleId"], "core.filesystem.destructive-rm");
+    assert!(
+        body["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("destructive-rm")),
+        "body: {body}",
+    );
+    assert!(stderr.is_empty(), "stderr: {stderr}");
+
+    let (code, stdout, _) = run(&["--json", "check", "--tool", "Bash", "ls"], "");
+    assert_eq!(code, 0);
+    let body: serde_json::Value = serde_json::from_str(stdout.trim()).expect("stdout is JSON");
+    assert_eq!(body["decision"], "allow");
+    assert!(body["ruleId"].is_null());
+}
+
+#[test]
 fn check_denies_remote_script_pipe() {
     let (code, _stdout, stderr) = run(
         &[
@@ -1026,6 +1049,17 @@ rules:
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
     assert!(stdout.contains("pack.demo"), "stdout: {stdout}");
     assert!(stdout.contains("1 passed"), "stdout: {stdout}");
+
+    // #333: `--json plugin check` emits the report as JSON.
+    let (code, stdout, stderr) = run(&["--json", "plugin", "check", &path_str], "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    let body: serde_json::Value = serde_json::from_str(stdout.trim()).expect("stdout is JSON");
+    assert_eq!(body["plugin"], "pack.demo");
+    assert_eq!(body["passed"], 1);
+    assert_eq!(body["failed"], 0);
+    assert_eq!(body["cases"][0]["ruleId"], "pack.demo.no-curl");
+    assert_eq!(body["cases"][0]["expect"], "deny");
+    assert_eq!(body["cases"][0]["got"], "deny");
 }
 
 #[test]

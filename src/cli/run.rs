@@ -143,6 +143,7 @@ fn require_bash_command(input: HookInput) -> Result<HookInput, String> {
 }
 
 pub(super) fn run_check<W1: Write, W2: Write>(
+    globals: GlobalFlags,
     tool: &str,
     command: &str,
     stdout: &mut W1,
@@ -165,24 +166,39 @@ pub(super) fn run_check<W1: Write, W2: Write>(
         },
         Err(deny) => deny,
     };
-    let _ = writeln!(stdout, "Decision: {}", decision_label(&decision));
-    if let Some(rule_id) = decision.rule_id() {
-        let _ = writeln!(stdout, "Rule: {rule_id}");
-    }
-    if let Some(reason) = decision.reason() {
-        let _ = writeln!(stderr, "{reason}");
+    if globals.json {
+        let body = serde_json::json!({
+            "decision": decision_label(&decision),
+            "ruleId": decision.rule_id(),
+            "reason": decision.reason(),
+        });
+        let _ = writeln!(stdout, "{body}");
+    } else {
+        let _ = writeln!(stdout, "Decision: {}", decision_label(&decision));
+        if let Some(rule_id) = decision.rule_id() {
+            let _ = writeln!(stdout, "Rule: {rule_id}");
+        }
+        if let Some(reason) = decision.reason() {
+            let _ = writeln!(stderr, "{reason}");
+        }
     }
     decision_exit_code(HookAgent::ClaudeCode, &decision)
 }
 
 pub(super) fn run_plugin_check<W1: Write, W2: Write>(
+    globals: GlobalFlags,
     path: &std::path::Path,
     stdout: &mut W1,
     stderr: &mut W2,
 ) -> u8 {
     match plugin_runner::run(path) {
         Ok(report) => {
-            if report.render(stdout).is_err() {
+            let written = if globals.json {
+                writeln!(stdout, "{}", report.to_json())
+            } else {
+                report.render(stdout)
+            };
+            if written.is_err() {
                 let _ = writeln!(stderr, "ptuf: failed to write plugin test report");
                 return 1;
             }
@@ -1859,7 +1875,7 @@ rules:
 
         let mut writer = FailingWriter { budget: 0 };
         let mut err = Vec::new();
-        let code = run_plugin_check(&path, &mut writer, &mut err);
+        let code = run_plugin_check(GlobalFlags::default(), &path, &mut writer, &mut err);
         assert_eq!(code, 1);
         assert!(
             String::from_utf8_lossy(&err).contains("failed to write plugin test report"),

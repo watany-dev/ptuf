@@ -392,8 +392,10 @@ pub fn run<R: Read, W1: Write, W2: Write>(
 ) -> u8 {
     match command {
         Command::HookPreToolUse { agent } => run::run_hook(agent, stdin, stdout, stderr),
-        Command::Check { tool, command } => run::run_check(&tool, &command, stdout, stderr),
-        Command::PluginCheck { path } => run::run_plugin_check(&path, stdout, stderr),
+        Command::Check { tool, command } => {
+            run::run_check(globals, &tool, &command, stdout, stderr)
+        },
+        Command::PluginCheck { path } => run::run_plugin_check(globals, &path, stdout, stderr),
         Command::Init(options) => run::run_init(globals, options, stdout, stderr),
         Command::Update(options) => run::run_update(options, stdout, stderr),
         Command::Audit(options) => run::run_audit(globals, options, stdout, stderr),

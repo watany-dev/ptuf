@@ -363,6 +363,9 @@ ptuf --version
 subcommand. `hook` does not accept `--json` because the hook protocol
 output shape is fixed by the host. `audit` is a read-only viewer for the
 JSONL audit log (default last 20 matches; `--stats` prints counts).
+With `--json`, `check` prints `{"decision", "ruleId", "reason"}` on
+stdout (exit code unchanged) and `plugin check` prints the test report
+as `{"plugin", "source", "passed", "failed", "cases": [...]}`.
 `init` runs the post-install verify
 by default; pass `--no-verify` to skip, or `--dry-run` to plan only
 (dry-run implicitly turns verify off because nothing is written).

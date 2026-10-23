@@ -47,6 +47,16 @@ pub(crate) enum Expectation {
     ShouldSkip,
 }
 
+impl Expectation {
+    /// The decision this expectation stands for in reports.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::ShouldTrigger => "deny",
+            Self::ShouldSkip => "allow",
+        }
+    }
+}
+
 /// Aggregated result of running every test case in a plugin file.
 #[derive(Debug)]
 pub(crate) struct RunReport {
@@ -69,6 +79,30 @@ impl RunReport {
         self.cases.iter().filter(|c| !c.passed).count()
     }
 
+    /// Machine-readable form of the report for `ptuf --json plugin check`.
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        let cases: Vec<serde_json::Value> = self
+            .cases
+            .iter()
+            .map(|case| {
+                serde_json::json!({
+                    "ruleId": case.rule_id,
+                    "expect": case.expectation.label(),
+                    "passed": case.passed,
+                    "command": case.command,
+                    "got": case.got.as_ref().map(decision_label),
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "plugin": self.plugin_name,
+            "source": self.source.display().to_string(),
+            "passed": self.passed_count(),
+            "failed": self.failed_count(),
+            "cases": cases,
+        })
+    }
+
     /// Render a human-readable summary. Returns the underlying I/O
     /// error if one of the writes fails.
     pub(crate) fn render<W: Write>(&self, out: &mut W) -> io::Result<()> {
@@ -82,10 +116,7 @@ impl RunReport {
         )?;
         for case in &self.cases {
             let mark = if case.passed { "ok " } else { "FAIL" };
-            let label = match case.expectation {
-                Expectation::ShouldTrigger => "deny",
-                Expectation::ShouldSkip => "allow",
-            };
+            let label = case.expectation.label();
             writeln!(out, "  {mark} {} [{label}] {}", case.rule_id, case.command)?;
             if !case.passed {
                 match &case.got {
