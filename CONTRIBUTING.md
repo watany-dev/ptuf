@@ -106,10 +106,17 @@ demand) and are not part of `make check`:
   `src/rules/**`, `src/engine/**`, `src/plugin/dsl.rs`,
   `src/facts/shell.rs`, `src/config/merge.rs`, `src/self_paths.rs`;
   scope in `.cargo/mutants.toml`). `make mutants-diff` mutates only the
-  lines changed since `BASE` (default `origin/main`) and mirrors the
-  non-blocking PR `mutants-diff` job. A surviving (`MISSED`) mutant marks
-  a behaviour the test suite fails to verify — close it with an
-  example-based test. Triage lives in `docs/design/mutants-inventory.md`.
+  lines changed since `BASE` (default `origin/main`), widened by
+  `scripts/mutants-diff.py` to every source file whose tests lost a line,
+  and mirrors the PR `mutants-diff` job, which fails on a missed mutant.
+  A surviving (`MISSED`) mutant marks a behaviour the test suite fails to
+  verify — close it with an example-based test, or exclude an equivalent
+  mutant in `.cargo/mutants.toml` with a comment saying why. A failed
+  nightly run on `main` files or comments on one tracking issue. Triage
+  lives in `docs/design/mutants-inventory.md`.
+- **Script tests** — `make test-scripts` runs the stdlib-only unittests
+  for `scripts/*.py` (`tests/scripts/`). Keep a script's judging logic in
+  functions those tests can call.
 - **Bypass corpus** — `tests/bypass/corpus.jsonl` is a version-controlled
   adversarial negative-security suite (`tests/bypass_corpus.rs`, run by
   the ordinary `cargo test` / `make check` `test` step). New bypasses
@@ -154,6 +161,9 @@ platform-specific code:
 ## Releasing
 
 Release mechanics live in [`docs/RELEASING.md`](docs/RELEASING.md).
+GitHub, crates.io and npm settings that CI cannot see (branch ruleset,
+required checks, environments) are listed in
+[`docs/repository-settings.md`](docs/repository-settings.md).
 The short version:
 
 1. Bump `version` in `Cargo.toml` and update `CHANGELOG.md`.

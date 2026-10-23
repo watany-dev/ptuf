@@ -110,8 +110,9 @@ fresh `seen_from` で outer pipeline への漏洩 FP を防ぐ。
 ### Known limitations (本イテレーション外 / 継続)
 
 - ~~C `bash <(curl …)` — プロセス置換 opaque 化~~ — Resolved by issue #162
-- ADR 0002 の ~~B1~~/B2/~~B5~~/C2 (~~Unicode homoglyph~~ / symlink /
-  ~~cmdsubst~~ / 変数 head)。B1 は ADR 0007、B5 は ADR 0008 で解消
+- ADR 0002 の ~~B1~~/B2/~~B5~~/~~C2~~ (~~Unicode homoglyph~~ / symlink /
+  ~~cmdsubst~~ / ~~変数 head~~)。B1 は ADR 0007、B5 は ADR 0008 で解消、
+  C2 は issue #303/#305 で ask に緩和
 - ~~C3 `rm -rf /e*` glob 展開前 bypass~~ — 解消 (ADR 0006)
 
 ## Implementation map
