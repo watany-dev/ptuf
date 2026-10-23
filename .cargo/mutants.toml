@@ -50,4 +50,7 @@ exclude_re = [
     # Letting over-long comma-less bodies reach `brace_sequence` brings
     # back the quadratic rescan; the linear-time test then only times out.
     'replace > with (==|<) in brace_alternatives',
+    # The alternatives cap only saves work: `brace_product` caps the
+    # output again, so one extra alternative is unobservable.
+    'replace < with <= in brace_alternatives',
 ]

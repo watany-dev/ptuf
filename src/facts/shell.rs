@@ -2293,14 +2293,21 @@ mod tests {
 
     #[test]
     fn brace_expansion_merges_duplicates_before_the_cap() {
-        // 3 * 2^400000 raw words, but only `rm`, `-rf`, `/` are distinct.
-        // Enough groups that charging each one to the byte budget would
-        // exhaust it: single-word groups must be inlined for free.
-        let cmd = format!("{{rm,-rf,/}}{}", "{,}".repeat(400_000));
+        // 3 * 2^100000 raw words, but only `rm`, `-rf`, `/` are distinct.
+        let cmd = format!("{{rm,-rf,/}}{}", "{,}".repeat(100_000));
         let b = parse(&cmd);
         let a = &b.segments[0].commands[0];
         assert_eq!(a.head, "rm");
         assert_eq!(a.args[..2], ["-rf", "/"]);
+        // Single-word groups are inlined for free: charging each one to
+        // the byte budget (two 100-byte words per group) would exhaust it
+        // and leave the trailing groups literal.
+        let stem = "x".repeat(100);
+        let b = parse(&format!("echo {stem}{{a,b}}{}", "{,}".repeat(100_000)));
+        assert_eq!(
+            b.segments[0].commands[0].args[..2],
+            [format!("{stem}a"), format!("{stem}b")]
+        );
     }
 
     #[test]
