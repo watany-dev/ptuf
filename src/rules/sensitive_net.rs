@@ -161,11 +161,15 @@ fn invokes_network_sink(argv: &Argv) -> bool {
     if NETWORK_SINK_HEADS.contains(&head) {
         return true;
     }
-    let positional: Vec<&str> = argv.positional().collect();
-    SUBCOMMAND_SINKS
+    let mut sinks = SUBCOMMAND_SINKS
         .iter()
         .filter(|(h, _)| *h == head)
-        .any(|(_, words)| positional.windows(words.len()).any(|w| w == *words))
+        .peekable();
+    if sinks.peek().is_none() {
+        return false;
+    }
+    let positional: Vec<&str> = argv.positional().collect();
+    sinks.any(|(_, words)| positional.windows(words.len()).any(|w| w == *words))
 }
 
 /// A stdin sink (`ssh`) fed by a sensitive upstream command in the same
