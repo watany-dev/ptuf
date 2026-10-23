@@ -44,5 +44,7 @@ exclude_re = [
     # forever instead of failing a test; the run only ever times out.
     # `t = star_t + 1` likewise retries the same text byte forever.
     'replace \+ with \* in (expand_cwd_references|fnmatch_from)',
-    'replace \+= with \*= in (fnmatch_from|match_one)',
+    'replace \+= with [-*]= in (fnmatch_from|match_one)',
+    # Never seeing a `*` (or seeing one everywhere) stalls the star loop.
+    ':\d+:27: replace == with != in fnmatch_from',
 ]
