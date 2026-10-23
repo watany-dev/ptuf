@@ -83,3 +83,8 @@ Required checks も直す。
 
 - **TDD** — failing test → 実装 → リファクタ
 - **Tidy First** (Kent Beck) — 機能変更前に、ガード節・デッドコード削除・対称性整え・ヘルパ抽出・コメント明確化で読みやすさを上げられないか検討する
+
+## セキュリティ監査
+
+`/security-audit` (Codex は `$security-audit`) で Cloudflare 公式のセキュリティ監査スキルを使う。
+明示呼出し専用。導入元コミット・更新手順は `.claude/skills/security-audit/INSTALLATION.ja.md`。
