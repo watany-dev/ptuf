@@ -51,7 +51,11 @@ impl ConfigRule for SensitiveRead {
         let is_file_tool = matches!(
             input.tool_name.as_str(),
             "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Grep" | "apply_patch",
-        ) || (input.is_mcp_tool() && !facts.paths.is_empty());
+        ) || (input.is_mcp_tool() && !facts.paths.is_empty())
+            || facts
+                .paths
+                .iter()
+                .any(|p| p.tool == crate::facts::path::PathTool::ApplyPatch);
         if !is_file_tool {
             return None;
         }
@@ -375,6 +379,19 @@ mod tests {
             tool_input: serde_json::json!({"url": "https://example.com/x"}),
         };
         let facts = crate::facts::extract(&input);
+        assert!(SensitiveRead.evaluate(&facts, &input).is_none());
+        // Even when the URL itself looks like a secret path: there is
+        // no local file being read.
+        let input = HookInput {
+            tool_name: "mcp__fetch__fetch".into(),
+            tool_input: serde_json::json!({"url": "https://example.com/.env"}),
+        };
+        let facts = crate::facts::extract(&input);
+        assert!(
+            !facts.sensitive.is_empty(),
+            "precondition: {:?}",
+            facts.sensitive
+        );
         assert!(SensitiveRead.evaluate(&facts, &input).is_none());
     }
 
