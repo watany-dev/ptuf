@@ -101,7 +101,7 @@ static NPM_TOKEN: LazyLock<Regex> =
 // Google API key — `AIza` + 35 of `[0-9A-Za-z_-]`. No trailing `\b`:
 // the key may end in `-`.
 static GOOGLE_API_KEY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\bAIza[0-9A-Za-z_-]{35}(?:[^0-9A-Za-z_-]|$)").expect("google api key")
+    Regex::new(r"\bAIza[0-9A-Za-z_-]{35}(?P<tail>[^0-9A-Za-z_-]|$)").expect("google api key")
 });
 
 /// Shell-ish value: a quoted string or a run up to whitespace / a
@@ -166,9 +166,7 @@ fn redact_within(text: &str, segment: &Regex, inner: &Regex, keep: &str) -> Stri
     segment
         .replace_all(text, |seg: &regex::Captures| {
             inner
-                .replace_all(&seg[0], |caps: &regex::Captures| {
-                    format!("{}{PLACEHOLDER}", &caps[keep])
-                })
+                .replace_all(&seg[0], format!("${{{keep}}}{PLACEHOLDER}"))
                 .into_owned()
         })
         .into_owned()
@@ -280,26 +278,15 @@ pub(crate) fn redact_strict(input: &str) -> String {
         out = NPM_TOKEN.replace_all(&out, PLACEHOLDER).into_owned();
     }
     if input.contains("AIza") {
+        // Keep the terminator the pattern consumed.
         out = GOOGLE_API_KEY
-            .replace_all(&out, |caps: &regex::Captures| {
-                // Keep the terminator the pattern consumed.
-                let tail = caps[0]
-                    .chars()
-                    .last()
-                    .filter(|c| !(c.is_ascii_alphanumeric() || *c == '_' || *c == '-'));
-                format!(
-                    "{PLACEHOLDER}{}",
-                    tail.map(String::from).unwrap_or_default()
-                )
-            })
+            .replace_all(&out, format!("{PLACEHOLDER}${{tail}}"))
             .into_owned();
     }
 
     if input.contains("--") {
         out = SECRET_FLAG
-            .replace_all(&out, |caps: &regex::Captures| {
-                format!("{}{}{PLACEHOLDER}", &caps["flag"], &caps["sep"])
-            })
+            .replace_all(&out, format!("${{flag}}${{sep}}{PLACEHOLDER}"))
             .into_owned();
     }
     if lower.contains("mysql") || lower.contains("mariadb") {
@@ -313,9 +300,7 @@ pub(crate) fn redact_strict(input: &str) -> String {
     }
     if input.contains("config") {
         out = CONFIG_SET
-            .replace_all(&out, |caps: &regex::Captures| {
-                format!("{}{PLACEHOLDER}", &caps["keep"])
-            })
+            .replace_all(&out, format!("${{keep}}{PLACEHOLDER}"))
             .into_owned();
     }
 
