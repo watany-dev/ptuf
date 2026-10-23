@@ -135,8 +135,8 @@ impl Engine {
         let config = config::load_for(repo_root)?;
         let mut plugins = PluginSet::new();
         plugins.load_paths(&config.plugin_paths)?;
-        let (audit_sink, audit_warning) = audit_sink_from_config(&config);
         let protected = ProtectedPaths::collect(repo_root, &config);
+        let (audit_sink, audit_warning) = audit_sink_from_config(&config, &protected);
         let plugin_versions = compute_plugin_versions(&plugins);
         let project_facts = facts::project::collect(repo_root, &config.protected_branches);
         let workspaces = compute_workspaces(repo_root, &config);
@@ -176,8 +176,8 @@ impl Engine {
     pub fn with_config(config: Config) -> Result<Self, EngineError> {
         let mut plugins = PluginSet::new();
         plugins.load_paths(&config.plugin_paths)?;
-        let (audit_sink, audit_warning) = audit_sink_from_config(&config);
         let protected = ProtectedPaths::collect(None, &config);
+        let (audit_sink, audit_warning) = audit_sink_from_config(&config, &protected);
         let plugin_versions = compute_plugin_versions(&plugins);
         let project_facts = facts::project::collect(None, &config.protected_branches);
         let workspaces = compute_workspaces(None, &config);
@@ -475,7 +475,10 @@ pub(super) fn compute_workspaces(repo_root: Option<&Path>, config: &Config) -> V
     facts::path::canonical_workspaces(repo_root, &config.additional_workspaces, &SystemEnv)
 }
 
-fn audit_sink_from_config(config: &Config) -> (Box<dyn AuditSink>, Option<String>) {
+fn audit_sink_from_config(
+    config: &Config,
+    protected: &ProtectedPaths,
+) -> (Box<dyn AuditSink>, Option<String>) {
     if !config.audit.enabled {
         return (Box::new(NoopSink), None);
     }
@@ -485,6 +488,18 @@ fn audit_sink_from_config(config: &Config) -> (Box<dyn AuditSink>, Option<String
             Some("ptuf: audit is enabled but $HOME is not set; audit disabled".into()),
         );
     };
+    // Appending JSONL to a hook registration, config, plugin, or the
+    // binary would corrupt the very files self-protection guards.
+    if let Some(kind) = protected.match_path(&path) {
+        return (
+            Box::new(NoopSink),
+            Some(format!(
+                "ptuf: audit path {} is a protected {} file; audit disabled",
+                path.display(),
+                kind.as_str()
+            )),
+        );
+    }
     match JsonlSink::open(&path) {
         Ok(s) => (Box::new(s), None),
         Err(err) => (
@@ -855,6 +870,24 @@ rules:
         assert!(engine.audit_warning().is_some());
         let outcome = engine.decide(&bash("ls"));
         assert_eq!(outcome.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn audit_sink_refuses_a_protected_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let settings = dir.path().join("settings.json");
+        std::fs::write(&settings, "{}").expect("write");
+        let protected = ProtectedPaths {
+            claude_settings: vec![settings.clone()],
+            ..ProtectedPaths::default()
+        };
+        let mut cfg = Config::default();
+        cfg.audit.enabled = true;
+        cfg.audit.path = Some(settings.clone());
+        let (_sink, warning) = audit_sink_from_config(&cfg, &protected);
+        let warning = warning.expect("protected audit path must warn");
+        assert!(warning.contains("protected"), "{warning}");
+        assert_eq!(std::fs::read_to_string(&settings).expect("read"), "{}");
     }
 
     #[test]
