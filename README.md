@@ -195,6 +195,22 @@ re-detects existing ptuf entries.
 ptuf init claude-code
 ```
 
+Prefer Claude Code's plugin system? Install the binary first (any method
+above), then inside Claude Code:
+
+```text
+/plugin install ptuf --marketplace watany-dev/ptuf
+```
+
+On Claude Code older than 2.1.275, run `/plugin marketplace add watany-dev/ptuf`
+and then `/plugin install ptuf@ptuf`. The plugin registers the same
+`PreToolUse` hook and blocks every matched tool call with an install hint
+until the `ptuf` binary is on PATH (or in `~/.cargo/bin`). `ptuf init
+claude-code` remains the stronger option: `core.self_protection.*` guards
+`~/.claude/settings.json`, but not the plugin cache under
+`~/.claude/plugins/`. Use one or the other, not both, or every call is
+evaluated twice.
+
 **Codex** — writes `<repo>/.codex/hooks.json` and `config.toml`:
 
 ```bash

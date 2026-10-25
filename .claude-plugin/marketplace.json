@@ -1,0 +1,15 @@
+{
+  "name": "ptuf",
+  "description": "Claude Code plugin for ptuf, a deterministic guardrail for coding agents.",
+  "owner": {
+    "name": "watany-dev",
+    "url": "https://github.com/watany-dev"
+  },
+  "plugins": [
+    {
+      "name": "ptuf",
+      "source": "./plugins/ptuf",
+      "description": "Deterministic PreToolUse guardrail: blocks rm -rf, curl | bash, and credential exfiltration before the agent runs them."
+    }
+  ]
+}
