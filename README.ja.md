@@ -28,6 +28,7 @@ Claude Code の hooks で `rm -rf` を grep してブロックする自作スク
 版管理されたテストコーパス
 ([`tests/bypass/corpus.jsonl`](tests/bypass/corpus.jsonl)) と
 fuzzing / mutation testing で継続的に検証しています。
+抜け道を見つけられると思ったら [bypass チャレンジ](docs/bypass-challenge.md) に挑戦してください。
 
 |  | 自作 regex hook | LLM / 確認ダイアログ任せ | sandbox / コンテナ | ptuf |
 | --- | --- | --- | --- | --- |

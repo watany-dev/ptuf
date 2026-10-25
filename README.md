@@ -36,6 +36,9 @@ approach:
 A sandbox is complementary, not competing: it limits blast radius, while
 ptuf stops and audits the dangerous call itself — run both if you can.
 
+Think you can sneak a dangerous call past it? Take the
+[bypass challenge](docs/bypass-challenge.md).
+
 ## What it stops
 
 ptuf ships with built-in rules that block, ask, or audit before the agent
