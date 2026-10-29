@@ -71,6 +71,9 @@ meta_variable_misuse = "warn"
 # sees items whose *module chain* is crate-internal, so module declarations are
 # `pub(crate) mod` unless the module is genuinely part of the public API.
 unreachable_pub = "deny"
+# `cfg(kani)` gates the Kani bounded-model-checking harnesses
+# (`make kani`, `formal/README.md`).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
 
 [lints.clippy]
 # Group lints (lower priority so individual deny-overrides below win).

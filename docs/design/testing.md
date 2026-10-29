@@ -4,6 +4,11 @@ ptuf のテスト層は **二段構成** で運用する。判定の正しさは
 コアのアルゴリズム性質は Property-Based Testing (PBT) で網羅する。両者は補完
 関係であり、片方が他方を置き換えることはない。
 
+PBT / fuzz が入力空間を標本抽出するのに対し、有限に切った空間を網羅する
+形式モデル (TLA+ / Kani) を第三の層として `formal/` に置く
+(`make tla` / `make kani`、nightly の `formal` job)。対象と検出した反例は
+[`formal/README.md`](../../formal/README.md) を参照。
+
 ## 役割分担
 
 | 観点 | example-based | Property-Based |

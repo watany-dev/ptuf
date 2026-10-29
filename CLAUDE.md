@@ -50,6 +50,10 @@ fd / tempfile リーク・8 MiB stdin 境界・並列 hook と shared audit JSON
 - `make test-scripts` — `scripts/*.py` の stdlib-only unittest (`tests/scripts/`)。PR CI の
   `test-scripts` job で実行する。
 - `make semver` — `cargo-semver-checks` で公開 API の SemVer 破壊を検知 (PR CI でも実行)。
+- `make tla` / `make kani` — 形式モデル。TLA+ (`formal/tla/`, TLC) は audit の並行追記・
+  判定パイプラインの合成則・pack scope を全探索し、Kani は `src/**` の `#[cfg(kani)]`
+  harness で日付演算・IPv4 正規化を網羅検証する。`formal/tla/violations/` は
+  「違反が出るべき」反例 (修正前バグ / 未決の設計課題) の固定。詳細は `formal/README.md`。
 
 敵対的 bypass の回帰は `tests/bypass/corpus.jsonl` (版管理) に集約し、`make check` の
 `test` ステップで `tests/bypass_corpus.rs` が検証する。fuzz / 監査で新規 bypass を

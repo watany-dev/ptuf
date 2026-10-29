@@ -69,6 +69,13 @@ block する。repository 側の `.ptuf.yaml` で `mode: monitor` を指定し�
 同時に発火した `hardDeny` まで `Monitor` に落ちてしまう。rule ごとの降格では
 非 `hardDeny` の `Deny` だけが `Monitor` になり、同時に発火した `Ask` もそのまま残る。
 
+降格される `Deny` が `rules.<id>.decision: deny` による格上げで、rule 自身は
+`Ask` を返していた場合は `Monitor` ではなく元の `Ask` に戻す
+(`filter::demote_with_floor`)。厳しくする override が monitor mode で
+結果を弱めないためで、`formal/tla/DecisionPipeline.tla` の
+`StricterOverrideNeverWeakens` がこの性質を全探索で検査する。明示的な
+`decision: monitor` (緩める override) はそのまま `Monitor`。
+
 降格前にいずれかの rule が `Deny` を返し、mode による降格で最終結果が `Deny` でなくなった場合は
 `Outcome.mode_demoted = true` となり、audit の `modeDemoted` にも反映される。
 

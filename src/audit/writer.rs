@@ -9,7 +9,7 @@
 //! partial writes.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use super::record::AuditRecord;
@@ -58,6 +58,7 @@ fn open_append_secure(path: &Path) -> io::Result<File> {
 
     let file = OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .mode(0o600)
         .open(path)?;
@@ -71,7 +72,31 @@ fn open_append_secure(path: &Path) -> io::Result<File> {
 
 #[cfg(not(unix))]
 fn open_append_secure(path: &Path) -> io::Result<File> {
-    OpenOptions::new().create(true).append(true).open(path)
+    OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(path)
+}
+
+/// Terminate a torn last line left by a writer that died mid-record
+/// (hook timeout SIGKILL, ENOSPC halfway through `write_all`). Without
+/// this the next record is glued onto the fragment and the reader drops
+/// both as one invalid line. Must run under the exclusive lock so the
+/// last byte cannot change underneath; `O_APPEND` still puts the `\n`
+/// at the end regardless of the read position. Model:
+/// `formal/tla/AuditLog.tla` (`RepairTail`).
+pub(crate) fn terminate_torn_tail<F: Read + Write + Seek>(dst: &mut F) -> io::Result<()> {
+    if dst.seek(SeekFrom::End(0))? == 0 {
+        return Ok(());
+    }
+    dst.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8; 1];
+    dst.read_exact(&mut last)?;
+    if last[0] != b'\n' {
+        dst.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 /// Encode one record as a JSON line and append it to `dst`. The
@@ -103,6 +128,24 @@ mod tests {
         assert!(s.ends_with('\n'));
         assert_eq!(s.matches('\n').count(), 1);
         assert!(s.contains("\"decision\":\"deny\""));
+    }
+
+    #[test]
+    fn terminate_torn_tail_is_a_noop_on_empty_and_terminated_input() {
+        let mut empty = io::Cursor::new(Vec::new());
+        terminate_torn_tail(&mut empty).unwrap();
+        assert!(empty.get_ref().is_empty());
+
+        let mut whole = io::Cursor::new(b"{}\n".to_vec());
+        terminate_torn_tail(&mut whole).unwrap();
+        assert_eq!(whole.get_ref(), b"{}\n");
+    }
+
+    #[test]
+    fn terminate_torn_tail_closes_a_fragment() {
+        let mut torn = io::Cursor::new(b"{}\n{\"sche".to_vec());
+        terminate_torn_tail(&mut torn).unwrap();
+        assert_eq!(torn.get_ref(), b"{}\n{\"sche\n");
     }
 
     #[test]

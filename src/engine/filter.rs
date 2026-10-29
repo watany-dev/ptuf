@@ -157,6 +157,31 @@ fn pack_disabled(overlay: &PackOverride) -> bool {
     overlay.enabled == Some(false)
 }
 
+/// [`demote_for_mode`] that never drops a rule below what it returned
+/// before `rules.<id>.decision` was applied. A rule that asks, tightened
+/// to `deny` by config, keeps asking in monitor mode instead of falling
+/// to a silent `Monitor`: tightening must not weaken the outcome.
+/// Counterexample from `formal/tla/DecisionPipeline.tla`
+/// (`StricterOverrideNeverWeakens`).
+pub(super) fn demote_with_floor(
+    decision: Decision,
+    raw: Decision,
+    mode: Mode,
+    plugins: &PluginSet,
+) -> Decision {
+    let was_deny = matches!(decision, Decision::Deny { .. });
+    let demoted = demote_for_mode(decision, mode, plugins);
+    // Only a Deny the mode just demoted gets the floor; an explicit
+    // `decision: monitor` override is the operator's choice and stays.
+    if was_deny
+        && matches!(demoted, Decision::Monitor { .. })
+        && matches!(raw, Decision::Ask { .. })
+    {
+        return raw;
+    }
+    demoted
+}
+
 pub(super) fn demote_for_mode(decision: Decision, mode: Mode, plugins: &PluginSet) -> Decision {
     if matches!(mode, Mode::Monitor)
         && let Decision::Deny { rule_id, .. } = &decision
@@ -237,6 +262,74 @@ rules:
         let outcome = Engine::with_components(cfg, set).decide(&bash("curl https://example.com"));
         assert!(matches!(outcome.decision, Decision::Monitor { .. }));
         assert!(outcome.mode_demoted);
+    }
+
+    // `rules.<id>.decision: deny` on an asking rule must not turn the ask
+    // into a silent Monitor in monitor mode. Counterexample from
+    // `formal/tla/DecisionPipeline.tla` (`StricterOverrideNeverWeakens`).
+    #[test]
+    fn monitor_mode_keeps_ask_of_rule_tightened_to_deny() {
+        let mut cfg = Config {
+            mode: Mode::Monitor,
+            ..Config::default()
+        };
+        let cmd = bash("git reset --hard HEAD~1");
+        let baseline = engine_with(cfg.clone()).decide(&cmd);
+        assert!(matches!(baseline.decision, Decision::Ask { .. }));
+
+        cfg.rule_overrides.insert(
+            "core.git.reset-hard".into(),
+            RuleOverride {
+                decision: Some(DecisionKind::Deny),
+                ..RuleOverride::default()
+            },
+        );
+        let outcome = engine_with(cfg).decide(&cmd);
+        assert_eq!(outcome.decision, baseline.decision);
+        assert!(outcome.mode_demoted);
+    }
+
+    // Outside monitor mode the tightened rule denies; the floor must not
+    // pull an undemoted Deny back down to the rule's own Ask.
+    #[test]
+    fn enforce_mode_keeps_deny_of_rule_tightened_to_deny() {
+        let mut cfg = Config::default();
+        cfg.rule_overrides.insert(
+            "core.git.reset-hard".into(),
+            RuleOverride {
+                decision: Some(DecisionKind::Deny),
+                ..RuleOverride::default()
+            },
+        );
+        let outcome = engine_with(cfg).decide(&bash("git reset --hard HEAD~1"));
+        assert!(matches!(outcome.decision, Decision::Deny { .. }));
+        assert!(!outcome.mode_demoted);
+    }
+
+    // The floor only applies to a Deny the mode demoted: loosening an
+    // asking rule to `decision: monitor` must stay Monitor. Counterexample
+    // the model (`NoSpuriousEscalation`) found in a first draft of the fix.
+    #[test]
+    fn explicit_monitor_override_on_asking_rule_is_kept() {
+        for mode in [Mode::Enforce, Mode::Monitor] {
+            let mut cfg = Config {
+                mode,
+                ..Config::default()
+            };
+            cfg.rule_overrides.insert(
+                "core.git.reset-hard".into(),
+                RuleOverride {
+                    decision: Some(DecisionKind::Monitor),
+                    ..RuleOverride::default()
+                },
+            );
+            let outcome = engine_with(cfg).decide(&bash("git reset --hard HEAD~1"));
+            assert!(
+                matches!(outcome.decision, Decision::Monitor { .. }),
+                "mode={mode:?}: {:?}",
+                outcome.decision,
+            );
+        }
     }
 
     #[test]

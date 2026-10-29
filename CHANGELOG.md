@@ -13,6 +13,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hardDeny ごと `Monitor` に降格されていた問題を修正。降格を集約前に
   ルールごとに適用するようにした。副次的に、降格された deny が同時に発火した
   ask を隠して `Monitor` になることもなくなった。(#278)
+- `url.hostAny` の host 正規化が、leading zero の長い IPv4 part
+  (`0x00000000000a9.0xfe.0xa9.0xfe`, `00000000000000251.254.169.254` など。
+  WHATWG / curl は `169.254.169.254` と解釈する) を数値と認めず、
+  `url.hostAny: ["169.254.169.254"]` の deny plugin をすり抜けていた問題を修正。
+  先頭 `+` 付きの part (`1.2.3.+4`) も WHATWG に合わせて数値扱いしない。
+  Kani harness (`formal/README.md`) で検出。
+- `mode: monitor` で、ask を返す rule を `rules.<id>.decision: deny` で厳しくすると、
+  降格の結果 `Monitor` (素通し) になり override なしの `Ask` より弱くなっていた
+  問題を修正。降格後も rule 自身の `Ask` を下回らない。TLA+ モデル
+  (`formal/tla/DecisionPipeline.tla`) で検出。
+
+### Fixed
+- audit JSONL: 記録中に死んだ ptuf (hook timeout の SIGKILL / ENOSPC) が
+  改行なしの断片を残すと、次のプロセスのレコードがその断片に連結され、
+  `ptuf audit` から 1 行の invalid として失われていた。writer はロック取得後に
+  末尾の断片を改行で閉じてから追記する。TLA+ モデル (`formal/tla/AuditLog.tla`) で検出。
+- audit timestamp: 時計が西暦 9999 年を超える場合に日付演算が i32 overflow
+  (debug は panic) していた。`9999-12-31T23:59:59Z` に clamp する。
+  あわせて西暦 0 年 1–2 月で床除算の補正が二重に掛かっていた日付演算を修正。
+  いずれも Kani harness で検出。
+
+### Added
+- 形式モデル: TLA+ (`formal/tla/`, `make tla`) と Kani harness
+  (`#[cfg(kani)]`, `make kani`) を追加し、nightly の `formal` job で実行する。
+  `overridable: false` rule の allowlist / monitor による弱化と、pack scope の
+  優先度については反例を `formal/tla/violations/` に固定した (仕様判断待ち)。
 
 ## [0.7.0] - 2026-10-21
 

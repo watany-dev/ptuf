@@ -29,8 +29,8 @@ use crate::rules::{self, ConfigRule};
 use crate::self_paths::ProtectedPaths;
 
 use filter::{
-    AllowlistContext, allowlist_hit_for, apply_rule_override, demote_for_mode, effective_severity,
-    is_pack_disabled,
+    AllowlistContext, allowlist_hit_for, apply_rule_override, demote_with_floor,
+    effective_severity, is_pack_disabled,
 };
 
 /// Resolved engine ready to evaluate hook payloads.
@@ -340,18 +340,20 @@ impl Engine {
             now,
         };
         let mut allowlist_hits: Vec<&str> = Vec::new();
-        let mut decisions: Vec<Decision> = Vec::new();
+        // Each fired rule's decision after overrides, paired with what the
+        // rule itself returned (the floor for monitor-mode demotion).
+        let mut decisions: Vec<(Decision, Decision)> = Vec::new();
         for rule in rules::iter() {
             if is_pack_disabled(rule, &self.config) {
                 continue;
             }
-            if let Some(d) = rule.evaluate(&facts, input)
-                && let Some(d) = apply_rule_override(rule, d, &self.config)
+            if let Some(raw) = rule.evaluate(&facts, input)
+                && let Some(d) = apply_rule_override(rule, raw.clone(), &self.config)
             {
                 if let Some(id) = allowlist_hit_for(rule, &d, &allowlist_ctx) {
                     allowlist_hits.push(id);
                 } else {
-                    decisions.push(d);
+                    decisions.push((d, raw));
                 }
             }
         }
@@ -360,13 +362,13 @@ impl Engine {
             if is_pack_disabled(rule, &self.config) {
                 continue;
             }
-            if let Some(d) = rule.evaluate(&facts, input)
-                && let Some(d) = apply_rule_override(rule, d, &self.config)
+            if let Some(raw) = rule.evaluate(&facts, input)
+                && let Some(d) = apply_rule_override(rule, raw.clone(), &self.config)
             {
                 if let Some(id) = allowlist_hit_for(rule, &d, &allowlist_ctx) {
                     allowlist_hits.push(id);
                 } else {
-                    decisions.push(d);
+                    decisions.push((d, raw));
                 }
             }
         }
@@ -374,11 +376,13 @@ impl Engine {
         // `aggregate` keeps the last of equal-kind decisions, so demoting
         // only the winner would let a later non-hardDeny deny drag a
         // co-firing hardDeny down to Monitor.
-        let raw_is_deny = decisions.iter().any(|d| matches!(d, Decision::Deny { .. }));
+        let raw_is_deny = decisions
+            .iter()
+            .any(|(d, _)| matches!(d, Decision::Deny { .. }));
         let demoted_decision = aggregate(
             decisions
                 .into_iter()
-                .map(|d| demote_for_mode(d, self.config.mode, &self.plugins)),
+                .map(|(d, raw)| demote_with_floor(d, raw, self.config.mode, &self.plugins)),
         );
         let mode_demoted = raw_is_deny && !matches!(demoted_decision, Decision::Deny { .. });
         let allowlist_ids: Vec<String> =
@@ -1042,6 +1046,7 @@ rules:
         let _ = engine.decide(&bash("rm -rf /"));
     }
 
+    use super::filter::demote_for_mode;
     use crate::config::PackOverride;
     use crate::testing::proptest::{decision, hook_input};
     use proptest::prelude::*;

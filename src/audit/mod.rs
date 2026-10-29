@@ -147,7 +147,9 @@ impl AuditSink for JsonlSink {
         // not span other OFDs so flock is required even on Linux where
         // a single write() on O_APPEND is otherwise atomic.
         File::lock(&guard).map_err(|e| AuditError::Write(WriteError::Io(e)))?;
-        let result = writer::append_record(&mut *guard, record).map_err(AuditError::Write);
+        let result = writer::terminate_torn_tail(&mut *guard)
+            .map_err(|e| AuditError::Write(WriteError::Io(e)))
+            .and_then(|()| writer::append_record(&mut *guard, record).map_err(AuditError::Write));
         // unlock failures are best-effort: the same OFD's existing lock
         // remains valid (Linux flock treats a re-lock as a no-op) and
         // closing the File on Drop releases it unconditionally.
@@ -209,6 +211,35 @@ mod tests {
         assert!(body.contains("\"ruleId\":\"r\""));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A writer killed mid-record (hook timeout) leaves a fragment with no
+    // newline. The next record must still land on its own line instead of
+    // being glued onto the fragment. Counterexample from
+    // `formal/tla/AuditLog.tla` (`AcknowledgedRecordsReadable`).
+    #[test]
+    fn jsonl_sink_record_after_torn_tail_stays_readable() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = JsonlSink::open(&path).expect("open");
+        sink.record(&rec()).expect("first");
+        let mut torn = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open torn");
+        std::io::Write::write_all(&mut torn, b"{\"schemaVersion\":1,\"time").expect("torn");
+        drop(torn);
+
+        sink.record(&rec()).expect("after torn tail");
+
+        let snapshot = read::open_snapshot(&path).expect("snapshot");
+        let out = read::read_filtered(snapshot, &read::AuditFilter::default(), 0).expect("read");
+        assert_eq!(
+            out.valid_records, 2,
+            "acknowledged records must stay readable"
+        );
+        assert_eq!(out.skipped_invalid, 1, "only the fragment is lost");
+        assert!(!out.incomplete_tail);
     }
 
     #[test]
