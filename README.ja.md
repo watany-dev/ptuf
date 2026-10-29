@@ -123,6 +123,18 @@ ptuf init opencode-v1   # v1 plugin API を固定 (旧 OpenCode)
 `--dry-run` で書き込みなしの計画表示も可能です。ホストごとの詳細は
 [`docs/agents.md`](docs/agents.md) を参照。
 
+Claude Code のプラグインとして入れることもできます。先にバイナリを入れたうえで、Claude Code 内で次を実行します
+(2.1.275 より前の Claude Code では `/plugin marketplace add watany-dev/ptuf` のあと `/plugin install ptuf@ptuf`)。
+
+```text
+/plugin install ptuf --marketplace watany-dev/ptuf
+```
+
+プラグインは `ptuf init claude-code` と同じ `PreToolUse` hook を登録し、`ptuf` バイナリが PATH (または `~/.cargo/bin`)
+に無い間はインストール方法を添えてツール呼出しをブロックします。`core.self_protection.*` は `~/.claude/settings.json` を
+保護しますが `~/.claude/plugins/` 配下のプラグインキャッシュは保護対象外なので、最も強い保証が必要なら `ptuf init claude-code`
+を使ってください。二重評価になるため両方を併用しないでください。
+
 ## カスタマイズ
 
 YAML 設定を `/etc/ptuf/policy.yaml` → `~/.config/ptuf/config.yaml` →

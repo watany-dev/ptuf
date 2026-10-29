@@ -1,0 +1,16 @@
+{
+  "description": "Route every tool call ptuf can evaluate through `ptuf hook claude-code`.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Edit|Write|WebFetch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/ptuf-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
