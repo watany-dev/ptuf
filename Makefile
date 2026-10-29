@@ -151,8 +151,8 @@ semver: tools
 
 # Formal models (formal/README.md). Not part of `make check`.
 #   - `tla` .... TLC over formal/tla: `<Spec>.cfg` must hold,
-#                `violations/*.cfg` must be violated (known bugs / open
-#                questions pinned as counterexamples). Needs Java 11+;
+#                `violations/*.cfg` must be violated (pre-fix bugs pinned
+#                as counterexamples). Needs Java 11+;
 #                scripts/formal-tla.sh fetches a pinned tla2tools.jar.
 #   - `kani` ... Kani bounded model checking of the `#[cfg(kani)]`
 #                harnesses in src/. Installs KANI_VERSION when missing.

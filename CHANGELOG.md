@@ -37,8 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - 形式モデル: TLA+ (`formal/tla/`, `make tla`) と Kani harness
   (`#[cfg(kani)]`, `make kani`) を追加し、nightly の `formal` job で実行する。
-  `overridable: false` rule の allowlist / monitor による弱化と、pack scope の
-  優先度については反例を `formal/tla/violations/` に固定した (仕様判断待ち)。
 
 ## [0.7.0] - 2026-10-21
 

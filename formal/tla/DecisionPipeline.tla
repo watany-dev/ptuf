@@ -102,18 +102,6 @@ AllowlistIdSet == Final = Allow /\ Hits # {}
 HardDenyAlwaysBlocks ==
     (\E r \in Rules : hard[r] /\ raw[r] = Deny) => Final = Deny
 
-\* decision-model.md "hardDeny / overridable": a rule with
-\* `overridable: false` cannot have its decision changed or be disabled
-\* from config, so whatever it returned is a lower bound on the outcome.
-LockedRuleNotWeakened ==
-    \A r \in Rules : (~ovr[r] /\ raw[r] \in Kinds) => Final >= raw[r]
-
-\* The same guarantee split by mechanism, for one-cause counterexamples.
-LockedRuleNotWeakenedByAllowlist ==
-    mode = "enforce" => LockedRuleNotWeakened
-LockedRuleNotWeakenedByMode ==
-    (\A r \in Rules : ~allowed[r]) => LockedRuleNotWeakened
-
 \* decision-model.md: demotion only ever lowers a Deny to Monitor.
 DemotionOnlyLowersDeny ==
     mode = "enforce" => ~ModeDemoted

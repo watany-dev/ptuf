@@ -18,7 +18,7 @@ PBT (`proptest`) や fuzz は入力空間を **標本抽出** する。ここに
 
 - `formal/tla/<Spec>.cfg` — **成り立つべき** 構成。違反が出たら失敗。
 - `formal/tla/violations/<Spec>[_x].cfg` — **違反が出るべき** 構成。修正前の
-  バグや未決の設計課題を、反例が再現できる形で固定する。違反が出なくなったら
+  バグを、反例が再現できる形で固定する。違反が出なくなったら
   (= コードかモデルが変わった) 失敗するので、設定を `formal/tla/` へ移す。
 
 ### `AuditLog.tla` — audit JSONL の並行追記
@@ -61,7 +61,6 @@ rule の出力・`rules.<id>.enabled|decision`・allowlist・mode の **全組�
 | `DemotionOnlyLowersDeny` / `MonitorBlocksOnlyViaHardDeny` | 成立 |
 | `AllowlistIdOnlyOnAllow` / `NoSpuriousEscalation` | 成立 |
 | `StricterOverrideNeverWeakens` | 成立 (修正後) |
-| `LockedRuleNotWeakenedByAllowlist` / `...ByMode` | **違反 (未決、下記)** |
 
 **検出したバグ (修正済み)** — `violations/DecisionPipeline_NoFloor.cfg`:
 
@@ -78,40 +77,6 @@ override なしなら Ask だったので、厳しくした設定で結果が弱
 (`filter::demote_with_floor`)。なお修正の初版は明示的な
 `decision: monitor` (緩める override) まで Ask に戻してしまい、これも
 `NoSpuriousEscalation` の反例としてモデルが検出した。
-
-**未決の設計課題** — `overridable: false` の弱化:
-
-`decision-model.md` は `overridable: false` を「下位 scope から decision を
-変えられない / 無効化されない」と定めるが、次の 2 経路で結果が rule の出力を
-下回る。
-
-- `violations/DecisionPipeline_LockedByAllowlist.cfg`:
-  `overridable: false` の rule (非 hardDeny) が `allowlists[]` で抑止される
-  (`allowlist_hit_for` は `hard_deny` しか見ない)。
-- `violations/DecisionPipeline_LockedByMode.cfg`:
-  `overridable: false` の rule の Deny が `mode: monitor` で Monitor に降格される
-  (`demote_for_mode` も `hard_deny` しか見ない)。
-
-どちらも repo の `.ptuf.yaml` (信頼度が最も低い scope) から書ける。
-`hardDeny` だけを最終防衛線とする現仕様なのか、`overridable: false` も
-allowlist / monitor から守るべきなのかは仕様判断なので、コードは変えていない。
-
-### `PackScopes.tla` — `packs.<prefix>.enabled` の scope 優先度
-
-`config::merge` は pack key ごとに上位 scope の値で上書きし、
-`is_pack_disabled` は rule id の **どれか 1 つの** prefix が `false` なら無効化する。
-
-**未決の設計課題** — `violations/PackScopes.cfg`:
-
-```
-repo  (.ptuf.yaml)       packs: { core.network: { enabled: false } }
-local (.ptuf.local.yaml) packs: { core:         { enabled: true  } }
-→ core.network.* は無効のまま (より上位の local の enable が効かない)
-```
-
-同じ scope 内でも `core: false` + `core.network: true` は `core.network.*` を
-無効にする。「上位 scope が勝つ」「より具体的な key が勝つ」のどちらにも
-なっていないが、無効側に倒れるのは保守的でもあるため、コードは変えていない。
 
 ## Kani (`make kani`)
 

@@ -2,8 +2,8 @@
 # Model-check every TLA+ spec under formal/tla with TLC (`make tla`).
 #
 #   formal/tla/<Spec>.cfg                 must hold (no violation)
-#   formal/tla/violations/<Spec>[_x].cfg  must be violated: a known bug or
-#                                         open question the model pins.
+#   formal/tla/violations/<Spec>[_x].cfg  must be violated: a pre-fix bug
+#                                         the model pins as a counterexample.
 #                                         Passing means the code/model
 #                                         changed; move the config.
 #
