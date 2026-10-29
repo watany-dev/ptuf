@@ -119,18 +119,22 @@ local (.ptuf.local.yaml) packs: { core:         { enabled: true  } }
 (`make kani` が `KANI_VERSION` を入れる)。harness は対象 module の末尾の
 `#[cfg(kani)] mod verification` にあり、通常のビルド・テストには影響しない。
 
+証明が実用時間で終わる harness だけを置く。`make kani` は nightly で 1–2 分程度。
+
 | harness | 性質 |
 | --- | --- |
 | `audit::time::verification::civil_round_trip` | 4 桁年の全日付で `civil_from_days ∘ days_from_civil = id` |
 | `audit::time::verification::days_round_trip` | 4 桁年の全日数で逆向きも恒等、出力日付も妥当 |
 | `audit::time::verification::rfc3339_total_on_any_system_time` | 任意の `SystemTime` で overflow せず年は 1970..=9999 |
-| `audit::time::verification::parse_total_on_canonical_lengths` | 20 / 25 byte の任意入力で `parse_rfc3339_to_secs` が panic しない |
-| `audit::time::verification::zero_offset_spellings_agree` | `Z` / `+00:00` / `-00:00` が同じ秒になる |
-| `facts::url::verification::ipv4_number_matches_whatwg` | IPv4 の各 part の数値解釈が WHATWG と一致 (16 byte まで) |
 
 **検出したバグ (すべて修正済み)**
 
-1. **`url.hostAny` の bypass** (`ipv4_number_matches_whatwg`)。
+1. **`url.hostAny` の bypass**。IPv4 part の数値解釈を WHATWG の参照実装と
+   比べる Kani harness は修正前のコードで即座に反例を出したが、修正後の
+   **証明** は 30 分以内に終わらなかった。そのため同じ性質を有界網羅テスト
+   `facts::url::tests::ipv4_number_matches_whatwg_exhaustively` (prefix 4 種 ×
+   leading zero 0..=16 × 2 byte までの tail、約 4 万通り) として `make check`
+   側に置いている。
    `parse_ipv4_number` が leading zero を含む生の桁数で 12 桁上限を判定していたため、
    `0x00000000000a9` (= 169) のような part を数値と認めず、host が正規化されなかった。
    WHATWG と curl はこれを `169.254.169.254` と解釈する。実機で

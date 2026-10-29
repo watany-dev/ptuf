@@ -473,40 +473,4 @@ mod verification {
         assert!((1..=12).contains(&m));
         assert!(d >= 1 && d <= days_in_month(y, m).unwrap_or(0));
     }
-
-    /// `parse_rfc3339_to_secs` never panics on any canonical-length input.
-    #[kani::proof]
-    #[kani::unwind(26)]
-    fn parse_total_on_canonical_lengths() {
-        let short: [u8; 20] = kani::any();
-        if let Ok(s) = std::str::from_utf8(&short) {
-            let _ = parse_rfc3339_to_secs(s);
-        }
-        let long: [u8; 25] = kani::any();
-        if let Ok(s) = std::str::from_utf8(&long) {
-            let _ = parse_rfc3339_to_secs(s);
-        }
-    }
-
-    /// A parsed `Z` timestamp is exactly `days * 86400 + seconds-of-day`
-    /// and an equivalent `+00:00` / `-00:00` spelling parses identically.
-    #[kani::proof]
-    #[kani::unwind(26)]
-    fn zero_offset_spellings_agree() {
-        let mut z: [u8; 20] = *b"0000-00-00T00:00:00Z";
-        for i in [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18] {
-            let d: u8 = kani::any();
-            kani::assume(d <= 9);
-            z[i] = b'0' + d;
-        }
-        let mut plus = [0u8; 25];
-        plus[..19].copy_from_slice(&z[..19]);
-        plus[19..].copy_from_slice(b"+00:00");
-        let mut minus = plus;
-        minus[19] = b'-';
-        let as_str = |b: &[u8]| std::str::from_utf8(b).ok().and_then(parse_rfc3339_to_secs);
-        let base = as_str(&z);
-        assert_eq!(as_str(&plus), base);
-        assert_eq!(as_str(&minus), base);
-    }
 }

@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WHATWG / curl は `169.254.169.254` と解釈する) を数値と認めず、
   `url.hostAny: ["169.254.169.254"]` の deny plugin をすり抜けていた問題を修正。
   先頭 `+` 付きの part (`1.2.3.+4`) も WHATWG に合わせて数値扱いしない。
-  Kani harness (`formal/README.md`) で検出。
+  Kani harness で反例を確認し、有界網羅テストで固定。
 - `mode: monitor` で、ask を返す rule を `rules.<id>.decision: deny` で厳しくすると、
   降格の結果 `Monitor` (素通し) になり override なしの `Ask` より弱くなっていた
   問題を修正。降格後も rule 自身の `Ask` を下回らない。TLA+ モデル
