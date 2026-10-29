@@ -134,7 +134,7 @@ mod tests {
     fn terminate_torn_tail_is_a_noop_on_empty_and_terminated_input() {
         let mut empty = io::Cursor::new(Vec::new());
         terminate_torn_tail(&mut empty).unwrap();
-        assert!(empty.get_ref().is_empty());
+        assert_eq!(empty.into_inner(), Vec::<u8>::new());
 
         let mut whole = io::Cursor::new(b"{}\n".to_vec());
         terminate_torn_tail(&mut whole).unwrap();
