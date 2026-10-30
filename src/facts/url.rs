@@ -178,13 +178,21 @@ fn parse_ipv4_number(part: &str) -> Option<u64> {
         } else {
             (part, 10)
         };
-    if digits.is_empty() {
-        return Some(0);
-    }
-    if digits.len() > 12 {
+    // Every byte must be a digit of `radix`: `from_str_radix` would also
+    // take a leading `+`, which WHATWG does not.
+    if !digits.bytes().all(|b| char::from(b).is_digit(radix)) {
         return None;
     }
-    u64::from_str_radix(digits, radix).ok()
+    // Leading zeros carry no value and WHATWG allows any number of them,
+    // so the overflow cap applies to the significant digits only.
+    let significant = digits.trim_start_matches('0');
+    if significant.is_empty() {
+        return Some(0);
+    }
+    if significant.len() > 12 {
+        return None;
+    }
+    u64::from_str_radix(significant, radix).ok()
 }
 
 fn is_valid_scheme(scheme: &str) -> bool {
@@ -373,6 +381,104 @@ mod tests {
         // Not an address: left as a name.
         assert_eq!(parse("http://1.2.3.4.5/").unwrap().host, "1.2.3.4.5");
         assert_eq!(parse("http://0x1g/").unwrap().host, "0x1g");
+    }
+
+    // WHATWG (and curl's `ipv4_normalize`) accept any number of leading
+    // zeros in an IPv4 part; a 12-digit cap on the raw text left these
+    // spellings un-normalized, so `url.hostAny: ["169.254.169.254"]`
+    // missed them. Pinned exhaustively by
+    // `ipv4_number_matches_whatwg_exhaustively`.
+    #[test]
+    fn normalizes_ipv4_parts_with_long_leading_zero_runs() {
+        for raw in [
+            "http://0x00000000000a9.0xfe.0xa9.0xfe/",
+            "http://00000000000000251.254.169.254/",
+            "http://169.254.169.0000000000000000376/",
+            "http://0x00000000000000000000a9fea9fe/",
+        ] {
+            assert_eq!(parse(raw).unwrap().host, "169.254.169.254", "raw={raw}");
+            let oracle = ::url::Url::parse(raw).unwrap();
+            assert_eq!(oracle.host_str(), Some("169.254.169.254"), "raw={raw}");
+        }
+    }
+
+    /// WHATWG "IPv4 number parser", written straight from the spec with
+    /// saturating arithmetic. `None` = failure.
+    fn whatwg_ipv4_number(s: &[u8]) -> Option<u128> {
+        if s.is_empty() {
+            return None;
+        }
+        let (digits, radix): (&[u8], u32) = if s.len() >= 2 && s[0] == b'0' && (s[1] | 0x20) == b'x'
+        {
+            (&s[2..], 16)
+        } else if s.len() >= 2 && s[0] == b'0' {
+            (&s[1..], 8)
+        } else {
+            (s, 10)
+        };
+        let mut value: u128 = 0;
+        for &b in digits {
+            let d = char::from(b).to_digit(radix)?;
+            value = value
+                .saturating_mul(u128::from(radix))
+                .saturating_add(u128::from(d));
+        }
+        Some(value)
+    }
+
+    // Bounded-exhaustive check of `parse_ipv4_number` against WHATWG over
+    // every part shaped `prefix ++ "0" * zeros ++ tail`: radix prefix
+    // (none / `0` / `0x` / `0X`), 0..=16 leading zeros (the shape that
+    // slipped past the old 12-digit cap) and every 0..=2-byte tail over
+    // digits, hex letters and the signs `from_str_radix` treats specially.
+    // Parts that cannot form an IPv4 address (value > u32::MAX) only have
+    // to stay out of range. A Kani harness for the same property found
+    // the leading-zero bug but cannot finish the proof in nightly time.
+    #[test]
+    fn ipv4_number_matches_whatwg_exhaustively() {
+        const ALPHABET: &[u8] = b"0123456789abcdefABFgxX+-";
+        let mut tails: Vec<Vec<u8>> = vec![Vec::new()];
+        for &a in ALPHABET {
+            tails.push(vec![a]);
+            for &b in ALPHABET {
+                tails.push(vec![a, b]);
+            }
+        }
+        for prefix in [&b""[..], b"0", b"0x", b"0X"] {
+            for zeros in 0..=16 {
+                for tail in &tails {
+                    let mut part = prefix.to_vec();
+                    part.extend(std::iter::repeat_n(b'0', zeros));
+                    part.extend_from_slice(tail);
+                    let text = std::str::from_utf8(&part).unwrap();
+                    let got = parse_ipv4_number(text);
+                    match whatwg_ipv4_number(&part) {
+                        None => assert_eq!(got, None, "part={text}"),
+                        Some(v) if v <= u128::from(u32::MAX) => {
+                            assert_eq!(got.map(u128::from), Some(v), "part={text}");
+                        },
+                        Some(_) => assert!(
+                            got.is_none_or(|g| g > u64::from(u32::MAX)),
+                            "part={text} got={got:?}",
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
+    // `u64::from_str_radix` accepts a leading `+`; WHATWG does not, so
+    // `1.2.3.+4` is a name, not `1.2.3.4`.
+    #[test]
+    fn ipv4_part_with_plus_sign_is_not_a_number() {
+        assert_eq!(parse("http://1.2.3.+4/").unwrap().host, "1.2.3.+4");
+    }
+
+    #[test]
+    fn ipv4_part_overflow_is_still_rejected() {
+        // 2^64 + 1 in hex: too large for any IPv4 address.
+        let raw = "http://0x10000000000000001/";
+        assert_eq!(parse(raw).unwrap().host, "0x10000000000000001");
     }
 
     #[test]

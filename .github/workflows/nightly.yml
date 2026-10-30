@@ -113,12 +113,29 @@ jobs:
       - name: Run heavy E2E suite
         run: make e2e
 
+  # Formal models (formal/README.md): TLC over formal/tla and the Kani
+  # harnesses in src/. Ubuntu runners ship Java 17 for TLC.
+  formal:
+    name: formal models (TLA+ / Kani)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: TLA+ (TLC)
+        run: make tla
+      - name: Kani
+        run: make kani
+
   # A failed run on main files its result as an issue: the scheduled-workflow
   # e-mail alone lets a red nightly sit unnoticed. One open issue collects
   # every failed run, each as a comment. A cancelled run files nothing.
   nightly-issue:
     name: Nightly (file failure on main)
-    needs: [fuzz, mutants, e2e]
+    needs: [fuzz, mutants, e2e, formal]
     if: >-
       always() && github.ref == 'refs/heads/main' &&
       contains(needs.*.result, 'failure')
@@ -141,6 +158,7 @@ jobs:
           FUZZ: ${{ needs.fuzz.result }}
           MUTANTS: ${{ needs.mutants.result }}
           E2E: ${{ needs.e2e.result }}
+          FORMAL: ${{ needs.formal.result }}
         run: |
           missed=$(sort -u mutants-report/missed.txt 2>/dev/null || true)
           {
@@ -151,6 +169,7 @@ jobs:
             echo "| fuzz | $FUZZ |"
             echo "| cargo-mutants | $MUTANTS |"
             echo "| heavy E2E | $E2E |"
+            echo "| formal models | $FORMAL |"
             echo
             if [ "$FUZZ" = failure ]; then
               echo "fuzz: download the \`fuzz-artifacts-*\` artifacts, add the reproducer to \`fuzz/artifacts/\` and the bypass to \`tests/bypass/corpus.jsonl\`."

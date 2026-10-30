@@ -1,4 +1,4 @@
-.PHONY: build test test-opencode test-scripts lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants mutants-diff semver tools tools-deny install-hooks
+.PHONY: build test test-opencode test-scripts lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants mutants-diff semver tla kani tools tools-deny install-hooks
 
 # Keep these aligned with .github/workflows/ci.yml and nightly.yml:
 # - CARGO_DENY_VERSION must match the cargo-deny pinned in
@@ -12,6 +12,7 @@ CARGO_TARPAULIN_VERSION ?= 0.35.1
 CARGO_FUZZ_VERSION ?= 0.13.1
 CARGO_MUTANTS_VERSION ?= 27.0.0
 CARGO_SEMVER_CHECKS_VERSION ?= 0.50.0
+KANI_VERSION ?= 0.68.0
 
 # When set to a non-empty value, `tools` only verifies presence and exits
 # non-zero if a required binary is missing (no `cargo install`). Useful in CI
@@ -146,6 +147,24 @@ mutants-diff: tools
 # a breaking change the Cargo.toml version does not account for.
 semver: tools
 	cargo semver-checks --baseline-rev "$$(scripts/semver-baseline.sh)"
+
+
+# Formal models (formal/README.md). Not part of `make check`.
+#   - `tla` .... TLC over formal/tla: `<Spec>.cfg` must hold,
+#                `violations/*.cfg` must be violated (pre-fix bugs pinned
+#                as counterexamples). Needs Java 11+;
+#                scripts/formal-tla.sh fetches a pinned tla2tools.jar.
+#   - `kani` ... Kani bounded model checking of the `#[cfg(kani)]`
+#                harnesses in src/. Installs KANI_VERSION when missing.
+tla:
+	scripts/formal-tla.sh
+
+kani:
+	@if ! cargo kani --version 2>/dev/null | grep -q "$(KANI_VERSION)"; then \
+		if [ -n "$(SKIP_TOOL_INSTALL)" ]; then echo "missing: kani $(KANI_VERSION)"; exit 1; fi; \
+		cargo install --locked kani-verifier --version $(KANI_VERSION) && cargo kani setup; \
+	fi
+	cargo kani --lib --output-format terse
 
 tools:
 ifeq ($(SKIP_TOOL_INSTALL),)

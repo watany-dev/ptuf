@@ -2,15 +2,21 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// `9999-12-31T23:59:59Z`, the last instant with a four-digit year.
+const MAX_RFC3339_SECS: u64 = 253_402_300_799;
+
 /// Format the supplied [`SystemTime`] as an RFC3339 string in UTC with
 /// second precision (e.g. `2026-05-04T12:00:00Z`). Times before the
-/// Unix epoch are clamped to the epoch; they never occur in practice
-/// but a panic-free fallback keeps the audit pipeline lossless.
+/// Unix epoch are clamped to the epoch, and times past year 9999 to
+/// [`MAX_RFC3339_SECS`]; they never occur in practice but a panic-free
+/// fallback keeps the audit pipeline lossless and every timestamp
+/// parseable by [`parse_rfc3339_to_secs`].
 pub(crate) fn rfc3339_utc(t: SystemTime) -> String {
     let secs = t
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .min(MAX_RFC3339_SECS);
     let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX);
     let rem = secs % 86_400;
     let (year, month, day) = civil_from_days(days);
@@ -98,7 +104,10 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
     if m <= 2 {
         y -= 1;
     }
-    let era = if y >= 0 { y } else { y - 399 }.div_euclid(400);
+    // `div_euclid` already floors; Hinnant's `y - 399` adjustment is for
+    // C's truncating `/` and applying both double-counts negative years
+    // (found by the Kani harness `verification::civil_round_trip`).
+    let era = y.div_euclid(400);
     let yoe = y - era * 400;
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
@@ -108,7 +117,7 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
 /// Howard Hinnant `civil_from_days`: inverse of [`days_from_civil`].
 fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let era = z.div_euclid(146_097);
     let doe = u32::try_from(z - era * 146_097).unwrap_or(0);
     let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
     let y = i32::try_from(yoe).unwrap_or(i32::MAX) + i32::try_from(era).unwrap_or(0) * 400;
@@ -178,6 +187,31 @@ mod tests {
     fn drops_subsecond_precision() {
         let t = UNIX_EPOCH + Duration::new(1_704_067_200, 123_456_789);
         assert_eq!(rfc3339_utc(t), "2024-01-01T00:00:00Z");
+    }
+
+    // Year 0 January/February are the only four-digit dates with a
+    // negative March-based year; the floor adjustment used to be applied
+    // twice there. Found by the Kani harness `verification::civil_round_trip`.
+    #[test]
+    fn civil_round_trips_year_zero_january() {
+        for (m, d) in [(1, 1), (2, 29), (3, 1)] {
+            let days = days_from_civil(0, m, d).unwrap();
+            assert_eq!(civil_from_days(days), (0, m, d));
+        }
+    }
+
+    // `civil_from_days` overflowed `i32` (debug panic, release garbage
+    // year) for clocks past year ~5.8 million. Found by the Kani harness
+    // `verification::rfc3339_total_on_any_system_time`.
+    #[test]
+    fn far_future_clamps_to_last_four_digit_second() {
+        let far = UNIX_EPOCH.checked_add(Duration::from_secs(1 << 62));
+        let Some(far) = far else {
+            return; // platform SystemTime cannot represent it
+        };
+        let s = rfc3339_utc(far);
+        assert_eq!(s, "9999-12-31T23:59:59Z");
+        assert_eq!(parse_rfc3339_to_secs(&s), Some(MAX_RFC3339_SECS));
     }
 
     #[test]
@@ -387,5 +421,56 @@ mod tests {
         ) {
             let _ = parse_rfc3339_to_secs(&s);
         }
+    }
+}
+
+// Kani bounded-model-checking harnesses (`make kani`, see
+// `formal/README.md`). They prove the date arithmetic for *every* input
+// in range rather than sampling it like the proptests above.
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    // 0000-03-01 and 9999-12-31: the span four-digit RFC3339 years cover.
+    const MIN_DAY: i64 = -719_468;
+    const MAX_DAY: i64 = 2_932_896;
+
+    /// `civil_from_days` inverts `days_from_civil` on every valid
+    /// four-digit date.
+    #[kani::proof]
+    fn civil_round_trip() {
+        let year: i32 = kani::any();
+        let month: u32 = kani::any();
+        let day: u32 = kani::any();
+        kani::assume((0..=9999).contains(&year));
+        kani::assume((1..=12).contains(&month));
+        kani::assume(day >= 1 && day <= days_in_month(year, month).unwrap_or(0));
+        let days = days_from_civil(year, month, day).unwrap_or(i64::MIN);
+        assert_eq!(civil_from_days(days), (year, month, day));
+    }
+
+    /// `days_from_civil` inverts `civil_from_days` on every day of the
+    /// four-digit range, and the produced date is itself valid.
+    #[kani::proof]
+    fn days_round_trip() {
+        let z: i64 = kani::any();
+        kani::assume((MIN_DAY..=MAX_DAY).contains(&z));
+        let (y, m, d) = civil_from_days(z);
+        assert!((1..=12).contains(&m));
+        assert!(d >= 1 && d <= days_in_month(y, m).unwrap_or(0));
+        assert_eq!(days_from_civil(y, m, d), Some(z));
+    }
+
+    /// `rfc3339_utc` never overflows for any `SystemTime` and always
+    /// produces a four-digit year. Exercises the same clamp + split as
+    /// `rfc3339_utc` without its `format!`.
+    #[kani::proof]
+    fn rfc3339_total_on_any_system_time() {
+        let secs: u64 = kani::any::<u64>().min(MAX_RFC3339_SECS);
+        let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX);
+        let (y, m, d) = civil_from_days(days);
+        assert!((1970..=9999).contains(&y));
+        assert!((1..=12).contains(&m));
+        assert!(d >= 1 && d <= days_in_month(y, m).unwrap_or(0));
     }
 }
