@@ -352,7 +352,8 @@ fn fold_char(c: char) -> char {
 /// pay for the [`classify`] result vector.
 pub(crate) fn matches(token: &str) -> bool {
     let folded = fold_sensitive_homoglyphs(token);
-    let token = folded.as_ref();
+    let spelled = crate::facts::path::fold_redundant_separators(&folded);
+    let token = spelled.as_ref();
     let mask = needle_mask(token.as_bytes());
     if mask == 0 {
         return false;
@@ -397,7 +398,9 @@ pub(crate) fn classify_content_into(token: &str, out: &mut Vec<SensitivePath>) {
 /// that drops a variant never even compiles its pattern.
 fn classify_into_filtered(token: &str, out: &mut Vec<SensitivePath>, content_only: bool) {
     let folded = fold_sensitive_homoglyphs(token);
-    let token = folded.as_ref();
+    // `~/.config//gh/./hosts.yml` is `~/.config/gh/hosts.yml` to the kernel.
+    let spelled = crate::facts::path::fold_redundant_separators(&folded);
+    let token = spelled.as_ref();
     let mask = needle_mask(token.as_bytes());
     if mask == 0 {
         return;
@@ -525,6 +528,20 @@ mod tests {
         assert!(kinds("$HOME/.ssh/").contains(&SensitiveKind::SshDir));
         assert!(kinds("/home/user/.ssh/config").contains(&SensitiveKind::SshDir));
         assert!(kinds("/root/.ssh/id_rsa").contains(&SensitiveKind::SshDir));
+    }
+
+    #[test]
+    fn redundant_separators_do_not_hide_sensitive_paths() {
+        for (token, kind) in [
+            ("~/.config//gh/hosts.yml", SensitiveKind::GhHosts),
+            ("~/.config/./gh/hosts.yml", SensitiveKind::GhHosts),
+            ("~/.config/gcloud//credentials.db", SensitiveKind::GcloudDir),
+            ("~/.kube//config", SensitiveKind::KubeConfig),
+            ("~/.docker/./config.json", SensitiveKind::DockerConfig),
+        ] {
+            assert!(kinds(token).contains(&kind), "{token}");
+            assert!(matches(token), "{token}");
+        }
     }
 
     #[test]

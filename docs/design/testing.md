@@ -92,7 +92,10 @@ engine end-to-end は `src/testing/engine_pbt.rs`、全 rule にまたがる否�
   (語の quote / `''` 挿入 / backslash、区切りの tab / 連続空白 / 行継続 /
   `${IFS}`、subshell / brace group / 前置 no-op、透過的な exec wrapper の前置)
   を 1 か所ずつ全通り生成し、判定が元より弱くならないことを検査する。
-  ここから `>${IFS}target` の redirect 先の取りこぼしと wrapper 経由の素通りを検出した
+  ここから `>${IFS}target` の redirect 先の取りこぼしと wrapper 経由の素通りを検出した。
+  同ファイルの `path_spelling_equivalent_rewrites_stay_caught` はパス語の
+  `/` → `//` / `/./` と、ファイル引数の dotfile への `./` 前置を全通り試す
+  (`~//.claude` の HOME 外への解決、機密パス・download-then-exec の照合漏れを検出)
 - tokenizer は 1 byte 以上前進する (forward-progress;
   `debug_assert!(advanced > 0)`)
 

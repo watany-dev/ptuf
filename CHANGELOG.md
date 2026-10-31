@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   内側にあると、`sensitive-bash-read` が発火しなかった問題を修正。
 - `>${IFS}out` のように redirect 演算子と target の間に `${IFS}` を置くと
   target を見失い、`cat .env >${IFS}/dev/tcp/…` などが判定を逃れていた問題を修正。
+- `~//.claude` のように `~/` の直後に `/` を重ねると、`Path::join` が絶対パス
+  `/.claude` として扱い HOME の外を指していたため、self-protection が
+  `rm -rf ~//.claude` を許可していた問題を修正。
+- 機密パスの照合 (`~/.config//gh/hosts.yml`, `~/.kube/./config` など) と
+  download-then-exec の「保存したファイルと実行するファイルが同じか」の比較
+  (`> /tmp//i.sh && bash /tmp/./i.sh`) で、`//` と `/./` を畳んでから比べる。
 - 上記はいずれも bash の等価変形による有界網羅テスト
   (`tests/bash_quote_equivalence.rs`) で検出。
 

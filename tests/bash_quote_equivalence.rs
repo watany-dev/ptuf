@@ -265,3 +265,110 @@ fn quote_removal_equivalent_rewrites_stay_caught() {
         misses.join("\n"),
     );
 }
+
+/// A top-level word that names a filesystem path the kernel resolves
+/// (absolute, `~/`, `./` or `../`), with nothing bash would expand or
+/// treat specially. `/dev/tcp/…` and friends are matched by bash as
+/// literal strings in redirects, so their spelling matters and they are
+/// left alone.
+fn is_path_word(word: &str) -> bool {
+    (word.starts_with('/')
+        || word.starts_with("~/")
+        || word.starts_with("./")
+        || word.starts_with("../"))
+        && !word.starts_with("/dev/")
+        && !word.contains("://")
+        && word
+            .bytes()
+            .skip(usize::from(word.starts_with('~')))
+            .all(|b| b.is_ascii_alphanumeric() || b"_./,:@%+-".contains(&b))
+}
+
+/// Path spellings the kernel resolves to the same file: a doubled `/`
+/// and an inserted `/./` at each separator, and for a bare dotfile
+/// argument of a file-taking command the `./` prefix.
+fn path_rewrites(word: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, _) in word.match_indices('/') {
+        let (a, b) = word.split_at(i);
+        out.push(format!("{a}/{b}"));
+        out.push(format!("{a}/.{b}"));
+    }
+    out
+}
+
+/// Commands whose operands are all file paths, so `.env` and `./.env`
+/// name the same file.
+const FILE_OPERAND_HEADS: &[&str] = &[
+    "cat", "less", "more", "head", "tail", "rm", "cp", "mv", "chmod", "tee", "source", ".",
+    "truncate", "shred", "nl", "tac", "base64", "xxd", "od", "strings",
+];
+
+#[test]
+fn path_spelling_equivalent_rewrites_stay_caught() {
+    let engine = Engine::builder()
+        .agent("path-equivalence")
+        .build()
+        .expect("default-config engine builds");
+    let mut checked = 0_usize;
+    let mut misses: Vec<String> = Vec::new();
+    for line in include_str!("bypass/corpus.jsonl").lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let case: serde_json::Value = serde_json::from_str(line).expect("corpus json");
+        if case["expect"]["kind"] != "must_catch" || case["hook_input"]["tool_name"] != "Bash" {
+            continue;
+        }
+        let Some(cmd) = case["hook_input"]["tool_input"]["command"].as_str() else {
+            continue;
+        };
+        if cmd.contains('\n') || cmd.contains("<<") {
+            continue;
+        }
+        let base = rank(engine.decide(&bash(cmd)).decision.kind());
+        let words: Vec<&str> = cmd.split(' ').collect();
+        let file_operands = words
+            .first()
+            .is_some_and(|h| FILE_OPERAND_HEADS.contains(h));
+        let mut offset = 0;
+        for (idx, word) in words.iter().enumerate() {
+            let start = offset;
+            offset += word.len() + 1;
+            if idx == 0 || !at_top_level(cmd, start) {
+                continue;
+            }
+            let mut variants = if is_path_word(word) {
+                path_rewrites(word)
+            } else {
+                Vec::new()
+            };
+            if file_operands && word.starts_with('.') && !word.starts_with("./") && is_plain(word) {
+                variants.push(format!("./{word}"));
+                variants.extend(path_rewrites(&format!("./{word}")));
+            }
+            for rewrite in variants {
+                let mut variant = words.clone();
+                variant[idx] = &rewrite;
+                let variant = variant.join(" ");
+                checked += 1;
+                let got = engine.decide(&bash(&variant)).decision.kind();
+                if rank(got) < base {
+                    misses.push(format!(
+                        "{id}: {variant:?} -> {got:?} (original {cmd:?})",
+                        id = case["id"].as_str().unwrap_or("?"),
+                    ));
+                }
+            }
+        }
+    }
+    eprintln!("checked {checked} path variants");
+    assert!(checked > 100, "only {checked} path variants generated");
+    assert!(
+        misses.is_empty(),
+        "{} of {checked} path-equivalent variants weakened the decision:\n{}",
+        misses.len(),
+        misses.join("\n")
+    );
+}
