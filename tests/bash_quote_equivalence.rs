@@ -22,6 +22,39 @@ const RESERVED: &[&str] = &[
     "done", "in", "function", "time", "{", "}", "!", "[[", "]]", "coproc",
 ];
 
+/// Builtins with no external counterpart: an exec wrapper (`sudo`,
+/// `nohup`) cannot run them.
+const SHELL_ONLY_BUILTINS: &[&str] = &[
+    "cd",
+    "source",
+    ".",
+    "eval",
+    "exec",
+    "builtin",
+    "export",
+    "alias",
+    "unset",
+    "set",
+    "trap",
+    "declare",
+    "typeset",
+    "local",
+    "readonly",
+    "enable",
+    "hash",
+    "pushd",
+    "popd",
+    "ulimit",
+    "umask",
+    "shopt",
+    "mapfile",
+    "readarray",
+    "let",
+    "return",
+    "exit",
+    "shift",
+];
+
 fn is_plain(word: &str) -> bool {
     !word.is_empty()
         && !RESERVED.contains(&word)
@@ -79,11 +112,10 @@ fn rank(kind: DecisionKind) -> u8 {
 }
 
 fn bash(cmd: &str) -> HookInput {
-    serde_json::from_value(serde_json::json!({
-        "tool_name": "Bash",
-        "tool_input": { "command": cmd },
-    }))
-    .expect("hook input")
+    HookInput {
+        tool_name: "Bash".into(),
+        tool_input: serde_json::json!({ "command": cmd }),
+    }
 }
 
 #[test]
@@ -160,6 +192,67 @@ fn quote_removal_equivalent_rewrites_stay_caught() {
                         id = case["id"].as_str().unwrap_or("?"),
                     ));
                 }
+            }
+        }
+        // Whole-command contexts that run the command unchanged: a
+        // subshell, a brace group, a preceding no-op, and transparent
+        // exec wrappers in front of the first simple command.
+        let mut contexts = vec![
+            format!("({cmd})"),
+            format!("{{ {cmd}; }}"),
+            format!("true; {cmd}"),
+            format!(": && {cmd}"),
+            format!("false || {cmd}"),
+        ];
+        let first = cmd.split([' ', '\t']).next().unwrap_or_default();
+        // A wrapper only applies to a simple command: not to a reserved
+        // word (`sudo coproc` runs a program named `coproc`), a group or an
+        // assignment. Shell-only builtins (`cd`, `source`, `eval`) cannot
+        // be exec'd, so only the shell's own `command` / `builtin` forms
+        // reach them.
+        if !cmd.starts_with(['(', '{']) && !first.contains('=') && !RESERVED.contains(&first) {
+            let shell_only = SHELL_ONLY_BUILTINS.contains(&first);
+            for wrapper in [
+                "command",
+                "builtin command",
+                "command -p",
+                "\\command",
+                "exec",
+                "nohup",
+                "nice",
+                "nice -n 5",
+                "env",
+                "env -i",
+                "time",
+                "timeout 9",
+                "timeout -s KILL 9",
+                "stdbuf -o0",
+                "setsid",
+                "ionice -c3",
+                "sudo",
+                "sudo -E",
+                "doas",
+                "chrt -o 0",
+                "taskset 1",
+                "flock /tmp/l",
+                "chroot /",
+                "busybox",
+                "/usr/bin/time -o /dev/null",
+            ] {
+                if shell_only && !wrapper.contains("command") {
+                    continue;
+                }
+                contexts.push(format!("{wrapper} {cmd}"));
+            }
+        }
+        for variant in contexts {
+            checked += 1;
+            let got = engine.decide(&bash(&variant)).decision.kind();
+            if rank(got) < base {
+                misses.push(format!(
+                    "{id}: {variant:?} -> {got:?} (original {cmd:?})",
+                    id = case["id"].as_str().unwrap_or("?"),
+                ));
             }
         }
     }

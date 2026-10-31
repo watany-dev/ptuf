@@ -24,6 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   問題を修正。降格後も rule 自身の `Ask` を下回らない。TLA+ モデル
   (`formal/tla/DecisionPipeline.tla`) で検出。
 
+- `timeout` / `nohup` / `nice` / `ionice` / `stdbuf` / `setsid` / `/usr/bin/time` /
+  `chroot` / `chrt` / `taskset` / `flock` / `unshare` / `busybox` を前置すると
+  内側のコマンドが判定されず、`timeout 9 rm -rf /` などが allow になっていた問題を修正。
+  これらを prefix wrapper として peel する (`timeout DURATION` などの operand も
+  読み飛ばす)。(#252)
+- `bash -c` / `su -c` / `eval` / `xargs` / `find -exec` の payload が prefix wrapper の
+  内側にあると再 parse されず、`sudo su -c 'rm -rf /'` が allow になっていた問題を修正。
+- `sudo cat $(echo .env)` のように `$(…)` を含むコマンドで reader が wrapper の
+  内側にあると、`sensitive-bash-read` が発火しなかった問題を修正。
+- `>${IFS}out` のように redirect 演算子と target の間に `${IFS}` を置くと
+  target を見失い、`cat .env >${IFS}/dev/tcp/…` などが判定を逃れていた問題を修正。
+- 上記はいずれも bash の等価変形による有界網羅テスト
+  (`tests/bash_quote_equivalence.rs`) で検出。
+
 ### Fixed
 - audit JSONL: 記録中に死んだ ptuf (hook timeout の SIGKILL / ENOSPC) が
   改行なしの断片を残すと、次のプロセスのレコードがその断片に連結され、
