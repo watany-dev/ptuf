@@ -723,15 +723,47 @@ fn candidate_targets<'a>(
 /// Walk the Bash segments in order, following literal `cd` / `pushd`
 /// so later relative paths resolve against the directory the shell is
 /// actually in (`cd .claude && echo {} > settings.json`).
+///
+/// Shell code a command runs (`bash -c '…'`, `su -c '…'`, `eval '…'`) is
+/// walked the same way, up to `depth` levels, starting from the directory
+/// the outer shell is in: the flattened `inner_argv` loses the inner
+/// `cd` order and the inner pipelines' redirects
+/// (`bash -c 'cd ~/.claude && echo {} > settings.json'`).
 fn bash_candidates(
     bash: &crate::facts::shell::Bash,
     base_dir: Option<&Path>,
     out: &mut Vec<Candidate>,
 ) {
+    let start = ShellDir {
+        cwd: base_dir.map(Path::to_path_buf),
+        lost: false,
+    };
+    walk_shell(
+        bash,
+        base_dir,
+        start,
+        crate::facts::shell::NESTING_BUDGET,
+        out,
+    );
+}
+
+/// The directory a (possibly nested) shell starts in.
+struct ShellDir {
+    cwd: Option<PathBuf>,
+    /// Set once a `cd` target is not a literal path.
+    lost: bool,
+}
+
+fn walk_shell(
+    bash: &crate::facts::shell::Bash,
+    base_dir: Option<&Path>,
+    start: ShellDir,
+    depth: usize,
+    out: &mut Vec<Candidate>,
+) {
     let env = &crate::config::scope::SystemEnv;
-    let mut cwd: Option<PathBuf> = base_dir.map(Path::to_path_buf);
-    // Set once a `cd` target is not a literal path.
-    let mut lost_cwd = false;
+    let mut cwd = start.cwd;
+    let mut lost_cwd = start.lost;
     let push = |raw: &str, cwd: Option<&Path>, lost: bool, tree: bool, out: &mut Vec<Candidate>| {
         let expanded = expand_cwd_references(raw, cwd);
         let raw = expanded.as_str();
@@ -769,6 +801,13 @@ fn bash_candidates(
             // writer head and its destinations are the inner command's.
             let argv = crate::facts::shell::unwrap_all_prefix_wrappers(outer);
             let head = argv.head_basename();
+            // A `cd` inside a payload (`bash -c 'cd …'`, `$(cd …)`) runs in
+            // a child shell and never moves this one; payload code is
+            // walked with its own cwd below.
+            let direct = pipe.commands.iter().any(|c| std::ptr::eq(c, outer));
+            if matches!(head, "cd" | "pushd") && !direct {
+                continue;
+            }
             if matches!(head, "cd" | "pushd") {
                 match argv.positional().next() {
                     Some(dir) if !dir.starts_with(['$', '+', '-']) => {
@@ -808,6 +847,16 @@ fn bash_candidates(
                 && (moved || r.target.contains(['$', '*', '?', '[']))
             {
                 push(&r.target, cwd.as_deref(), lost_cwd, false, out);
+            }
+        }
+        if depth > 0 {
+            for code in pipe.commands.iter().flat_map(|c| &c.inner_code) {
+                let inner = crate::facts::shell::parse(code);
+                let start = ShellDir {
+                    cwd: cwd.clone(),
+                    lost: lost_cwd,
+                };
+                walk_shell(&inner, base_dir, start, depth - 1, out);
             }
         }
     }
@@ -1585,6 +1634,11 @@ mod tests {
             "cd /repo/.claude && tee settings.json",
             "cd $X && rm settings.json",
             "cd - && rm settings.json",
+            // Shell code run by a command is walked in order too.
+            "bash -c 'cd .claude && echo {} > settings.json'",
+            "su -c 'cd .claude; rm settings.json'",
+            "cd .claude && sh -c 'echo {} > settings.json'",
+            "eval 'cd .claude && echo {} >| settings.json'",
         ] {
             assert!(
                 bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),

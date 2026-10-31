@@ -204,6 +204,21 @@ fn quote_removal_equivalent_rewrites_stay_caught() {
             format!(": && {cmd}"),
             format!("false || {cmd}"),
         ];
+        // Re-parsed payload carriers. Only one level is added and only
+        // around commands without single quotes, so the original's own
+        // nesting stays within `NESTING_BUDGET`.
+        if !cmd.contains('\'') {
+            for carrier in [
+                "bash -c",
+                "sh -c",
+                "eval",
+                "su -c",
+                "bash -lc",
+                "sudo sh -c",
+            ] {
+                contexts.push(format!("{carrier} '{cmd}'"));
+            }
+        }
         let first = cmd.split([' ', '\t']).next().unwrap_or_default();
         // A wrapper only applies to a simple command: not to a reserved
         // word (`sudo coproc` runs a program named `coproc`), a group or an
@@ -237,9 +252,11 @@ fn quote_removal_equivalent_rewrites_stay_caught() {
                 "flock /tmp/l",
                 "chroot /",
                 "busybox",
+                "X=1",
+                "LC_ALL=C X=1",
                 "/usr/bin/time -o /dev/null",
             ] {
-                if shell_only && !wrapper.contains("command") {
+                if shell_only && !wrapper.contains("command") && !wrapper.contains('=') {
                     continue;
                 }
                 contexts.push(format!("{wrapper} {cmd}"));

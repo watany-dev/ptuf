@@ -1881,10 +1881,25 @@ fn augment_inner_commands(argv: &mut Argv, nesting_budget: usize) {
 }
 
 fn merge_inner_shell(argv: &mut Argv, code: &str, nesting_budget: usize) {
+    // The payload word was decoded byte-per-char (`push_latin1`); undo that
+    // before re-tokenising, or a non-ASCII byte is widened twice and
+    // `.еnv` (Cyrillic `е`) no longer folds to `.env`.
+    let code = undo_latin1_widening(code);
+    let code = code.as_ref();
     argv.inner_code.push(code.to_string());
     let inner = parse_inner_shell(code, nesting_budget);
     argv.inner_argv.extend(inner.commands);
     argv.inner_redirects.extend(inner.redirects);
+}
+
+/// Reverse [`push_latin1`]: when every char is a Latin-1 code point and
+/// the bytes form valid UTF-8, return that UTF-8 text.
+fn undo_latin1_widening(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.is_ascii() || text.chars().any(|c| c > '\u{00FF}') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let bytes: Vec<u8> = text.chars().map(|c| c as u8).collect();
+    String::from_utf8(bytes).map_or(std::borrow::Cow::Borrowed(text), std::borrow::Cow::Owned)
 }
 
 struct InnerShell {
@@ -3422,6 +3437,24 @@ mod tests {
         let eq = extract_su_command(&argv("su", &["--command=rm -rf /"]))
             .expect("--command= inline form");
         assert_eq!(eq, "rm -rf /");
+    }
+
+    #[test]
+    fn payload_code_is_reparsed_from_the_original_bytes() {
+        // `е` is Cyrillic (U+0435): the payload must keep it as one char,
+        // not as its two UTF-8 bytes widened again.
+        let bash = parse("su -c 'cat .еnv'");
+        let outer = &bash.segments[0].commands[0];
+        assert_eq!(outer.inner_code, vec!["cat .еnv".to_string()]);
+        assert_eq!(
+            outer.inner_argv[0].args,
+            vec![".\u{d0}\u{b5}nv".to_string()]
+        );
+        assert_eq!(undo_latin1_widening("plain"), "plain");
+        assert_eq!(undo_latin1_widening("\u{c3}\u{a9}"), "é");
+        // Not a widening (a char above U+00FF, or invalid UTF-8): unchanged.
+        assert_eq!(undo_latin1_widening("é\u{0435}"), "é\u{0435}");
+        assert_eq!(undo_latin1_widening("\u{ff}"), "\u{ff}");
     }
 
     #[test]

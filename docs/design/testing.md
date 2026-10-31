@@ -102,7 +102,8 @@ engine end-to-end は `src/testing/engine_pbt.rs`、全 rule にまたがる否�
   中立な global option (`-C .` / `--no-pager` / `-c k=v` など) の挿入を全通り試す。
   `head_path_and_option_order_rewrites_stay_caught` は head の絶対パス化
   (`/usr/bin/bash`) と、boolean option だけの coreutils での cluster の分割・逆順・
-  operand の後ろへの移動 (`rm / -rf`) を試す
+  operand の後ろへの移動 (`rm / -rf`) を試す。最初のテストは各コマンドを
+  `bash -c '…'` / `sh -c` / `eval` / `su -c` / `sudo sh -c` で 1 段包む変形も含む
 - tokenizer は 1 byte 以上前進する (forward-progress;
   `debug_assert!(advanced > 0)`)
 
