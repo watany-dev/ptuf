@@ -820,7 +820,11 @@ fn tokenize(s: &str) -> TokenizeOutput {
                 // operator, not a pipe (#258 / #262).
                 out.push(Token::Redirect(RedirectOp::Stdout));
                 saw_redirect = true;
-                i += 1 + usize::from(bytes.get(i + 1) == Some(&b'|'));
+                i += if bytes.get(i + 1) == Some(&b'|') {
+                    2
+                } else {
+                    1
+                };
             }
             continue;
         }
