@@ -1609,7 +1609,20 @@ fn take_redirect_target(
     op: RedirectOp,
     current_words: &mut Vec<(String, Vec<String>)>,
 ) -> String {
-    let next = iter.next();
+    let mut next = iter.next();
+    // An unquoted `${IFS}` right after the operator (`>${IFS}out`) yields
+    // an empty word: bash drops the leading field separators and
+    // redirects to `out`. Skip such empty words so the real operand is
+    // the target instead of leaking into argv. Found by the metamorphic
+    // check in `tests/bash_quote_equivalence.rs`.
+    if op != RedirectOp::Heredoc {
+        while let Some(Token::Word { text, subst_bodies }) = &next
+            && text.is_empty()
+        {
+            current_words.extend(subst_bodies.iter().map(|b| (String::new(), vec![b.clone()])));
+            next = iter.next();
+        }
+    }
     match (op, next) {
         (RedirectOp::Heredoc, Some(Token::HeredocBody(b))) => b,
         (_, Some(Token::Word { text, subst_bodies })) if op != RedirectOp::Heredoc => {
@@ -2607,6 +2620,22 @@ mod tests {
         assert_eq!(p.commands.len(), 2);
         assert_eq!(p.redirects.len(), 1);
         assert_eq!(p.redirects[0].target, "/tmp/y");
+    }
+
+    // `>${IFS}out` redirects to `out`: the empty word the IFS expansion
+    // leaves must not become the target.
+    #[test]
+    fn ifs_between_redirect_operator_and_target_is_skipped() {
+        for (cmd, args, target) in [
+            ("echo hi >${IFS}out", 1, "out"),
+            ("echo hi >$IFS${IFS}out", 1, "out"),
+            ("cat <${IFS}in", 0, "in"),
+        ] {
+            let b = parse(cmd);
+            let p = &b.segments[0];
+            assert_eq!(p.commands[0].args.len(), args, "{cmd:?}: {:?}", p.commands[0]);
+            assert_eq!(p.redirects[0].target, target, "{cmd:?}");
+        }
     }
 
     #[test]
