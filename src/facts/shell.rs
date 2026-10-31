@@ -816,9 +816,11 @@ fn tokenize(s: &str) -> TokenizeOutput {
                 saw_redirect = true;
                 i += 2;
             } else {
+                // `>|` (clobber) writes like `>`; the `|` is part of the
+                // operator, not a pipe (#258 / #262).
                 out.push(Token::Redirect(RedirectOp::Stdout));
                 saw_redirect = true;
-                i += 1;
+                i += 1 + usize::from(bytes.get(i + 1) == Some(&b'|'));
             }
             continue;
         }
@@ -848,7 +850,9 @@ fn tokenize(s: &str) -> TokenizeOutput {
                 };
                 out.push(Token::Redirect(op));
                 saw_redirect = true;
-                i = d + if append { 2 } else { 1 };
+                // `n>|` (clobber) is `n>` with the `|` kept in the operator.
+                let clobber = !append && bytes.get(d + 1) == Some(&b'|');
+                i = d + if append || clobber { 2 } else { 1 };
                 continue;
             }
             // `n<` — single stdin redirect. Leave `n<<` (numeric-fd
@@ -2766,6 +2770,29 @@ mod tests {
             );
             assert_eq!(p.redirects[0].target, target, "{cmd:?}");
         }
+    }
+
+    #[test]
+    fn clobber_redirect_keeps_its_target() {
+        for (cmd, op) in [
+            ("echo hi >| out", RedirectOp::Stdout),
+            ("echo hi >|out", RedirectOp::Stdout),
+            ("echo hi 1>| out", RedirectOp::Stdout),
+            ("echo hi 1>|out", RedirectOp::Stdout),
+            ("echo hi 2>| out", RedirectOp::Stderr),
+        ] {
+            let b = parse(cmd);
+            assert_eq!(b.segments.len(), 1, "{cmd:?}");
+            let p = &b.segments[0];
+            assert_eq!(p.commands.len(), 1, "{cmd:?}: no pipe");
+            assert_eq!(p.commands[0].args, vec!["hi".to_string()], "{cmd:?}");
+            assert_eq!(p.redirects[0].op, op, "{cmd:?}");
+            assert_eq!(p.redirects[0].target, "out", "{cmd:?}");
+        }
+        // `1>>|` is not an operator: append stays append, `|` pipes.
+        let b = parse("echo hi 1>> out | cat");
+        assert_eq!(b.segments[0].commands.len(), 2);
+        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::StdoutAppend);
     }
 
     #[test]

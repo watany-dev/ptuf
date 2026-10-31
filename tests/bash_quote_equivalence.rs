@@ -372,3 +372,199 @@ fn path_spelling_equivalent_rewrites_stay_caught() {
         misses.join("\n")
     );
 }
+
+/// git global options that change neither the repository nor the
+/// subcommand, inserted between `git` and its subcommand.
+const GIT_NEUTRAL_GLOBALS: &[&str] = &[
+    "-C .",
+    "-C.",
+    "--no-pager",
+    "-P",
+    "--paginate",
+    "-p",
+    "-c color.ui=never",
+    "-ccolor.ui=never",
+    "--config-env=color.ui=HOME",
+    "--literal-pathspecs",
+    "--no-replace-objects",
+    "--no-optional-locks",
+    "--no-advice",
+    "--git-dir=.git",
+    "--git-dir .git",
+    "--work-tree=.",
+    "--work-tree .",
+    "--namespace=x",
+    "--exec-path=/usr/lib/git-core",
+];
+
+#[test]
+fn git_global_option_insertions_stay_caught() {
+    let engine = Engine::builder()
+        .agent("git-equivalence")
+        .build()
+        .expect("default-config engine builds");
+    let mut checked = 0_usize;
+    let mut misses: Vec<String> = Vec::new();
+    for line in include_str!("bypass/corpus.jsonl").lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let case: serde_json::Value = serde_json::from_str(line).expect("corpus json");
+        if case["expect"]["kind"] != "must_catch" || case["hook_input"]["tool_name"] != "Bash" {
+            continue;
+        }
+        let Some(cmd) = case["hook_input"]["tool_input"]["command"].as_str() else {
+            continue;
+        };
+        if cmd.contains('\n') || cmd.contains("<<") {
+            continue;
+        }
+        let base = rank(engine.decide(&bash(cmd)).decision.kind());
+        let mut offset = 0;
+        for word in cmd.split(' ') {
+            let start = offset;
+            offset += word.len() + 1;
+            if word != "git" || !at_top_level(cmd, start) {
+                continue;
+            }
+            // Only a command-position `git` (start, or after an operator).
+            let before = cmd[..start].trim_end();
+            if !(before.is_empty() || before.ends_with(['&', '|', ';', '('])) {
+                continue;
+            }
+            let after = start + word.len();
+            for opt in GIT_NEUTRAL_GLOBALS {
+                let variant = format!("{} {opt}{}", &cmd[..after], &cmd[after..]);
+                checked += 1;
+                let got = engine.decide(&bash(&variant)).decision.kind();
+                if rank(got) < base {
+                    misses.push(format!(
+                        "{id}: {variant:?} -> {got:?} (original {cmd:?})",
+                        id = case["id"].as_str().unwrap_or("?"),
+                    ));
+                }
+            }
+        }
+    }
+    eprintln!("checked {checked} git variants");
+    assert!(checked > 100, "only {checked} git variants generated");
+    assert!(
+        misses.is_empty(),
+        "{} of {checked} git-option variants weakened the decision:\n{}",
+        misses.len(),
+        misses.join("\n")
+    );
+}
+
+/// Equivalent spellings of a redirect operator: the explicit default fd,
+/// and `>|` for `>` (identical unless `noclobber` is set).
+fn redirect_op_spellings(op: &str) -> &'static [&'static str] {
+    match op {
+        ">" => &["1>", ">|", "1>|"],
+        ">>" => &["1>>"],
+        "<" => &["0<"],
+        "2>" => &["2>|"],
+        "&>" => &[">&"],
+        _ => &[],
+    }
+}
+
+/// Redirects may appear anywhere in a simple command (`>f cmd a`,
+/// `cmd >f a`, `cmd a >f` are the same), the target may be attached to
+/// the operator, and the operator has equivalent spellings.
+#[test]
+fn redirect_placement_and_spelling_rewrites_stay_caught() {
+    let engine = Engine::builder()
+        .agent("redirect-equivalence")
+        .build()
+        .expect("default-config engine builds");
+    let mut checked = 0_usize;
+    let mut misses: Vec<String> = Vec::new();
+    for line in include_str!("bypass/corpus.jsonl").lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let case: serde_json::Value = serde_json::from_str(line).expect("corpus json");
+        if case["expect"]["kind"] != "must_catch" || case["hook_input"]["tool_name"] != "Bash" {
+            continue;
+        }
+        let Some(cmd) = case["hook_input"]["tool_input"]["command"].as_str() else {
+            continue;
+        };
+        if cmd.contains('\n') || cmd.contains("<<") {
+            continue;
+        }
+        let base = rank(engine.decide(&bash(cmd)).decision.kind());
+        let words: Vec<&str> = cmd.split(' ').collect();
+        let mut starts = Vec::with_capacity(words.len());
+        let mut offset = 0;
+        for w in &words {
+            starts.push(offset);
+            offset += w.len() + 1;
+        }
+        let mut variants = Vec::new();
+        for idx in 0..words.len().saturating_sub(1) {
+            let op = words[idx];
+            let target = words[idx + 1];
+            if redirect_op_spellings(op).is_empty()
+                || !at_top_level(cmd, starts[idx])
+                || target.is_empty()
+                || target.starts_with(['&', '(', '<', '>'])
+            {
+                continue;
+            }
+            let rebuild = |replacement: &[String], at: usize, drop: usize| {
+                let mut out: Vec<String> = words.iter().map(|w| (*w).to_string()).collect();
+                out.splice(idx..idx + drop, std::iter::empty());
+                for (k, r) in replacement.iter().enumerate() {
+                    out.insert(at + k, r.clone());
+                }
+                out.join(" ")
+            };
+            // Attached target and alternative operator spellings, in place.
+            variants.push(rebuild(&[format!("{op}{target}")], idx, 2));
+            for alt in redirect_op_spellings(op) {
+                variants.push(rebuild(&[(*alt).to_string(), target.to_string()], idx, 2));
+                variants.push(rebuild(&[format!("{alt}{target}")], idx, 2));
+            }
+            // Move `op target` to the start of its simple command and to
+            // right after its head.
+            let start = (0..idx)
+                .rev()
+                .find(|&k| matches!(words[k], "&&" | "||" | ";" | "|"))
+                .map_or(0, |k| k + 1);
+            let head = words.get(start).copied().unwrap_or_default();
+            if start < idx
+                && !head.contains('=')
+                && !RESERVED.contains(&head)
+                && !head.starts_with(['(', '{'])
+            {
+                let pair = [op.to_string(), target.to_string()];
+                variants.push(rebuild(&pair, start, 2));
+                if start + 1 < idx {
+                    variants.push(rebuild(&pair, start + 1, 2));
+                }
+            }
+        }
+        for variant in variants {
+            checked += 1;
+            let got = engine.decide(&bash(&variant)).decision.kind();
+            if rank(got) < base {
+                misses.push(format!(
+                    "{id}: {variant:?} -> {got:?} (original {cmd:?})",
+                    id = case["id"].as_str().unwrap_or("?"),
+                ));
+            }
+        }
+    }
+    eprintln!("checked {checked} redirect variants");
+    assert!(checked > 50, "only {checked} redirect variants generated");
+    assert!(
+        misses.is_empty(),
+        "{} of {checked} redirect variants weakened the decision:\n{}",
+        misses.len(),
+        misses.join("\n")
+    );
+}

