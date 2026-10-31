@@ -568,3 +568,124 @@ fn redirect_placement_and_spelling_rewrites_stay_caught() {
         misses.join("\n")
     );
 }
+
+/// GNU coreutils whose short options are all boolean (for the options the
+/// corpus uses), so a cluster may be split or reordered and options may
+/// follow operands (GNU `getopt` permutes argv).
+const BOOLEAN_FLAG_HEADS: &[&str] = &["rm", "cp", "mv", "ln", "cat", "mkdir", "touch", "shred"];
+
+/// Head and option spellings that run the same program: the head by
+/// absolute path (`/usr/bin/rm`), a short-option cluster split or
+/// reversed (`-rf` → `-r -f`, `-fr`), and options moved after the
+/// operands (`rm / -rf`).
+#[test]
+fn head_path_and_option_order_rewrites_stay_caught() {
+    let engine = Engine::builder()
+        .agent("argv-equivalence")
+        .build()
+        .expect("default-config engine builds");
+    let mut checked = 0_usize;
+    let mut misses: Vec<String> = Vec::new();
+    for line in include_str!("bypass/corpus.jsonl").lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let case: serde_json::Value = serde_json::from_str(line).expect("corpus json");
+        if case["expect"]["kind"] != "must_catch" || case["hook_input"]["tool_name"] != "Bash" {
+            continue;
+        }
+        let Some(cmd) = case["hook_input"]["tool_input"]["command"].as_str() else {
+            continue;
+        };
+        if cmd.contains('\n') || cmd.contains("<<") {
+            continue;
+        }
+        let base = rank(engine.decide(&bash(cmd)).decision.kind());
+        let words: Vec<&str> = cmd.split(' ').collect();
+        let mut starts = Vec::with_capacity(words.len());
+        let mut offset = 0;
+        for w in &words {
+            starts.push(offset);
+            offset += w.len() + 1;
+        }
+        let mut variants = Vec::new();
+        for (idx, head) in words.iter().enumerate() {
+            let command_position = idx == 0 || matches!(words[idx - 1], "&&" | "||" | ";" | "|");
+            if !command_position
+                || !at_top_level(cmd, starts[idx])
+                || !is_plain(head)
+                || head.contains(['/', '='])
+            {
+                continue;
+            }
+            // The simple command's words: up to the next operator.
+            let end = (idx + 1..words.len())
+                .find(|&k| {
+                    matches!(words[k], "&&" | "||" | ";" | "|")
+                        || words[k].starts_with(['>', '<', '2'])
+                })
+                .unwrap_or(words.len());
+            let replace = |new: Vec<String>| {
+                let mut out: Vec<String> = words[..idx].iter().map(|w| (*w).to_string()).collect();
+                out.extend(new);
+                out.extend(words[end..].iter().map(|w| (*w).to_string()));
+                out.join(" ")
+            };
+            let simple: Vec<String> = words[idx..end].iter().map(|w| (*w).to_string()).collect();
+            if !SHELL_ONLY_BUILTINS.contains(head) {
+                let mut new = simple.clone();
+                new[0] = format!("/usr/bin/{head}");
+                variants.push(replace(new));
+            }
+            if !BOOLEAN_FLAG_HEADS.contains(head)
+                || simple[1..].iter().any(|a| a == "--" || !is_plain(a))
+            {
+                continue;
+            }
+            let (flags, operands): (Vec<&String>, Vec<&String>) = simple[1..]
+                .iter()
+                .partition(|a| a.starts_with('-') && a.len() > 1 && !a.starts_with("--"));
+            if flags.is_empty() || operands.is_empty() {
+                continue;
+            }
+            let split: Vec<String> = flags
+                .iter()
+                .flat_map(|f| f[1..].chars().map(|c| format!("-{c}")).collect::<Vec<_>>())
+                .collect();
+            let reversed: Vec<String> = flags
+                .iter()
+                .map(|f| format!("-{}", f[1..].chars().rev().collect::<String>()))
+                .collect();
+            let ops: Vec<String> = operands.iter().map(|s| (*s).clone()).collect();
+            for flag_form in [split, reversed] {
+                let mut before = vec![(*head).to_string()];
+                before.extend(flag_form.iter().cloned());
+                before.extend(ops.iter().cloned());
+                variants.push(replace(before));
+                let mut after = vec![(*head).to_string()];
+                after.extend(ops.iter().cloned());
+                after.extend(flag_form.iter().cloned());
+                variants.push(replace(after));
+            }
+        }
+        for variant in variants {
+            checked += 1;
+            let got = engine.decide(&bash(&variant)).decision.kind();
+            if rank(got) < base {
+                misses.push(format!(
+                    "{id}: {variant:?} -> {got:?} (original {cmd:?})",
+                    id = case["id"].as_str().unwrap_or("?"),
+                ));
+            }
+        }
+    }
+    eprintln!("checked {checked} argv variants");
+    assert!(checked > 100, "only {checked} argv variants generated");
+    assert!(
+        misses.is_empty(),
+        "{} of {checked} argv variants weakened the decision:\n{}",
+        misses.len(),
+        misses.join("\n")
+    );
+}

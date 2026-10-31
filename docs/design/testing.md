@@ -99,7 +99,10 @@ engine end-to-end は `src/testing/engine_pbt.rs`、全 rule にまたがる否�
   `redirect_placement_and_spelling_rewrites_stay_caught` は redirect の位置
   (コマンド先頭 / head 直後) と表記 (`>f` / `1>` / `>|` / `0<`) を、
   `git_global_option_insertions_stay_caught` は `git` と subcommand の間への
-  中立な global option (`-C .` / `--no-pager` / `-c k=v` など) の挿入を全通り試す
+  中立な global option (`-C .` / `--no-pager` / `-c k=v` など) の挿入を全通り試す。
+  `head_path_and_option_order_rewrites_stay_caught` は head の絶対パス化
+  (`/usr/bin/bash`) と、boolean option だけの coreutils での cluster の分割・逆順・
+  operand の後ろへの移動 (`rm / -rf`) を試す
 - tokenizer は 1 byte 以上前進する (forward-progress;
   `debug_assert!(advanced > 0)`)
 
