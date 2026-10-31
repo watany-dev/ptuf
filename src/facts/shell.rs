@@ -1895,11 +1895,14 @@ fn merge_inner_shell(argv: &mut Argv, code: &str, nesting_budget: usize) {
 /// Reverse [`push_latin1`]: when every char is a Latin-1 code point and
 /// the bytes form valid UTF-8, return that UTF-8 text.
 fn undo_latin1_widening(text: &str) -> std::borrow::Cow<'_, str> {
-    if text.is_ascii() || text.chars().any(|c| c > '\u{00FF}') {
+    if text.is_ascii() {
         return std::borrow::Cow::Borrowed(text);
     }
-    let bytes: Vec<u8> = text.chars().map(|c| c as u8).collect();
-    String::from_utf8(bytes).map_or(std::borrow::Cow::Borrowed(text), std::borrow::Cow::Owned)
+    text.chars()
+        .map(|c| u8::try_from(u32::from(c)).ok())
+        .collect::<Option<Vec<u8>>>()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map_or(std::borrow::Cow::Borrowed(text), std::borrow::Cow::Owned)
 }
 
 struct InnerShell {
@@ -3450,11 +3453,16 @@ mod tests {
             outer.inner_argv[0].args,
             vec![".\u{d0}\u{b5}nv".to_string()]
         );
-        assert_eq!(undo_latin1_widening("plain"), "plain");
+        assert!(matches!(
+            undo_latin1_widening("plain"),
+            std::borrow::Cow::Borrowed("plain")
+        ));
         assert_eq!(undo_latin1_widening("\u{c3}\u{a9}"), "é");
         // Not a widening (a char above U+00FF, or invalid UTF-8): unchanged.
         assert_eq!(undo_latin1_widening("é\u{0435}"), "é\u{0435}");
         assert_eq!(undo_latin1_widening("\u{ff}"), "\u{ff}");
+        // U+01A9 truncated to a byte would complete `é`; it must not be.
+        assert_eq!(undo_latin1_widening("\u{c3}\u{1a9}"), "\u{c3}\u{1a9}");
     }
 
     #[test]

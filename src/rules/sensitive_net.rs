@@ -112,13 +112,13 @@ fn bash_co_locates_sink_and_sensitive(bash: &Bash) -> bool {
 /// cannot be used: it drops the inner pipeline boundaries and redirects.
 fn co_locates_in_shell(bash: &Bash, depth: usize) -> bool {
     co_locates_at_top(bash)
-        || (depth > 0
-            && bash
-                .segments
+        || depth.checked_sub(1).is_some_and(|next| {
+            bash.segments
                 .iter()
                 .flat_map(|p| &p.commands)
                 .flat_map(|c| &c.inner_code)
-                .any(|code| co_locates_in_shell(&crate::facts::shell::parse(code), depth - 1)))
+                .any(|code| co_locates_in_shell(&crate::facts::shell::parse(code), next))
+        })
 }
 
 fn co_locates_at_top(bash: &Bash) -> bool {

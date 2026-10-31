@@ -849,14 +849,14 @@ fn walk_shell(
                 push(&r.target, cwd.as_deref(), lost_cwd, false, out);
             }
         }
-        if depth > 0 {
+        if let Some(next) = depth.checked_sub(1) {
             for code in pipe.commands.iter().flat_map(|c| &c.inner_code) {
                 let inner = crate::facts::shell::parse(code);
                 let start = ShellDir {
                     cwd: cwd.clone(),
                     lost: lost_cwd,
                 };
-                walk_shell(&inner, base_dir, start, depth - 1, out);
+                walk_shell(&inner, base_dir, start, next, out);
             }
         }
     }
