@@ -4265,7 +4265,7 @@ mod tests {
             "cat <<< 'rm -rf /'",
         ] {
             let a = first(cmd);
-            assert!(a.inner_code.is_empty(), "{cmd:?}: {:?}", a.inner_code);
+            assert_eq!(a.inner_code.len(), 0, "{cmd:?}: {:?}", a.inner_code);
         }
         // `-c` carries the script; stdin is not parsed a second time.
         assert_eq!(
@@ -4308,10 +4308,7 @@ mod tests {
             "bash < script.sh",
         ] {
             let pipe = &parse(cmd).segments[0];
-            assert!(
-                pipe.commands.last().unwrap().inner_code.is_empty(),
-                "{cmd:?}"
-            );
+            assert_eq!(pipe.commands.last().unwrap().inner_code.len(), 0, "{cmd:?}");
         }
     }
 
@@ -4344,10 +4341,7 @@ mod tests {
             "echo / | xargs",
         ] {
             let pipe = &parse(cmd).segments[0];
-            assert!(
-                pipe.commands.last().unwrap().subst_argv.is_empty(),
-                "{cmd:?}"
-            );
+            assert_eq!(pipe.commands.last().unwrap().subst_argv.len(), 0, "{cmd:?}");
         }
     }
 
@@ -4516,7 +4510,7 @@ mod tests {
             "cat <<EOF\n$(unterminated\nEOF",
             "cat <<EOF\n`unterminated\nEOF",
         ] {
-            assert!(first(cmd).subst_argv.is_empty(), "{cmd:?}");
+            assert_eq!(first(cmd).subst_argv.len(), 0, "{cmd:?}");
         }
         assert!(parse("cat <<EOF\n$(ls)\nEOF").has_command_substitution);
         assert!(!parse("cat <<'EOF'\n$(ls)\nEOF").has_command_substitution);
@@ -4528,7 +4522,7 @@ mod tests {
             heredoc_substitution_bodies(b"a $(ls -l) b `pwd` c \\$(no) $x) d"),
             vec!["ls -l".to_string(), "pwd".to_string()]
         );
-        assert!(heredoc_substitution_bodies(b"$x) y").is_empty());
+        assert_eq!(heredoc_substitution_bodies(b"$x) y").len(), 0);
         assert_eq!(
             heredoc_substitution_bodies(b"ab $(x)"),
             vec!["x".to_string()]
@@ -4579,7 +4573,7 @@ mod tests {
     fn stdin_script_edge_operands() {
         // `+` and a script name with no `c` / `s` are operands, not options.
         for cmd in ["bash + <<< 'rm -rf /'", "bash run.py <<< 'rm -rf /'"] {
-            assert!(first(cmd).inner_code.is_empty(), "{cmd:?}");
+            assert_eq!(first(cmd).inner_code.len(), 0, "{cmd:?}");
         }
         // A lone `-` after echo is printed, not an option.
         let pipe = &parse("echo - | bash").segments[0];
