@@ -1734,10 +1734,11 @@ fn join_piped_groups(mut segments: Vec<RawSegment>) -> Vec<Vec<Token>> {
             }
         }
     }
-    let mut out: Vec<Vec<Token>> = Vec::new();
-    for (k, seg) in segments.into_iter().enumerate() {
+    let mut segments = segments.into_iter();
+    let mut out: Vec<Vec<Token>> = segments.next().map(|s| s.tokens).into_iter().collect();
+    for (seg, joined) in segments.zip(join) {
         match out.last_mut() {
-            Some(prev) if k > 0 && join[k - 1] => {
+            Some(prev) if joined => {
                 prev.push(Token::Pipe);
                 prev.extend(seg.tokens);
             },
@@ -2233,7 +2234,9 @@ fn feed_stdin(cmd: &mut Argv, unwrapped: &Argv, stdin: &[String], nesting_budget
             )
             .map(|text| (text, Vec::new()))
             .collect();
-        cmd.inner_argv.push(parse_argv(words, nesting_budget));
+        // Kept apart from the operand-only argv in `inner_argv`: these
+        // operands come from data, like a substitution's output.
+        cmd.subst_argv.push(parse_argv(words, nesting_budget));
     }
 }
 
@@ -2953,16 +2956,15 @@ mod tests {
     fn parses_xargs_inner_command() {
         let b = parse("printf '/\\0' | xargs -0 rm -rf");
         let inner = &b.segments[0].commands[1].inner_argv;
-        // The xargs operands alone, then with the literal stdin appended.
-        assert_eq!(inner.len(), 2);
+        assert_eq!(inner.len(), 1);
         assert_eq!(inner[0], argv("rm", &["-rf"]));
-        assert_eq!(inner[1], argv("rm", &["-rf", "/\\0"]));
     }
 
     #[test]
     fn parses_xargs_inner_command_with_dash_x_flag() {
         let b = parse("printf '/\\0' | xargs -0 -x rm -rf /");
         let inner = &b.segments[0].commands[1].inner_argv;
+        assert_eq!(inner.len(), 1);
         assert_eq!(inner[0], argv("rm", &["-rf", "/"]));
     }
 
@@ -4327,8 +4329,13 @@ mod tests {
         for (cmd, args) in cases {
             let pipe = &parse(cmd).segments[0];
             let xargs = pipe.commands.last().unwrap();
-            assert_eq!(xargs.inner_argv.last().unwrap().args, *args, "{cmd:?}");
+            assert_eq!(xargs.subst_argv.last().unwrap().args, *args, "{cmd:?}");
+            assert_eq!(xargs.inner_argv, vec![argv("rm", &["-rf"])], "{cmd:?}");
         }
+        assert_eq!(
+            parse("printf '/\\0' | xargs -0 rm -rf").segments[0].commands[1].subst_argv,
+            vec![argv("rm", &["-rf", "/\\0"])]
+        );
         // A narrowing find, or no literal input, adds nothing.
         for cmd in [
             "find / -name x | xargs rm -rf",
@@ -4337,7 +4344,7 @@ mod tests {
         ] {
             let pipe = &parse(cmd).segments[0];
             assert!(
-                pipe.commands.last().unwrap().inner_argv.len() <= 1,
+                pipe.commands.last().unwrap().subst_argv.is_empty(),
                 "{cmd:?}"
             );
         }
@@ -4512,5 +4519,50 @@ mod tests {
         }
         assert!(parse("cat <<EOF\n$(ls)\nEOF").has_command_substitution);
         assert!(!parse("cat <<'EOF'\n$(ls)\nEOF").has_command_substitution);
+    }
+
+    #[test]
+    fn heredoc_substitution_bodies_are_exact() {
+        assert_eq!(
+            heredoc_substitution_bodies(b"a $(ls -l) b `pwd` c \\$(no) $x) d"),
+            vec!["ls -l".to_string(), "pwd".to_string()]
+        );
+        assert!(heredoc_substitution_bodies(b"$x) y").is_empty());
+    }
+
+    #[test]
+    fn group_boundaries_only_join_across_a_pipe() {
+        for (cmd, n) in [
+            ("a; (b)", 2),
+            ("a && { b; }", 3),
+            ("x; { a; } | b", 2),
+            ("x; (a) | b", 2),
+            ("a | (b; f() ; c); d", 2),
+            ("a | (b); d", 2),
+        ] {
+            assert_eq!(parse(cmd).segments.len(), n, "{cmd:?}");
+        }
+        assert_eq!(
+            heads(&parse("a | (b; f() ; c); d").segments[0]),
+            ["a", "b", "f", "c"]
+        );
+        assert_eq!(heads(&parse("x; { a; } | b").segments[1]), ["a", "b"]);
+    }
+
+    #[test]
+    fn stdin_script_nesting_is_bounded() {
+        fn level(n: usize) -> String {
+            if n == 0 {
+                return "rm -rf /".to_string();
+            }
+            format!("bash <<< '{}'", level(n - 1).replace('\'', "'\\''"))
+        }
+        let b = parse(&level(NESTING_BUDGET + 2));
+        assert_eq!(
+            deepest_inner_chain(&b.segments[0].commands[0]),
+            NESTING_BUDGET
+        );
+        let b = parse(&level(1));
+        assert_eq!(deepest_inner_chain(&b.segments[0].commands[0]), 1);
     }
 }
