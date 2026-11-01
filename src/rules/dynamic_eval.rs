@@ -242,6 +242,12 @@ mod tests {
     }
 
     #[test]
+    fn allows_interpreter_script_with_trailing_arguments() {
+        assert_allow("python3 script.py --verbose");
+        assert_allow("bash -x build.sh arg");
+    }
+
+    #[test]
     fn asks_on_bash_dash_c() {
         assert_ask("bash -c 'echo hi'");
     }

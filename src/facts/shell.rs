@@ -1543,7 +1543,8 @@ fn heredoc_substitution_bodies(bytes: &[u8]) -> Vec<String> {
                     break;
                 };
                 out.push(latin1_slice(&bytes[i + 2..close]));
-                i = close + 1;
+                // The `)` itself is skipped by the catch-all arm.
+                i = close;
             },
             b'`' => {
                 let Some(end) = skip_backquoted(bytes, i + 1) else {
@@ -4528,6 +4529,14 @@ mod tests {
             vec!["ls -l".to_string(), "pwd".to_string()]
         );
         assert!(heredoc_substitution_bodies(b"$x) y").is_empty());
+        assert_eq!(
+            heredoc_substitution_bodies(b"ab $(x)"),
+            vec!["x".to_string()]
+        );
+        assert_eq!(
+            heredoc_substitution_bodies(b"$(echo `a`) `b`"),
+            vec!["echo `a`".to_string(), "b".to_string()]
+        );
     }
 
     #[test]
@@ -4564,5 +4573,16 @@ mod tests {
         );
         let b = parse(&level(1));
         assert_eq!(deepest_inner_chain(&b.segments[0].commands[0]), 1);
+    }
+
+    #[test]
+    fn stdin_script_edge_operands() {
+        // `+` and a script name with no `c` / `s` are operands, not options.
+        for cmd in ["bash + <<< 'rm -rf /'", "bash run.py <<< 'rm -rf /'"] {
+            assert!(first(cmd).inner_code.is_empty(), "{cmd:?}");
+        }
+        // A lone `-` after echo is printed, not an option.
+        let pipe = &parse("echo - | bash").segments[0];
+        assert_eq!(pipe.commands[1].inner_code, vec!["-".to_string()]);
     }
 }
