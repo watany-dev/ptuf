@@ -458,10 +458,11 @@ fn parse_with_depth(command: &str, nesting_budget: usize) -> Bash {
         has_process_substitution,
     } = tokenize(command);
     let segments = split_segments(tokens);
-    let pipelines: Vec<Pipeline> = segments
+    let mut pipelines: Vec<Pipeline> = segments
         .into_iter()
         .map(|segment| parse_pipeline(segment, nesting_budget))
         .collect();
+    propagate_assignments(&mut pipelines);
     Bash {
         segments: pipelines
             .into_iter()
@@ -484,6 +485,10 @@ enum Token {
     And,
     Or,
     Semi,
+    /// Unquoted `(`: ends a command like `;` and opens a group.
+    GroupOpen,
+    /// Unquoted `)`: ends a command like `;` and closes a group.
+    GroupClose,
     Redirect(RedirectOp),
     HeredocBody(String),
 }
@@ -525,7 +530,7 @@ fn tokenize(s: &str) -> TokenizeOutput {
         if c == b'\n' {
             if !matches!(
                 out.last(),
-                None | Some(Token::Pipe | Token::And | Token::Or | Token::Semi)
+                None | Some(Token::Pipe | Token::And | Token::Or | Token::Semi | Token::GroupOpen)
             ) {
                 out.push(Token::Semi);
             }
@@ -590,7 +595,11 @@ fn tokenize(s: &str) -> TokenizeOutput {
         // substitution openers (`<(`, `>(`, `$(`) never reach here: they
         // are absorbed as words below or inside `read_word`.
         if matches!(c, b';' | b'(' | b')') {
-            out.push(Token::Semi);
+            out.push(match c {
+                b'(' => Token::GroupOpen,
+                b')' => Token::GroupClose,
+                _ => Token::Semi,
+            });
             i += 1;
             continue;
         }
@@ -632,6 +641,10 @@ fn tokenize(s: &str) -> TokenizeOutput {
             }
             let (tag, tag_len, _, _) = read_word(&bytes[j..]);
             if !tag.is_empty() {
+                // Any quoting in the tag keeps the body literal.
+                let expands = !bytes[j..j + tag_len]
+                    .iter()
+                    .any(|b| matches!(b, b'\'' | b'"' | b'\\'));
                 j += tag_len;
                 // The body begins after this line (or after the previous
                 // heredoc's body when one line opens several).
@@ -641,8 +654,21 @@ fn tokenize(s: &str) -> TokenizeOutput {
                 });
                 let body_from = body_from.min(bytes.len());
                 let body = read_heredoc_body(&bytes[body_from..], &tag);
+                // An unquoted tag expands `$(…)` / `` `…` `` in the body.
+                let bodies = if expands {
+                    heredoc_substitution_bodies(body.text.as_bytes())
+                } else {
+                    Vec::new()
+                };
                 out.push(Token::Redirect(RedirectOp::Heredoc));
                 out.push(Token::HeredocBody(body.text));
+                if !bodies.is_empty() {
+                    saw_command_substitution = true;
+                    out.push(Token::Word {
+                        text: String::new(),
+                        subst_bodies: bodies,
+                    });
+                }
                 saw_redirect = true;
                 saw_heredoc = true;
                 heredoc = Some((nl, body_from + body.consumed));
@@ -1503,6 +1529,35 @@ fn find_group_close(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+/// Command substitution bodies in an unquoted-tag heredoc body. Quotes
+/// are literal text there, so only `\\` escapes, `$(…)` and `` `…` ``
+/// are recognised; an unterminated substitution ends the scan.
+fn heredoc_substitution_bodies(bytes: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'$' if bytes.get(i + 1) == Some(&b'(') => {
+                let Some(close) = find_group_close(bytes, i + 2) else {
+                    break;
+                };
+                out.push(latin1_slice(&bytes[i + 2..close]));
+                i = close + 1;
+            },
+            b'`' => {
+                let Some(end) = skip_backquoted(bytes, i + 1) else {
+                    break;
+                };
+                out.push(unescape_backquoted(&bytes[i + 1..end - 1]));
+                i = end;
+            },
+            _ => i += 1,
+        }
+    }
+    out
+}
+
 /// Skip a backquoted span whose body starts at `start`; returns the
 /// index just past the closing `` ` ``.
 fn skip_backquoted(bytes: &[u8], start: usize) -> Option<usize> {
@@ -1547,33 +1602,163 @@ fn latin1_slice(bytes: &[u8]) -> String {
     s
 }
 
-fn split_segments(tokens: Vec<Token>) -> Vec<Vec<Token>> {
-    let mut segments = Vec::new();
-    let mut current = Vec::new();
-    for tok in tokens {
-        match tok {
-            Token::And | Token::Or | Token::Semi => {
-                if !current.is_empty() {
-                    segments.push(std::mem::take(&mut current));
-                }
-            },
-            other => current.push(other),
+/// Words that open a compound command when they start a command.
+const GROUP_OPEN_WORDS: &[&str] = &["{", "if", "while", "until", "for", "case", "select"];
+/// Words that close a compound command when they start a command.
+const GROUP_CLOSE_WORDS: &[&str] = &["}", "fi", "done", "esac"];
+
+/// One `;` / `&&` / `||`-bounded run of tokens, with the compound
+/// command boundaries (`( … )`, `{ … }`, `if … fi`, loops) around it.
+struct RawSegment {
+    tokens: Vec<Token>,
+    /// Groups opened right before (or by the first word of) this segment.
+    opens_before: usize,
+    /// Groups closed right after this segment.
+    closes_after: usize,
+    /// Leading closing words (`} | bash`, `done | sh`) before a `|`.
+    leading_closers: usize,
+}
+
+impl RawSegment {
+    fn new(opens_before: usize) -> Self {
+        Self {
+            tokens: Vec::new(),
+            opens_before,
+            closes_after: 0,
+            leading_closers: 0,
         }
     }
-    if !current.is_empty() {
+
+    /// Starts with `|`, after any closing words: its input is the output
+    /// of the group just before it (`(curl URL) | bash`).
+    fn reads_group_output(&self) -> bool {
+        matches!(self.tokens.get(self.leading_closers), Some(Token::Pipe))
+    }
+
+    fn feeds_group(&self) -> bool {
+        matches!(self.tokens.last(), Some(Token::Pipe))
+    }
+}
+
+fn is_word_in(tok: Option<&Token>, words: &[&str]) -> bool {
+    matches!(tok, Some(Token::Word { text, .. }) if words.contains(&text.as_str()))
+}
+
+fn split_segments(tokens: Vec<Token>) -> Vec<Vec<Token>> {
+    let mut segments: Vec<RawSegment> = Vec::new();
+    let mut current = RawSegment::new(0);
+    let mut pending_opens = 0;
+    for tok in tokens {
+        match tok {
+            Token::And | Token::Or | Token::Semi | Token::GroupOpen | Token::GroupClose => {
+                if !current.tokens.is_empty() {
+                    segments.push(std::mem::replace(&mut current, RawSegment::new(0)));
+                }
+                match tok {
+                    Token::GroupOpen => pending_opens += 1,
+                    // `()` (a function definition) opens and closes nothing.
+                    Token::GroupClose if pending_opens > 0 => pending_opens -= 1,
+                    Token::GroupClose => {
+                        if let Some(last) = segments.last_mut() {
+                            last.closes_after += 1;
+                        }
+                    },
+                    _ => {},
+                }
+            },
+            other => {
+                if current.tokens.is_empty() {
+                    current.opens_before = std::mem::take(&mut pending_opens);
+                    if is_word_in(Some(&other), GROUP_OPEN_WORDS) {
+                        current.opens_before += 1;
+                    }
+                }
+                if current.tokens.len() == current.leading_closers
+                    && is_word_in(Some(&other), GROUP_CLOSE_WORDS)
+                {
+                    current.leading_closers += 1;
+                    if let Some(last) = segments.last_mut() {
+                        last.closes_after += 1;
+                    }
+                }
+                current.tokens.push(other);
+            },
+        }
+    }
+    if !current.tokens.is_empty() {
         segments.push(current);
     }
-    segments
+    join_piped_groups(segments)
+}
+
+/// A compound command on either side of a `|` is one stage of that
+/// pipeline: `(curl URL) | bash`, `{ echo CODE; } | sh`, `if …; then
+/// curl URL; fi | bash`, `curl URL | (bash)`. The segment split above cut
+/// them apart, so join the group's segments back into the pipeline, each
+/// command inside the group becoming a stage (a pessimistic reading: any
+/// of them may write to the pipe).
+fn join_piped_groups(mut segments: Vec<RawSegment>) -> Vec<Vec<Token>> {
+    let n = segments.len();
+    // join[k]: segment k and k + 1 belong to one pipeline.
+    let mut join = vec![false; n.saturating_sub(1)];
+    for j in 1..n {
+        if !segments[j].reads_group_output() || segments[j - 1].closes_after == 0 {
+            continue;
+        }
+        let mut open = 0_usize;
+        let mut k = j;
+        while k > 0 {
+            k -= 1;
+            join[k] = true;
+            open += segments[k].closes_after;
+            open = open.saturating_sub(segments[k].opens_before);
+            if open == 0 {
+                break;
+            }
+        }
+        // The closing words are consumed by the join.
+        let closers = segments[j].leading_closers;
+        segments[j].tokens.drain(..closers);
+    }
+    for i in 0..n.saturating_sub(1) {
+        if !segments[i].feeds_group() || segments[i + 1].opens_before == 0 {
+            continue;
+        }
+        let mut open = 0_usize;
+        for (k, seg) in segments.iter().enumerate().skip(i + 1) {
+            join[k - 1] = true;
+            open += seg.opens_before;
+            open = open.saturating_sub(seg.closes_after);
+            if open == 0 {
+                break;
+            }
+        }
+    }
+    let mut out: Vec<Vec<Token>> = Vec::new();
+    for (k, seg) in segments.into_iter().enumerate() {
+        match out.last_mut() {
+            Some(prev) if k > 0 && join[k - 1] => {
+                prev.push(Token::Pipe);
+                prev.extend(seg.tokens);
+            },
+            _ => out.push(seg.tokens),
+        }
+    }
+    out
 }
 
 fn parse_pipeline(tokens: Vec<Token>, nesting_budget: usize) -> Pipeline {
     let mut commands = Vec::new();
     let mut redirects = Vec::new();
     let mut current_words: Vec<(String, Vec<String>)> = Vec::new();
+    let mut feeds = PipelineFeeds::default();
     let mut iter = tokens.into_iter();
     while let Some(tok) = iter.next() {
         match tok {
-            Token::Word { text, subst_bodies } => current_words.push((text, subst_bodies)),
+            Token::Word { text, subst_bodies } => {
+                feeds.note_word(commands.len(), &text, &subst_bodies);
+                current_words.push((text, subst_bodies));
+            },
             Token::Pipe => {
                 if !current_words.is_empty() {
                     commands.push(parse_argv(
@@ -1583,15 +1768,24 @@ fn parse_pipeline(tokens: Vec<Token>, nesting_budget: usize) -> Pipeline {
                 }
             },
             Token::Redirect(op) => {
+                let folded = current_words.len();
                 let target = take_redirect_target(&mut iter, op, &mut current_words);
+                let bodies: Vec<String> = current_words[folded..]
+                    .iter()
+                    .flat_map(|(_, b)| b.iter().cloned())
+                    .collect();
+                feeds.note_redirect(commands.len(), op, &target, &bodies);
                 redirects.push(Redirect { op, target });
             },
             Token::HeredocBody(_) => {},
-            Token::And | Token::Or | Token::Semi => {},
+            Token::And | Token::Or | Token::Semi | Token::GroupOpen | Token::GroupClose => {},
         }
     }
     if !current_words.is_empty() {
         commands.push(parse_argv(current_words, nesting_budget));
+    }
+    if nesting_budget > 0 {
+        feeds.apply(&mut commands, nesting_budget - 1);
     }
     Pipeline {
         commands,
@@ -1902,6 +2096,471 @@ fn extract_find_exec_inner(argv: &Argv, nesting_budget: usize) -> Option<Argv> {
         return None;
     }
     Some(parse_argv(words, nesting_budget))
+}
+
+// --- Data flow between commands --------------------------------------------
+//
+// The argv model above sees each command on its own. The helpers below
+// follow the few data paths whose content is literal in the command
+// line itself, so a payload that only becomes a command after it travels
+// is still re-parsed:
+//
+// - stdin of a shell: `bash <<< 'CODE'`, `bash <<EOF … EOF`,
+//   `echo 'CODE' | sh`, `cat <<EOF | bash`;
+// - stdin of `xargs`: `echo / | xargs rm -rf`, `find / | xargs rm -rf`;
+// - an output process substitution, which is a pipe in disguise:
+//   `curl URL > >(bash)`, `curl URL | tee >(sh)`;
+// - a shell variable set earlier in the same line: `X=/; rm -rf $X`.
+
+/// Shells that run a script read from stdin when given no script operand.
+const STDIN_SCRIPT_SHELLS: &[&str] = &["bash", "sh", "zsh", "ksh", "dash", "fish", "ash", "mksh"];
+
+/// What one pipeline's commands receive that the argv alone does not
+/// show, keyed by the command's index in [`Pipeline::commands`].
+#[derive(Default)]
+struct PipelineFeeds {
+    /// Heredoc / here-string bodies: the stdin of that command.
+    stdin: Vec<(usize, String)>,
+    /// Bodies of `< <(…)`: a command whose output is that command's stdin.
+    stdin_producers: Vec<(usize, String)>,
+    /// Bodies of `>(…)` words: commands that read that command's output.
+    sinks: Vec<(usize, String)>,
+}
+
+impl PipelineFeeds {
+    /// `bodies` are the substitution bodies the lexer captured for the
+    /// word; a quoted `'>(x)'` has none, so it stays a plain word.
+    fn note_word(&mut self, index: usize, text: &str, bodies: &[String]) {
+        if let Some(body) = process_substitution_body(text, ">(", bodies) {
+            self.sinks.push((index, body.to_string()));
+        }
+    }
+
+    fn note_redirect(&mut self, index: usize, op: RedirectOp, target: &str, bodies: &[String]) {
+        match op {
+            RedirectOp::Heredoc => self.stdin.push((index, target.to_string())),
+            RedirectOp::Stdin => {
+                if let Some(body) = process_substitution_body(target, "<(", bodies) {
+                    self.stdin_producers.push((index, body.to_string()));
+                }
+            },
+            _ => self.note_word(index, target, bodies),
+        }
+    }
+
+    fn apply(&self, commands: &mut Vec<Argv>, nesting_budget: usize) {
+        // Stdin each command gets from its own redirects.
+        let mut own: Vec<Vec<String>> = vec![Vec::new(); commands.len()];
+        for (index, body) in &self.stdin {
+            if let Some(slot) = own.get_mut(*index) {
+                slot.push(body.clone());
+            }
+        }
+        for (index, body) in &self.stdin_producers {
+            let producer = parse_inner_shell(body, nesting_budget).commands;
+            if let (Some(slot), Some(last)) = (own.get_mut(*index), producer.last()) {
+                slot.extend(literal_output(&unwrap_all_prefix_wrappers(last), &[]));
+            }
+        }
+        let mut staged: Vec<(Argv, Vec<String>)> = commands.drain(..).zip(own).collect();
+        // A `>(…)` body reads the output of the command it is attached
+        // to, so it runs as the next pipeline stage. Insert from the back
+        // so earlier indices stay valid.
+        for (index, body) in self.sinks.iter().rev() {
+            let sink = parse_inner_shell(body, nesting_budget).commands;
+            let at = (index + 1).min(staged.len());
+            staged.splice(at..at, sink.into_iter().map(|c| (c, Vec::new())));
+        }
+        // Walk the stages in order, carrying literal output down the pipe.
+        let mut piped: Vec<String> = Vec::new();
+        for (cmd, own) in &mut staged {
+            let stdin = if own.is_empty() {
+                std::mem::take(&mut piped)
+            } else {
+                std::mem::take(own)
+            };
+            let unwrapped = unwrap_all_prefix_wrappers(cmd);
+            piped = literal_output(&unwrapped, &stdin);
+            feed_stdin(cmd, &unwrapped, &stdin, nesting_budget);
+        }
+        commands.extend(staged.into_iter().map(|(cmd, _)| cmd));
+    }
+}
+
+/// What `argv` writes to stdout, as far as the command line spells it
+/// out, given the literal text on its stdin. Empty when unknown.
+fn literal_output(argv: &Argv, stdin: &[String]) -> Vec<String> {
+    match argv.head_basename() {
+        "echo" => {
+            let words: Vec<&str> = argv
+                .args
+                .iter()
+                .map(String::as_str)
+                .skip_while(|a| is_echo_flag(a))
+                .collect();
+            vec![unescape_newlines(&words.join(" "))]
+        },
+        // Each operand separately: the format decides how the operands
+        // are laid out.
+        "printf" => argv.positional().map(unescape_newlines).collect(),
+        "cat" if argv.positional().next().is_none() => stdin.to_vec(),
+        "tee" => stdin.to_vec(),
+        "find" if find_lists_every_entry(argv) => vec![find_start_paths(argv).join("\n")],
+        _ => Vec::new(),
+    }
+}
+
+/// Re-parse literal stdin where the command treats it as code or as
+/// arguments: a shell reading its script from stdin, or `xargs`.
+fn feed_stdin(cmd: &mut Argv, unwrapped: &Argv, stdin: &[String], nesting_budget: usize) {
+    if stdin.is_empty() {
+        return;
+    }
+    if reads_script_from_stdin(unwrapped) {
+        for code in stdin {
+            merge_inner_shell(cmd, code, nesting_budget);
+        }
+    } else if unwrapped.head_basename() == "xargs"
+        && let Some(start) = xargs_command_start(&unwrapped.args)
+    {
+        let words = unwrapped.args[start..]
+            .iter()
+            .cloned()
+            .chain(
+                stdin
+                    .iter()
+                    .flat_map(|s| s.split_whitespace().map(str::to_string)),
+            )
+            .map(|text| (text, Vec::new()))
+            .collect();
+        cmd.inner_argv.push(parse_argv(words, nesting_budget));
+    }
+}
+
+/// The body of a process substitution word (`opener` is `>(` or `<(`)
+/// that the lexer captured as a substitution, not a quoted look-alike.
+fn process_substitution_body<'a>(
+    word: &'a str,
+    opener: &str,
+    bodies: &[String],
+) -> Option<&'a str> {
+    let body = word.strip_prefix(opener)?.strip_suffix(')')?;
+    bodies.iter().any(|b| b == body).then_some(body)
+}
+
+fn is_echo_flag(arg: &str) -> bool {
+    arg.len() > 1
+        && arg
+            .strip_prefix('-')
+            .is_some_and(|f| f.chars().all(|c| matches!(c, 'n' | 'e' | 'E')))
+}
+
+/// `printf` / `echo -e` turn `\n` into a newline, which separates
+/// commands once the text reaches a shell.
+fn unescape_newlines(text: &str) -> String {
+    text.replace("\\n", "\n")
+}
+
+/// True when a shell invocation takes its script from stdin: no `-c`
+/// and no script operand, or an explicit `-s` / `-`.
+pub(crate) fn reads_script_from_stdin(argv: &Argv) -> bool {
+    if !STDIN_SCRIPT_SHELLS.contains(&argv.head_basename()) {
+        return false;
+    }
+    let mut dash_s = false;
+    let mut options_done = false;
+    let mut rest = argv.args.iter();
+    while let Some(arg) = rest.next() {
+        let arg = arg.as_str();
+        if options_done || arg == "-" {
+            return arg == "-" || dash_s || STDIN_DEVICES.contains(&arg);
+        }
+        match arg {
+            "--" => options_done = true,
+            "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file" => {
+                rest.next();
+            },
+            a if a.starts_with("--") => {},
+            a if a.len() > 1 && (a.starts_with('-') || a.starts_with('+')) => {
+                if a[1..].contains('c') {
+                    return false;
+                }
+                dash_s |= a[1..].contains('s');
+            },
+            a => return dash_s || STDIN_DEVICES.contains(&a),
+        }
+    }
+    true
+}
+
+/// Script operands that name the shell's own stdin.
+const STDIN_DEVICES: &[&str] = &["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
+
+/// `find` options that come before the start paths.
+fn find_leading_option_len(args: &[String]) -> usize {
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        match arg.as_str() {
+            "-H" | "-L" | "-P" => i += 1,
+            "-D" => i += 2,
+            a if a.starts_with("-O") => i += 1,
+            _ => break,
+        }
+    }
+    i
+}
+
+/// The start paths of a `find` invocation (`find -L / /etc -name x` →
+/// `["/", "/etc"]`). An omitted start path means `.`.
+pub(crate) fn find_start_paths(argv: &Argv) -> Vec<&str> {
+    let paths: Vec<&str> = argv.args[find_leading_option_len(&argv.args)..]
+        .iter()
+        .map(String::as_str)
+        .take_while(|a| is_find_start_path(a))
+        .collect();
+    if paths.is_empty() { vec!["."] } else { paths }
+}
+
+/// Start paths run until the first primary, operator, or `(` / `!`.
+fn is_find_start_path(arg: &str) -> bool {
+    !arg.starts_with('-') && arg != "(" && arg != "!"
+}
+
+/// `find` primaries that never narrow which entries match, with the
+/// number of operands each takes.
+const FIND_NON_FILTERING: &[(&str, usize)] = &[
+    ("-print", 0),
+    ("-print0", 0),
+    ("-delete", 0),
+    ("-depth", 0),
+    ("-d", 0),
+    ("-mount", 0),
+    ("-xdev", 0),
+    ("-follow", 0),
+    ("-noleaf", 0),
+    ("-daystart", 0),
+    ("-ignore_readdir_race", 0),
+    ("-noignore_readdir_race", 0),
+    ("-true", 0),
+    ("-a", 0),
+    ("-and", 0),
+    ("-maxdepth", 1),
+    ("-mindepth", 1),
+    // Every file, or every directory, is still the whole tree in
+    // practice.
+    ("-type", 1),
+    ("-xtype", 1),
+];
+
+/// True when `find` visits its start paths with no test that narrows the
+/// match: every entry under them (the start paths included) is listed,
+/// deleted, or handed to `-exec`. `-exec … ;` / `+` blocks are skipped.
+pub(crate) fn find_lists_every_entry(argv: &Argv) -> bool {
+    let expr = &argv.args[find_leading_option_len(&argv.args)..];
+    let mut i = expr.iter().take_while(|a| is_find_start_path(a)).count();
+    while let Some(arg) = expr.get(i) {
+        let arg = arg.as_str();
+        if matches!(arg, "-exec" | "-execdir" | "-ok" | "-okdir") {
+            match expr[i..].iter().position(|a| a == ";" || a == "+") {
+                Some(end) => i += end + 1,
+                None => return true,
+            }
+            continue;
+        }
+        match FIND_NON_FILTERING.iter().find(|(name, _)| *name == arg) {
+            Some((_, operands)) => i += 1 + operands,
+            None => return false,
+        }
+    }
+    true
+}
+
+/// The commands a `find` runs through `-exec` / `-execdir` / `-ok` /
+/// `-okdir`, without the `{}` placeholder.
+pub(crate) fn find_exec_commands(argv: &Argv) -> Vec<Argv> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(arg) = argv.args.get(i) {
+        i += 1;
+        if !matches!(arg.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir") {
+            continue;
+        }
+        let rest = &argv.args[i..];
+        let end = rest
+            .iter()
+            .position(|a| a == ";" || a == "+")
+            .unwrap_or(rest.len());
+        let mut words: std::collections::VecDeque<String> = rest[..end]
+            .iter()
+            .filter(|a| a.as_str() != "{}")
+            .cloned()
+            .collect();
+        i += end;
+        let Some(head) = words.pop_front() else {
+            continue;
+        };
+        out.push(unwrap_all_prefix_wrappers(&Argv {
+            env_assignments: Vec::new(),
+            head,
+            args: words.into(),
+            inner_argv: Vec::new(),
+            inner_code: Vec::new(),
+            inner_redirects: Vec::new(),
+            subst_argv: Vec::new(),
+        }));
+    }
+    out
+}
+
+/// Builtins whose `NAME=VALUE` operands set a shell variable.
+const DECLARING_BUILTINS: &[&str] = &["export", "readonly", "declare", "typeset", "local"];
+
+/// Substitute shell variables assigned earlier in the same command line
+/// (`X=/; rm -rf $X`, `export D=~; rm -rf "$D"`, `for d in / ; do rm -rf
+/// $d; done`). Values are tracked in source order and the last
+/// assignment wins; a word referencing a variable with several values
+/// (a `for` list) yields one word per value. Variables whose value is
+/// unknown are left as written.
+fn propagate_assignments(pipelines: &mut [Pipeline]) {
+    let mut vars: Vec<(String, Vec<String>)> = Vec::new();
+    for pipe in pipelines {
+        let here_string = pipe
+            .redirects
+            .iter()
+            .find(|r| r.op == RedirectOp::Heredoc)
+            .map(|r| r.target.trim().to_string());
+        for cmd in &mut pipe.commands {
+            if !vars.is_empty() {
+                substitute_vars(cmd, &vars);
+            }
+            record_assignments(cmd, here_string.as_deref(), &mut vars);
+        }
+    }
+}
+
+fn set_var(vars: &mut Vec<(String, Vec<String>)>, key: String, values: Vec<String>) {
+    vars.retain(|(k, _)| *k != key);
+    vars.push((key, values));
+}
+
+fn record_assignments(cmd: &Argv, stdin: Option<&str>, vars: &mut Vec<(String, Vec<String>)>) {
+    if cmd.head.is_empty() {
+        for a in &cmd.env_assignments {
+            set_var(vars, a.key.clone(), vec![a.value.clone()]);
+        }
+        return;
+    }
+    match head_basename(&cmd.head) {
+        h if DECLARING_BUILTINS.contains(&h) => {
+            for (k, v) in cmd.args.iter().filter_map(|a| split_env_assignment(a)) {
+                set_var(vars, k, vec![v]);
+            }
+        },
+        // `read [-r] NAME <<< VALUE`
+        "read" => {
+            if let (Some(value), Some(name)) = (stdin, cmd.positional().last())
+                && is_valid_env_key(name)
+            {
+                set_var(vars, name.to_string(), vec![value.to_string()]);
+            }
+        },
+        // `set -- A B` sets `$1`, `$2`, … and `$@` / `$*`.
+        "set" => {
+            if let Some(pos) = cmd.args.iter().position(|a| a == "--") {
+                let values = cmd.args[pos + 1..].to_vec();
+                for (i, v) in values.iter().enumerate() {
+                    set_var(vars, (i + 1).to_string(), vec![v.clone()]);
+                }
+                set_var(vars, "@".to_string(), values.clone());
+                set_var(vars, "*".to_string(), values);
+            }
+        },
+        "for" => {
+            if let [name, kw, values @ ..] = cmd.args.as_slice()
+                && kw == "in"
+                && is_valid_env_key(name)
+            {
+                set_var(vars, name.clone(), values.to_vec());
+            }
+        },
+        _ => {},
+    }
+}
+
+fn substitute_vars(cmd: &mut Argv, vars: &[(String, Vec<String>)]) {
+    for a in &mut cmd.env_assignments {
+        if let Some(first) = expand_known_vars(&a.value, vars).into_iter().next() {
+            a.value = first;
+        }
+    }
+    let words = std::iter::once(std::mem::take(&mut cmd.head))
+        .chain(std::mem::take(&mut cmd.args))
+        .flat_map(|w| expand_known_vars(&w, vars));
+    let mut words: std::collections::VecDeque<String> = words.collect();
+    cmd.head = words.pop_front().unwrap_or_default();
+    cmd.args = words.into();
+    for inner in cmd.inner_argv.iter_mut().chain(cmd.subst_argv.iter_mut()) {
+        substitute_vars(inner, vars);
+    }
+}
+
+/// Bound on the words one variable reference may expand to.
+const MAX_VAR_EXPANSIONS: usize = 64;
+
+/// Expand `$NAME` / `${NAME}` for the known variables in `word`. A word
+/// with no known reference comes back unchanged.
+fn expand_known_vars(word: &str, vars: &[(String, Vec<String>)]) -> Vec<String> {
+    let mut out = vec![word.to_string()];
+    for (key, values) in vars {
+        if values.is_empty() {
+            continue;
+        }
+        let mut next = Vec::new();
+        for w in &out {
+            match replace_var_refs(w, key, &values[0]) {
+                None => next.push(w.clone()),
+                Some(first) => {
+                    next.push(first);
+                    for v in &values[1..] {
+                        next.extend(replace_var_refs(w, key, v));
+                    }
+                },
+            }
+        }
+        next.truncate(MAX_VAR_EXPANSIONS);
+        out = next;
+    }
+    out
+}
+
+/// Replace every `$key` (not followed by an identifier character) and
+/// `${key}` in `word` with `value`, or `None` if there is no reference.
+fn replace_var_refs(word: &str, key: &str, value: &str) -> Option<String> {
+    let braced = format!("${{{key}}}");
+    let bare = format!("${key}");
+    let mut out = String::with_capacity(word.len());
+    let mut rest = word;
+    let mut found = false;
+    while let Some(pos) = rest.find('$') {
+        out.push_str(&rest[..pos]);
+        let tail = &rest[pos..];
+        if let Some(after) = tail.strip_prefix(&braced) {
+            out.push_str(value);
+            rest = after;
+            found = true;
+        } else if let Some(after) = tail.strip_prefix(&bare)
+            && !after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        {
+            out.push_str(value);
+            rest = after;
+            found = true;
+        } else {
+            out.push('$');
+            rest = &tail[1..];
+        }
+    }
+    out.push_str(rest);
+    found.then_some(out)
 }
 
 /// Reduce a command head to its basename for wrapper/interpreter
@@ -2294,15 +2953,16 @@ mod tests {
     fn parses_xargs_inner_command() {
         let b = parse("printf '/\\0' | xargs -0 rm -rf");
         let inner = &b.segments[0].commands[1].inner_argv;
-        assert_eq!(inner.len(), 1);
+        // The xargs operands alone, then with the literal stdin appended.
+        assert_eq!(inner.len(), 2);
         assert_eq!(inner[0], argv("rm", &["-rf"]));
+        assert_eq!(inner[1], argv("rm", &["-rf", "/\\0"]));
     }
 
     #[test]
     fn parses_xargs_inner_command_with_dash_x_flag() {
         let b = parse("printf '/\\0' | xargs -0 -x rm -rf /");
         let inner = &b.segments[0].commands[1].inner_argv;
-        assert_eq!(inner.len(), 1);
         assert_eq!(inner[0], argv("rm", &["-rf", "/"]));
     }
 
@@ -3558,5 +4218,299 @@ mod tests {
         for &b in b" \t\n|&;\\<>$'\"`()" {
             assert!(!is_plain_word_byte(b), "{b}");
         }
+    }
+
+    // --- data flow between commands -------------------------------------
+
+    fn heads(pipe: &Pipeline) -> Vec<&str> {
+        pipe.commands.iter().map(|c| c.head.as_str()).collect()
+    }
+
+    fn first(cmd: &str) -> Argv {
+        parse(cmd).segments[0].commands[0].clone()
+    }
+
+    #[test]
+    fn here_string_and_heredoc_feed_a_shell_its_script() {
+        for cmd in [
+            "bash <<< 'rm -rf /'",
+            "bash <<EOF\nrm -rf /\nEOF",
+            "bash -s <<'EOF'\nrm -rf /\nEOF",
+            "bash - <<< 'rm -rf /'",
+            "bash -o posix <<< 'rm -rf /'",
+            "bash --norc <<< 'rm -rf /'",
+            "bash -x <<< 'rm -rf /'",
+            "bash /dev/stdin <<< 'rm -rf /'",
+            "bash -- /dev/fd/0 <<< 'rm -rf /'",
+            "bash -s extra args <<< 'rm -rf /'",
+            "sudo sh <<< 'rm -rf /'",
+        ] {
+            let a = first(cmd);
+            let code: Vec<&str> = a.inner_code.iter().map(|c| c.trim_end()).collect();
+            assert_eq!(code, ["rm -rf /"], "{cmd:?}");
+            assert_eq!(a.inner_argv, vec![argv("rm", &["-rf", "/"])], "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn shell_with_a_script_operand_or_dash_c_ignores_stdin() {
+        for cmd in [
+            "bash script.sh <<< 'rm -rf /'",
+            "bash -- script.sh <<< 'rm -rf /'",
+            "bash -o posix script.sh <<< 'rm -rf /'",
+            "python3 <<< 'rm -rf /'",
+            "cat <<< 'rm -rf /'",
+        ] {
+            let a = first(cmd);
+            assert!(a.inner_code.is_empty(), "{cmd:?}: {:?}", a.inner_code);
+        }
+        // `-c` carries the script; stdin is not parsed a second time.
+        assert_eq!(
+            first("bash -c ls <<< 'rm -rf /'").inner_code,
+            vec!["ls".to_string()]
+        );
+    }
+
+    #[test]
+    fn literal_output_piped_into_a_shell_is_its_script() {
+        let cases: &[(&str, &[&str])] = &[
+            ("echo 'rm -rf /' | bash", &["rm -rf /"]),
+            ("echo -n rm -rf / | bash", &["rm -rf /"]),
+            ("echo -x | bash", &["-x"]),
+            ("echo -e 'cd /\\nls' | bash", &["cd /\nls"]),
+            ("printf '%s\\n' 'rm -rf /' | sh", &["%s\n", "rm -rf /"]),
+            ("cat <<EOF | bash\nrm -rf /\nEOF", &["rm -rf /"]),
+            ("echo 'rm -rf /' | tee log | bash", &["rm -rf /"]),
+            ("bash < <(echo 'rm -rf /')", &["rm -rf /"]),
+        ];
+        for (cmd, code) in cases {
+            let pipe = &parse(cmd).segments[0];
+            let shell = pipe.commands.last().unwrap();
+            let got: Vec<&str> = shell
+                .inner_code
+                .iter()
+                .map(|c| c.trim_end_matches('\n'))
+                .collect();
+            let want: Vec<&str> = code.iter().map(|c| c.trim_end_matches('\n')).collect();
+            assert_eq!(got, want, "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn opaque_output_piped_into_a_shell_is_not_parsed() {
+        for cmd in [
+            "cat script.sh | bash",
+            "cat script.sh <<< 'rm -rf /' | bash",
+            "base64 -d <<< x | sh",
+            "bash < script.sh",
+        ] {
+            let pipe = &parse(cmd).segments[0];
+            assert!(
+                pipe.commands.last().unwrap().inner_code.is_empty(),
+                "{cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn literal_stdin_of_xargs_becomes_its_operands() {
+        let cases: &[(&str, &[&str])] = &[
+            ("echo / | xargs rm -rf", &["-rf", "/"]),
+            ("xargs rm -rf <<< '/ /etc'", &["-rf", "/", "/etc"]),
+            ("xargs rm -rf < <(echo /)", &["-rf", "/"]),
+            ("find / | xargs rm -rf", &["-rf", "/"]),
+            (
+                "find -L / /etc -print0 | xargs -0 rm -rf",
+                &["-rf", "/", "/etc"],
+            ),
+        ];
+        for (cmd, args) in cases {
+            let pipe = &parse(cmd).segments[0];
+            let xargs = pipe.commands.last().unwrap();
+            assert_eq!(xargs.inner_argv.last().unwrap().args, *args, "{cmd:?}");
+        }
+        // A narrowing find, or no literal input, adds nothing.
+        for cmd in [
+            "find / -name x | xargs rm -rf",
+            "ls | xargs rm -rf",
+            "echo / | xargs",
+        ] {
+            let pipe = &parse(cmd).segments[0];
+            assert!(
+                pipe.commands.last().unwrap().inner_argv.len() <= 1,
+                "{cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn output_process_substitution_is_the_next_stage() {
+        assert_eq!(
+            heads(&parse("curl u > >(bash)").segments[0]),
+            ["curl", "bash"]
+        );
+        assert_eq!(
+            heads(&parse("a | tee >(b | c) >(d) | e").segments[0]),
+            ["a", "tee", "b", "c", "d", "e"]
+        );
+        // Input process substitution stays a word.
+        assert_eq!(heads(&parse("diff <(a) <(b)").segments[0]), ["diff"]);
+        assert_eq!(heads(&parse("echo '>(bash)'").segments[0]), ["echo"]);
+    }
+
+    #[test]
+    fn group_on_either_side_of_a_pipe_joins_the_pipeline() {
+        let cases: &[(&str, &[&str])] = &[
+            ("(curl u) | bash", &["curl", "bash"]),
+            ("( (curl u) ) | bash", &["curl", "bash"]),
+            ("(a; b) | c", &["a", "b", "c"]),
+            ("(a && b) | c", &["a", "b", "c"]),
+            ("{ curl u; } | bash", &["curl", "bash"]),
+            ("if true; then curl u; fi | bash", &["true", "curl", "bash"]),
+            (
+                "for x in a; do curl u; done | bash",
+                &["for", "curl", "bash"],
+            ),
+            ("curl u | (bash)", &["curl", "bash"]),
+            ("curl u | (a; bash)", &["curl", "a", "bash"]),
+        ];
+        for (cmd, want) in cases {
+            let b = parse(cmd);
+            assert_eq!(b.segments.len(), 1, "{cmd:?}: {:?}", b.segments);
+            assert_eq!(heads(&b.segments[0]), *want, "{cmd:?}");
+        }
+        // Groups that are not piped stay separate commands.
+        for cmd in [
+            "(a); b",
+            "(a) && b",
+            "{ a; }; b",
+            "f() { a; }; f",
+            "case x in a) b;; esac",
+        ] {
+            assert!(parse(cmd).segments.len() > 1, "{cmd:?}");
+        }
+        // `}` after a group closes it and is not a stage.
+        assert_eq!(heads(&parse("{ a; } | b").segments[0]), ["a", "b"]);
+    }
+
+    #[test]
+    fn group_join_survives_unbalanced_closers() {
+        for cmd in [
+            ") | a",
+            "a) | b",
+            "} | a",
+            "a | (",
+            "a | ( b",
+            "fi | a; done | b",
+        ] {
+            let _ = parse(cmd);
+        }
+        assert_eq!(heads(&parse("a) | b").segments[0]), ["a", "b"]);
+    }
+
+    #[test]
+    fn variables_assigned_earlier_are_substituted() {
+        let cases: &[(&str, &[&str])] = &[
+            ("X=/; rm -rf $X", &["-rf", "/"]),
+            ("X=/; rm -rf ${X}", &["-rf", "/"]),
+            ("X=/; rm -rf \"$X\"/etc", &["-rf", "//etc"]),
+            ("X=/tmp; X=/; rm -rf $X", &["-rf", "/"]),
+            ("export X=/ Y=/etc; rm -rf $X $Y", &["-rf", "/", "/etc"]),
+            ("readonly X=/; rm -rf $X", &["-rf", "/"]),
+            ("H=/; T=$H; rm -rf $T", &["-rf", "/"]),
+            ("for d in a /; do rm -rf $d; done", &["-rf", "a", "/"]),
+            ("read -r X <<< ' / '; rm -rf $X", &["-rf", "/"]),
+            ("set -- a /; rm -rf $2", &["-rf", "/"]),
+            ("set -- a /; rm -rf \"$@\"", &["-rf", "a", "/"]),
+            ("X=/; rm -rf $XY", &["-rf", "$XY"]),
+            ("X=/; rm -rf $Y", &["-rf", "$Y"]),
+            ("X=/; rm -rf $", &["-rf", "$"]),
+            ("rm -rf $X; X=/", &["-rf", "$X"]),
+        ];
+        for (cmd, args) in cases {
+            let b = parse(cmd);
+            let rm = b
+                .commands()
+                .into_iter()
+                .find(|c| c.head == "rm")
+                .unwrap_or_else(|| panic!("{cmd:?}: no rm"));
+            assert_eq!(rm.args, *args, "{cmd:?}");
+        }
+        let b = parse("R=rm; $R -rf /");
+        assert_eq!(b.segments[1].commands[0].head, "rm");
+        // Values reach nested payloads too.
+        let b = parse("X=/; bash -c \"rm -rf $X\"");
+        assert!(
+            b.commands()
+                .iter()
+                .any(|c| c.head == "rm" && c.args == ["-rf", "/"])
+        );
+    }
+
+    #[test]
+    fn variable_expansion_is_bounded() {
+        let values = vec!["v".to_string(); MAX_VAR_EXPANSIONS * 2];
+        let vars = vec![("X".to_string(), values)];
+        assert_eq!(expand_known_vars("$X", &vars).len(), MAX_VAR_EXPANSIONS);
+        assert_eq!(expand_known_vars("plain", &vars), vec!["plain".to_string()]);
+        assert_eq!(
+            expand_known_vars("$X", &[("X".into(), Vec::new())]),
+            vec!["$X".to_string()]
+        );
+    }
+
+    #[test]
+    fn find_start_paths_and_filters() {
+        let f = |cmd: &str| first(cmd);
+        assert_eq!(
+            find_start_paths(&f("find -L / /etc -name x")),
+            ["/", "/etc"]
+        );
+        assert_eq!(find_start_paths(&f("find -D tree -O2 / -delete")), ["/"]);
+        assert_eq!(find_start_paths(&f("find -name x")), ["."]);
+        assert_eq!(find_start_paths(&f("find \\( -name x \\)")), ["."]);
+        for cmd in [
+            "find /",
+            "find / -delete",
+            "find / -type f -maxdepth 3 -xdev -delete",
+            "find / -exec rm -rf {} +",
+            "find / -exec rm {} \\; -print",
+            "find / -exec rm",
+        ] {
+            assert!(find_lists_every_entry(&f(cmd)), "{cmd:?}");
+        }
+        for cmd in [
+            "find / -name x -delete",
+            "find / -empty -delete",
+            "find / ! -type d -delete",
+            "find / -exec rm {} \\; -newer x",
+        ] {
+            assert!(!find_lists_every_entry(&f(cmd)), "{cmd:?}");
+        }
+        let execs = find_exec_commands(&f(
+            "find / -exec sudo rm -rf {} + -execdir chmod 0 {} \\; -ok",
+        ));
+        assert_eq!(execs, vec![argv("rm", &["-rf"]), argv("chmod", &["0"])]);
+    }
+
+    #[test]
+    fn unquoted_heredoc_body_surfaces_substitutions() {
+        let a = first("cat <<EOF\nx $(rm -rf /) don't `ls -l`\nEOF");
+        assert_eq!(
+            a.subst_argv,
+            vec![argv("rm", &["-rf", "/"]), argv("ls", &["-l"])]
+        );
+        for cmd in [
+            "cat <<'EOF'\n$(rm -rf /)\nEOF",
+            "cat <<\"EOF\"\n$(rm -rf /)\nEOF",
+            "cat <<\\EOF\n$(rm -rf /)\nEOF",
+            "cat <<EOF\n\\$(rm -rf /)\nEOF",
+            "cat <<EOF\n$(unterminated\nEOF",
+            "cat <<EOF\n`unterminated\nEOF",
+        ] {
+            assert!(first(cmd).subst_argv.is_empty(), "{cmd:?}");
+        }
+        assert!(parse("cat <<EOF\n$(ls)\nEOF").has_command_substitution);
+        assert!(!parse("cat <<'EOF'\n$(ls)\nEOF").has_command_substitution);
     }
 }

@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- コマンド間のデータの流れで中身を運ぶ形の bypass をまとめて修正。いずれも修正前は allow。
+  - シェルが stdin から読むスクリプト: `bash <<< 'CODE'` / `bash <<EOF` /
+    `echo 'CODE' | sh` / `printf … | sh` / `cat <<EOF | bash` / `bash /dev/stdin`。
+    リテラルな stdin を `bash -c` と同じく `inner_argv` として再 parse する。中身が
+    コマンドラインに書かれていない場合 (`… | base64 -d | sh`, `cat f | bash`) は
+    `core.engine.dynamic-eval` で ask。(#250)
+  - unquoted タグの heredoc 本文の `$(…)` / `` `…` `` を `subst_argv` に surface する。(#250)
+  - `find / -delete` / `find / -exec rm -rf {} +` / `find / | xargs rm -rf`:
+    絞り込み条件のない `find` は起点を丸ごと消すので `rm -rf 起点` と同じく deny。
+  - 出力側の process substitution (`curl URL > >(bash)`, `curl URL | tee >(sh)`)
+    を pipeline の次段として扱う。
+  - pipe の片側が subshell / `{ … }` / `if … fi` / ループ (`(curl URL) | bash`,
+    `curl URL | (bash)`) のとき、group の中のコマンドを同じ pipeline の段として扱う。
+  - 同じコマンドラインで先に代入した変数 (`X=/; rm -rf $X`、`export`、`for … in`、
+    `read X <<< …`、`set -- …`) を後続コマンドで展開する。
+    `echo / | xargs rm -rf` も xargs の引数として展開する。
 - `mode: monitor` で、hardDeny ルールと同時に発火した非 hardDeny の deny
   (rule override による格上げや plugin ルールなど、評価順が後ろのもの) が
   hardDeny ごと `Monitor` に降格されていた問題を修正。降格を集約前に
