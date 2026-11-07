@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-07
+
 ### Security
 - `mode: monitor` で、hardDeny ルールと同時に発火した非 hardDeny の deny
   (rule override による格上げや plugin ルールなど、評価順が後ろのもの) が
@@ -59,6 +61,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   展開が 2 重にかかり homoglyph の正規化が効かなかった問題を修正。
 - 上記はいずれも bash の等価変形による有界網羅テスト
   (`tests/bash_quote_equivalence.rs`) で検出。
+- shell parser: `<<<` (here-string) を heredoc と解釈し、後続のコマンドを本文として
+  飲み込んでいた (`cat <<< x; rm -rf /`) 問題を修正。(#301)
+- shell parser: `$(…)` の閉じ `)` の対応付けが quote を考慮せず
+  (`echo $(echo ')'); rm -rf /`)、また長い `$("$("…` の連鎖で stack overflow を起こし
+  hook が exit 134 で abort していた問題を修正。heap 上のスタックで走査する。(#308)
+- shell parser: ANSI-C quoting `$'…'` を bash と同じく decode する
+  (`echo $'a\'b' ; rm -rf /`, `$'\x72m' -rf /`, `rm -rf $'/'`)。(#302, #254)
+- shell parser: 改行 / CRLF / 単独の `&` を区切りとして扱い、heredoc 本文を次行から
+  読み、`#` コメントを解釈する。(#247, #248, #249, #310)
+- shell parser: subshell / brace group / `if` / `for` / `while` / `case` / 関数定義
+  (`function` キーワードの有無とも) / `coproc` / `!` / `time` / `exec` / `builtin` を
+  解釈し、内側のコマンドを判定する。(#253, #307)
+- shell parser: quote されていない `$IFS` / `${IFS}` で word を分割する。(#306)
+- shell parser: brace expansion (`{rm,-rf,/}`, `/e{t,}c`) を bash と同じく展開する。
+  線形時間かつ byte 予算付き。(#304)
+- shell parser: backquote の本文は `\\` / `` \` `` / `\$` を unescape してから再 parse する。(#309)
+- shell parser: `sudo FOO=bar CMD`、値を取る short flag で終わる flag cluster (`-u`)、
+  `env -P DIR`、`command -v` を正しく peel する。(#311)
+- `core.engine.dynamic-eval`: コマンド名が実行時に決まる場合 (`$CMD`, `$(…)`,
+  `${X:-rm}`, glob / bracket) を ask にする。(#303, #305)
+- destructive-rm: `/./`、home の glob (`~/*`, dot-glob)、`${HOME:?}` / `${X:-/}`、
+  long option の省略形、`--interactive=never`、`/home` / `/Users` / `~root` を検出する。
+  (#280, #281, #282, #283, #284, #285)
+- remote-script-pipe: version 付き interpreter (`python3.12`)、php / PowerShell の stdin、
+  httpie、raw socket、`source <(curl …)` / `. <(curl …)` / `eval "$(curl …)"` を検出する。
+  (#286, #287, #288)
+- sensitive-bash-read: jq / yq / diff、圧縮系コマンド、editor を reader head として扱う。(#292)
+- sensitive-path-to-network: ssh の stdin と cloud への upload subcommand
+  (`aws s3 cp`, `gh gist create`, `rclone copy` など) を network sink として扱う。(#293, #294)
+- secrets catalog に netrc / git-credentials / gnupg / gh `hosts.yml` / azure /
+  vault token / key store / `.envrc` / `*.key` を追加。(#291)
+- `.env` の境界判定が curl の `@` / `<`、scp の `:` を見るようにした。`.npmrc` /
+  `.pypirc` も同じ境界 (加えて `=`) で照合する。(#290)
+- git: `git config KEY VALUE` / `git config set` による永続的な bypass
+  (`core.hooksPath`, `commit.gpgsign false` など) を `core.git.config-override-bypass`
+  で deny する。shell 経由で実行される key は新ルール `core.git.config-exec-command`
+  (ask) で扱い、値を内側のシェルとして再 parse する。(#313, #314)
+- git: `-f` / `--force` を伴う `branch -d` を branch-delete-force として扱う。(#312)
+- git: `git push --prune` を ask にする。(#315)
+- self-protection: 保護パスの祖先の削除 / 移動、downloader の出力
+  (`curl -o`, `wget -O`)、git pathspec による書き込み (`git checkout` での restore)、
+  `cd` の追跡に対応。(#316, #317, #318, #319)
+- self-protection: `$PWD` / `$(pwd)`、`$(which X)` / `command -v` / `type -P` による
+  lookup、glob の書き込み先を展開し、in-place editor (`sponge`, `patch`, `ed`, `ex`,
+  `awk -i inplace`, `perl -i`, `ruby -i`) を writer として扱う。(#320, #321, #322)
+- `core.self_protection.binary`: package manager (cargo / npm / pnpm / yarn / bun /
+  brew など) による ptuf の install / uninstall / update と、`ptuf update` の
+  downgrade を deny する。(#323)
+- workspace pack: Bash の reader / writer の file operand を境界と照合する。(#334)
+- `url.hostAny`: host を WHATWG と同じく解釈する (`?` / `#` / `\` で authority が
+  終わる、scheme なしは https、percent-decode、小文字化、末尾 `.`)。(#329, #330)
+- audit の redaction: option 値として渡す credential (`--password`, `--token`,
+  `--api-key`, mysql の `-pVALUE`, curl の `-u user:pass`, `docker login -p`,
+  `config set <secret key>`)、npm の `npm_…` token、Google の `AIza…` key を伏せる。(#325)
+- injection scan: 不正な UTF-8 / NUL の後も走査を続け、不可視文字の catalog を拡充
+  (U+034F, Hangul filler, U+206A–206F, U+FFF9–FFFB, U+2028/2029 など)。8 MiB を
+  超えるファイルは先頭 1 MiB・末尾 1 MiB・Read の `offset` から 1 MiB を走査する。
+  (#326, #327, #328)
+- tool の対応範囲: Claude Code の `Grep` を sensitive-read / invisible-chars で Read と
+  同等に扱う (#295)。MultiEdit / NotebookEdit を Edit として扱う (#296)。複数パスの
+  Read (Kiro / Cursor / Cline の `paths[]`, `operations[].path` など) は全パスを判定する
+  (#297)。Cursor の Grep / Delete と Cline の `search_files` を mapping (#298)。
+  `command` が文字列でない Bash payload は `core.engine.invalid-payload` で fail-closed
+  (#299)。シェル上の `apply_patch` / `applypatch` を patch として扱う (#300)。
+- config: project 層の `audit.path` を repo 内に限定し、audit sink は保護対象の
+  ファイルを開かない (警告して audit を無効化する)。(#324)
+- `ptuf update`: installer の一時ディレクトリを専用の新規ディレクトリ (0700、既存なら
+  拒否) にし、release tag を検証する。PowerShell 側の quoting も修正。(#331, #332)
+- `scripts/bootstrap-cloud.sh` が installer を実行する前に SHA256 pin を検証する。(#375)
 
 ### Fixed
 - audit JSONL: 記録中に死んだ ptuf (hook timeout の SIGKILL / ENOSPC) が
@@ -73,6 +144,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - 形式モデル: TLA+ (`formal/tla/`, `make tla`) と Kani harness
   (`#[cfg(kani)]`, `make kani`) を追加し、nightly の `formal` job で実行する。
+- `core.network.download-then-exec` (ask): 1 コマンド内での download と実行を検出する
+  (curl の short option cluster を含む)。(#289)
+- `core.git.config-exec-command` (ask): `core.sshCommand` / `core.pager` /
+  `core.editor` / `core.fsmonitor` / `credential.helper` / `diff.external` / textconv /
+  filter / `gpg.program` / `sequence.editor` / `pager.*` / `!` alias など、git が
+  shell 経由で実行する key の設定を検出する。(#314)
+- `ptuf check --json` は `{"decision","ruleId","reason"}` を、`ptuf plugin check --json` は
+  `{"plugin","source","passed","failed","cases":[...]}` を出力する。(#333)
+- Claude Code plugin marketplace (`.claude-plugin/marketplace.json`, `plugins/ptuf`)。
+  PreToolUse hook で `ptuf hook claude-code` を呼び、バイナリが無い場合は fail-closed。(#389)
+- bypass challenge のドキュメントページ。(#390)
+
+### Changed
+- 開発 / CI: `mutants-diff` を PR の blocking gate にした (`scripts/mutants-diff.py`)。
+  nightly 失敗時に追跡 issue を起票する `nightly-issue` job、`make test-scripts`、
+  CODEOWNERS、`docs/repository-settings.md` を追加。(#375)
+- 開発 / CI: SemVer gate の比較基準を直近の release tag にした
+  (`scripts/semver-baseline.sh`)。(#277)
+- 開発 / CI: audit workflow を `cargo deny check advisories` に統一し
+  `.cargo/audit.toml` を削除。未配線の `.claude/ptuf-hook.sh` を削除。(#376)
+- README の highlights を更新し、install 手順の pin を v0.7.0 に更新。(#387, #388)
+- テストの安定化: ETXTBSY の retry (#373)、root 実行時に読めない audit の
+  テストを skip (#335)。
 
 ## [0.7.0] - 2026-10-21
 
@@ -727,7 +821,8 @@ Initial public release.
 - `curl | sh` and PowerShell installers via cargo-dist
 - crates.io publication
 
-[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/watany-dev/ptuf/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/watany-dev/ptuf/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/watany-dev/ptuf/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/watany-dev/ptuf/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/watany-dev/ptuf/compare/v0.4.1...v0.5.0
