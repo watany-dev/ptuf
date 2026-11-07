@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04, macos-15]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,12 +69,13 @@ jobs:
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-nextest@0.9.133
-      # On macos-14 hosted images something between rust-cache and
-      # install-action replaces $CARGO_HOME/bin/cargo with the bare
-      # rustup-init binary, so `cargo nextest run` reports
-      # `Usage: rustup-init[EXE]` and dies. Re-assert the multiplexer
-      # shim by symlinking cargo/rustc/rustdoc back to the rustup binary
-      # right before the test step. Idempotent on Linux.
+      # On macOS hosted images (first seen on macos-14) something
+      # between rust-cache and install-action replaces
+      # $CARGO_HOME/bin/cargo with the bare rustup-init binary, so
+      # `cargo nextest run` reports `Usage: rustup-init[EXE]` and
+      # dies. Re-assert the multiplexer shim by symlinking
+      # cargo/rustc/rustdoc back to the rustup binary right before the
+      # test step. Idempotent on Linux.
       - name: Diagnose and repair cargo shim
         shell: bash
         run: |

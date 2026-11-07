@@ -186,6 +186,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`scripts/semver-baseline.sh`)。(#277)
 - 開発 / CI: audit workflow を `cargo deny check advisories` に統一し
   `.cargo/audit.toml` を削除。未配線の `.claude/ptuf-hook.sh` を削除。(#376)
+- 開発 / CI: GitHub が廃止した `macos-14` イメージから `macos-15` に移行。
+  CI の `test` matrix に加え、cargo-dist 0.31.0 の既定で `macos-14` に載る
+  `aarch64-apple-darwin` の release ビルドも `dist-workspace.toml` の
+  `github-custom-runners` で `macos-15` に固定した。
 - README の highlights を更新し、install 手順の pin を v0.7.0 に更新。(#387, #388)
 - テストの安定化: ETXTBSY の retry (#373)、root 実行時に読めない audit の
   テストを skip (#335)。

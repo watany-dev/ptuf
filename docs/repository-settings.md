@@ -18,7 +18,7 @@ Settings → Rules → Rulesets:
   cover `make check` and the PR-only gates:
   - `Format check`
   - `Clippy + doc warnings`
-  - `test (ubuntu-24.04)`, `test (macos-14)`
+  - `test (ubuntu-24.04)`, `test (macos-15)`
   - `Coverage (tarpaulin)`
   - `MSRV build (1.93.0)`
   - `npm smoke`

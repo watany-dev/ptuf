@@ -35,6 +35,13 @@ install-updater = false
 # cargo-dist-version.
 allow-dirty = ["ci"]
 
+# GitHub retired the macos-14 hosted image, and cargo-dist 0.31.0 still
+# defaults aarch64-apple-darwin builds to it, so those jobs are cancelled
+# before they get a runner. Pin the target to macos-15. Drop this table
+# once a cargo-dist bump moves the default off macos-14.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
+
 # Linux build profile uses `lld` (see .cargo/config.toml). Install it on the
 # CI runner so x86_64-unknown-linux-gnu builds succeed. musl-tools provides the
 # linker/toolchain needed for musl release archives.
