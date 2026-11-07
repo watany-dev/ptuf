@@ -102,7 +102,10 @@ impl ConfigRule for SensitiveBashRead {
 fn bash_reads_sensitive_path(bash: &Bash) -> bool {
     if bash.has_command_substitution {
         let commands = bash.commands();
-        let has_reader = commands.iter().any(|a| invokes_reader(a));
+        // `sudo cat $(echo .env)`: the reader may sit behind a prefix wrapper.
+        let has_reader = commands
+            .iter()
+            .any(|a| invokes_reader(&crate::facts::shell::unwrap_all_prefix_wrappers(a)));
         let has_sensitive = commands.iter().any(|a| argv_references_sensitive(a));
         return has_reader && has_sensitive;
     }
@@ -249,6 +252,9 @@ mod tests {
         // still satisfy the pessimistic-mode coexistence check.
         assert_ask("cat $(echo .env)");
         assert_ask("source $(printf %s .env.production)");
+        // The reader behind a prefix wrapper counts too.
+        assert_ask("sudo cat $(echo .env)");
+        assert_ask("timeout 9 cat $(echo .env)");
     }
 
     #[test]

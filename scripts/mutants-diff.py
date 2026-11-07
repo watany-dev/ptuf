@@ -37,6 +37,7 @@ from pathlib import Path
 # directory stands for every `.rs` file under it. `None`: the file runs the
 # whole pipeline end to end, so no narrower target exists.
 TEST_TARGETS: dict[str, tuple[str, ...] | None] = {
+    "bash_quote_equivalence": None,
     "bypass_corpus": None,
     "cli_audit": None,
     "cli_smoke": None,

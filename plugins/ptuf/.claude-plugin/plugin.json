@@ -1,0 +1,12 @@
+{
+  "name": "ptuf",
+  "description": "Deterministic PreToolUse guardrail: blocks rm -rf, curl | bash, and credential exfiltration before the agent runs them. Requires the ptuf binary on PATH.",
+  "author": {
+    "name": "watany-dev",
+    "url": "https://github.com/watany-dev"
+  },
+  "homepage": "https://github.com/watany-dev/ptuf",
+  "repository": "https://github.com/watany-dev/ptuf",
+  "license": "Apache-2.0",
+  "keywords": ["guardrail", "security", "hooks", "pretooluse", "safety"]
+}

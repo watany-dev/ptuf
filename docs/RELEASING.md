@@ -136,6 +136,14 @@
    cargo install ptuf
    ```
 
+8. Once the release is published, bump the pinned version in the install
+   snippets so first-time readers copy the current release. The pins live
+   in `README.md`, `README.ja.md`, and `docs/install.md`:
+
+   ```bash
+   grep -rn 'v[0-9]\+\.[0-9]\+\.[0-9]\+' README.md README.ja.md docs/install.md
+   ```
+
 ## Pre-releases
 
 Tags like `v0.1.0-rc.1` are accepted. They produce a GitHub Release marked as

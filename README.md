@@ -16,6 +16,25 @@ rules, not LLM heuristics.
 
 Supported hosts: **Claude Code**, **Codex**, **GitHub Copilot**, **Kiro CLI**, **Cline**, **Cursor**, **Pi Coding Agent**, **OpenCode**.
 
+- **Shell-aware** — parses quotes, pipes, `bash -c`, `$(…)` and variable
+  expansion, so `rm -rf "/"` and `$(echo rm) -rf /` are caught too.
+- **Bypass-tested** — every known evasion is a versioned regression case,
+  backed by fuzzing and mutation testing.
+- **Self-protecting** — the agent cannot edit ptuf's config, binary, or hook
+  registration to switch it off mid-session.
+- **Zero runtime** — a single offline binary with a JSONL audit log.
+
+## Quick start
+
+```bash
+brew install watany-dev/tap/ptuf   # or: npm install -g @watany-dev/ptuf
+ptuf init claude-code              # or codex / copilot / kiro / cline / cursor / pi / opencode
+ptuf check --tool Bash 'rm -rf /'  # Decision: deny
+```
+
+Other install methods (prebuilt installer, Windows, cargo, mise) are under
+[Install](#install).
+
 ## Why ptuf?
 
 Most guardrails today are hand-rolled hook scripts that grep the command
@@ -35,6 +54,9 @@ approach:
 
 A sandbox is complementary, not competing: it limits blast radius, while
 ptuf stops and audits the dangerous call itself — run both if you can.
+
+Think you can sneak a dangerous call past it? Take the
+[bypass challenge](docs/bypass-challenge.md).
 
 ## What it stops
 
@@ -119,13 +141,13 @@ CI / Docker builds are reproducible.
 
 ```bash
 # Linux / macOS
-PTUF_VERSION=v0.4.1
+PTUF_VERSION=v0.7.0
 curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
 ```
 
 ```powershell
 # Windows (PowerShell)
-$env:PTUF_VERSION = "v0.4.1"
+$env:PTUF_VERSION = "v0.7.0"
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/watany-dev/ptuf/releases/download/$env:PTUF_VERSION/ptuf-installer.ps1 | iex"
 ```
 
@@ -194,6 +216,22 @@ re-detects existing ptuf entries.
 ```bash
 ptuf init claude-code
 ```
+
+Prefer Claude Code's plugin system? Install the binary first (any method
+above), then inside Claude Code:
+
+```text
+/plugin install ptuf --marketplace watany-dev/ptuf
+```
+
+On Claude Code older than 2.1.275, run `/plugin marketplace add watany-dev/ptuf`
+and then `/plugin install ptuf@ptuf`. The plugin registers the same
+`PreToolUse` hook and blocks every matched tool call with an install hint
+until the `ptuf` binary is on PATH (or in `~/.cargo/bin`). `ptuf init
+claude-code` remains the stronger option: `core.self_protection.*` guards
+`~/.claude/settings.json`, but not the plugin cache under
+`~/.claude/plugins/`. Use one or the other, not both, or every call is
+evaluated twice.
 
 **Codex** — writes `<repo>/.codex/hooks.json` and `config.toml`:
 
