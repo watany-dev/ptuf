@@ -77,7 +77,7 @@ Rust ツールチェイン不要のビルド済みバイナリです。
 
 ```bash
 # Linux / macOS
-PTUF_VERSION=v0.3.0
+PTUF_VERSION=v0.7.0
 curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
 ```
 
