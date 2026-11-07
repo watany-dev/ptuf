@@ -18,6 +18,8 @@ Run before every push:
 make check
 ```
 
+Node 24 is required to execute the generated OpenCode TypeScript plugins.
+
 This runs the same gates that block CI. `make check` installs only
 `cargo-deny` when missing; `tarpaulin` / fuzz / mutants / semver-checks
 stay on their own Make targets.
@@ -27,6 +29,7 @@ stay on their own Make targets.
 | `fmt-check` | `cargo fmt -- --check` |
 | `lint` | `cargo clippy --all-targets --locked -- -D warnings` |
 | `test` | `cargo test --locked` |
+| `test-opencode` | Installed v1/v2 TypeScript callback tests with the real CLI and failing subprocess fixtures |
 | `doc` | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked` |
 | `deny` | `cargo deny check advisories licenses bans sources` |
 
@@ -34,7 +37,7 @@ CI additionally runs `tarpaulin` (95% coverage floor), an MSRV build on Rust
 1.93.0 (`cargo build`, `cargo test --no-run`, and `cargo doc` — not merely
 `cargo check`), `cargo-semver-checks` (public-API SemVer gate), `actionlint`,
 `cargo-machete`, and `zizmor` (workflow security audit). A daily scheduled
-`cargo audit` workflow catches newly-published RustSec advisories outside the
+`cargo deny check advisories` workflow (`audit.yml`) catches newly-published RustSec advisories outside the
 PR loop, and a scheduled `Nightly` workflow runs coverage-guided fuzzing and
 mutation testing (see below). The MSRV is the floor — do not raise it without
 prior discussion.
@@ -45,6 +48,26 @@ prior discussion.
 override available). Run it before tagging a release.
 
 ### Heavy end-to-end tests
+
+To verify actual OpenCode hosts on Linux/macOS, install both generations in
+separate directories and run the host smoke test (Python 3.9+ and Git required):
+
+```sh
+npm install --prefix /tmp/ptuf-host-v1 opencode-ai@1.19.3
+npm install --prefix /tmp/ptuf-host-v2 @opencode/cli@2.0.32
+cargo build --locked
+python3 scripts/smoke-opencode-hosts.py \
+  --v1 /tmp/ptuf-host-v1/node_modules/.bin/opencode \
+  --v2 /tmp/ptuf-host-v2/node_modules/.bin/opencode
+```
+
+This runs the real hosts and installed ptuf plugins with a local deterministic
+model endpoint; no model account or API key is required. It checks preservation
+of the installed generation through agentless init, safe shell
+execution, rejection of `git reset --hard HEAD`, preservation of uncommitted
+changes in disposable Git repositories, and ptuf audit records. Host stdout,
+stderr, model requests, and results stay in the printed artifact directory.
+This opt-in check is separate from `make check` because it requires both hosts.
 
 `make e2e` runs the `#[ignore]`d subprocess suite in
 `tests/e2e_heavy.rs`, exercising real-world ptuf invocation patterns
@@ -79,17 +102,32 @@ demand) and are not part of `make check`:
   runs one target for longer. Crash reproducers belong in `fuzz/artifacts/`
   when they exist.
 - **Mutation testing** — `make mutants` runs `cargo-mutants` over the
-  decision core (`src/decision.rs`, `src/rules/**`, `src/engine/**`;
-  scope in `.cargo/mutants.toml`). A surviving (`MISSED`) mutant marks a
-  behaviour the test suite fails to verify — close it with an
-  example-based test.
+  decision core and the trust boundaries feeding it (`src/decision.rs`,
+  `src/rules/**`, `src/engine/**`, `src/plugin/dsl.rs`,
+  `src/facts/shell.rs`, `src/config/merge.rs`, `src/self_paths.rs`;
+  scope in `.cargo/mutants.toml`). `make mutants-diff` mutates only the
+  lines changed since `BASE` (default `origin/main`), widened by
+  `scripts/mutants-diff.py` to every source file whose tests lost a line,
+  and mirrors the PR `mutants-diff` job, which fails on a missed mutant.
+  A surviving (`MISSED`) mutant marks a behaviour the test suite fails to
+  verify — close it with an example-based test, or exclude an equivalent
+  mutant in `.cargo/mutants.toml` with a comment saying why. A failed
+  nightly run on `main` files or comments on one tracking issue. Triage
+  lives in `docs/design/mutants-inventory.md`.
+- **Script tests** — `make test-scripts` runs the stdlib-only unittests
+  for `scripts/*.py` (`tests/scripts/`). Keep a script's judging logic in
+  functions those tests can call.
 - **Bypass corpus** — `tests/bypass/corpus.jsonl` is a version-controlled
   adversarial negative-security suite (`tests/bypass_corpus.rs`, run by
   the ordinary `cargo test` / `make check` `test` step). New bypasses
   found by fuzzing or audit are appended there.
 
 `make semver` runs the public-API SemVer check locally (same comparison
-as the PR `semver` job).
+as the PR `semver` job). The baseline is the last stable release tag
+(`scripts/semver-baseline.sh`), not `origin/main`: after vX.Y.Z, the
+first PR with a breaking public-API change bumps `Cargo.toml` to the next
+minor (0.x) and every later breaking PR in the same cycle passes without
+another bump. Do not bump the version in a PR unless the gate asks for it.
 
 ## Commit & PR Hygiene
 
@@ -123,6 +161,9 @@ platform-specific code:
 ## Releasing
 
 Release mechanics live in [`docs/RELEASING.md`](docs/RELEASING.md).
+GitHub, crates.io and npm settings that CI cannot see (branch ruleset,
+required checks, environments) are listed in
+[`docs/repository-settings.md`](docs/repository-settings.md).
 The short version:
 
 1. Bump `version` in `Cargo.toml` and update `CHANGELOG.md`.

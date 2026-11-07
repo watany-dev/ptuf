@@ -147,7 +147,10 @@ Cursor / Pi / OpenCode) の tool hook として呼ばれる Rust CLI** である
 - `make pbt-deep` (`PROPTEST_CASES=100000`) — redaction / decision / rule
   matching の境界条件をソーク
 - `make e2e` — fd リーク / 8 MiB stdin / 並列 hook / 4 層 config フル統合
-- `make mutants` (nightly) — engine と plugin loader の mutation testing
+- `make mutants` (nightly) / `make mutants-diff` (PR、非ブロッキング) —
+  decision / rules / engine / plugin DSL / shell parser / config merge /
+  self-protection path matching の mutation testing。MISSED の棚卸しは
+  `docs/design/mutants-inventory.md`
 - `make fuzz` / `make fuzz-soak` (nightly) — YAML / DSL / JSON payload の
   coverage-guided fuzzing
 

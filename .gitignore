@@ -31,3 +31,6 @@ lcov.info
 .codex/config.toml
 .codex/hooks.json
 .github/hooks/
+
+# Python bytecode from scripts/ and tests/scripts/
+__pycache__/

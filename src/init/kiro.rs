@@ -202,10 +202,16 @@ pub enum ScopeFilter {
 
 /// Options threaded from the CLI parser through to `resolve_paths`
 /// and `install`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+///
+/// Shared by both Kiro adapter generations: `mode` only applies to v2,
+/// `root` (the `--root` repo-discovery override) only to v3, and `scope`
+/// to both (see [`crate::init::kiro_v3::resolve_paths_with`] for the v3
+/// reading of each filter).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KiroInitOptions {
     pub mode: KiroMode,
     pub scope: ScopeFilter,
+    pub root: Option<PathBuf>,
 }
 
 /// Production entry: resolve every agent-config path to patch.
@@ -954,7 +960,7 @@ mod tests {
         );
         match result {
             Ok(t) => {
-                assert!(!t.agent_config_paths.is_empty());
+                assert_ne!(t.agent_config_paths.len(), 0);
                 assert!(
                     t.agent_config_paths
                         .iter()
@@ -984,10 +990,11 @@ mod tests {
 
     #[test]
     fn pre_tool_use_commands_returns_empty_when_key_missing() {
-        assert!(pre_tool_use_commands(&json!({})).is_empty());
-        assert!(pre_tool_use_commands(&json!({ "hooks": {} })).is_empty());
-        assert!(
-            pre_tool_use_commands(&json!({ "hooks": { "preToolUse": "not-array" } })).is_empty()
+        assert_eq!(pre_tool_use_commands(&json!({})).len(), 0);
+        assert_eq!(pre_tool_use_commands(&json!({ "hooks": {} })).len(), 0);
+        assert_eq!(
+            pre_tool_use_commands(&json!({ "hooks": { "preToolUse": "not-array" } })).len(),
+            0
         );
     }
 
@@ -1001,6 +1008,7 @@ mod tests {
         let opts = KiroInitOptions {
             mode: KiroMode::NewAgent,
             scope: ScopeFilter::WorkspaceOnly,
+            root: None,
         };
         let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         let outcome = install(&targets, "/usr/local/bin/ptuf", false).unwrap();
@@ -1039,6 +1047,7 @@ mod tests {
         let opts = KiroInitOptions {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
+            root: None,
         };
         let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 2);
@@ -1071,6 +1080,7 @@ mod tests {
         let opts = KiroInitOptions {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
+            root: None,
         };
         let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
@@ -1098,6 +1108,7 @@ mod tests {
         let opts = KiroInitOptions {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
+            root: None,
         };
         let err = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap_err();
         match err {
@@ -1118,6 +1129,7 @@ mod tests {
         let opts = KiroInitOptions {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
+            root: None,
         };
         let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
@@ -1148,6 +1160,7 @@ mod tests {
         let opts = KiroInitOptions {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
+            root: None,
         };
         let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
@@ -1169,6 +1182,7 @@ mod tests {
         let opts = KiroInitOptions {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
+            root: None,
         };
         let targets = resolve_paths_with(Some(dir.as_path()), Some(home.as_path()), &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
@@ -1189,6 +1203,7 @@ mod tests {
         let opts = KiroInitOptions {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::GlobalOnly,
+            root: None,
         };
         let targets = resolve_paths_with(Some(dir.as_path()), Some(home.as_path()), &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
@@ -1208,6 +1223,7 @@ mod tests {
         let opts = KiroInitOptions {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::Both,
+            root: None,
         };
         let targets = resolve_paths_with(Some(dir.as_path()), Some(home.as_path()), &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 2);
@@ -1236,6 +1252,7 @@ mod tests {
         let opts = KiroInitOptions {
             mode: KiroMode::NewAgent,
             scope: ScopeFilter::WorkspaceOnly,
+            root: None,
         };
         let targets = resolve_paths_with(Some(dir.as_path()), None, &opts).unwrap();
         assert_eq!(targets.agent_config_paths.len(), 1);
@@ -1254,6 +1271,7 @@ mod tests {
         let opts_legacy = KiroInitOptions {
             mode: KiroMode::NewAgent,
             scope: ScopeFilter::WorkspaceOnly,
+            root: None,
         };
         let targets = resolve_paths_with(Some(dir.as_path()), None, &opts_legacy).unwrap();
         install(&targets, "/x/ptuf", false).unwrap();
@@ -1264,6 +1282,7 @@ mod tests {
         let opts_default = KiroInitOptions {
             mode: KiroMode::PatchExisting,
             scope: ScopeFilter::WorkspaceOnly,
+            root: None,
         };
         let targets2 = resolve_paths_with(Some(dir.as_path()), None, &opts_default).unwrap();
         let (outcome, extras) = install_and_extras(&targets2, "/x/ptuf", false);

@@ -1,6 +1,6 @@
 ---
 name: update-docs
-description: ptuf のドキュメント (README.md, docs/design/, CLAUDE.md) を最新の `src/` に追従させる更新スキル。
+description: ptuf のドキュメント (README.md, README.ja.md, docs/design/, docs/agents.md, CLAUDE.md) を最新の `src/` に追従させる更新スキル。コード変更後やドキュメントの陳腐化が疑われるとき、user が「/update-docs」と言ったときに発動する。
 ---
 
 # update-docs スキル
@@ -21,17 +21,18 @@ ptuf のソースとドキュメントの乖離を解消する 5 フェーズス
 
 ## Phase 3: README 反映
 
-- `README.md` には次を必ず含める
+- `README.md` (英) と `README.ja.md` (日) の両方に次を必ず含める
   - 1 段落のプロジェクト概要（PreToolUse フィルタである旨）
   - インストール / ビルド (`cargo install`, `make build`)
   - Claude Code `settings.json` への組み込み例（`hooks.PreToolUse` を `ptuf` で配線）
   - 終了コード仕様（`0` = Allow, `2` = Deny + stderr）
   - `make check` / `make coverage` の説明
+- `ptuf init <agent>` の対応 agent や配線手順が変わったら `docs/agents.md` も揃える
 
 ## Phase 4: 横断整合性チェック
 
 - 全 Markdown 間で、コマンド名 / ファイルパス / Cargo クレート名 / 終了コード / 用語が一致しているか確認
-- README は英語、`docs/design/` と `CLAUDE.md` は日本語、という言語規約に従う
+- `README.md` / `docs/agents.md` は英語、`README.ja.md` / `docs/design/` / `CLAUDE.md` は日本語、という言語規約に従う (`AGENTS.md` は `CLAUDE.md` への symlink)
 
 ## Phase 5: 報告
 

@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn collect_returns_default_when_repo_root_is_none() {
         let f = collect(None, &["main".into()]);
-        assert!(f.lock_files.is_empty());
+        assert_eq!(f.lock_files.len(), 0);
         assert!(f.current_branch.is_none());
         assert!(!f.on_protected_branch);
     }

@@ -15,13 +15,18 @@ use crate::update::UpdateOptions;
 
 use super::{AuditOptions, Command, HookAgent, InitOptions, ParseError};
 
-/// Versioned agent token for the Kiro CLI **v2** adapter — the one that
-/// targets today's `.kiro/agents/*.json` + `hooks.preToolUse` contract.
+/// Versioned agent token for the Kiro CLI **v2** adapter — the
+/// `.kiro/agents/*.json` + `hooks.preToolUse` contract.
 ///
-/// Kiro CLI's hook contract changes in v3, so each adapter generation
+/// Kiro CLI changed its hook contract in v3, so each adapter generation
 /// gets its own explicit token. A versioned token always resolves to
 /// that exact generation and never moves.
 const KIRO_V2_AGENT: &str = "kiro-v2";
+
+/// Versioned agent token for the Kiro CLI **v3** adapter — standalone
+/// `.kiro/hooks/*.json` documents with the PascalCase `PreToolUse`
+/// trigger. See [`KIRO_V2_AGENT`] for why the generation is pinned.
+const KIRO_V3_AGENT: &str = "kiro-v3";
 
 /// Unversioned Kiro token: a *floating* alias that resolves to whichever
 /// Kiro adapter is newest in this build of ptuf (see
@@ -33,14 +38,40 @@ const KIRO_LATEST_ALIAS: &str = "kiro";
 /// The adapter [`KIRO_LATEST_ALIAS`] currently resolves to.
 ///
 /// This is the single point of change when a newer Kiro adapter lands:
-/// add its versioned token (`kiro-v3`, …) and repoint this const, and
-/// `ptuf init kiro` follows automatically. Nothing else needs to move —
-/// in particular the `command` written into agent configs is pinned to a
-/// *versioned* token (`ptuf hook kiro-v2`, see
-/// [`crate::init::kiro::COMMAND_TAIL`]) so already-installed hook lines
-/// stay bound to the adapter that wrote them instead of drifting with
-/// the alias.
-const KIRO_LATEST_AGENT: HookAgent = HookAgent::Kiro;
+/// add its versioned token and repoint this const, and `ptuf init kiro`
+/// follows automatically. The `command` written to disk is always pinned
+/// to a *versioned* token (`ptuf hook kiro-v2` /
+/// `ptuf hook kiro-v3`) so already-installed hook lines stay bound to the
+/// adapter that wrote them instead of drifting with the alias.
+const KIRO_LATEST_AGENT: HookAgent = HookAgent::KiroV3;
+
+/// Versioned agent token for the OpenCode **v1** plugin API adapter
+/// (`@opencode-ai/plugin` + `tool.execute.before`).
+///
+/// OpenCode's plugin API broke between v1 and v2: a v1 plugin does not
+/// load under v2 and vice versa. A versioned token always resolves to
+/// that exact generation and never moves.
+const OPENCODE_V1_AGENT: &str = "opencode-v1";
+
+/// Versioned agent token for the OpenCode **v2** plugin API adapter
+/// (`@opencode/plugin` + `Plugin.define` + `ctx.tool.hook`). See
+/// [`OPENCODE_V1_AGENT`] for why the generation is pinned.
+const OPENCODE_V2_AGENT: &str = "opencode-v2";
+
+/// Unversioned OpenCode token: a *floating* alias that resolves to
+/// whichever OpenCode adapter is newest in this build of ptuf (see
+/// [`OPENCODE_LATEST_AGENT`]).
+const OPENCODE_LATEST_ALIAS: &str = "opencode";
+
+/// The adapter [`OPENCODE_LATEST_ALIAS`] currently resolves to.
+///
+/// This is the single point of change when a newer OpenCode plugin API
+/// lands: add its versioned token and repoint this const, and
+/// `ptuf init opencode` follows automatically. Already-installed plugins
+/// stay pinned because the generated plugin spawns a *versioned* token
+/// (`ptuf hook opencode-v2`, see
+/// [`crate::init::opencode::OpencodeGeneration::hook_token`]).
+const OPENCODE_LATEST_AGENT: HookAgent = HookAgent::OpencodeV2;
 
 pub(super) fn parse_init<'a, I>(iter: &mut I) -> Result<Command, ParseError>
 where
@@ -73,8 +104,18 @@ where
                 "--new-agent" => new_agent = true,
                 "--workspace-only" => workspace_only = true,
                 "--global" => global = true,
-                "claude-code" | "codex" | "copilot" | KIRO_LATEST_ALIAS | KIRO_V2_AGENT
-                | "cline" | "cursor" | "pi" | "opencode" => {
+                "claude-code"
+                | "codex"
+                | "copilot"
+                | KIRO_LATEST_ALIAS
+                | KIRO_V2_AGENT
+                | KIRO_V3_AGENT
+                | "cline"
+                | "cursor"
+                | "pi"
+                | OPENCODE_LATEST_ALIAS
+                | OPENCODE_V1_AGENT
+                | OPENCODE_V2_AGENT => {
                     if agent.is_some() {
                         return Err(ParseError::UnexpectedArgument(arg.to_string()));
                     }
@@ -92,10 +133,24 @@ where
             "--new-agent vs --workspace-only",
         ));
     }
-    let kiro_only_flag_set = new_agent || workspace_only || global;
-    if kiro_only_flag_set && agent != Some(HookAgent::Kiro) {
+    if new_agent && agent != Some(HookAgent::KiroV2) {
         return Err(ParseError::ConflictingFlags(
-            "Kiro-only flag requires the `kiro` / `kiro-v2` agent",
+            "--new-agent requires the `kiro-v2` agent",
+        ));
+    }
+    if (workspace_only || global) && !is_kiro(agent) {
+        return Err(ParseError::ConflictingFlags(
+            "Kiro-only flag requires the `kiro` / `kiro-v2` / `kiro-v3` agent",
+        ));
+    }
+    if agent == Some(HookAgent::KiroV2) && (shared_scope.is_some() || shared_root.is_some()) {
+        return Err(ParseError::ConflictingFlags(
+            "`--scope` / `--root` are not supported by `kiro-v2`; use --workspace-only / --global",
+        ));
+    }
+    if agent == Some(HookAgent::KiroV3) && shared_scope.is_some() && (workspace_only || global) {
+        return Err(ParseError::ConflictingFlags(
+            "--scope vs --workspace-only / --global",
         ));
     }
     if cursor_hooks.is_some() && agent != Some(HookAgent::Cursor) {
@@ -106,10 +161,11 @@ where
     if (shared_scope.is_some() || shared_root.is_some())
         && agent != Some(HookAgent::Cursor)
         && agent != Some(HookAgent::Pi)
-        && agent != Some(HookAgent::Opencode)
+        && agent != Some(HookAgent::KiroV3)
+        && !is_opencode(agent)
     {
         return Err(ParseError::ConflictingFlags(
-            "`--scope` / `--root` require `cursor`, `pi`, or `opencode` agent",
+            "`--scope` / `--root` require `cursor`, `pi`, `opencode`, or `kiro-v3` agent",
         ));
     }
     if pi_extension.is_some() && agent != Some(HookAgent::Pi) {
@@ -121,19 +177,23 @@ where
     // confirm whatever was already on disk; treat dry-run as "skip
     // verify" rather than as a parse error.
     let verify = !no_verify && !dry_run;
+    // Kiro v3 also takes the shared `--scope` / `--root`; a Cursor / Pi /
+    // OpenCode `--scope` must not leak into the Kiro options.
+    let kiro_v3 = agent == Some(HookAgent::KiroV3);
     let kiro = KiroInitOptions {
         mode: if new_agent {
             KiroMode::NewAgent
         } else {
             KiroMode::PatchExisting
         },
-        scope: if workspace_only {
+        scope: if workspace_only || (kiro_v3 && shared_scope == Some(SharedScope::Local)) {
             ScopeFilter::WorkspaceOnly
-        } else if global {
+        } else if global || (kiro_v3 && shared_scope == Some(SharedScope::Global)) {
             ScopeFilter::GlobalOnly
         } else {
             ScopeFilter::Both
         },
+        root: shared_root.clone().filter(|_| kiro_v3),
     };
     let cursor = CursorInitOptions {
         scope: if agent == Some(HookAgent::Cursor) {
@@ -162,12 +222,12 @@ where
         extension: pi_extension,
     };
     let opencode = OpencodeInitOptions {
-        scope: if agent == Some(HookAgent::Opencode) {
+        scope: if is_opencode(agent) {
             shared_scope.map(Into::into).unwrap_or_default()
         } else {
             OpencodeScope::default()
         },
-        root: if agent == Some(HookAgent::Opencode) {
+        root: if is_opencode(agent) {
             shared_root
         } else {
             None
@@ -216,7 +276,7 @@ fn parse_shared_scope(value: &str) -> Result<SharedScope, ParseError> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum SharedScope {
     Local,
     Global,
@@ -255,13 +315,29 @@ fn parse_agent(value: &str) -> Result<HookAgent, ParseError> {
         "codex" => Ok(HookAgent::Codex),
         "copilot" => Ok(HookAgent::Copilot),
         KIRO_LATEST_ALIAS => Ok(KIRO_LATEST_AGENT),
-        KIRO_V2_AGENT => Ok(HookAgent::Kiro),
+        KIRO_V2_AGENT => Ok(HookAgent::KiroV2),
+        KIRO_V3_AGENT => Ok(HookAgent::KiroV3),
         "cline" => Ok(HookAgent::Cline),
         "cursor" => Ok(HookAgent::Cursor),
         "pi" => Ok(HookAgent::Pi),
-        "opencode" => Ok(HookAgent::Opencode),
+        OPENCODE_LATEST_ALIAS => Ok(OPENCODE_LATEST_AGENT),
+        OPENCODE_V1_AGENT => Ok(HookAgent::OpencodeV1),
+        OPENCODE_V2_AGENT => Ok(HookAgent::OpencodeV2),
         other => Err(ParseError::UnknownAgent(other.to_string())),
     }
+}
+
+/// True for either Kiro adapter generation. Both accept the
+/// `--workspace-only` / `--global` scope filters.
+fn is_kiro(agent: Option<HookAgent>) -> bool {
+    matches!(agent, Some(HookAgent::KiroV2 | HookAgent::KiroV3))
+}
+
+/// True for either OpenCode adapter generation. Both share the same
+/// `--scope` / `--root` handling and the same hook I/O contract; only the
+/// generated plugin body and its pinned spawn token differ.
+fn is_opencode(agent: Option<HookAgent>) -> bool {
+    matches!(agent, Some(HookAgent::OpencodeV1 | HookAgent::OpencodeV2))
 }
 
 pub(super) fn parse_hook<'a, I>(iter: &mut I) -> Result<Command, ParseError>
@@ -435,7 +511,10 @@ mod tests {
     use super::super::{
         AuditOptions, Command, GlobalFlags, HookAgent, InitOptions, ParseError, parse,
     };
-    use super::{KIRO_LATEST_AGENT, KIRO_LATEST_ALIAS, KIRO_V2_AGENT, parse_agent};
+    use super::{
+        KIRO_LATEST_AGENT, KIRO_LATEST_ALIAS, KIRO_V2_AGENT, KIRO_V3_AGENT, OPENCODE_LATEST_AGENT,
+        OPENCODE_LATEST_ALIAS, OPENCODE_V1_AGENT, OPENCODE_V2_AGENT, parse_agent,
+    };
 
     fn ok(args: &[&str]) -> (GlobalFlags, Command) {
         parse(&s(args)).unwrap()
@@ -484,13 +563,19 @@ mod tests {
         assert_eq!(
             cmd(&["hook", "kiro"]),
             Command::HookPreToolUse {
-                agent: HookAgent::Kiro
+                agent: HookAgent::KiroV3
             }
         );
         assert_eq!(
             cmd(&["hook", "kiro-v2"]),
             Command::HookPreToolUse {
-                agent: HookAgent::Kiro
+                agent: HookAgent::KiroV2
+            }
+        );
+        assert_eq!(
+            cmd(&["hook", "kiro-v3"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::KiroV3
             }
         );
         assert_eq!(
@@ -514,7 +599,19 @@ mod tests {
         assert_eq!(
             cmd(&["hook", "opencode"]),
             Command::HookPreToolUse {
-                agent: HookAgent::Opencode
+                agent: HookAgent::OpencodeV2
+            }
+        );
+        assert_eq!(
+            cmd(&["hook", "opencode-v1"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::OpencodeV1
+            }
+        );
+        assert_eq!(
+            cmd(&["hook", "opencode-v2"]),
+            Command::HookPreToolUse {
+                agent: HookAgent::OpencodeV2
             }
         );
     }
@@ -527,16 +624,16 @@ mod tests {
         ));
     }
 
-    /// `kiro-v3` is a future adapter with a different hook contract; it
-    /// must not silently resolve to the v2 adapter.
+    /// `kiro-v4` does not exist; it must not silently resolve to the
+    /// newest adapter.
     #[test]
-    fn rejects_kiro_v3_agent_token() {
+    fn rejects_unknown_kiro_generation_token() {
         assert!(matches!(
-            parse(&s(&["hook", "kiro-v3"])),
+            parse(&s(&["hook", "kiro-v4"])),
             Err(ParseError::UnknownAgent(_))
         ));
         assert!(matches!(
-            parse(&s(&["init", "kiro-v3"])),
+            parse(&s(&["init", "kiro-v4"])),
             Err(ParseError::UnexpectedArgument(_))
         ));
     }
@@ -681,12 +778,15 @@ mod tests {
             ("claude-code", HookAgent::ClaudeCode),
             ("codex", HookAgent::Codex),
             ("copilot", HookAgent::Copilot),
-            ("kiro", HookAgent::Kiro),
-            ("kiro-v2", HookAgent::Kiro),
+            ("kiro", HookAgent::KiroV3),
+            ("kiro-v2", HookAgent::KiroV2),
+            ("kiro-v3", HookAgent::KiroV3),
             ("cline", HookAgent::Cline),
             ("cursor", HookAgent::Cursor),
             ("pi", HookAgent::Pi),
-            ("opencode", HookAgent::Opencode),
+            ("opencode", HookAgent::OpencodeV2),
+            ("opencode-v1", HookAgent::OpencodeV1),
+            ("opencode-v2", HookAgent::OpencodeV2),
         ] {
             let c = cmd(&["init", token]);
             assert_eq!(
@@ -756,14 +856,15 @@ mod tests {
     #[test]
     fn parse_init_accepts_new_agent_with_kiro() {
         assert_eq!(
-            cmd(&["init", "kiro", "--new-agent"]),
+            cmd(&["init", "kiro-v2", "--new-agent"]),
             Command::Init(InitOptions {
-                agent: Some(HookAgent::Kiro),
+                agent: Some(HookAgent::KiroV2),
                 verify: true,
                 dry_run: false,
                 kiro: KiroInitOptions {
                     mode: KiroMode::NewAgent,
                     scope: ScopeFilter::Both,
+                    root: None,
                 },
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
@@ -775,14 +876,15 @@ mod tests {
     #[test]
     fn parse_init_accepts_workspace_only_with_kiro() {
         assert_eq!(
-            cmd(&["init", "kiro", "--workspace-only"]),
+            cmd(&["init", "kiro-v2", "--workspace-only"]),
             Command::Init(InitOptions {
-                agent: Some(HookAgent::Kiro),
+                agent: Some(HookAgent::KiroV2),
                 verify: true,
                 dry_run: false,
                 kiro: KiroInitOptions {
                     mode: KiroMode::PatchExisting,
                     scope: ScopeFilter::WorkspaceOnly,
+                    root: None,
                 },
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
@@ -794,14 +896,15 @@ mod tests {
     #[test]
     fn parse_init_accepts_global_with_kiro() {
         assert_eq!(
-            cmd(&["init", "kiro", "--global"]),
+            cmd(&["init", "kiro-v2", "--global"]),
             Command::Init(InitOptions {
-                agent: Some(HookAgent::Kiro),
+                agent: Some(HookAgent::KiroV2),
                 verify: true,
                 dry_run: false,
                 kiro: KiroInitOptions {
                     mode: KiroMode::PatchExisting,
                     scope: ScopeFilter::GlobalOnly,
+                    root: None,
                 },
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
@@ -810,17 +913,61 @@ mod tests {
         );
     }
 
-    /// The `kiro-v2` token is the versioned spelling of the adapter the
-    /// alias currently points at, so while `KIRO_LATEST_AGENT` is the v2
-    /// adapter every Kiro-only flag must produce byte-identical
-    /// `KiroInitOptions` under either spelling.
+    /// `--workspace-only` / `--global` keep working on the `kiro` alias
+    /// after it moved to v3, and mean the same as `--scope local|global`
+    /// there. `--new-agent` is a v2-only agent-profile mode.
     #[test]
-    fn parse_init_accepts_kiro_only_flags_with_kiro_v2_token() {
-        for flag in ["--new-agent", "--workspace-only", "--global"] {
+    fn parse_init_maps_kiro_scope_flags_onto_v3() {
+        let v3 = |scope, root: Option<&str>| {
+            Command::Init(InitOptions {
+                agent: Some(HookAgent::KiroV3),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions {
+                    mode: KiroMode::PatchExisting,
+                    scope,
+                    root: root.map(PathBuf::from),
+                },
+                cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
+                opencode: OpencodeInitOptions::default(),
+            })
+        };
+        for token in [KIRO_LATEST_ALIAS, KIRO_V3_AGENT] {
+            assert_eq!(cmd(&["init", token]), v3(ScopeFilter::Both, None));
+            for (args, scope) in [
+                (&["--workspace-only"][..], ScopeFilter::WorkspaceOnly),
+                (&["--scope", "local"][..], ScopeFilter::WorkspaceOnly),
+                (&["--global"][..], ScopeFilter::GlobalOnly),
+                (&["--scope", "global"][..], ScopeFilter::GlobalOnly),
+            ] {
+                let mut argv = vec!["init", token];
+                argv.extend_from_slice(args);
+                assert_eq!(cmd(&argv), v3(scope, None), "{argv:?}");
+            }
             assert_eq!(
-                cmd(&["init", "kiro-v2", flag]),
-                cmd(&["init", "kiro", flag]),
-                "`kiro-v2 {flag}` must match the `kiro` alias",
+                cmd(&["init", token, "--scope", "local", "--root", "/repo"]),
+                v3(ScopeFilter::WorkspaceOnly, Some("/repo"))
+            );
+        }
+    }
+
+    #[test]
+    fn parse_init_rejects_kiro_flag_combinations_per_generation() {
+        for combo in [
+            vec!["init", "kiro", "--new-agent"],
+            vec!["init", "kiro-v3", "--new-agent"],
+            vec!["init", "kiro-v3", "--scope", "local", "--global"],
+            vec!["init", "kiro-v3", "--scope", "global", "--workspace-only"],
+            vec!["init", "kiro-v2", "--scope", "local"],
+            vec!["init", "kiro-v2", "--root", "/x"],
+            vec!["init", "kiro", "--workspace-only", "--global"],
+            vec!["init", "--global"],
+            vec!["init", "cursor", "--workspace-only"],
+        ] {
+            assert!(
+                matches!(parse(&s(&combo)), Err(ParseError::ConflictingFlags(_))),
+                "expected ConflictingFlags for {combo:?}",
             );
         }
     }
@@ -828,8 +975,8 @@ mod tests {
     /// The unversioned `kiro` token is a *floating* alias: it resolves
     /// to whichever Kiro adapter is newest in this build, not to a fixed
     /// generation. Pinning the assertion to `KIRO_LATEST_AGENT` (rather
-    /// than to `HookAgent::Kiro`) is what makes this test keep guarding
-    /// the intent once a `kiro-v3` adapter lands — repointing the const
+    /// than to a concrete variant) is what makes this test keep guarding
+    /// the intent whenever a newer adapter lands — repointing the const
     /// must carry the alias with it.
     #[test]
     fn bare_kiro_token_resolves_to_the_latest_kiro_adapter() {
@@ -845,21 +992,108 @@ mod tests {
     /// Versioned tokens are the opposite: each one is frozen to its own
     /// adapter generation and must never follow the alias forward.
     #[test]
-    fn kiro_v2_token_is_pinned_to_the_v2_adapter() {
-        assert_eq!(parse_agent(KIRO_V2_AGENT), Ok(HookAgent::Kiro));
+    fn kiro_versioned_tokens_are_pinned_to_their_adapter() {
+        assert_eq!(parse_agent(KIRO_V2_AGENT), Ok(HookAgent::KiroV2));
+        assert_eq!(parse_agent(KIRO_V3_AGENT), Ok(HookAgent::KiroV3));
+        assert_eq!(parse_agent(KIRO_LATEST_ALIAS), Ok(HookAgent::KiroV3));
+    }
+
+    /// The bare `opencode` token floats to the newest OpenCode adapter,
+    /// while `opencode-v1` / `opencode-v2` stay pinned to their own plugin
+    /// API generation. A v1 plugin does not load under v2 (and vice
+    /// versa), so the generation must never drift with the alias.
+    #[test]
+    fn opencode_tokens_split_floating_alias_from_pinned_generations() {
+        assert_eq!(
+            parse_agent(OPENCODE_LATEST_ALIAS),
+            Ok(OPENCODE_LATEST_AGENT)
+        );
+        assert_eq!(
+            parse_agent(OPENCODE_LATEST_ALIAS),
+            Ok(HookAgent::OpencodeV2)
+        );
+        assert_eq!(parse_agent(OPENCODE_V1_AGENT), Ok(HookAgent::OpencodeV1));
+        assert_eq!(parse_agent(OPENCODE_V2_AGENT), Ok(HookAgent::OpencodeV2));
+        assert_eq!(
+            cmd(&["hook", OPENCODE_LATEST_ALIAS]),
+            Command::HookPreToolUse {
+                agent: OPENCODE_LATEST_AGENT
+            }
+        );
+    }
+
+    /// `opencode-v3` is a future adapter with a different plugin API; it
+    /// must not silently resolve to the v2 adapter.
+    #[test]
+    fn rejects_opencode_v3_agent_token() {
+        assert!(matches!(
+            parse(&s(&["hook", "opencode-v3"])),
+            Err(ParseError::UnknownAgent(_))
+        ));
+        assert!(matches!(
+            parse(&s(&["init", "opencode-v3"])),
+            Err(ParseError::UnexpectedArgument(_))
+        ));
+    }
+
+    /// `--scope` / `--root` are shared by both OpenCode generations, so
+    /// either versioned token must thread them into `OpencodeInitOptions`.
+    #[test]
+    fn parse_init_accepts_scope_and_root_with_either_opencode_generation() {
+        for token in [OPENCODE_V1_AGENT, OPENCODE_V2_AGENT] {
+            let agent = parse_agent(token).unwrap();
+            assert_eq!(
+                cmd(&["init", token, "--scope", "local", "--root", "/repo"]),
+                Command::Init(InitOptions {
+                    agent: Some(agent),
+                    verify: true,
+                    dry_run: false,
+                    kiro: KiroInitOptions::default(),
+                    cursor: CursorInitOptions::default(),
+                    pi: PiInitOptions::default(),
+                    opencode: OpencodeInitOptions {
+                        scope: crate::init::opencode::OpencodeScope::Local,
+                        root: Some(PathBuf::from("/repo")),
+                    },
+                }),
+                "token {token}",
+            );
+        }
+    }
+
+    /// The implicit `opencode` alias must also accept `--scope` /
+    /// `--root`; it resolves to the v2 adapter today.
+    #[test]
+    fn parse_init_accepts_scope_with_bare_opencode_alias() {
+        assert_eq!(
+            cmd(&["init", OPENCODE_LATEST_ALIAS, "--scope", "local"]),
+            Command::Init(InitOptions {
+                agent: Some(OPENCODE_LATEST_AGENT),
+                verify: true,
+                dry_run: false,
+                kiro: KiroInitOptions::default(),
+                cursor: CursorInitOptions::default(),
+                pi: PiInitOptions::default(),
+                opencode: OpencodeInitOptions {
+                    scope: crate::init::opencode::OpencodeScope::Local,
+                    root: None,
+                },
+            }),
+        );
     }
 
     #[test]
     fn parse_init_accepts_new_agent_with_global() {
         assert_eq!(
-            cmd(&["init", "kiro", "--new-agent", "--global"]),
+            cmd(&["init", "kiro-v2", "--new-agent", "--global"]),
             Command::Init(InitOptions {
-                agent: Some(HookAgent::Kiro),
+                agent: Some(HookAgent::KiroV2),
                 verify: true,
                 dry_run: false,
                 kiro: KiroInitOptions {
                     mode: KiroMode::NewAgent,
                     scope: ScopeFilter::GlobalOnly,
+                    root: None,
                 },
                 cursor: CursorInitOptions::default(),
                 pi: PiInitOptions::default(),
@@ -1051,7 +1285,7 @@ mod tests {
             vec!["init", "--root", "/x"],
             vec!["init", "--hooks", "/x.json"],
             vec!["init", "claude-code", "--scope", "local"],
-            vec!["init", "kiro", "--root", "/x"],
+            vec!["init", "kiro-v2", "--root", "/x"],
         ] {
             assert!(
                 matches!(parse(&s(&combo)), Err(ParseError::ConflictingFlags(_))),

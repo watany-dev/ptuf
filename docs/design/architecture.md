@@ -31,9 +31,9 @@ facts::extract()
   ↓
 built-in rules + plugin rules
   ↓
-aggregate(deny > ask > monitor > allow)
+rule ごとに mode に応じて demote (hardDeny は対象外)
   ↓
-mode に応じて demote
+aggregate(deny > ask > monitor > allow)
   ↓
 hook response / eval text / audit JSONL
 ```
@@ -51,9 +51,9 @@ P1 として削除)。embed 利用者は `Engine::builder()` 直接利用も可�
 
 | fact | 内容 |
 | --- | --- |
-| `bash` | `Bash` tool の `command` を parse した command / segment / pipeline。`Pipeline.redirects` で `>` / `>>` / `<` / `2>` / `&>` / heredoc の operator と target を保持する。`Bash::has_command_substitution` / `has_redirect` / `has_heredoc` / `has_process_substitution` で `` ` … ` `` / `$(…)` / リダイレクト / heredoc / `<(…)` `>(…)` の存在を surface する。`Argv.inner_argv` / `inner_code` / `inner_redirects` は `bash -c`, `su -c`, `eval`, `xargs`, `find -exec` の内側 command と redirect を bounded depth で再 parse し、既存 rule と self-protection が inspectable な形に連結する。`Argv.subst_argv` は `` `…` `` / `$(…)` / `<(…)` / `>(…)` 本体を同じ budget で再 parse した列で、`inner_argv` には混ぜない (ADR 0008 / ADR 0003 C)。`Bash::commands()` は両者を flatten する。rule / plugin DSL は評価前に `unwrap_all_prefix_wrappers` で `sudo` / `env` / `timeout` 等の prefix を全層 peel する (`unwrap_prefix_wrapper` は 1 層) |
+| `bash` | `Bash` tool の `command` を parse した command / segment / pipeline。`Pipeline.redirects` で `>` / `>>` / `<` / `2>` / `&>` / heredoc の operator と target を保持する。`Bash::has_command_substitution` / `has_redirect` / `has_heredoc` / `has_process_substitution` で `` ` … ` `` / `$(…)` / リダイレクト / heredoc / `<(…)` `>(…)` の存在を surface する。`Argv.inner_argv` / `inner_code` / `inner_redirects` は `bash -c`, `su -c`, `eval`, `xargs`, `find -exec` の内側 command と redirect を bounded depth で再 parse し、既存 rule と self-protection が inspectable な形に連結する。`Argv.subst_argv` は `` `…` `` / `$(…)` / `<(…)` / `>(…)` 本体を同じ budget で再 parse した列で、`inner_argv` には混ぜない (ADR 0008 / ADR 0003 C)。`Bash::commands()` は両者を flatten する。コマンド間のデータの流れのうちコマンドライン上でリテラルなもの (シェルの stdin に渡る heredoc / here-string / `echo` / `printf` の出力、`xargs` の stdin、`>(…)` の読み手、pipe の片側にある `( … )` / `{ … }` 等の group、同じ行で先に代入した変数) も parse 時に辿り、再 parse した結果を同じ `inner_*` / pipeline 段 / 引数に載せる。rule / plugin DSL は評価前に `unwrap_all_prefix_wrappers` で `sudo` / `env` / `timeout` / `nohup` / `nice` 等 (`PREFIX_WRAPPERS`) の prefix を全層 peel する (`unwrap_prefix_wrapper` は 1 層) |
 | `path` | 先頭の file path (`Read` / `Edit` / `Write` / MCP の top-level `path`)。`PathFact` として `raw` / `expanded` / `absolute` / `canonical_or_raw` / `origin` を保持する |
-| `paths` | tool 入力 (`Read` / `Edit` / `Write` / `apply_patch` / MCP) 由来の全 `PathFact`。`Read` / `Edit` / `Write` の `paths[]` (string array) と `operations[].path` (object array) も canonical な `file_path` と並んで重複排除しつつ収集する (Kiro batch read/write 経路用)。Bash redirect target はここには含まれない (engine が self-protection 用に別 slice として供給する) |
+| `paths` | tool 入力 (`Read` / `Edit` / `Write` / `apply_patch` / MCP) 由来の全 `PathFact`。`Read` / `Edit` / `Write` の `paths[]` (string array) と `operations[].path` (object array) も canonical な `file_path` と並んで重複排除しつつ収集する (Kiro batch read/write 経路用)。Bash の head が `apply_patch` / `applypatch` の場合 (Codex が shell から横取りして内部 apply_patch として実行する形) は、第 1 引数と heredoc 本文を patch として解釈した path も `ApplyPatch` として入る。`apply_patch` tool の本文は `command` → `input` → `patch` の順で読む。Bash redirect target はここには含まれない (engine が self-protection 用に別 slice として供給する) |
 | `url` | `WebFetch` または MCP の top-level `url` |
 | `sensitive` | path / URL / write payload などから検出した機密分類 |
 | `protected` | self-protection 対象との一致。engine 側で `Facts.paths` と Bash redirect target (`Pipeline.redirects[].target` に加え wrapper 由来の `Argv.inner_redirects[].target`) を `ProtectedPaths::classify_input_prepared` に二本のスライスとして渡して補完する。戻り値は固定長の `ProtectedKinds` (`[ProtectedKind; 12] + len`) で、中間 path clone や `ProtectedKind` 用 heap allocation は発生させない |
@@ -86,11 +86,12 @@ plugin `requires:` と `when:` DSL から参照できる fact 名は現在次に
 - `claude-code`
 - `codex`
 - `copilot` (GitHub Copilot)
-- `kiro` (Kiro CLI)
+- `kiro` (Kiro CLI。`kiro-v3` への floating alias、`kiro-v2` は agent JSON 世代)
 - `cline` (Cline)
 - `cursor` (Cursor)
 - `pi` (Pi Coding Agent)
-- `opencode` (OpenCode)
+- `opencode` (OpenCode; `opencode-v1` / `opencode-v2` は plugin API 世代を
+  固定する versioned token で、無印 `opencode` は最新世代への floating alias)
 
 adapter は stdin payload をまず `RawHookInput` として受け、内部では
 normalized `Event { agent, event, tool, inputs, paths, urls, content }`
@@ -106,9 +107,11 @@ normalized `Event { agent, event, tool, inputs, paths, urls, content }`
   ため、reserved rule (`core.engine.invalid-payload` /
   `core.engine.policy-load-failed`) も exit `0` + bare deny JSON で fail-closed
   する。
-- Kiro: hook protocol が JSON envelope を持たないため、stdout は常に空。
+- Kiro v2: hook protocol が JSON envelope を持たないため、stdout は常に空。
   `Ask` / `Deny` の reason は stderr に書き、`Deny` (および demote された
   `Ask`) は exit `2`。reserved rule の fail-closed も同経路で扱う。
+- Kiro v3: `Deny` は v2 と同じく stderr + exit `2`。`Ask` は demote せず
+  `hookSpecificOutput.permissionDecision: "ask"` を stdout に書いて exit `0`。
 - Cline: `Ask` は `Deny` へ demote。すべての Decision で exit `0` を返す。
   `Allow` / `Monitor` は stdout に `{}`、`Deny` (および demote された
   `Ask`) は `{"cancel":true,"errorMessage":"…"}` JSON を stdout に書く。
@@ -128,18 +131,20 @@ normalized `Event { agent, event, tool, inputs, paths, urls, content }`
   `Ask` を降格せず保持する (Cursor と同型)。`Allow` / `Monitor` / `Ask` は
   exit `0`、`Deny` と reserved rule は exit `2`。正規化は
   `src/cli/pi_input.rs` で行う。
-- OpenCode: TypeScript plugin が `tool.execute.before` で raw tool event を
-  `ptuf hook opencode` に渡す。stdout は Pi と同型の bare `decision` JSON だが
-  `Ask` は Rust 側で `Deny` に降格する (exit `2`)。正規化は
-  `src/cli/opencode_input.rs` で行う。
+- OpenCode: TypeScript plugin が raw tool event を `ptuf hook opencode`
+  (v1 は `opencode-v1`、v2 は `opencode-v2`) に渡す。stdout は Pi と同型の
+  bare `decision` JSON だが `Ask` は Rust 側で `Deny` に降格する (exit `2`)。
+  v1 (`@opencode-ai/plugin` + `tool.execute.before`) と v2
+  (`@opencode/plugin` + `ctx.tool.hook`) は同一 path の plugin として書き分け、
+  入力正規化は共有の `src/cli/opencode_input.rs` で行う。
 
 Copilot 入力は CLI 層の `src/cli/copilot_input.rs` で snake (`tool_name` /
 `tool_input`) と camel (`toolName` / `toolArgs`) の両形を正規化し、tool 名
 mapping (`bash`→`Bash`, `view`→`Read`, `edit`→`Edit`, `create`→`Write`,
 `web_fetch`→`WebFetch`, `powershell`→`Bash`) を適用する。
 
-Kiro 入力は CLI 層の `src/cli/kiro_input.rs` で `hook_event_name == "preToolUse"`
-を検証したうえで tool 名を canonical 形へ正規化する
+Kiro 入力は CLI 層の `src/cli/kiro_input.rs` で `hook_event_name` が `PreToolUse`
+(V3 engine、v3 語彙で正規化。詳細は [`kiro-cli.md`](kiro-cli.md)) か `preToolUse` かを検証し、後者は tool 名を canonical 形へ正規化する
 (`shell` / `execute_bash` / `execute_cmd`→`Bash`、`read` / `fs_read` / `fsRead`
 →`Read`、`write` / `fs_write` / `fsWrite`→`Write`、`web_fetch` / `webFetch`
 →`WebFetch`、`@server/tool`→`mcp__server__tool`)。`tool_input` も
@@ -151,7 +156,7 @@ Cline 入力は CLI 層の `src/cli/cline_input.rs` で SDK 形 (`tool_call`) �
 legacy 形 (`preToolUse`) の両 envelope を正規化する。`tool_call` がある場合は
 `hookName == "tool_call"` を要求して優先採用し、無ければ `preToolUse` を
 `hookName ∈ {"PreToolUse","tool_call"}` で採用する。tool 名 mapping
-(`run_commands` / `execute_command` / `bash`→`Bash`、`read_files`→`Read`、
+(`run_commands` / `execute_command` / `bash`→`Bash`、`read_files` / `search_files`→`Read`、
 `write_file`→`Write`、`use_mcp_tool`→`mcp__server__tool` 等) を適用し、
 alias キー (`command` / `file_path` / `content` 等) を非破壊的に正規化する。
 
@@ -165,7 +170,7 @@ enforce 対象は `preToolUse` (tool 名を canonical 形へ正規化) /
 `beforeShellExecution`→`Bash` / `beforeReadFile`→`Read` /
 `beforeMCPExecution`→`mcp__server__tool` で、それ以外の event は MVP では
 `core.engine.invalid-payload` で fail-closed する。tool 名 mapping
-(`Shell` / `Bash`→`Bash`、`Read` / `ReadFile`→`Read`、`Write`→`Write`、
+(`Shell` / `Bash`→`Bash`、`Read` / `ReadFile` / `Grep`→`Read`、`Write` / `Delete`→`Write`、
 `Edit`→`Edit`、`Fetch`→`WebFetch`、`MCP` / `mcp__*`→`mcp__server__tool`) を
 適用し、`tool_input` (camelCase `toolInput` / root も読む) の `command` /
 `file_path` / `content` / `old_string` / `new_string` を alias から非破壊的に
@@ -198,11 +203,12 @@ stdin payload は最大 8 MiB。上限超過時は JSON parse に進まず exit 
 | `ptuf hook claude-code` | `Ask` / `Deny` のときだけ `hookSpecificOutput` JSON | `Ask` / `Deny` reason | `0` or `2` |
 | `ptuf hook codex` | `Deny` のときだけ `hookSpecificOutput` JSON | deny reason | `0` or `2` |
 | `ptuf hook copilot` | `Deny` のときだけ bare JSON envelope (no `hookSpecificOutput`) | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
-| `ptuf hook kiro` | 常に空 (Kiro hook には JSON envelope が無い) | `Ask` / `Deny` reason | `0` or `2` |
+| `ptuf hook kiro-v2` | 常に空 (Kiro v2 hook には JSON envelope が無い) | `Ask` / `Deny` reason | `0` or `2` |
+| `ptuf hook kiro-v3` (= `kiro`) | `Ask` のときだけ `hookSpecificOutput` JSON | deny reason | `0` or `2` |
 | `ptuf hook cline` | `Allow` / `Monitor` は `{}`、`Deny` は cancel JSON envelope | deny reason | 常に `0` (stdout serialize 失敗のみ `1`) |
 | `ptuf hook cursor` | `Allow` / `Monitor` は bare `permission:allow` JSON、`Ask` / `Deny` は bare JSON | `Ask` / `Deny` reason | `0` or `2` |
 | `ptuf hook pi` | すべての Decision で bare `decision` JSON | `Ask` / `Deny` reason | `0` or `2` |
-| `ptuf hook opencode` | すべての Decision で bare `decision` JSON (`Ask` は demote 後 `deny`) | `Deny` reason | `0` or `2` |
+| `ptuf hook opencode` / `opencode-v1` / `opencode-v2` | すべての Decision で bare `decision` JSON (`Ask` は demote 後 `deny`) | `Deny` reason | `0` or `2` |
 
 ### check
 
@@ -233,7 +239,9 @@ CLI 経路 (`hook`, `eval`) は config / plugin のロードに失敗すると
 `failClosed: false` でも変わらない。設定ファイル自体が読めない状況では、その設定を
 信用できないためである。
 
-`hook` はさらに stdin 読み取り失敗 / 8 MiB 上限超過 / JSON parse 失敗を
+`hook` はさらに stdin 読み取り失敗 / 8 MiB 上限超過 / JSON parse 失敗、
+および adapter 正規化後に `tool_name == "Bash"` なのに `tool_input.command` が
+文字列でない payload (配列・欠落・`tool_input` 自体が文字列など) を
 `core.engine.invalid-payload` で deny する (exit `2` + adapter の deny JSON)。
 Claude Code の hook 仕様では exit `1` が non-blocking warning として扱われ
 tool 実行を止めないため、これらの初期化エラーを exit `1` のまま放置すると

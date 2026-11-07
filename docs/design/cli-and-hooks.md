@@ -11,11 +11,14 @@ ptuf hook claude-code
 ptuf hook codex
 ptuf hook copilot
 ptuf hook kiro           # kiro = その build の最新 Kiro adapter への floating alias
+ptuf hook kiro-v3
 ptuf hook kiro-v2
 ptuf hook cline
 ptuf hook cursor
 ptuf hook pi
-ptuf hook opencode
+ptuf hook opencode       # opencode = その build の最新 OpenCode adapter への floating alias
+ptuf hook opencode-v2
+ptuf hook opencode-v1
 ptuf [--json] check --tool Bash 'git reset --hard HEAD~1'
 ptuf [--json] plugin check ./ptuf-plugin.yaml
 ptuf [--json] init                       # auto-detect every agent
@@ -50,28 +53,32 @@ ptuf [--json] audit [--path <FILE>] [--decision <deny|ask|monitor|allow>]
 | ClaudeCode | `$HOME/.claude/` | `$HOME/.claude/settings.json` |
 | Codex | `<repo>/.codex/` または `$HOME/.codex/` | repo 配下の `.codex/` |
 | Copilot | `<repo>/.github/` | `<repo>/.github/hooks/ptuf.json` |
-| Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | 両 scope の `.kiro/agents/*.json` を一括 patch (空 scope は `agents/default.json` で fallback) |
+| Kiro | `<repo>/.kiro/` または `$HOME/.kiro/` | v3 (既定): `$HOME/.kiro/hooks/ptuf.json` (`--workspace-only` / `--scope local` で `<repo>/.kiro/hooks/ptuf.json`)。v2 (`ptuf init kiro-v2`): 両 scope の `.kiro/agents/*.json` を一括 patch (空 scope は `agents/default.json` で fallback) |
 | Cline | `<repo>/.clinerules/` `.cline/`、または `$HOME/Documents/Cline/` `.cline/` | repo 配下 `.clinerules/hooks/PreToolUse` または `$HOME/Documents/Cline/Hooks/PreToolUse` |
 | Cursor | `<repo>/.cursor/` または `$HOME/.cursor/` | `<repo>/.cursor/hooks.json` (`--scope global` で `$HOME/.cursor/hooks.json`) |
 | Pi | `<repo>/.pi/` または `$HOME/.pi/agent/` | `$HOME/.pi/agent/extensions/ptuf.ts` (default global) または `<repo>/.pi/extensions/ptuf.ts` (local) |
-| OpenCode | `<repo>/.opencode/` または `<repo>/opencode.json` | `$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` (default global) または `<repo>/.opencode/plugins/ptuf.ts` (local) |
+| OpenCode | `<repo>/.opencode/` または `<repo>/opencode.json` | `$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts` (default global) または `<repo>/.opencode/plugins/ptuf.ts` (local)。世代は install 先ではなく**中身**が持つ |
 
 検出 0 件 → exit `1` + `no agent detected` を stderr に出す。1 件以上
 → 全部 install + verify。verify がいずれかで失敗すれば exit `1`。
 `--dry-run` は計画のみ (verify off)、`--no-verify` は書き込むが verify
 を走らせない。`<agent>` を明示すれば auto-detect を bypass し単独
-install になる。
+install になる。OpenCode は検出時に version を区別できないため、
+auto-detect では実際の install 先にある managed plugin の marker で世代を維持する
+(旧 `plugin/ptuf.ts` も対象)。新規・世代不明・marker の競合時は書き込まず、
+`ptuf init opencode-v1` / `ptuf init opencode-v2` の明示指定を要求する。
 
 ## 終了コード
 
 | 条件 | exit |
 | --- | --- |
-| `Allow` / `Monitor` / Claude Code・Cursor・Pi の `Ask` | `0` |
-| `Deny` (Claude Code / Codex / Kiro / Cursor / Pi) | `2` |
+| `Allow` / `Monitor` / Claude Code・Cursor・Pi・Kiro v3 の `Ask` | `0` |
+| `Deny` (Claude Code / Codex / Kiro / Cursor / Pi / OpenCode) | `2` |
 | Copilot / Cline の **すべての Decision** (Allow / Monitor / Ask→Deny / Deny) | `0` |
 | 内部エラー、引数不正、plugin check fail、init verify fail、update 失敗 (curl 不在 / updater 非ゼロ)、`audit` の I/O エラー / 引数不正 / default path 解決不能 | `1` |
 
-Codex / Kiro では `Ask` を `Deny` へ変換するため、実際には exit `2` になる。
+Codex / Kiro v2 / OpenCode では `Ask` を `Deny` へ変換するため、実際には
+exit `2` になる。Kiro v3 は native の `permissionDecision: "ask"` を exit `0` で返す。
 Cursor は Claude Code と同じく `Ask` channel を持つため `Ask` を降格せず、
 `{"permission":"ask",…}` を exit `0` で返す (下記「Cursor への登録」参照)。
 
@@ -93,8 +100,9 @@ Copilot は protocol 上 non-zero exit が hook failure として扱われ得る
 (`hookSpecificOutput` で wrap しない) を stdout に書く。stdout serialize
 失敗のみ exit `1`。詳細は下記「hook response」セクションを参照。
 
-Kiro hook は JSON envelope を持たず、`Ask` / `Deny` の reason は stderr のみで
-通知する。stdout は常に空。
+Kiro v2 hook は JSON envelope を持たず、`Ask` / `Deny` の reason は stderr のみで
+通知する。stdout は常に空。Kiro v3 は `Deny` を stderr + exit `2`、`Ask` を
+stdout の `hookSpecificOutput` envelope + exit `0` で通知する。
 
 Cline file hook はプロセス失敗が経路によって fail-open になり得るため、
 Copilot と同じく **すべての Decision で exit `0`** に固定し、block は stdout
@@ -209,7 +217,17 @@ hooks = true
 
 ## Kiro CLI への登録
 
-`ptuf init kiro` の default 動作は **既存 agent JSON への一括 patch**:
+### v3 (既定)
+
+`ptuf init kiro` (= `kiro-v3`) は standalone hook 文書 `.kiro/hooks/ptuf.json` を
+作成・更新する。既定は `$HOME/.kiro/hooks/ptuf.json`、`--workspace-only` /
+`--scope local` で `<repo>/.kiro/hooks/ptuf.json`、`--root` で repo を明示する。
+`--scope` と `--workspace-only` / `--global` の併用、`--new-agent` は parse error。
+文書形式・冪等性・制約は [`kiro-cli.md`](kiro-cli.md#kiro-cli-adapter-v3) を参照。
+
+### v2
+
+`ptuf init kiro-v2` の default 動作は **既存 agent JSON への一括 patch**:
 列挙対象の各 scope (workspace + home) にある `*.json` をすべて読み込み、
 `hooks.preToolUse` 配列に ptuf entry を append する。
 
@@ -247,6 +265,7 @@ CLI フラグ:
 
 `--workspace-only` + `--global` は parse error。`--new-agent` +
 `--workspace-only` も parse error。`--new-agent` + `--global` は許可。
+`--scope` / `--root` は v2 では parse error。
 Kiro-only フラグを他 adapter / auto-detect に渡しても parse error。
 
 実装上の契約:
@@ -342,7 +361,7 @@ exit $LASTEXITCODE
       {
         "type": "command",
         "command": "/usr/local/bin/ptuf hook cursor",
-        "matcher": "Shell|Bash|Read|ReadFile|Write|Edit|MCP|WebFetch|Fetch|mcp__.*",
+        "matcher": "Shell|Bash|Read|ReadFile|Grep|Write|Edit|Delete|MCP|WebFetch|Fetch|mcp__.*",
         "timeout": 10,
         "failClosed": true
       }
@@ -396,17 +415,49 @@ Rust (`src/cli/pi_input.rs`) で行う。managed marker (`Managed by ptuf…`,
 `ptuf-agent: pi`) を持たない既存ファイルは `InitError::HookFileConflict`。
 temp file + rename の原子的更新、Unix では mode `0600`。
 
-`--scope` / `--root` は Cursor と Pi で共有する。`--extension` は Pi 専用。
-`--hooks` は Cursor 専用。他 adapter や auto-detect へ渡すと
-`ParseError::ConflictingFlags`。
+`--scope` / `--root` は Cursor / Pi / OpenCode で共有する。`--hooks` は
+Cursor 専用、`--extension` は Pi 専用。他 adapter や auto-detect へ渡すと
+parse error (`ConflictingFlags`)。Kiro の `--global` との取り違えを避ける
+ため Cursor / Pi は `--scope global` を採用している。
 
 
+## OpenCode への登録
+
+`ptuf init opencode` は managed TypeScript plugin (`plugins/ptuf.ts`) を
+書き込む。デフォルト scope は **global**
+(`$XDG_CONFIG_HOME/opencode/plugins/ptuf.ts`、未設定時は
+`~/.config/opencode/plugins/ptuf.ts`)。`--scope local` は `--root` (無ければ
+cwd) 起点の `<repo>/.opencode/plugins/ptuf.ts`。
+
+OpenCode は v1 と v2 で plugin API が破壊的に変わり、v1 plugin は v2 で
+ロードされない。ptuf は両世代を同梱し、versioned token で選ぶ
+(`src/init/opencode.rs`):
+
+| token | 世代 | plugin entrypoint |
+| --- | --- | --- |
+| `opencode-v2` (および floating alias `opencode`) | v2 | `@opencode/plugin` + `Plugin.define({ id, setup })` + `ctx.tool.hook("execute.before", …)` |
+| `opencode-v1` | v1 | `@opencode-ai/plugin` + `tool.execute.before` |
+
+世代は install **先ではなく plugin の中身**が持つ。両世代とも managed path
+`plugins/ptuf.ts` に書き込むため、host が同時にロードする ptuf plugin は常に
+1 つ。marker は v1 が `ptuf-agent: opencode`、v2 が
+`ptuf-agent: opencode-v2` で、前者は後者の prefix のため単一の
+`is_ptuf_managed` 判定で両世代を回収でき、`opencode-v1` / `opencode-v2` は
+互いの managed ファイルを上書き更新できる。書き込む spawn token は常に
+versioned (`ptuf hook opencode-v1` / `opencode-v2`) なので、既存 install が
+ptuf upgrade で勝手に世代を変えることはない。audit 名は両世代とも
+`opencode`。
+
+required marker (`Managed by ptuf…`, `ptuf-agent: opencode`) を持たない
+既存ファイルは `InitError::HookFileConflict`。temp file + rename の原子的
+更新、Unix では mode `0600`。旧 `plugin/ptuf.ts` に managed plugin が
+残っていれば `plugins/ptuf.ts` への移行時に削除する (二重ロード防止)。
 
 ### OpenCode 入力正規化 (`src/cli/opencode_input.rs`)
 
 | OpenCode tool | Canonical `tool_name` | 備考 |
 | --- | --- | --- |
-| bash | Bash | |
+| bash (v1) / shell (v2) | Bash | 両世代とも `command` をシェル規則で評価 |
 | read / write / edit | Read / Write / Edit | camelCase `filePath` → `file_path` |
 | apply_patch / patch | apply_patch | patch 本文を `command` に複製。現行 OpenCode は `apply_patch` (GPT 系モデルでは `edit` / `write` の代替)、`patch` は旧 id |
 | webfetch | WebFetch | |
@@ -545,8 +596,20 @@ GitHub Copilot (bare envelope, `hookSpecificOutput` wrap なし):
 }
 ```
 
-Kiro CLI は JSON envelope を持たない。`Ask` / `Deny` reason は stderr のみで
+Kiro CLI v2 は JSON envelope を持たない。`Ask` / `Deny` reason は stderr のみで
 通知し、stdout は常に空。`Ask` は `Deny` へ demote する。
+
+Kiro CLI v3 は `Ask` だけ envelope を返す (`Deny` は stderr + exit `2`):
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "ask",
+    "permissionDecisionReason": "..."
+  }
+}
+```
 
 Cline (`hookSpecificOutput` wrap なし、`shouldContinue` / `review` /
 `overrideInput` は出さない):
@@ -597,7 +660,8 @@ agent 別の Decision → exit / 出力契約:
 | Claude Code | exit `0`, 空 stdout | exit `0`, `hookSpecificOutput` ask | exit `2`, `hookSpecificOutput` deny | exit `2`, deny |
 | Codex | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `2`) | exit `2`, `hookSpecificOutput` deny | exit `2`, deny |
 | Copilot | exit `0`, 空 stdout | `Ask` → `Deny` に demote (exit `0`, bare JSON) | exit `0`, bare deny JSON | exit `0`, bare deny JSON |
-| Kiro | exit `0`, 空 stdout / 空 stderr | `Ask` → `Deny` に demote (exit `2`, stderr reason のみ) | exit `2`, stderr reason のみ | exit `2`, stderr reason のみ |
+| Kiro v2 | exit `0`, 空 stdout / 空 stderr | `Ask` → `Deny` に demote (exit `2`, stderr reason のみ) | exit `2`, stderr reason のみ | exit `2`, stderr reason のみ |
+| Kiro v3 | exit `0`, 空 stdout / 空 stderr | exit `0`, `hookSpecificOutput` ask (**降格しない**) | exit `2`, stderr reason のみ | exit `2`, stderr reason のみ |
 | Cline | exit `0`, stdout `{}` | `Ask` → `Deny` に demote (exit `0`, cancel JSON) | exit `0`, cancel JSON | exit `0`, cancel JSON |
 | Cursor | exit `0`, bare `permission:allow` JSON | exit `0`, bare `permission:ask` JSON (**降格しない**) | exit `2`, bare `permission:deny` JSON | exit `2`, deny |
 | Pi | exit `0`, bare `decision:allow` / `monitor` JSON | exit `0`, bare `decision:ask` JSON (**降格しない**) | exit `2`, bare `decision:deny` JSON | exit `2`, deny JSON |
@@ -645,7 +709,13 @@ exit `2`、Cline では cancel JSON + exit `0`、Cursor では bare
 
 ## Kiro 入力正規化
 
-Kiro CLI の `preToolUse` payload は `{"hook_event_name":"preToolUse",
+`src/cli/kiro_input.rs` は `hook_event_name` の綴りで語彙を選ぶ。`PreToolUse`
+(V3 engine) なら v3 表、`preToolUse` (V2 engine) なら v2 表を使い、field が
+無い場合だけ adapter 世代 (`kiro-v2` / `kiro-v3`) を fallback にする。V3 engine は
+legacy agent JSON の hook にも V3 payload を送るため、どちらの token で登録しても
+両 engine の payload を正しく判定できる。v3 表は [`kiro-cli.md`](kiro-cli.md#入力-payload) を参照。
+
+以下は v2 (V2 engine) の表。Kiro CLI の `preToolUse` payload は `{"hook_event_name":"preToolUse",
 "tool_name":"<name>","tool_input":{...}}` の形を取る。`src/cli/kiro_input.rs`
 が次の正規化を行う。
 
@@ -670,7 +740,7 @@ Kiro CLI の `preToolUse` payload は `{"hook_event_name":"preToolUse",
 - `Write`: `content` が無ければ `text` → `new_content` の順で先頭 string を
   `content` に複製する
 
-`hook_event_name` が `preToolUse` 以外の場合は `core.engine.invalid-payload`
+`hook_event_name` が `preToolUse` / `PreToolUse` 以外の場合は `core.engine.invalid-payload`
 で fail-closed する。空 payload / 非 object payload / `tool_name` 欠落も同様。
 
 ## Cline 入力正規化
@@ -688,7 +758,7 @@ Cline の file hook payload は `hookName` envelope に包まれており、2 �
 | Cline tool 名 | canonical |
 | --- | --- |
 | `execute_command` / `run_command` / `run_commands` / `bash` | `Bash` |
-| `read_file` / `read_files` | `Read` |
+| `read_file` / `read_files` / `search_files` | `Read` |
 | `editor` / `replace_in_file` / `edit_file` | `Edit` |
 | `write_file` | `Write` |
 | `apply_patch` | `apply_patch` |
@@ -731,7 +801,9 @@ canonical shape に正規化する。
 | --- | --- |
 | `Shell` / `Bash` | `Bash` |
 | `Read` / `ReadFile` | `Read` |
+| `Grep` | `Read` (`path` を `file_path` へ。結果にファイル内容が載るため) |
 | `Write` | `Write` |
+| `Delete` / `DeleteFile` | `Write` (`path` を `file_path` へ。Kiro v3 `delete_file` と同じ扱い) |
 | `Edit` | `Edit` |
 | `WebFetch` / `Fetch` | `WebFetch` |
 | `MCP` / `mcp__*` | `mcp__<server>__<tool>` |

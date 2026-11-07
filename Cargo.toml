@@ -1,6 +1,6 @@
 [package]
 name = "ptuf"
-version = "0.15.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.93.0"
 license = "Apache-2.0"
@@ -47,6 +47,7 @@ toml_edit = "0.25"
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std", "bit-set"] }
 tempfile = "3"
+url = "2"
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -70,6 +71,9 @@ meta_variable_misuse = "warn"
 # sees items whose *module chain* is crate-internal, so module declarations are
 # `pub(crate) mod` unless the module is genuinely part of the public API.
 unreachable_pub = "deny"
+# `cfg(kani)` gates the Kani bounded-model-checking harnesses
+# (`make kani`, `formal/README.md`).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
 
 [lints.clippy]
 # Group lints (lower priority so individual deny-overrides below win).

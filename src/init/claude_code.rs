@@ -415,13 +415,13 @@ mod tests {
     #[test]
     fn entry_hooks_returns_empty_when_hooks_key_is_missing() {
         let entry = json!({ "matcher": "Bash" });
-        assert!(entry_hooks(&entry).is_empty());
+        assert_eq!(entry_hooks(&entry).len(), 0);
     }
 
     #[test]
     fn entry_hooks_returns_empty_when_hooks_is_not_an_array() {
         let entry = json!({ "matcher": "Bash", "hooks": "not-an-array" });
-        assert!(entry_hooks(&entry).is_empty());
+        assert_eq!(entry_hooks(&entry).len(), 0);
     }
 
     #[test]
@@ -492,5 +492,22 @@ mod tests {
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "re-install must tighten an existing 0644 file");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The Claude Code plugin (`plugins/ptuf/`) registers the hook without
+    /// going through `install`, so pin it to the same matcher and command
+    /// tail that `ptuf init claude-code` writes.
+    #[test]
+    fn claude_code_plugin_hook_matches_init_entry() {
+        let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/ptuf/hooks");
+        let hooks: Value = serde_json::from_str(&read(&plugin.join("hooks.json"))).unwrap();
+        let entries = hooks["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["matcher"], DEFAULT_MATCHER);
+
+        let script = read(&plugin.join("ptuf-hook.sh"));
+        let tail = COMMAND_TAIL.join(" ");
+        assert!(script.contains(&format!("exec ptuf {tail}")));
+        assert!(script.contains(&format!("exec \"$fallback\" {tail}")));
     }
 }

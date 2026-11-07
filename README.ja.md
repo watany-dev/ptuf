@@ -18,6 +18,24 @@
 対応ホスト: **Claude Code** / **Codex** / **GitHub Copilot** /
 **Kiro CLI** / **Cline** / **Cursor** / **Pi Coding Agent** / **OpenCode**
 
+- **シェル構文を理解** — クォート、パイプ、`bash -c`、`$(…)`、変数展開を解釈するので
+  `rm -rf "/"` や `$(echo rm) -rf /` も止まります。
+- **bypass をテストで固定** — 既知の回避手口はすべて版管理された回帰ケースにし、
+  fuzzing と mutation testing で継続検証しています。
+- **エージェントが無効化できない** — ptuf の設定・バイナリ・hook 登録の書き換えを
+  セッション中にブロックします。
+- **ランタイム不要** — オフラインで動く単一バイナリ、監査ログは JSONL。
+
+## クイックスタート
+
+```bash
+brew install watany-dev/tap/ptuf   # または: npm install -g @watany-dev/ptuf
+ptuf init claude-code              # codex / copilot / kiro / cline / cursor / pi / opencode も可
+ptuf check --tool Bash 'rm -rf /'  # Decision: deny
+```
+
+ビルド済みインストーラ・Windows・cargo などの導入方法は [インストール](#インストール) を参照。
+
 ## hooks の自作スクリプト、そのままで大丈夫ですか?
 
 Claude Code の hooks で `rm -rf` を grep してブロックする自作スクリプトは
@@ -28,6 +46,7 @@ Claude Code の hooks で `rm -rf` を grep してブロックする自作スク
 版管理されたテストコーパス
 ([`tests/bypass/corpus.jsonl`](tests/bypass/corpus.jsonl)) と
 fuzzing / mutation testing で継続的に検証しています。
+抜け道を見つけられると思ったら [bypass チャレンジ](docs/bypass-challenge.md) に挑戦してください。
 
 |  | 自作 regex hook | LLM / 確認ダイアログ任せ | sandbox / コンテナ | ptuf |
 | --- | --- | --- | --- | --- |
@@ -77,7 +96,7 @@ Rust ツールチェイン不要のビルド済みバイナリです。
 
 ```bash
 # Linux / macOS
-PTUF_VERSION=v0.3.0
+PTUF_VERSION=v0.7.0
 curl -LsSf "https://github.com/watany-dev/ptuf/releases/download/$PTUF_VERSION/ptuf-installer.sh" | sh
 ```
 
@@ -105,16 +124,35 @@ Windows (PowerShell) / `cargo binstall` / `cargo install` / mise / aqua、
 ptuf init claude-code   # ~/.claude/settings.json に hook を登録
 ptuf init codex         # <repo>/.codex/hooks.json + config.toml
 ptuf init copilot       # <repo>/.github/hooks/ptuf.json
-ptuf init kiro-v2       # .kiro/agents/*.json を一括パッチ (`kiro` は最新版 alias)
+ptuf init kiro          # ~/.kiro/hooks/ptuf.json (Kiro CLI V3。`kiro` は最新版 alias = kiro-v3)
+ptuf init kiro-v2       # .kiro/agents/*.json を一括パッチ (CLI 2.x の V2 / Classic engine 向け)
 ptuf init cline         # .clinerules/hooks/PreToolUse
 ptuf init cursor        # <repo>/.cursor/hooks.json
 ptuf init pi            # ~/.pi/agent/extensions/ptuf.ts
-ptuf init opencode      # $XDG_CONFIG_HOME/opencode/plugins/ptuf.ts
+ptuf init opencode      # $XDG_CONFIG_HOME/opencode/plugins/ptuf.ts (`opencode` は最新版 alias)
+ptuf init opencode-v2   # v2 plugin API を固定
+ptuf init opencode-v1   # v1 plugin API を固定 (旧 OpenCode)
 ```
+
+引数なしの `ptuf init` は既存 managed OpenCode plugin の世代を維持します。
+新規・世代不明・marker 競合時はファイルを書き換えず、`ptuf init opencode-v1` /
+`ptuf init opencode-v2` の明示指定を案内します。
 
 引数なしの `ptuf init` は到達可能なホストを自動検出して全てに導入します。
 `--dry-run` で書き込みなしの計画表示も可能です。ホストごとの詳細は
 [`docs/agents.md`](docs/agents.md) を参照。
+
+Claude Code のプラグインとして入れることもできます。先にバイナリを入れたうえで、Claude Code 内で次を実行します
+(2.1.275 より前の Claude Code では `/plugin marketplace add watany-dev/ptuf` のあと `/plugin install ptuf@ptuf`)。
+
+```text
+/plugin install ptuf --marketplace watany-dev/ptuf
+```
+
+プラグインは `ptuf init claude-code` と同じ `PreToolUse` hook を登録し、`ptuf` バイナリが PATH (または `~/.cargo/bin`)
+に無い間はインストール方法を添えてツール呼出しをブロックします。`core.self_protection.*` は `~/.claude/settings.json` を
+保護しますが `~/.claude/plugins/` 配下のプラグインキャッシュは保護対象外なので、最も強い保証が必要なら `ptuf init claude-code`
+を使ってください。二重評価になるため両方を併用しないでください。
 
 ## カスタマイズ
 

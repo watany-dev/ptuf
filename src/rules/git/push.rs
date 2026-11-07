@@ -53,6 +53,8 @@ pub(super) fn matches_push_delete_remote(argv: &Argv) -> bool {
     let rest = args_after_subcommand(argv, "push");
     rest.iter().any(|a| {
         *a == "--delete"
+            // `--prune` deletes every remote ref without a local match.
+            || *a == "--prune"
             || (a.starts_with('-') && !a.starts_with("--") && a.contains('d'))
             || (a.starts_with(':') && a.len() > 1)
     })
@@ -117,8 +119,8 @@ const PUSH_DELETE_REMOTE: RuleSpec = RuleSpec {
     decision_kind: DecisionKind::Ask,
     hard_deny: false,
     matcher: matches_push_delete_remote,
-    problem: "git push --delete (or `:<ref>` refspec) removes a branch or tag on the remote, \
-         which is destructive and can break collaborators if the ref is shared.",
+    problem: "git push --delete / --prune (or a `:<ref>` refspec) removes branches or tags on \
+         the remote, which is destructive and can break collaborators if the refs are shared.",
     alternatives: &[
         "Confirm with the user that the remote ref is safe to remove.",
         "If the goal is to clean up a stale local branch, use git branch -d locally instead.",

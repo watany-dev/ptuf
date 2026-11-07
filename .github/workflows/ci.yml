@@ -44,7 +44,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Doc warnings
@@ -65,8 +65,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-nextest@0.9.133
       # On macos-14 hosted images something between rust-cache and
@@ -98,6 +98,11 @@ jobs:
         run: cargo nextest run --locked --all-targets
       - name: Doctests
         run: cargo test --locked --doc
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version: "24"
+      - name: OpenCode generated plugin callbacks
+        run: make test-opencode
 
   pbt-deep:
     # Deep PBT run gated to main pushes so PR latency stays bounded.
@@ -113,8 +118,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-nextest@0.9.133
       - name: PBT deep
@@ -131,8 +136,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-tarpaulin@0.35.1
       - name: Coverage
@@ -148,7 +153,7 @@ jobs:
             -- --test-threads=1
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-report
           path: |
@@ -173,7 +178,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # 1.93.0
         with:
           toolchain: 1.93.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: MSRV build (release profile, locked)
         run: cargo build --release --all-targets --locked
       - name: MSRV test compile (harness must build, but do not run)
@@ -190,7 +195,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build release binary
         run: cargo build --release --locked
       - name: Pack and smoke-test npm packages
@@ -211,9 +216,24 @@ jobs:
         with:
           persist-credentials: false
       - name: Install actionlint
-        run: bash <(curl -sL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.11
+        # Downloader pinned to a commit, not `main`, like every other action.
+        run: bash <(curl -sL https://raw.githubusercontent.com/rhysd/actionlint/393031adb9afb225ee52ae2ccd7a5af5525e03e8/scripts/download-actionlint.bash) 1.7.11
       - name: Run actionlint
         run: ./actionlint -color
+
+  test-scripts:
+    name: Test scripts
+    # stdlib-only unittests for the CI helper scripts (`make test-scripts`).
+    # They pin each gate's judging logic on small fixed inputs, so a gate
+    # that silently always passes fails here.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run script unittests
+        run: make test-scripts
 
   zizmor:
     name: zizmor
@@ -227,7 +247,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
         with:
           inputs: ./.github/workflows/
           persona: auditor
@@ -252,7 +272,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-machete@0.9.2
       - name: Detect unused dependencies
@@ -263,8 +283,9 @@ jobs:
     # Public-API SemVer gate: fails the PR when an exported item in
     # `src/lib.rs` (`decide`, `try_decide`, `Engine`, `Decision`, …)
     # changes incompatibly without a version bump. Compares the PR tree
-    # against `origin/main`; once the crate is published the crates.io
-    # release becomes the automatic baseline.
+    # against the last release tag (scripts/semver-baseline.sh), not
+    # `origin/main`, so one minor bump covers every breaking PR until the
+    # next release instead of each PR bumping again.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -272,12 +293,76 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Full history so `--baseline-rev origin/main` resolves.
+          # Full history and tags so the release-tag baseline resolves.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-semver-checks@0.50.0
       - name: SemVer check
-        run: cargo semver-checks --baseline-rev origin/main
+        run: cargo semver-checks --baseline-rev "$(scripts/semver-baseline.sh)"
+
+  mutants-diff:
+    name: Mutants (PR diff)
+    # Mutation testing restricted to the lines this PR changes (same
+    # scope filter as `.cargo/mutants.toml`, so only the decision core is
+    # mutated). Blocking: a MISSED mutant means a changed line whose
+    # behaviour no test verifies — add the test, or exclude an equivalent
+    # mutant in `.cargo/mutants.toml` with a comment saying why.
+    # `scripts/mutants-diff.py` widens the diff to every source file
+    # whose tests lost a line, so a PR that only deletes or weakens tests
+    # is mutated too. The full scope runs nightly. Mirrors
+    # `make mutants-diff`.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history so `git diff origin/<base>...` resolves.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-mutants@27.0.0
+      - name: Mutate lines changed by this PR
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          mkdir -p target
+          git diff "origin/${BASE_REF}..." > target/mutants.diff
+          python3 scripts/mutants-diff.py target/mutants.diff \
+            > target/mutants-widened.diff 2> target/mutants-widened.txt
+          cat target/mutants-widened.txt
+          cargo mutants -j 2 --in-diff target/mutants-widened.diff
+      - name: Summarize missed mutants
+        if: always()
+        run: |
+          {
+            echo "### cargo-mutants (PR diff)"
+            if [ -s target/mutants-widened.txt ]; then
+              sed 's/^/- /' target/mutants-widened.txt
+            fi
+            if [ -s mutants.out/missed.txt ]; then
+              echo "Missed mutants: a test should have failed for each of these."
+              echo "Add the test, or exclude an equivalent mutant in .cargo/mutants.toml."
+              echo '```'
+              cat mutants.out/missed.txt
+              echo '```'
+            else
+              echo "No missed mutants."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutants-diff
+          path: mutants.out/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -14,7 +14,7 @@ use crate::Decision;
 use crate::engine::Engine;
 use crate::init::cursor::CursorInitOptions;
 use crate::init::kiro::KiroInitOptions;
-use crate::init::opencode::OpencodeInitOptions;
+use crate::init::opencode::{OpencodeGeneration, OpencodeInitOptions};
 use crate::init::pi::PiInitOptions;
 use crate::reason;
 
@@ -75,19 +75,34 @@ pub enum HookAgent {
     Codex,
     Copilot,
     /// Kiro CLI v2 — the `.kiro/agents/*.json` + `hooks.preToolUse`
-    /// contract. Selected by the versioned token `kiro-v2`, or by the
-    /// unversioned `kiro`, which is a floating alias for whichever Kiro
-    /// adapter is newest (today, this one). Kiro CLI v3 changes that
-    /// contract and will get its own variant, at which point `kiro`
-    /// follows it forward while `kiro-v2` stays here.
+    /// contract. Reachable only through the pinned `kiro-v2` token: the
+    /// floating `kiro` alias follows the newest adapter ([`Self::KiroV3`]).
     ///
     /// The audit name stays `"kiro"` regardless, so audit records remain
     /// comparable across adapter generations.
-    Kiro,
+    KiroV2,
+    /// Kiro CLI v3 — standalone `.kiro/hooks/*.json` documents
+    /// (`version: "v1"`, PascalCase `PreToolUse` trigger) and the V3
+    /// built-in tool IDs (`execute_bash`, `read_file`, `fs_write`, …).
+    /// Reached through the pinned `kiro-v3` token and the floating `kiro`
+    /// alias. Shares the `"kiro"` audit name with [`Self::KiroV2`].
+    KiroV3,
     Cline,
     Cursor,
     Pi,
-    Opencode,
+    /// OpenCode **v1** plugin API (`@opencode-ai/plugin` +
+    /// `tool.execute.before`). Reachable only through the pinned
+    /// `opencode-v1` token: OpenCode v1 does not run a v2 plugin, and the
+    /// floating `opencode` alias follows the newest adapter (v2).
+    OpencodeV1,
+    /// OpenCode **v2** plugin API (`@opencode/plugin` +
+    /// `ctx.tool.hook("execute.before", …)`). Reached through the pinned
+    /// `opencode-v2` token and the floating `opencode` alias.
+    ///
+    /// Both OpenCode generations share the audit name `"opencode"` so
+    /// audit records stay comparable across the API break, mirroring the
+    /// Kiro adapter generations.
+    OpencodeV2,
 }
 
 impl HookAgent {
@@ -96,17 +111,29 @@ impl HookAgent {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::Copilot => "copilot",
-            Self::Kiro => "kiro",
+            Self::KiroV2 | Self::KiroV3 => "kiro",
             Self::Cline => "cline",
             Self::Cursor => "cursor",
             Self::Pi => "pi",
-            Self::Opencode => "opencode",
+            Self::OpencodeV1 | Self::OpencodeV2 => "opencode",
+        }
+    }
+
+    /// The OpenCode plugin generation this variant installs, or `None`
+    /// for non-OpenCode agents. Both variants share the `opencode` audit
+    /// name but write a different plugin body, so the generation — not
+    /// the audit name — decides what lands on disk.
+    pub(super) const fn opencode_generation(self) -> Option<OpencodeGeneration> {
+        match self {
+            Self::OpencodeV1 => Some(OpencodeGeneration::V1),
+            Self::OpencodeV2 => Some(OpencodeGeneration::V2),
+            _ => None,
         }
     }
 }
 
 /// Parsed `ptuf init [<agent>] [--no-verify] [--dry-run]
-/// [--new-agent] [--workspace-only] [--global]`.
+/// [--new-agent] [--workspace-only] [--global] [--scope …] [--root …]`.
 ///
 /// `agent = None` means "auto-detect every agent reachable from
 /// `cwd` / `$HOME`". `verify` defaults to `true`; `--no-verify`
@@ -114,10 +141,11 @@ impl HookAgent {
 /// dry run never writes, so the synthetic-deny check would just
 /// confirm the unmodified disk state).
 ///
-/// `kiro` carries the Kiro-specific flags. These are accepted only
-/// when `agent == Some(HookAgent::Kiro)` — selected on the command
-/// line as `kiro-v2` or via the `kiro` alias; the parser rejects them
-/// against other agents (or against auto-detect) with
+/// `kiro` carries the Kiro-specific flags. `--workspace-only` /
+/// `--global` are accepted for either Kiro generation, `--new-agent`
+/// only for `kiro-v2`, and `--scope` / `--root` (shared with Cursor /
+/// Pi / OpenCode) only for `kiro-v3`; the parser rejects them against
+/// other agents (or against auto-detect) with
 /// `ParseError::ConflictingFlags`.
 ///
 /// `cursor` carries the Cursor-specific flags (`--scope` / `--root` /
@@ -281,20 +309,36 @@ USAGE:
         (auto-detect every agent under cwd / $HOME and install the
          PreToolUse hook with verify enabled by default. AGENT pins
          to a single adapter: claude-code | codex | copilot | kiro
-         | kiro-v2 | cline | cursor | pi | opencode)
-        The Kiro CLI hook contract changes in v3, so each Kiro adapter
-        has a versioned token; `kiro-v2` is the current one. The bare
-        `kiro` token always means the newest Kiro adapter this ptuf
-        ships, so it will follow ptuf forward to v3. Pin `kiro-v2` to
-        stay on today's contract. Either way the hook command written
-        into agent configs is the versioned `ptuf hook kiro-v2`, so an
-        existing install never changes generation on its own.
+         | kiro-v2 | kiro-v3 | cline | cursor | pi | opencode
+         | opencode-v1 | opencode-v2)
+        Kiro CLI changed its hook contract in v3. `kiro-v3` writes a
+        standalone hook document (~/.kiro/hooks/ptuf.json by default)
+        for the V3 engine; `kiro-v2` patches the `hooks.preToolUse`
+        array of every agent JSON for the CLI 2.x (V2 / Classic)
+        engines. The bare `kiro` token is a floating alias for the
+        newest adapter (currently v3). Either way the hook command
+        written to disk is the versioned `ptuf hook kiro-v2|kiro-v3`,
+        so an existing install never changes generation on its own.
+        OpenCode broke its plugin API between v1 and v2 and a v1 plugin
+        does not load under v2. `opencode-v1` pins the v1 API
+        (`@opencode-ai/plugin`) and `opencode-v2` pins the current v2
+        API (`@opencode/plugin`); the bare `opencode` token is a
+        floating alias for the newest adapter (currently v2). Either
+        way the generated plugin spawns the versioned token, so an
+        existing install never drifts with the alias.
         Kiro-only flags:
-          --new-agent       Create a dedicated ptuf-guarded.json agent
-                            (legacy single-file behavior) instead of
-                            patching every existing agent JSON.
-          --workspace-only  Patch only <repo>/.kiro/agents/*.json.
-          --global          Patch only $HOME/.kiro/agents/*.json.
+          --new-agent       (kiro-v2) Create a dedicated ptuf-guarded.json
+                            agent instead of patching every agent JSON.
+          --workspace-only  kiro-v2: patch only <repo>/.kiro/agents/*.json.
+                            kiro-v3: same as --scope local.
+          --global          kiro-v2: patch only $HOME/.kiro/agents/*.json.
+                            kiro-v3: same as --scope global.
+          --scope <local|global>
+                            (kiro-v3) global (default) writes
+                            $HOME/.kiro/hooks/ptuf.json; local writes
+                            <repo>/.kiro/hooks/ptuf.json.
+          --root <PATH>     (kiro-v3) Override the repo-discovery start
+                            directory.
         Cursor-only flags:
           --scope <local|global>
                             local (default) patches <repo>/.cursor/hooks.json;
@@ -348,8 +392,10 @@ pub fn run<R: Read, W1: Write, W2: Write>(
 ) -> u8 {
     match command {
         Command::HookPreToolUse { agent } => run::run_hook(agent, stdin, stdout, stderr),
-        Command::Check { tool, command } => run::run_check(&tool, &command, stdout, stderr),
-        Command::PluginCheck { path } => run::run_plugin_check(&path, stdout, stderr),
+        Command::Check { tool, command } => {
+            run::run_check(globals, &tool, &command, stdout, stderr)
+        },
+        Command::PluginCheck { path } => run::run_plugin_check(globals, &path, stdout, stderr),
         Command::Init(options) => run::run_init(globals, options, stdout, stderr),
         Command::Update(options) => run::run_update(options, stdout, stderr),
         Command::Audit(options) => run::run_audit(globals, options, stdout, stderr),
@@ -367,17 +413,43 @@ pub fn run<R: Read, W1: Write, W2: Write>(
 #[cfg(test)]
 mod tests {
 
-    use super::HookAgent;
+    use super::{HookAgent, OpencodeGeneration};
 
     #[test]
     fn hook_agent_audit_name_distinguishes_variants() {
         assert_eq!(HookAgent::ClaudeCode.audit_name(), "claude-code");
         assert_eq!(HookAgent::Codex.audit_name(), "codex");
         assert_eq!(HookAgent::Copilot.audit_name(), "copilot");
-        assert_eq!(HookAgent::Kiro.audit_name(), "kiro");
+        assert_eq!(HookAgent::KiroV2.audit_name(), "kiro");
+        assert_eq!(HookAgent::KiroV3.audit_name(), "kiro");
         assert_eq!(HookAgent::Cline.audit_name(), "cline");
         assert_eq!(HookAgent::Cursor.audit_name(), "cursor");
         assert_eq!(HookAgent::Pi.audit_name(), "pi");
-        assert_eq!(HookAgent::Opencode.audit_name(), "opencode");
+        assert_eq!(HookAgent::OpencodeV1.audit_name(), "opencode");
+        assert_eq!(HookAgent::OpencodeV2.audit_name(), "opencode");
+    }
+
+    #[test]
+    fn opencode_generation_maps_only_the_opencode_variants() {
+        assert_eq!(
+            HookAgent::OpencodeV1.opencode_generation(),
+            Some(OpencodeGeneration::V1)
+        );
+        assert_eq!(
+            HookAgent::OpencodeV2.opencode_generation(),
+            Some(OpencodeGeneration::V2)
+        );
+        for agent in [
+            HookAgent::ClaudeCode,
+            HookAgent::Codex,
+            HookAgent::Copilot,
+            HookAgent::KiroV2,
+            HookAgent::KiroV3,
+            HookAgent::Cline,
+            HookAgent::Cursor,
+            HookAgent::Pi,
+        ] {
+            assert_eq!(agent.opencode_generation(), None, "{agent:?}");
+        }
     }
 }

@@ -15,6 +15,7 @@ pub(crate) mod copilot;
 pub(crate) mod cursor;
 pub(crate) mod json;
 pub(crate) mod kiro;
+pub(crate) mod kiro_v3;
 pub(crate) mod opencode;
 pub(crate) mod pi;
 pub(crate) mod verify;
@@ -31,13 +32,19 @@ pub(crate) fn command_executable(cmd: &str) -> Option<&str> {
 /// - `ClaudeCode`: requires `<home>/.claude/` to exist.
 /// - `Codex`: `<repo>/.codex/` or `<home>/.codex/`.
 /// - `Copilot`: `<repo>/.github/`.
-/// - `Kiro`: `<repo>/.kiro/` or `<home>/.kiro/`.
+/// - `KiroV3`: `<repo>/.kiro/` or `<home>/.kiro/`. Like OpenCode, the
+///   probe identifies the host, not its engine generation; auto-detect
+///   installs the newest adapter and `ptuf init kiro-v2` pins the older
+///   one.
 /// - `Cline`: `<repo>/.clinerules/` or `<repo>/.cline/`, or
 ///   `<home>/Documents/Cline/` or `<home>/.cline/`.
 /// - `Cursor`: `<repo>/.cursor/` or `<home>/.cursor/`.
 /// - `Pi`: `<home>/.pi/agent/` or `<repo>/.pi/`.
-/// - `Opencode`: `<repo>/.opencode/` or `<repo>/opencode.json`, or
+/// - `OpencodeV2`: `<repo>/.opencode/` or `<repo>/opencode.json`, or
 ///   `$XDG_CONFIG_HOME/opencode/` (fallback `~/.config/opencode/`).
+///   This is only a host candidate: detection cannot tell its version.
+///   The install planner preserves the generation of the managed plugin
+///   at the resolved target, or requires an explicit generation selection.
 ///
 /// Returns agents in a stable order so callers can install / report
 /// deterministically. Production callers pass `std::env::var_os("HOME")`
@@ -70,7 +77,7 @@ pub(crate) fn detect_agents_with_env(
     if repo.as_deref().is_some_and(|r| r.join(".kiro").is_dir())
         || home.is_some_and(|h| h.join(".kiro").is_dir())
     {
-        found.push(HookAgent::Kiro);
+        found.push(HookAgent::KiroV3);
     }
     if repo
         .as_deref()
@@ -98,7 +105,7 @@ pub(crate) fn detect_agents_with_env(
             .as_deref()
             .is_some_and(|r| r.join("opencode.json").is_file())
     {
-        found.push(HookAgent::Opencode);
+        found.push(HookAgent::OpencodeV2);
     }
     found
 }
@@ -744,7 +751,7 @@ mod tests {
     fn detect_binary_returns_a_non_empty_string() {
         // Every adapter renders this into its hook command; a non-empty
         // string is the contract the host config writers depend on.
-        assert!(!detect_binary().is_empty());
+        assert_ne!(detect_binary().len(), 0);
     }
 
     #[test]
@@ -900,11 +907,14 @@ mod tests {
         fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
-        assert!(detect_hermetic(Some(dir.as_path()), Some(home.as_path())).is_empty());
+        assert_eq!(
+            detect_hermetic(Some(dir.as_path()), Some(home.as_path())).len(),
+            0
+        );
         // Also covers the home=None branch.
-        assert!(detect_hermetic(Some(dir.as_path()), None).is_empty());
+        assert_eq!(detect_hermetic(Some(dir.as_path()), None).len(), 0);
         // And cwd=None.
-        assert!(detect_hermetic(None, Some(home.as_path())).is_empty());
+        assert_eq!(detect_hermetic(None, Some(home.as_path())).len(), 0);
     }
 
     #[test]
@@ -968,7 +978,7 @@ mod tests {
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
-        assert_eq!(found, vec![HookAgent::Kiro]);
+        assert_eq!(found, vec![HookAgent::KiroV3]);
     }
 
     #[test]
@@ -978,7 +988,7 @@ mod tests {
         let home = dir.join("home");
         fs::create_dir_all(home.join(".kiro")).expect("mkdir home/.kiro");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
-        assert_eq!(found, vec![HookAgent::Kiro]);
+        assert_eq!(found, vec![HookAgent::KiroV3]);
     }
 
     #[test]
@@ -1043,11 +1053,11 @@ mod tests {
                 HookAgent::ClaudeCode,
                 HookAgent::Codex,
                 HookAgent::Copilot,
-                HookAgent::Kiro,
+                HookAgent::KiroV3,
                 HookAgent::Cline,
                 HookAgent::Cursor,
                 HookAgent::Pi,
-                HookAgent::Opencode,
+                HookAgent::OpencodeV2,
             ],
         );
     }
@@ -1083,7 +1093,7 @@ mod tests {
         let home = dir.join("home");
         fs::create_dir_all(&home).expect("mkdir home");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
-        assert_eq!(found, vec![HookAgent::Opencode]);
+        assert_eq!(found, vec![HookAgent::OpencodeV2]);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1094,7 +1104,7 @@ mod tests {
         let home = dir.join("home");
         fs::create_dir_all(home.join(".config/opencode")).expect("mkdir config/opencode");
         let found = detect_hermetic(Some(dir.as_path()), Some(home.as_path()));
-        assert_eq!(found, vec![HookAgent::Opencode]);
+        assert_eq!(found, vec![HookAgent::OpencodeV2]);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1112,7 +1122,7 @@ mod tests {
         fs::create_dir_all(&home).expect("mkdir home");
         let found =
             detect_agents_with_env(Some(dir.as_path()), Some(home.as_path()), &xdg_env(&xdg));
-        assert_eq!(found, vec![HookAgent::Opencode]);
+        assert_eq!(found, vec![HookAgent::OpencodeV2]);
 
         // Same env but the XDG dir has no opencode/ → not detected.
         let empty_xdg = dir.join("xdg-empty");
@@ -1122,7 +1132,7 @@ mod tests {
             Some(home.as_path()),
             &xdg_env(&empty_xdg),
         );
-        assert!(found.is_empty());
+        assert_eq!(found.len(), 0);
         let _ = fs::remove_dir_all(&dir);
     }
 }

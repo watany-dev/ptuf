@@ -11,8 +11,9 @@
 
 ## 必須チェック (commit / push 前)
 
-`make check` を必ずローカルで通すこと。これは CI と同じ 5 ステップ
-(fmt-check / clippy / test / `cargo doc` / cargo-deny) を実行する。手順の
+`make check` を必ずローカルで通すこと。これは CI と同じ 6 ステップ
+(fmt-check / clippy / test / test-opencode / `cargo doc` / cargo-deny) を実行する。
+test-opencode は生成 TypeScript callback を実行するため Node 24 を要する。手順の
 詳細は `CONTRIBUTING.md` と `Makefile` を参照。`make check` は
 cargo-deny だけを必要に応じて install し、tarpaulin / fuzz / mutants /
 semver-checks はそれぞれの target 側で入れる。
@@ -40,13 +41,27 @@ fd / tempfile リーク・8 MiB stdin 境界・並列 hook と shared audit JSON
   `fuzz/` は独立 workspace で nightly toolchain を要する。クラッシュ種は
   `fuzz/artifacts/` に commit。
 - `make mutants` — `cargo-mutants` による decision コア (`src/decision.rs` / `src/rules/**` /
-  `src/engine/**` に加え `src/plugin/dsl.rs` / `src/facts/shell.rs` / `src/config/merge.rs`、
-  スコープは `.cargo/mutants.toml`) の mutation testing。
+  `src/engine/**` に加え `src/plugin/dsl.rs` / `src/facts/shell.rs` / `src/config/merge.rs` /
+  `src/self_paths.rs`、スコープは `.cargo/mutants.toml`) の mutation testing。
+  `make mutants-diff` は `BASE` (既定 `origin/main`) からの差分行だけを変異させ、PR CI の
+  `mutants-diff` job (MISSED で失敗するブロッキングゲート) と同等。テストの行を削った
+  ファイルは `scripts/mutants-diff.py` がファイル全体に広げて変異させる。nightly が失敗すると
+  `nightly-issue` job が追跡 issue を起票 / 追記する。MISSED の棚卸しは `docs/design/mutants-inventory.md`。
+- `make test-scripts` — `scripts/*.py` の stdlib-only unittest (`tests/scripts/`)。PR CI の
+  `test-scripts` job で実行する。
 - `make semver` — `cargo-semver-checks` で公開 API の SemVer 破壊を検知 (PR CI でも実行)。
+- `make tla` / `make kani` — 形式モデル。TLA+ (`formal/tla/`, TLC) は audit の並行追記・
+  判定パイプラインの合成則を全探索し、Kani は `src/**` の `#[cfg(kani)]`
+  harness で日付演算を証明する。`formal/tla/violations/` は
+  「違反が出るべき」反例 (修正前バグ) の固定。詳細は `formal/README.md`。
 
 敵対的 bypass の回帰は `tests/bypass/corpus.jsonl` (版管理) に集約し、`make check` の
 `test` ステップで `tests/bypass_corpus.rs` が検証する。fuzz / 監査で新規 bypass を
 発見したら corpus に追記する。
+
+GitHub 側の設定 (main の ruleset / Required checks / environment / immutable releases) は
+`docs/repository-settings.md` にチェックリストとして置く。CI の job 名を変えたら同じ PR で
+Required checks も直す。
 
 ## アーキテクチャ規約
 
@@ -72,3 +87,8 @@ fd / tempfile リーク・8 MiB stdin 境界・並列 hook と shared audit JSON
 
 - **TDD** — failing test → 実装 → リファクタ
 - **Tidy First** (Kent Beck) — 機能変更前に、ガード節・デッドコード削除・対称性整え・ヘルパ抽出・コメント明確化で読みやすさを上げられないか検討する
+
+## セキュリティ監査
+
+`/security-audit` (Codex は `$security-audit`) で Cloudflare 公式のセキュリティ監査スキルを使う。
+明示呼出し専用。導入元コミット・更新手順は `.claude/skills/security-audit/INSTALLATION.ja.md`。

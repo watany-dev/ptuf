@@ -36,13 +36,13 @@ pub(super) fn emit_decision<W1: Write, W2: Write>(
         HookAgent::Pi => Some(serde_json::to_string(&hook_output::pi::from_decision(
             &adapted,
         ))),
-        HookAgent::Opencode => Some(serde_json::to_string(
+        HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => Some(serde_json::to_string(
             &hook_output::opencode::from_decision(&adapted),
         )),
-        HookAgent::ClaudeCode | HookAgent::Codex => {
+        HookAgent::ClaudeCode | HookAgent::Codex | HookAgent::KiroV3 => {
             render_hook_response(agent, &adapted).map(|r| serde_json::to_string(&r))
         },
-        HookAgent::Kiro => None,
+        HookAgent::KiroV2 => None,
     };
     if let Some(result) = serialised {
         match result {
@@ -80,9 +80,13 @@ pub(super) fn render_hook_response(
         // Copilot uses a bare envelope (no `hookSpecificOutput` wrapper);
         // `emit_decision` dispatches through `hook_output::copilot` directly.
         HookAgent::Copilot => None,
-        // Kiro emits no JSON envelope at all; deny/ask are surfaced via
+        // Kiro v3 prompts on a `hookSpecificOutput` ask envelope from a
+        // hook that exits 0; every other decision is carried by the exit
+        // code alone.
+        HookAgent::KiroV3 => hook_output::kiro::from_decision_v3(decision),
+        // Kiro v2 emits no JSON envelope at all; deny/ask are surfaced via
         // stderr reason + non-zero exit only.
-        HookAgent::Kiro => None,
+        HookAgent::KiroV2 => None,
         // Cline uses a Cline-specific cancel envelope; `emit_decision`
         // dispatches through `hook_output::cline` directly.
         HookAgent::Cline => None,
@@ -94,7 +98,7 @@ pub(super) fn render_hook_response(
         HookAgent::Pi => None,
         // OpenCode uses the same bare envelope as Pi; `emit_decision`
         // dispatches through `hook_output::opencode` directly.
-        HookAgent::Opencode => None,
+        HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => None,
     }
 }
 
@@ -108,7 +112,7 @@ pub(super) fn adapt_hook_decision(agent: HookAgent, decision: &Decision) -> Deci
             rule_id: rule_id.clone(),
             reason: hook_output::copilot::deny_reason_for_ask(reason),
         },
-        (HookAgent::Kiro, Decision::Ask { rule_id, reason }) => Decision::Deny {
+        (HookAgent::KiroV2, Decision::Ask { rule_id, reason }) => Decision::Deny {
             rule_id: rule_id.clone(),
             reason: hook_output::kiro::deny_reason_for_ask(reason),
         },
@@ -116,9 +120,11 @@ pub(super) fn adapt_hook_decision(agent: HookAgent, decision: &Decision) -> Deci
             rule_id: rule_id.clone(),
             reason: hook_output::cline::deny_reason_for_ask(reason),
         },
-        (HookAgent::Opencode, Decision::Ask { rule_id, reason }) => Decision::Deny {
-            rule_id: rule_id.clone(),
-            reason: hook_output::opencode::deny_reason_for_ask(reason),
+        (HookAgent::OpencodeV1 | HookAgent::OpencodeV2, Decision::Ask { rule_id, reason }) => {
+            Decision::Deny {
+                rule_id: rule_id.clone(),
+                reason: hook_output::opencode::deny_reason_for_ask(reason),
+            }
         },
         _ => decision.clone(),
     }
@@ -137,9 +143,14 @@ pub(super) fn decision_exit_code(agent: HookAgent, decision: &Decision) -> u8 {
     }
     match (agent, decision) {
         (_, Decision::Deny { .. }) => 2,
-        // Defense-in-depth: Codex/Kiro/OpenCode Ask is demoted to Deny upstream
-        // by `adapt_hook_decision`, but the matrix mirrors that here.
-        (HookAgent::Codex | HookAgent::Kiro | HookAgent::Opencode, Decision::Ask { .. }) => 2,
+        // Defense-in-depth: Codex/Kiro v2/OpenCode Ask is demoted to Deny
+        // upstream by `adapt_hook_decision`, but the matrix mirrors that here.
+        // Kiro v3 keeps Ask: the V3 engine only reads the ask envelope from
+        // a hook that exits 0 (exit 2 would block outright).
+        (
+            HookAgent::Codex | HookAgent::KiroV2 | HookAgent::OpencodeV1 | HookAgent::OpencodeV2,
+            Decision::Ask { .. },
+        ) => 2,
         _ => 0,
     }
 }
@@ -259,10 +270,14 @@ mod tests {
             (HookAgent::ClaudeCode, &ask, 0),
             (HookAgent::ClaudeCode, &deny, 2),
             (HookAgent::Codex, &ask, 2),
-            (HookAgent::Kiro, &allow, 0),
-            (HookAgent::Kiro, &monitor, 0),
-            (HookAgent::Kiro, &ask, 2),
-            (HookAgent::Kiro, &deny, 2),
+            (HookAgent::KiroV2, &allow, 0),
+            (HookAgent::KiroV2, &monitor, 0),
+            (HookAgent::KiroV2, &ask, 2),
+            (HookAgent::KiroV2, &deny, 2),
+            (HookAgent::KiroV3, &allow, 0),
+            (HookAgent::KiroV3, &monitor, 0),
+            (HookAgent::KiroV3, &ask, 0),
+            (HookAgent::KiroV3, &deny, 2),
             (HookAgent::Cline, &allow, 0),
             (HookAgent::Cline, &ask, 0),
             (HookAgent::Cline, &deny, 0),
@@ -274,10 +289,14 @@ mod tests {
             (HookAgent::Pi, &monitor, 0),
             (HookAgent::Pi, &ask, 0),
             (HookAgent::Pi, &deny, 2),
-            (HookAgent::Opencode, &allow, 0),
-            (HookAgent::Opencode, &monitor, 0),
-            (HookAgent::Opencode, &ask, 2),
-            (HookAgent::Opencode, &deny, 2),
+            (HookAgent::OpencodeV1, &allow, 0),
+            (HookAgent::OpencodeV1, &monitor, 0),
+            (HookAgent::OpencodeV1, &ask, 2),
+            (HookAgent::OpencodeV1, &deny, 2),
+            (HookAgent::OpencodeV2, &allow, 0),
+            (HookAgent::OpencodeV2, &monitor, 0),
+            (HookAgent::OpencodeV2, &ask, 2),
+            (HookAgent::OpencodeV2, &deny, 2),
         ];
         for (agent, decision, expect) in cases {
             assert_eq!(
@@ -296,7 +315,7 @@ mod tests {
         };
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Kiro, &decision, &mut out, &mut err);
+        let code = emit_decision(HookAgent::KiroV2, &decision, &mut out, &mut err);
         assert_eq!(code, 2);
         assert!(out.is_empty(), "Kiro must not write stdout, got: {out:?}");
         assert!(String::from_utf8_lossy(&err).contains("blocked"));
@@ -310,9 +329,9 @@ mod tests {
         };
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Kiro, &decision, &mut out, &mut err);
+        let code = emit_decision(HookAgent::KiroV2, &decision, &mut out, &mut err);
         assert_eq!(code, 2, "Kiro must demote Ask to deny exit code");
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         let err_s = String::from_utf8_lossy(&err);
         assert!(err_s.contains("please confirm"), "stderr: {err_s}");
         assert!(
@@ -325,10 +344,10 @@ mod tests {
     fn kiro_allow_writes_nothing_and_exits_zero() {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Kiro, &Decision::Allow, &mut out, &mut err);
+        let code = emit_decision(HookAgent::KiroV2, &Decision::Allow, &mut out, &mut err);
         assert_eq!(code, 0);
-        assert!(out.is_empty());
-        assert!(err.is_empty());
+        assert_eq!(out.len(), 0);
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -338,10 +357,69 @@ mod tests {
         };
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Kiro, &monitor, &mut out, &mut err);
+        let code = emit_decision(HookAgent::KiroV2, &monitor, &mut out, &mut err);
         assert_eq!(code, 0);
-        assert!(out.is_empty());
-        assert!(err.is_empty());
+        assert_eq!(out.len(), 0);
+        assert_eq!(err.len(), 0);
+    }
+
+    /// Kiro CLI v3 blocks a tool on exit 2 (stderr is shown to the
+    /// agent) and ignores stdout for that exit code.
+    #[test]
+    fn kiro_v3_deny_uses_exit_2_and_stderr_only() {
+        let decision = Decision::Deny {
+            rule_id: "core.filesystem.destructive-rm".into(),
+            reason: "blocked".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::KiroV3, &decision, &mut out, &mut err);
+        assert_eq!(code, 2);
+        assert!(out.is_empty(), "stdout: {out:?}");
+        assert!(String::from_utf8_lossy(&err).contains("blocked"));
+    }
+
+    /// Kiro CLI v3 prompts the user when a hook that exits 0 prints
+    /// `hookSpecificOutput.permissionDecision: "ask"`, so Ask is kept.
+    #[test]
+    fn kiro_v3_ask_emits_native_ask_envelope_with_zero_exit() {
+        let decision = Decision::Ask {
+            rule_id: "core.test.ask".into(),
+            reason: "please confirm".into(),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = emit_decision(HookAgent::KiroV3, &decision, &mut out, &mut err);
+        assert_eq!(code, 0);
+        let body: serde_json::Value =
+            serde_json::from_slice(&out).expect("stdout is one JSON object");
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "ask",
+                    "permissionDecisionReason": "please confirm",
+                }
+            })
+        );
+        let err_s = String::from_utf8_lossy(&err);
+        assert!(!err_s.contains("do not define an interactive ask channel"));
+    }
+
+    #[test]
+    fn kiro_v3_allow_and_monitor_write_nothing() {
+        let monitor = Decision::Monitor {
+            rule_id: "core.test.monitor".into(),
+        };
+        for decision in [Decision::Allow, monitor] {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = emit_decision(HookAgent::KiroV3, &decision, &mut out, &mut err);
+            assert_eq!(code, 0);
+            assert!(out.is_empty(), "stdout: {out:?}");
+            assert!(err.is_empty(), "stderr: {err:?}");
+        }
     }
 
     #[test]
@@ -350,7 +428,8 @@ mod tests {
             rule_id: "core.x".into(),
             reason: "r".into(),
         };
-        assert!(render_hook_response(HookAgent::Kiro, &decision).is_none());
+        assert!(render_hook_response(HookAgent::KiroV2, &decision).is_none());
+        assert!(render_hook_response(HookAgent::KiroV3, &decision).is_none());
     }
 
     #[test]
@@ -378,7 +457,7 @@ mod tests {
         let code = emit_decision(HookAgent::Cline, &Decision::Allow, &mut out, &mut err);
         assert_eq!(code, 0);
         assert_eq!(String::from_utf8_lossy(&out), "{}\n");
-        assert!(err.is_empty());
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -469,7 +548,7 @@ mod tests {
         assert_eq!(json["permission"], "allow");
         assert!(json.get("user_message").is_none());
         assert!(json.get("agent_message").is_none());
-        assert!(err.is_empty());
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -525,7 +604,7 @@ mod tests {
         assert_eq!(code, 0);
         let json: serde_json::Value = serde_json::from_slice(&out).expect("Pi stdout must be JSON");
         assert_eq!(json["decision"], "allow");
-        assert!(err.is_empty());
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -543,14 +622,16 @@ mod tests {
             rule_id: "core.filesystem.destructive-rm".into(),
             reason: "blocked".into(),
         };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Opencode, &decision, &mut out, &mut err);
-        assert_eq!(code, 2, "OpenCode deny exits 2");
-        let json: serde_json::Value =
-            serde_json::from_slice(&out).expect("OpenCode stdout must be JSON");
-        assert_eq!(json["decision"], "deny");
-        assert!(String::from_utf8_lossy(&err).contains("blocked"));
+        for agent in [HookAgent::OpencodeV1, HookAgent::OpencodeV2] {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = emit_decision(agent, &decision, &mut out, &mut err);
+            assert_eq!(code, 2, "OpenCode({agent:?}) deny exits 2");
+            let json: serde_json::Value =
+                serde_json::from_slice(&out).expect("OpenCode stdout must be JSON");
+            assert_eq!(json["decision"], "deny");
+            assert!(String::from_utf8_lossy(&err).contains("blocked"));
+        }
     }
 
     #[test]
@@ -559,19 +640,21 @@ mod tests {
             rule_id: "core.test.ask".into(),
             reason: "please confirm".into(),
         };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = emit_decision(HookAgent::Opencode, &decision, &mut out, &mut err);
-        assert_eq!(code, 2, "OpenCode Ask must demote to deny exit code");
-        let json: serde_json::Value =
-            serde_json::from_slice(&out).expect("OpenCode stdout must be JSON");
-        assert_eq!(json["decision"], "deny");
-        let err_s = String::from_utf8_lossy(&err);
-        assert!(err_s.contains("please confirm"), "stderr: {err_s}");
-        assert!(
-            err_s.contains("permission.ask"),
-            "stderr should explain OpenCode demotion: {err_s}"
-        );
+        for agent in [HookAgent::OpencodeV1, HookAgent::OpencodeV2] {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = emit_decision(agent, &decision, &mut out, &mut err);
+            assert_eq!(code, 2, "OpenCode({agent:?}) Ask must demote to deny");
+            let json: serde_json::Value =
+                serde_json::from_slice(&out).expect("OpenCode stdout must be JSON");
+            assert_eq!(json["decision"], "deny");
+            let err_s = String::from_utf8_lossy(&err);
+            assert!(err_s.contains("please confirm"), "stderr: {err_s}");
+            assert!(
+                err_s.contains("permission.ask"),
+                "stderr should explain OpenCode demotion: {err_s}"
+            );
+        }
     }
 
     #[test]
@@ -580,7 +663,8 @@ mod tests {
             rule_id: "core.x".into(),
             reason: "r".into(),
         };
-        assert!(render_hook_response(HookAgent::Opencode, &decision).is_none());
+        assert!(render_hook_response(HookAgent::OpencodeV1, &decision).is_none());
+        assert!(render_hook_response(HookAgent::OpencodeV2, &decision).is_none());
     }
 
     #[test]
@@ -615,7 +699,7 @@ mod tests {
             out.is_empty(),
             "Copilot allow must emit no stdout, got: {out:?}"
         );
-        assert!(err.is_empty());
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -646,7 +730,8 @@ mod tests {
             HookAgent::Cline,
             HookAgent::Cursor,
             HookAgent::Pi,
-            HookAgent::Opencode,
+            HookAgent::OpencodeV1,
+            HookAgent::OpencodeV2,
             HookAgent::ClaudeCode,
             HookAgent::Codex,
         ] {

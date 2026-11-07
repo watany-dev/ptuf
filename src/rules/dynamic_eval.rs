@@ -1,10 +1,15 @@
 //! `core.engine.dynamic-eval` — Ask before running interpreters whose
 //! `-c` / `-e` / first-positional argument hides code from the parser
-//! (so other built-in rules cannot inspect what will actually run).
+//! (so other built-in rules cannot inspect what will actually run), and
+//! before commands whose *name* is only known at run time: a variable
+//! or substitution (`$X -rf /`, `$(echo rm)`, `` `echo rm` ``) or a
+//! pathname glob (`/bin/r? -rf /`).
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, short_flag_cluster_contains, unwrap_all_prefix_wrappers};
+use crate::facts::shell::{
+    Argv, Bash, reads_script_from_stdin, short_flag_cluster_contains, unwrap_all_prefix_wrappers,
+};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -60,7 +65,8 @@ impl ConfigRule for DynamicEval {
 
     fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
         let bash = facts.bash.as_ref()?;
-        let triggered = bash.commands().into_iter().any(invokes_dynamic_eval);
+        let triggered =
+            bash.commands().into_iter().any(invokes_dynamic_eval) || pipes_opaque_script(bash);
         if !triggered {
             return None;
         }
@@ -68,8 +74,12 @@ impl ConfigRule for DynamicEval {
         let reason = reason::build(
             RULE_ID,
             "The command loads code at runtime through an interpreter flag \
-             (`bash -c`, `python -c`, `node -e`, `eval`, …). The inner code is \
-             opaque to ptuf, so other rules cannot inspect what will actually run.",
+             (`bash -c`, `python -c`, `node -e`, `eval`, …), pipes a script the \
+             command line does not spell out into a shell (`… | base64 -d | sh`), \
+             or picks the command name at runtime (`$X …`, `$(…) …`, a glob such \
+             as `/bin/r?`). The \
+             real command is opaque to ptuf, so other rules cannot inspect what \
+             will actually run.",
             &[
                 "Save the inner code to a script file and run that file directly.",
                 "Show the inner code to the user before approving.",
@@ -84,8 +94,53 @@ impl ConfigRule for DynamicEval {
     }
 }
 
+/// A shell that reads its script from a pipe whose content the command
+/// line does not spell out (`… | base64 -d | sh`, `cat f | bash`). When
+/// the content is literal (`echo CODE | sh`) the parser re-parses it into
+/// `inner_code` / `inner_argv`, so other rules see it and this does not fire.
+fn pipes_opaque_script(bash: &Bash) -> bool {
+    pipes_opaque_script_in_shell(bash, crate::facts::shell::NESTING_BUDGET)
+}
+
+/// Shell code run by a command (`su -c '…'`, `eval '…'`) is its own shell
+/// with its own pipelines, so it is checked the same way (`su -c 'echo X |
+/// base64 -d | bash'`). The flattened `inner_argv` drops the inner
+/// pipeline boundaries.
+fn pipes_opaque_script_in_shell(bash: &Bash, depth: usize) -> bool {
+    pipes_opaque_script_at_top(bash)
+        || depth.checked_sub(1).is_some_and(|next| {
+            bash.segments
+                .iter()
+                .flat_map(|p| &p.commands)
+                .flat_map(|c| &c.inner_code)
+                .any(|code| pipes_opaque_script_in_shell(&crate::facts::shell::parse(code), next))
+        })
+}
+
+fn pipes_opaque_script_at_top(bash: &Bash) -> bool {
+    bash.segments.iter().any(|pipe| {
+        pipe.commands.iter().skip(1).any(|cmd| {
+            cmd.inner_code.is_empty() && reads_script_from_stdin(&unwrap_all_prefix_wrappers(cmd))
+        })
+    })
+}
+
 fn invokes_dynamic_eval(argv: &Argv) -> bool {
-    matches_dynamic_eval(&unwrap_all_prefix_wrappers(argv))
+    let argv = unwrap_all_prefix_wrappers(argv);
+    matches_dynamic_eval(&argv) || has_dynamic_head(argv.head_basename())
+}
+
+/// True when the command name (basename) is decided by the shell at run time, so
+/// no head table can match it: a parameter / command substitution in
+/// the basename (`$X`, `${X:-rm}`, `$(echo rm)`; a backtick body leaves
+/// its inner words, hence the whitespace check) or a glob (`/bin/r?`,
+/// `/usr/bin/[r]m`). A variable directory with a literal basename
+/// (`$HOME/bin/tool`) is not dynamic: rules still match `tool`.
+fn has_dynamic_head(base: &str) -> bool {
+    if base.is_empty() || base == "[" || base == "[[" {
+        return false;
+    }
+    base.contains(['$', '*', '?', '[']) || base.contains(char::is_whitespace)
 }
 
 fn matches_dynamic_eval(argv: &Argv) -> bool {
@@ -177,6 +232,45 @@ mod tests {
     }
 
     #[test]
+    fn asks_when_an_opaque_script_is_piped_into_a_shell() {
+        for cmd in [
+            "echo x | base64 -d | bash",
+            "cat script.sh | sh",
+            "rev <<< x | sudo bash",
+            "make | bash -s",
+            "a | bash /dev/stdin",
+            "{ a; } | bash",
+            // Inside shell payload code, within the nesting budget.
+            "su -c 'echo x | base64 -d | bash'",
+            "eval 'cat f | sh'",
+            "su -c \"su -c 'cat f | sh'\"",
+        ] {
+            assert_ask(cmd);
+        }
+    }
+
+    #[test]
+    fn allows_shells_whose_stdin_script_is_literal_or_absent() {
+        for cmd in [
+            "echo ls | bash",
+            "bash <<< ls",
+            "bash < script.sh",
+            "bash",
+            "cat x | bash script.sh",
+            "cat x | grep bash",
+            "a; bash",
+        ] {
+            assert_allow(cmd);
+        }
+    }
+
+    #[test]
+    fn allows_interpreter_script_with_trailing_arguments() {
+        assert_allow("python3 script.py --verbose");
+        assert_allow("bash -x build.sh arg");
+    }
+
+    #[test]
     fn asks_on_bash_dash_c() {
         assert_ask("bash -c 'echo hi'");
     }
@@ -221,6 +315,33 @@ mod tests {
     #[test]
     fn asks_on_find_exec_eval_wrapper_itself() {
         assert_ask(r"find . -exec bash -c 'echo hi' \;");
+    }
+
+    #[test]
+    // `${X:-rm}` is shell syntax, not a format string.
+    #[allow(clippy::literal_string_with_formatting_args)]
+    fn asks_on_dynamic_or_glob_heads() {
+        for cmd in [
+            "$(echo rm) -rf /",
+            "`echo rm` -rf /",
+            "$X -rf /",
+            "${X:-rm} -rf /",
+            "/bin/r? -rf /",
+            "/bin/r* -rf /",
+            "/usr/bin/[r]m -rf /",
+            "sudo $CMD",
+        ] {
+            assert_ask(cmd);
+        }
+    }
+
+    #[test]
+    fn allows_literal_heads_under_variable_directories() {
+        assert_allow("$HOME/bin/tool --flag");
+        assert_allow("${CARGO_HOME}/bin/cargo build");
+        assert_allow("[ -f x ]");
+        assert_allow("[[ -f x ]]");
+        assert_allow("ls *.txt");
     }
 
     #[test]

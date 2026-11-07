@@ -4,6 +4,11 @@ ptuf のテスト層は **二段構成** で運用する。判定の正しさは
 コアのアルゴリズム性質は Property-Based Testing (PBT) で網羅する。両者は補完
 関係であり、片方が他方を置き換えることはない。
 
+PBT / fuzz が入力空間を標本抽出するのに対し、有限に切った空間を網羅する
+形式モデル (TLA+ / Kani) を第三の層として `formal/` に置く
+(`make tla` / `make kani`、nightly の `formal` job)。対象と検出した反例は
+[`formal/README.md`](../../formal/README.md) を参照。
+
 ## 役割分担
 
 | 観点 | example-based | Property-Based |
@@ -75,7 +80,30 @@ engine end-to-end は `src/testing/engine_pbt.rs`、全 rule にまたがる否�
   ルール側の head 判定はこれ経由に統一されている (ADR 0005)
 - `unwrap_prefix_wrapper` は prefix (`sudo` / `env` / `timeout` 等) を 1 層
   peel し、`unwrap_all_prefix_wrappers` は inner head まで全層 peel する。
-  非 wrapper では clone (冪等)。rule / plugin DSL は後者を使う
+  非 wrapper では clone (冪等)。rule / plugin DSL は後者を使う。対象は
+  `PREFIX_WRAPPERS` (`sudo` / `doas` / `pkexec` / `run0` / `env` / `command` /
+  `exec` / `builtin` / `nohup` / `setsid` / `nice` / `ionice` / `stdbuf` /
+  `time` / `timeout` / `chroot` / `chrt` / `taskset` / `flock` / `unshare` /
+  `busybox`)。`timeout DURATION` / `chroot NEWROOT` などの先頭 operand も読み飛ばす。
+  `bash -c` / `su -c` / `eval` / `xargs` / `find -exec` の payload は wrapper の
+  内側にあっても再 parse される (`sudo su -c '…'`)
+- `tests/bash_quote_equivalence.rs` は metamorphic な有界網羅テスト。corpus の
+  must_catch な Bash ケースすべてについて、bash 上で同じ意味になる書き換え
+  (語の quote / `''` 挿入 / backslash、区切りの tab / 連続空白 / 行継続 /
+  `${IFS}`、subshell / brace group / 前置 no-op、透過的な exec wrapper の前置)
+  を 1 か所ずつ全通り生成し、判定が元より弱くならないことを検査する。
+  ここから `>${IFS}target` の redirect 先の取りこぼしと wrapper 経由の素通りを検出した。
+  同ファイルの `path_spelling_equivalent_rewrites_stay_caught` はパス語の
+  `/` → `//` / `/./` と、ファイル引数の dotfile への `./` 前置を全通り試す
+  (`~//.claude` の HOME 外への解決、機密パス・download-then-exec の照合漏れを検出)。
+  `redirect_placement_and_spelling_rewrites_stay_caught` は redirect の位置
+  (コマンド先頭 / head 直後) と表記 (`>f` / `1>` / `>|` / `0<`) を、
+  `git_global_option_insertions_stay_caught` は `git` と subcommand の間への
+  中立な global option (`-C .` / `--no-pager` / `-c k=v` など) の挿入を全通り試す。
+  `head_path_and_option_order_rewrites_stay_caught` は head の絶対パス化
+  (`/usr/bin/bash`) と、boolean option だけの coreutils での cluster の分割・逆順・
+  operand の後ろへの移動 (`rm / -rf`) を試す。最初のテストは各コマンドを
+  `bash -c '…'` / `sh -c` / `eval` / `su -c` / `sudo sh -c` で 1 段包む変形も含む
 - tokenizer は 1 byte 以上前進する (forward-progress;
   `debug_assert!(advanced > 0)`)
 
@@ -105,7 +133,7 @@ point は、外部 agent との信頼境界として以下の不変を持つ。
   各 adapter として流すと panic しない。Claude Code / Cursor は exit
   `0`/`1`/`2` のいずれかで、invalid payload 時は exit `2` + deny
   envelope。Copilot は常に exit `0`/`1`（invalid payload も exit `0` +
-  bare deny）。Kiro は exit `0`/`1`/`2`（invalid payload 時は exit `2` +
+  bare deny）。Kiro (v2 / v3 とも) は exit `0`/`1`/`2`（invalid payload 時は exit `2` +
   stdout 空 + stderr reason）。対応 PBT:
   `pbt_run_hook_fails_closed_for_arbitrary_stdin` (Claude Code),
   `pbt_cursor_run_hook_fails_closed_for_arbitrary_stdin`,
@@ -116,8 +144,8 @@ point は、外部 agent との信頼境界として以下の不変を持つ。
   `Err(...)` を返し panic しない。trust boundary ごとに
   `pbt_parse_is_total_on_arbitrary_utf8` を各 adapter module が保持する
   （dedupe しない）
-- 非 object / `toolName`/`tool_name` 欠落 / Kiro の `hook_event_name !=
-  "preToolUse"` / Cline の `tool_call`・`preToolUse` 双方欠落や非対応
+- 非 object / `toolName`/`tool_name` 欠落 / Kiro の `hook_event_name` が
+  `preToolUse` / `PreToolUse` 以外 / Cline の `tool_call`・`preToolUse` 双方欠落や非対応
   `hookName` といった各異常 envelope は対応する parser error variant を
   返す (`pbt_invalid_envelope_returns_err`)
 - 例外として、Copilot の 8 MiB 超 stdin は adapter 経由でも exit `0` +
@@ -199,6 +227,21 @@ CLI run (`src/cli/run.rs` の `run_with`):
 
 ## ランタイム / CI 構成
 
+`make test-opencode` は Node 24 で実際に install した v1/v2 TypeScript の
+callback を呼び、実 CLI の allow/deny と、subprocess fixture の spawn 失敗・
+不正 JSON・終了コード不整合・出力上限・タイムアウト (SIGTERM 無視→SIGKILL)
+で reject することを検証する。v2 SDK は登録を検証する shim で、実 host の
+ロード検証とは区別する。共通 subprocess 部分は生成時に共有し、配布物は単一の
+`ptuf.ts` のまま。`make check` と PR CI の Linux/macOS 両方に含める。
+
+`scripts/smoke-opencode-hosts.py` はインストール済みの実 v1/v2 CLI を起動する
+手動 E2E。モデル応答のみ localhost の固定 SSE に置き換え、plugin の自動ロード・
+登録・ホストの native tool (`bash` / `shell`)・実 ptuf subprocess を通す。
+2026-10-17 に v1.19.3 / v2.0.32 で実施し、v2 `shell` が未知 MCP tool に分類され
+`git reset --hard` を許可する問題を再現した。`shell` → `Bash` の正規化追加後は
+両世代で safe command の実行と reset の拒否、未コミット変更の維持を確認した。
+外部 API キーは不要。再現コマンドは `CONTRIBUTING.md` を参照。
+
 PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。case 数の
 階層は `Makefile` の `pbt-quick` / `pbt` / `pbt-deep` ターゲットおよび
 `.github/workflows/ci.yml` の `test` / `pbt-deep` job に対応する。
@@ -254,10 +297,17 @@ PBT は 3 段の予算で同じ `proptest!` ブロックを繰り返し打つ。
   「行が実行された」を測るが「テストが振る舞いを検証しているか」は
   測らない。スコープは `.cargo/mutants.toml` の `examine_globs` で
   セキュリティ中核 (`src/decision.rs` / `src/rules/**` /
-  `src/engine/**`) に限定する。生き残った (`MISSED`) ミュータントは
-  テストが見逃す実バイパスに直結するため、example-based テストで
-  潰す。`nightly.yml` の `mutants` job が full スコープで実行し
-  mutation report を artifact 出力する。
+  `src/engine/**` / `src/plugin/dsl.rs` / `src/facts/shell.rs` /
+  `src/config/merge.rs` / `src/self_paths.rs`) に限定する。生き残った
+  (`MISSED`) ミュータントはテストが見逃す実バイパスに直結するため、
+  example-based テストで潰す。`nightly.yml` の `mutants` job が full
+  スコープで実行し mutation report を artifact 出力する。失敗すると
+  `nightly-issue` job が追跡 issue を起票 / 追記する。PR では
+  `ci.yml` の `mutants-diff` job (`make mutants-diff` 相当、
+  `--in-diff` で変更行のみ) をブロッキングで実行し、結果を step
+  summary に出す。テストの行を削ったファイルは `scripts/mutants-diff.py`
+  がファイル全体に広げる。MISSED の分類 (B / T / E) と issue との対応は
+  `docs/design/mutants-inventory.md` で棚卸しする。
 - **Bypass 回帰コーパス (`make check` 内)**: `tests/bypass/corpus.jsonl`
   は版管理された敵対的入力の負テストスイートで、`tests/bypass_corpus.rs`
   が通常の `cargo test` (= `make check` の `test` step) で実行する。

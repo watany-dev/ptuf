@@ -65,18 +65,27 @@ pub(crate) fn ensure_array<'a>(
 /// Pin the document's `version` to `1`, inserting it when absent. Any
 /// other value is a schema the installer does not know how to patch.
 pub(crate) fn ensure_version(root: &mut Value, path: &Path) -> Result<(), InitError> {
+    ensure_version_eq(root, path, &json!(1))
+}
+
+/// [`ensure_version`] for a document format whose version is `expected`.
+pub(crate) fn ensure_version_eq(
+    root: &mut Value,
+    path: &Path,
+    expected: &Value,
+) -> Result<(), InitError> {
     let Some(map) = root.as_object_mut() else {
         return Err(schema(path, "top-level value must be a JSON object"));
     };
     match map.get("version") {
         None => {
-            map.insert("version".to_string(), json!(1));
+            map.insert("version".to_string(), expected.clone());
             Ok(())
         },
-        Some(v) if v == &json!(1) => Ok(()),
+        Some(v) if v == expected => Ok(()),
         Some(other) => Err(schema(
             path,
-            &format!("`version` must be 1 (found {other})"),
+            &format!("`version` must be {expected} (found {other})"),
         )),
     }
 }
@@ -98,7 +107,7 @@ pub(crate) fn hook_array<'a>(
         .ok_or_else(|| schema(path, &format!("`hooks.{event}` must be an array")))
 }
 
-fn schema(path: &Path, message: &str) -> InitError {
+pub(crate) fn schema(path: &Path, message: &str) -> InitError {
     InitError::Schema {
         path: path.to_path_buf(),
         message: message.to_string(),

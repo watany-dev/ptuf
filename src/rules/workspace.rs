@@ -2,10 +2,11 @@
 //! workspace boundaries.
 //!
 //! `outside-access` denies any `Read` / `Edit` / `Write` / `apply_patch`
-//! / MCP `path` / Bash redirect target whose canonical destination falls
-//! outside the boundary set. The boundary set comes from the engine's
-//! `repo_root` plus `packs.core.workspace.additionalWorkspaces` from the
-//! merged config.
+//! / MCP `path` / Bash redirect target / Bash reader or writer file
+//! operand (`cat FILE`, `cp SRC DST`, `tee FILE`, `dd of=FILE`) whose
+//! canonical destination falls outside the boundary set. The boundary
+//! set comes from the engine's `repo_root` plus
+//! `packs.core.workspace.additionalWorkspaces` from the merged config.
 //!
 //! Path resolution applies `canonicalize` to both candidate and
 //! boundary so symlinks and `..` traversals are collapsed before the
@@ -19,13 +20,16 @@
 //! `/usr/include`) for projects that have not opted in. Enable via
 //! `packs.core.workspace.enabled: true` in `.ptuf.yaml`.
 
+use crate::config::scope::SystemEnv;
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::path::{self, PathFact};
+use crate::facts::path::{self, PathFact, PathOrigin, PathTool};
+use crate::facts::shell::Bash;
 use crate::hook_input::HookInput;
 use crate::reason;
 
 use super::ConfigRule;
+use super::sensitive_bash_read::READER_HEADS;
 
 const RULE_ID: &str = "core.workspace.outside-access";
 
@@ -50,7 +54,13 @@ impl ConfigRule for OutsideAccessRule {
         if facts.workspaces.is_empty() {
             return None;
         }
-        for fact in facts.paths.iter().chain(facts.bash_redirects.iter()) {
+        let operands = bash_file_operands(facts.bash.as_ref());
+        for fact in facts
+            .paths
+            .iter()
+            .chain(facts.bash_redirects.iter())
+            .chain(operands.iter())
+        {
             let resolved = path::resolve_for_containment(fact);
             if !path::is_within_workspace(&resolved, &facts.workspaces) {
                 return Some(Decision::Deny {
@@ -61,6 +71,64 @@ impl ConfigRule for OutsideAccessRule {
         }
         None
     }
+}
+
+/// Bash commands whose positional arguments are files they create,
+/// modify, move, or delete.
+const WRITER_HEADS: &[&str] = &[
+    "cp", "mv", "tee", "ln", "install", "rsync", "touch", "mkdir", "rm", "rmdir", "unlink",
+    "chmod", "chown", "chgrp", "truncate", "shred", "sponge",
+];
+
+/// Reader heads whose first positional argument is a pattern or a
+/// script, not a file.
+const PATTERN_FIRST_HEADS: &[&str] = &["grep", "egrep", "fgrep", "awk", "gawk", "mawk", "sed"];
+
+/// Reader heads that take no file operands at all.
+const NO_FILE_HEADS: &[&str] = &["tr"];
+
+/// File operands of every reader / writer command in a Bash line, as
+/// path facts. `Bash::commands()` already flattens `bash -c`, `xargs`,
+/// `find -exec` and command substitutions; prefix wrappers (`sudo`,
+/// `env`, `nice`, …) are peeled here.
+fn bash_file_operands(bash: Option<&Bash>) -> Vec<PathFact> {
+    let Some(bash) = bash else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for argv in bash.commands() {
+        let argv = crate::facts::shell::unwrap_all_prefix_wrappers(argv);
+        let head = argv.head_basename();
+        let tool = if WRITER_HEADS.contains(&head) {
+            PathTool::Write
+        } else if READER_HEADS.contains(&head) && !NO_FILE_HEADS.contains(&head) {
+            PathTool::Read
+        } else {
+            continue;
+        };
+        let operands: Vec<&str> = if head == "dd" {
+            argv.args
+                .iter()
+                .filter_map(|a| a.strip_prefix("if=").or_else(|| a.strip_prefix("of=")))
+                .collect()
+        } else {
+            let skip = usize::from(PATTERN_FIRST_HEADS.contains(&head));
+            argv.positional().skip(skip).collect()
+        };
+        for raw in operands {
+            if raw.is_empty() || raw == "-" {
+                continue;
+            }
+            out.push(PathFact::from_raw(
+                raw.to_string(),
+                tool,
+                PathOrigin::BashArgument,
+                None,
+                &SystemEnv,
+            ));
+        }
+    }
+    out
 }
 
 fn build_reason(
@@ -192,6 +260,69 @@ mod tests {
             OUTSIDE_ACCESS_RULE.evaluate(&f, &input),
             Some(Decision::Deny { .. })
         ));
+    }
+
+    fn bash_input(cmd: &str) -> HookInput {
+        HookInput {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({ "command": cmd }),
+        }
+    }
+
+    #[test]
+    fn denies_bash_file_operands_outside_workspace() {
+        // #334: reader / writer operands, not only redirects.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let inside = dir.path().join("a.txt");
+        let inside = inside.display();
+        for cmd in [
+            format!("cp {inside} /tmp/ptuf-outside.txt"),
+            "tee /tmp/ptuf-o.txt".to_string(),
+            format!("mv {inside} ~/ptuf-x"),
+            "cat /etc/passwd".to_string(),
+            "grep root /etc/passwd".to_string(),
+            "sed -n 1p /etc/hosts".to_string(),
+            "dd if=/etc/passwd of=x".to_string(),
+            "sudo cat /etc/shadow".to_string(),
+            "bash -c 'cat /etc/passwd'".to_string(),
+            "find . -name x -exec cp {} /tmp/ptuf-y \\;".to_string(),
+            "echo $(cat /etc/passwd)".to_string(),
+        ] {
+            let input = bash_input(&cmd);
+            let f = facts_with_workspaces(&input, vec![dir.path().to_path_buf()]);
+            assert!(
+                matches!(
+                    OUTSIDE_ACCESS_RULE.evaluate(&f, &input),
+                    Some(Decision::Deny { .. })
+                ),
+                "cmd: {cmd}",
+            );
+        }
+    }
+
+    #[test]
+    fn allows_bash_operands_inside_workspace_and_non_file_args() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        let (a, b) = (a.display(), b.display());
+        for cmd in [
+            format!("cp {a} {b}"),
+            format!("cat {a} -"),
+            // Pattern / script operands are not files.
+            format!("grep /etc/passwd {a}"),
+            format!("sed s,/usr,/opt, {a}"),
+            format!("awk '/\\/etc/ {{print}}' {a}"),
+            "tr /a /b".to_string(),
+            // Non-reader heads are out of scope.
+            "echo /etc/passwd".to_string(),
+            format!("dd if={a} of={b} bs=1M"),
+        ] {
+            let input = bash_input(&cmd);
+            let f = facts_with_workspaces(&input, vec![dir.path().to_path_buf()]);
+            let d = OUTSIDE_ACCESS_RULE.evaluate(&f, &input);
+            assert!(d.is_none(), "cmd: {cmd} got {d:?}");
+        }
     }
 
     #[test]

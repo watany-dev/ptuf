@@ -51,7 +51,9 @@
 ## Cutting a release
 
 1. Make sure `main` is green (`make check`).
-2. Bump the version:
+2. Bump the version (skip if a breaking PR already moved `Cargo.toml` to
+   the next minor since the last tag — the PR `semver` gate compares against
+   the last release tag, so the version is bumped at most once per cycle):
    - `Cargo.toml` `[package].version`
    - `Cargo.lock` (run `cargo build` to refresh, commit the diff)
 3. Update `CHANGELOG.md`:
@@ -132,6 +134,14 @@
 
    ```bash
    cargo install ptuf
+   ```
+
+8. Once the release is published, bump the pinned version in the install
+   snippets so first-time readers copy the current release. The pins live
+   in `README.md`, `README.ja.md`, and `docs/install.md`:
+
+   ```bash
+   grep -rn 'v[0-9]\+\.[0-9]\+\.[0-9]\+' README.md README.ja.md docs/install.md
    ```
 
 ## Pre-releases

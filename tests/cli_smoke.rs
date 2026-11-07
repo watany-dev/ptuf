@@ -79,6 +79,29 @@ fn check_denies_destructive_rm_with_exit_two() {
 }
 
 #[test]
+fn json_check_emits_single_json_object() {
+    // #333: the global `--json` flag must change `check`'s output.
+    let (code, stdout, stderr) = run(&["--json", "check", "--tool", "Bash", "rm -rf /"], "");
+    assert_eq!(code, 2);
+    let body: serde_json::Value = serde_json::from_str(stdout.trim()).expect("stdout is JSON");
+    assert_eq!(body["decision"], "deny");
+    assert_eq!(body["ruleId"], "core.filesystem.destructive-rm");
+    assert!(
+        body["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("destructive-rm")),
+        "body: {body}",
+    );
+    assert!(stderr.is_empty(), "stderr: {stderr}");
+
+    let (code, stdout, _) = run(&["--json", "check", "--tool", "Bash", "ls"], "");
+    assert_eq!(code, 0);
+    let body: serde_json::Value = serde_json::from_str(stdout.trim()).expect("stdout is JSON");
+    assert_eq!(body["decision"], "allow");
+    assert!(body["ruleId"].is_null());
+}
+
+#[test]
 fn check_denies_remote_script_pipe() {
     let (code, _stdout, stderr) = run(
         &[
@@ -113,7 +136,7 @@ fn check_allows_safe_command_with_exit_zero() {
     let (code, stdout, stderr) = run(&["check", "--tool", "Bash", "ls"], "");
     assert_eq!(code, 0);
     assert!(stdout.contains("Decision: allow"));
-    assert!(stderr.is_empty());
+    assert_eq!(stderr.len(), 0);
 }
 
 #[test]
@@ -137,7 +160,7 @@ fn check_allows_unrelated_segments_with_sensitive_and_sink() {
     );
     assert_eq!(code, 0);
     assert!(stdout.contains("Decision: allow"));
-    assert!(stderr.is_empty());
+    assert_eq!(stderr.len(), 0);
 }
 
 #[test]
@@ -171,14 +194,14 @@ fn hook_subcommand_allows_safe_payload_with_empty_streams() {
     let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
     let (code, stdout, stderr) = run(&["hook", "claude-code"], payload);
     assert_eq!(code, 0);
-    assert!(stdout.is_empty());
-    assert!(stderr.is_empty());
+    assert_eq!(stdout.len(), 0);
+    assert_eq!(stderr.len(), 0);
 }
 
 #[test]
 fn kiro_hook_denies_destructive_rm_with_stderr_only() {
     let payload = r#"{"hook_event_name":"preToolUse","tool_name":"shell","tool_input":{"command":"rm -rf /"}}"#;
-    let (code, stdout, stderr) = run(&["hook", "kiro"], payload);
+    let (code, stdout, stderr) = run(&["hook", "kiro-v2"], payload);
     assert_eq!(code, 2);
     assert!(stdout.is_empty(), "Kiro must not write stdout: {stdout}");
     assert!(stderr.contains("core.filesystem.destructive-rm"));
@@ -187,15 +210,15 @@ fn kiro_hook_denies_destructive_rm_with_stderr_only() {
 #[test]
 fn kiro_hook_allows_safe_read_payload_with_empty_streams() {
     let payload = r#"{"tool_name":"read","tool_input":{"operations":[{"path":"README.md"}]}}"#;
-    let (code, stdout, stderr) = run(&["hook", "kiro"], payload);
+    let (code, stdout, stderr) = run(&["hook", "kiro-v2"], payload);
     assert_eq!(code, 0);
-    assert!(stdout.is_empty());
-    assert!(stderr.is_empty());
+    assert_eq!(stdout.len(), 0);
+    assert_eq!(stderr.len(), 0);
 }
 
 #[test]
 fn kiro_hook_invalid_json_fails_closed_with_stderr_only() {
-    let (code, stdout, stderr) = run(&["hook", "kiro"], "not json");
+    let (code, stdout, stderr) = run(&["hook", "kiro-v2"], "not json");
     assert_eq!(code, 2);
     assert!(stdout.is_empty(), "Kiro must not write stdout: {stdout}");
     assert!(
@@ -209,7 +232,7 @@ fn kiro_hook_invalid_json_fails_closed_with_stderr_only() {
 fn no_args_returns_one_with_missing_subcommand_error() {
     let (code, stdout, stderr) = run(&[], "");
     assert_eq!(code, 1);
-    assert!(stdout.is_empty());
+    assert_eq!(stdout.len(), 0);
     assert!(stderr.contains("missing value for subcommand"));
 }
 
@@ -349,6 +372,75 @@ fn init_auto_detect_with_no_agents_returns_error() {
     let (code, stdout, stderr) = run_in(&["init"], &cwd, Some(&home), "");
     assert_eq!(code, 1, "stdout: {stdout} stderr: {stderr}");
     assert!(stderr.contains("no agent detected"), "stderr: {stderr}");
+}
+
+#[test]
+fn init_auto_detect_preserves_managed_opencode_generation() {
+    for (generation, plugin_dir) in [
+        ("opencode-v1", "plugins"),
+        ("opencode-v1", "plugin"),
+        ("opencode-v2", "plugins"),
+    ] {
+        let (_dir, home, cwd) = empty_non_repo_cwd();
+        let config = home.join(".config");
+        let mut cmd = binary();
+        let output = cmd
+            .args(["init", generation, "--no-verify"])
+            .current_dir(&cwd)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let plugin = config.join("opencode/plugins/ptuf.ts");
+        if plugin_dir == "plugin" {
+            let legacy = config.join("opencode/plugin/ptuf.ts");
+            std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+            std::fs::rename(&plugin, &legacy).unwrap();
+        }
+        let output = binary()
+            .args(["init", "--no-verify"])
+            .current_dir(&cwd)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let body = std::fs::read_to_string(&plugin).unwrap();
+        assert!(
+            body.contains(&format!("[\"hook\", \"{generation}\"]")),
+            "{body}"
+        );
+        assert!(!config.join("opencode/plugin/ptuf.ts").exists());
+    }
+}
+
+#[test]
+fn init_auto_detect_requires_explicit_opencode_generation_for_new_install() {
+    let (_dir, home, cwd) = empty_non_repo_cwd();
+    let config = home.join(".config");
+    std::fs::create_dir_all(config.join("opencode")).unwrap();
+    for args in [
+        vec!["init", "--no-verify"],
+        vec!["--json", "init", "--dry-run"],
+    ] {
+        let output = binary()
+            .args(args)
+            .current_dir(&cwd)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(text.contains("init opencode-v1"), "{text}");
+        assert!(text.contains("init opencode-v2"), "{text}");
+        assert!(!config.join("opencode/plugins/ptuf.ts").exists());
+    }
 }
 
 #[test]
@@ -498,7 +590,7 @@ fn init_kiro_default_mode_patches_existing_workspace_agents() {
     std::fs::write(agents_dir.join("beta.json"), r#"{"name":"beta"}"#).expect("write beta");
 
     let (code, stdout, stderr) = run_in(
-        &["init", "kiro", "--workspace-only", "--dry-run"],
+        &["init", "kiro-v2", "--workspace-only", "--dry-run"],
         cwd,
         Some(&home),
         "",
@@ -521,7 +613,7 @@ fn init_kiro_new_agent_flag_preserves_legacy_path() {
     std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
 
     let (code, stdout, stderr) = run_in(
-        &["init", "kiro", "--new-agent", "--dry-run"],
+        &["init", "kiro-v2", "--new-agent", "--dry-run"],
         cwd,
         Some(&home),
         "",
@@ -533,38 +625,11 @@ fn init_kiro_new_agent_flag_preserves_legacy_path() {
     );
 }
 
-/// The versioned `kiro-v2` token drives the same adapter as the bare
-/// `kiro` alias, and both spellings write the same versioned
-/// `hook kiro-v2` command so installs made under either stay mutually
-/// idempotent.
+/// `init kiro-v2` patches agent JSON with the *versioned* `hook kiro-v2`
+/// command. If it wrote the floating alias, the installed hook line would
+/// silently change adapter generation whenever the alias moves.
 #[test]
-fn init_kiro_v2_token_matches_kiro_alias_end_to_end() {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let cwd = dir.path();
-    let home = dir.path().join("home");
-    std::fs::create_dir_all(&home).expect("mkdir home");
-    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
-    let agents_dir = cwd.join(".kiro").join("agents");
-    std::fs::create_dir_all(&agents_dir).expect("mkdir agents");
-    std::fs::write(agents_dir.join("alpha.json"), r#"{"name":"alpha"}"#).expect("write alpha");
-
-    let (code, stdout, stderr) = run_in(
-        &["init", "kiro-v2", "--workspace-only", "--dry-run"],
-        cwd,
-        Some(&home),
-        "",
-    );
-    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
-    assert!(stdout.contains("alpha.json"), "stdout: {stdout}");
-    assert!(stdout.contains("hook kiro-v2"), "stdout: {stdout}");
-}
-
-/// `init kiro` (the floating alias) must write the *versioned* token
-/// into the agent config. If it wrote the alias, the installed hook line
-/// would silently start dispatching to a future v3 adapter as soon as
-/// ptuf is upgraded.
-#[test]
-fn init_kiro_alias_writes_versioned_hook_command_into_agent_json() {
+fn init_kiro_v2_writes_versioned_hook_command_into_agent_json() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let cwd = dir.path();
     let home = dir.path().join("home");
@@ -575,8 +640,12 @@ fn init_kiro_alias_writes_versioned_hook_command_into_agent_json() {
     let alpha = agents_dir.join("alpha.json");
     std::fs::write(&alpha, r#"{"name":"alpha"}"#).expect("write alpha");
 
-    let (code, stdout, stderr) =
-        run_in(&["init", "kiro", "--workspace-only"], cwd, Some(&home), "");
+    let (code, stdout, stderr) = run_in(
+        &["init", "kiro-v2", "--workspace-only"],
+        cwd,
+        Some(&home),
+        "",
+    );
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
 
     let body = std::fs::read_to_string(&alpha).expect("read alpha");
@@ -587,13 +656,160 @@ fn init_kiro_alias_writes_versioned_hook_command_into_agent_json() {
     );
 }
 
+/// The bare `kiro` alias now resolves to the v3 adapter: it writes a
+/// standalone `~/.kiro/hooks/ptuf.json` document (global by default)
+/// pinned to `hook kiro-v3`, and leaves agent profiles alone.
 #[test]
-fn hook_kiro_v2_denies_destructive_rm_like_the_kiro_alias() {
+fn init_kiro_alias_writes_global_v3_hook_document() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
+    let agents_dir = cwd.join(".kiro").join("agents");
+    std::fs::create_dir_all(&agents_dir).expect("mkdir agents");
+    let alpha = agents_dir.join("alpha.json");
+    std::fs::write(&alpha, r#"{"name":"alpha"}"#).expect("write alpha");
+
+    let (code, stdout, stderr) = run_in(&["init", "kiro"], cwd, Some(&home), "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    let doc_path = home.join(".kiro/hooks/ptuf.json");
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&doc_path).expect("read hook doc"))
+            .expect("hook doc is JSON");
+    assert_eq!(doc["version"], "v1");
+    assert_eq!(doc["hooks"][0]["trigger"], "PreToolUse");
+    assert_eq!(doc["hooks"][0]["matcher"], "*");
+    assert_eq!(doc["hooks"][0]["action"]["type"], "command");
+    let command = doc["hooks"][0]["action"]["command"]
+        .as_str()
+        .expect("command string");
+    assert!(command.ends_with(" hook kiro-v3"), "command: {command}");
+    assert_eq!(
+        std::fs::read_to_string(&alpha).expect("read alpha"),
+        r#"{"name":"alpha"}"#,
+        "v3 install must not touch agent profiles"
+    );
+
+    // Re-running is a no-op, and `kiro-v3 --scope local` targets the repo.
+    let (code, stdout, _) = run_in(&["init", "kiro-v3", "--no-verify"], cwd, Some(&home), "");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("already"), "stdout: {stdout}");
+    let (code, stdout, stderr) = run_in(
+        &["init", "kiro-v3", "--scope", "local", "--dry-run"],
+        cwd,
+        Some(&home),
+        "",
+    );
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(
+        stdout.contains(".kiro/hooks/ptuf.json") && !stdout.contains("home/.kiro"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
+fn hook_kiro_v2_denies_destructive_rm() {
     let payload = r#"{"hook_event_name":"preToolUse","tool_name":"shell","tool_input":{"command":"rm -rf /"}}"#;
     let (code, stdout, stderr) = run(&["hook", "kiro-v2"], payload);
     assert_eq!(code, 2, "stdout: {stdout} stderr: {stderr}");
     assert!(stdout.is_empty(), "Kiro must not write stdout: {stdout}");
     assert!(stderr.contains("core.filesystem.destructive-rm"));
+}
+
+/// A Kiro CLI V3 `PreToolUse` payload, as the V3 engine writes it to a
+/// command hook's stdin.
+fn kiro_v3_payload(tool: &str, input: &str) -> String {
+    format!(
+        r#"{{"session_id":"8f1c","hook_event_name":"PreToolUse","cwd":"/repo","tool_name":"{tool}","tool_input":{input}}}"#
+    )
+}
+
+#[test]
+fn hook_kiro_v3_denies_destructive_rm_with_exit_2_and_stderr_only() {
+    let payload = kiro_v3_payload("execute_bash", r#"{"command":"rm -rf /"}"#);
+    for token in ["kiro-v3", "kiro"] {
+        let (code, stdout, stderr) = run(&["hook", token], &payload);
+        assert_eq!(code, 2, "{token}: stdout: {stdout} stderr: {stderr}");
+        assert!(stdout.is_empty(), "{token}: stdout: {stdout}");
+        assert!(
+            stderr.contains("core.filesystem.destructive-rm"),
+            "{token}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn hook_kiro_v3_allows_safe_calls_with_empty_streams() {
+    for payload in [
+        kiro_v3_payload("execute_bash", r#"{"command":"ls"}"#),
+        kiro_v3_payload("read_file", r#"{"path":"README.md"}"#),
+        kiro_v3_payload("grep_search", r#"{"query":"TODO"}"#),
+    ] {
+        let (code, stdout, stderr) = run(&["hook", "kiro-v3"], &payload);
+        assert_eq!(code, 0, "{payload}: {stderr}");
+        assert!(stdout.is_empty(), "{payload}: {stdout}");
+        assert!(stderr.is_empty(), "{payload}: {stderr}");
+    }
+}
+
+/// Deleting the managed v3 hook document is a self-protection deny,
+/// whatever tool the agent uses to do it.
+#[test]
+fn hook_kiro_v3_blocks_removal_of_its_own_hook_document() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dir.path();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(cwd.join(".git")).expect("mkdir .git");
+    std::fs::create_dir_all(home.join(".kiro/hooks")).expect("mkdir hooks");
+    let doc = home.join(".kiro/hooks/ptuf.json");
+    std::fs::write(&doc, r#"{"version":"v1","hooks":[]}"#).expect("write doc");
+    let doc_s = doc.to_string_lossy().into_owned();
+    for payload in [
+        kiro_v3_payload(
+            "delete_file",
+            &format!(r#"{{"explanation":"x","targetFile":"{doc_s}"}}"#),
+        ),
+        kiro_v3_payload(
+            "fs_write",
+            &format!(r#"{{"path":"{doc_s}","text":"{{}}"}}"#),
+        ),
+        kiro_v3_payload("execute_bash", &format!(r#"{{"command":"rm {doc_s}"}}"#)),
+    ] {
+        let (code, stdout, stderr) = run_in(&["hook", "kiro-v3"], cwd, Some(&home), &payload);
+        assert_eq!(code, 2, "{payload}: stdout: {stdout} stderr: {stderr}");
+        assert!(
+            stderr.contains("core.self_protection.kiro-settings"),
+            "{payload}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn hook_kiro_v3_rejects_other_events_fail_closed() {
+    let payload = r#"{"hook_event_name":"PostToolUse","tool_name":"execute_bash","tool_input":{"command":"ls"}}"#;
+    let (code, stdout, stderr) = run(&["hook", "kiro-v3"], payload);
+    assert_eq!(code, 2, "stderr: {stderr}");
+    assert!(stdout.is_empty(), "stdout: {stdout}");
+    assert!(stderr.contains("core.engine.invalid-payload"), "{stderr}");
+}
+
+/// The V3 engine also runs legacy `hooks.preToolUse` entries from agent
+/// profiles and hands them V3 payloads; a `kiro-v2` install must keep
+/// guarding instead of blocking every tool call.
+#[test]
+fn hook_kiro_v2_guards_v3_engine_payloads() {
+    let deny = kiro_v3_payload("execute_bash", r#"{"command":"rm -rf /"}"#);
+    let (code, _, stderr) = run(&["hook", "kiro-v2"], &deny);
+    assert_eq!(code, 2);
+    assert!(
+        stderr.contains("core.filesystem.destructive-rm"),
+        "{stderr}"
+    );
+    let allow = kiro_v3_payload("read_file", r#"{"path":"README.md"}"#);
+    let (code, stdout, stderr) = run(&["hook", "kiro-v2"], &allow);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.is_empty() && stderr.is_empty());
 }
 
 #[test]
@@ -833,6 +1049,17 @@ rules:
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
     assert!(stdout.contains("pack.demo"), "stdout: {stdout}");
     assert!(stdout.contains("1 passed"), "stdout: {stdout}");
+
+    // #333: `--json plugin check` emits the report as JSON.
+    let (code, stdout, stderr) = run(&["--json", "plugin", "check", &path_str], "");
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    let body: serde_json::Value = serde_json::from_str(stdout.trim()).expect("stdout is JSON");
+    assert_eq!(body["plugin"], "pack.demo");
+    assert_eq!(body["passed"], 1);
+    assert_eq!(body["failed"], 0);
+    assert_eq!(body["cases"][0]["ruleId"], "pack.demo.no-curl");
+    assert_eq!(body["cases"][0]["expect"], "deny");
+    assert_eq!(body["cases"][0]["got"], "deny");
 }
 
 #[test]

@@ -314,7 +314,7 @@ mod tests {
         assert!(!r.mode_demoted);
         assert!(r.allowlist_id.is_none());
         assert_eq!(r.agent, "claude-code");
-        assert!(r.plugin_versions.is_empty());
+        assert_eq!(r.plugin_versions.len(), 0);
     }
 
     #[test]

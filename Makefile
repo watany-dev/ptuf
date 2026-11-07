@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants semver tools tools-deny install-hooks
+.PHONY: build test test-opencode test-scripts lint fmt fmt-check check clean coverage deny doc e2e bench pbt pbt-quick pbt-deep fuzz fuzz-soak mutants mutants-diff semver tla kani tools tools-deny install-hooks
 
 # Keep these aligned with .github/workflows/ci.yml and nightly.yml:
 # - CARGO_DENY_VERSION must match the cargo-deny pinned in
@@ -12,6 +12,7 @@ CARGO_TARPAULIN_VERSION ?= 0.35.1
 CARGO_FUZZ_VERSION ?= 0.13.1
 CARGO_MUTANTS_VERSION ?= 27.0.0
 CARGO_SEMVER_CHECKS_VERSION ?= 0.50.0
+KANI_VERSION ?= 0.68.0
 
 # When set to a non-empty value, `tools` only verifies presence and exits
 # non-zero if a required binary is missing (no `cargo install`). Useful in CI
@@ -23,6 +24,16 @@ build:
 
 test:
 	cargo test --locked
+
+# stdlib-only unittests for scripts/*.py (requires Python 3.10+).
+# Not part of `make check`; CI runs it in the `test-scripts` job.
+test-scripts:
+	python3 -m unittest discover -s tests/scripts -p 'test_*.py'
+
+# Executes the generated TypeScript callbacks (requires Node 24).
+test-opencode:
+	cargo build --locked
+	node --test tests/opencode_plugin.test.mjs
 
 lint:
 	cargo clippy --all-targets --locked -- -D warnings
@@ -107,13 +118,53 @@ fuzz-soak: tools
 # Mutation testing of the decision core (scope set in .cargo/mutants.toml).
 # Surfaces MISSED mutants — source changes the test suite fails to catch.
 # Runs on stable; not part of `make check` — see nightly.yml.
+#
+# mutants:      full scope (nightly). Builds dominate the wall clock, so
+#               debuginfo is dropped to keep each per-job build dir small
+#               and linking fast. Narrow with ARGS, e.g.
+#               ARGS="--no-config -f src/rules/destructive_rm.rs"
+#               (`-f` is ignored while .cargo/mutants.toml sets
+#               examine_globs). Results: mutants.out/.
+# mutants-diff: only the mutants on lines changed since BASE (default
+#               origin/main), widened by scripts/mutants-diff.py to every
+#               source file whose tests lost a line. Mirrors the PR
+#               `mutants-diff` job, which fails on a missed mutant.
+MUTANTS_ENV  = CARGO_PROFILE_DEV_DEBUG=0
+MUTANTS_JOBS ?= 2
+BASE         ?= origin/main
+
 mutants: tools
-	cargo mutants
+	$(MUTANTS_ENV) cargo mutants -j $(MUTANTS_JOBS) $(ARGS)
+
+mutants-diff: tools
+	mkdir -p target
+	git diff $(BASE)... > target/mutants.diff
+	python3 scripts/mutants-diff.py target/mutants.diff > target/mutants-widened.diff
+	$(MUTANTS_ENV) cargo mutants -j $(MUTANTS_JOBS) --in-diff target/mutants-widened.diff $(ARGS)
 
 # Public-API SemVer gate. Compares the working tree's exported surface
-# against `origin/main`; fails on an unversioned breaking change.
+# against the last release tag (see scripts/semver-baseline.sh); fails on
+# a breaking change the Cargo.toml version does not account for.
 semver: tools
-	cargo semver-checks --baseline-rev origin/main
+	cargo semver-checks --baseline-rev "$$(scripts/semver-baseline.sh)"
+
+
+# Formal models (formal/README.md). Not part of `make check`.
+#   - `tla` .... TLC over formal/tla: `<Spec>.cfg` must hold,
+#                `violations/*.cfg` must be violated (pre-fix bugs pinned
+#                as counterexamples). Needs Java 11+;
+#                scripts/formal-tla.sh fetches a pinned tla2tools.jar.
+#   - `kani` ... Kani bounded model checking of the `#[cfg(kani)]`
+#                harnesses in src/. Installs KANI_VERSION when missing.
+tla:
+	scripts/formal-tla.sh
+
+kani:
+	@if ! cargo kani --version 2>/dev/null | grep -q "$(KANI_VERSION)"; then \
+		if [ -n "$(SKIP_TOOL_INSTALL)" ]; then echo "missing: kani $(KANI_VERSION)"; exit 1; fi; \
+		cargo install --locked kani-verifier --version $(KANI_VERSION) && cargo kani setup; \
+	fi
+	cargo kani --lib --output-format terse
 
 tools:
 ifeq ($(SKIP_TOOL_INSTALL),)
@@ -157,7 +208,7 @@ else
 		exit 1; }
 endif
 
-check: tools-deny fmt-check lint test doc deny
+check: tools-deny fmt-check lint test test-opencode doc deny
 
 install-hooks:
 	bash scripts/install-hooks.sh

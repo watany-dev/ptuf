@@ -112,7 +112,8 @@ fn normalize_call(raw_name: &str, raw_input: Value) -> HookInput {
             normalize_command(&mut args);
             "Bash".to_string()
         },
-        "read_file" | "read_files" => {
+        // `search_files` returns matching file contents.
+        "read_file" | "read_files" | "search_files" => {
             normalize_path(&mut args);
             "Read".to_string()
         },
@@ -439,6 +440,20 @@ mod tests {
         let input = parse(body).unwrap();
         assert_eq!(input.tool_name, "Bash");
         assert_eq!(input.bash_command(), Some("npm install\nnpm test"));
+    }
+
+    #[test]
+    fn cline_search_files_normalizes_to_read() {
+        let body = r#"{
+            "hookName": "tool_call",
+            "tool_call": {
+                "name": "search_files",
+                "input": { "path": ".env", "regex": "." }
+            }
+        }"#;
+        let input = parse(body).unwrap();
+        assert_eq!(input.tool_name, "Read");
+        assert_eq!(input.file_path(), Some(".env"));
     }
 
     #[test]

@@ -5,7 +5,7 @@
 
 ## 現在の実装スコープ
 
-ptuf `v0.8.0` は次を実装済み:
+ptuf `v0.7.0` は次を実装済み:
 
 - `PreToolUse` 向け CLI とライブラリ
 - Claude Code / Codex / GitHub Copilot / Kiro CLI / Cline / Cursor / Pi /
@@ -85,7 +85,7 @@ crate 外から到達できない `pub` を機械的に弾く。公開 API は P
 - `ptuf hook claude-code`
 - `ptuf hook codex`
 - `ptuf hook copilot`
-- `ptuf hook kiro`
+- `ptuf hook kiro` (= `kiro-v3`。`kiro-v2` も可)
 - `ptuf hook cline`
 - `ptuf hook cursor`
 - `ptuf hook pi`
@@ -135,6 +135,7 @@ verify も行わない。
 | [`audit.md`](audit.md) | audit JSONL schema、redaction、閲覧 CLI |
 | [`npm-distribution.md`](npm-distribution.md) | npm 配布 (platform-package 方式) の設計 |
 | [`threat-model.md`](threat-model.md) | STRIDE 脅威モデル・信頼境界・残存リスク |
+| [`mutants-inventory.md`](mutants-inventory.md) | mutation testing の結果と MISSED の棚卸し・issue 対応 |
 | [`testing.md`](testing.md) | example-based test と PBT の役割分担 |
 | [`roadmap.md`](roadmap.md) | 各マイルストーンの到達点と今後の候補 |
 

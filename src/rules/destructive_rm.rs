@@ -1,6 +1,8 @@
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, unwrap_all_prefix_wrappers};
+use crate::facts::shell::{
+    Argv, find_exec_commands, find_lists_every_entry, find_start_paths, unwrap_all_prefix_wrappers,
+};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -14,12 +16,50 @@ const RULE_ID: &str = "core.filesystem.destructive-rm";
 // paths (`/bin/rm`, `/usr/local/bin/rm`, `./rm`) match without enumeration.
 const RM_HEADS: &[&str] = &["rm"];
 
+/// Roots whose whole subtree is protected.
 const SYSTEM_ROOTS: &[&str] = &[
-    "/etc", "/usr", "/var", "/bin", "/boot", "/lib", "/lib32", "/lib64", "/sbin", "/opt", "/root",
-    "/sys", "/proc",
+    "/etc",
+    "/usr",
+    "/var",
+    "/bin",
+    "/boot",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/sbin",
+    "/opt",
+    "/root",
+    "/sys",
+    "/proc",
+    "/System",
+    "/private/etc",
 ];
 
-const HOME_TARGETS: &[&str] = &["~", "~/", "$HOME", "$HOME/", "${HOME}", "${HOME}/"];
+/// Roots protected only as a whole: their children are routine targets
+/// (`/mnt/scratch/build`, `/private/var/folders/...` on macOS), but
+/// removing the root itself wipes mounts, devices, or every user.
+const EXACT_ROOTS: &[&str] = &[
+    "/home",
+    "/Users",
+    "/srv",
+    "/mnt",
+    "/media",
+    "/run",
+    "/dev",
+    "/Library",
+    "/Applications",
+    "/private",
+    "/private/var",
+    "/Volumes",
+];
+
+/// Parents of per-user homes: `/home/alice` (or a glob over the user
+/// segment) is a whole home directory.
+const HOME_PARENTS: &[&str] = &["/home", "/Users"];
+
+/// Spellings of the invoking user's home. `~NAME` / `~+` / `~-` are
+/// handled separately in [`home_rest`].
+const HOME_PREFIXES: &[&str] = &["$HOME", "${HOME}"];
 
 impl ConfigRule for DestructiveRm {
     fn id(&self) -> &str {
@@ -39,7 +79,7 @@ impl ConfigRule for DestructiveRm {
         let triggered = bash
             .commands()
             .into_iter()
-            .any(is_destructive_rm_invocation);
+            .any(|argv| is_destructive_rm_invocation(argv) || is_destructive_find_invocation(argv));
         if !triggered {
             return None;
         }
@@ -69,6 +109,25 @@ fn is_destructive_rm_invocation(argv: &Argv) -> bool {
         && argv.positional().any(is_destructive_target)
 }
 
+/// `find PATH -delete` / `find PATH -exec rm … {} +` with no test that
+/// narrows the match removes every entry under `PATH`, `PATH` itself
+/// included: the same as `rm -rf PATH`. A narrowing test (`-name`,
+/// `-mtime`, `-empty`, …) keeps the call out of this rule.
+fn is_destructive_find_invocation(argv: &Argv) -> bool {
+    let argv = unwrap_all_prefix_wrappers(argv);
+    if argv.head_basename() != "find" || !find_lists_every_entry(&argv) {
+        return false;
+    }
+    let deletes = argv.args.iter().any(|a| a == "-delete")
+        || find_exec_commands(&argv)
+            .iter()
+            .any(|c| is_rm_head(c.head_basename()));
+    deletes
+        && find_start_paths(&argv)
+            .into_iter()
+            .any(is_destructive_target)
+}
+
 fn is_rm_head(head: &str) -> bool {
     RM_HEADS.contains(&head)
 }
@@ -80,11 +139,8 @@ fn has_recursive_force_flag(argv: &Argv) -> bool {
 
 fn has_recursive(flags: &[&str]) -> bool {
     flags.iter().any(|flag| {
-        if *flag == "--recursive" {
-            return true;
-        }
-        if flag.starts_with("--") {
-            return false;
+        if let Some(long) = flag.strip_prefix("--") {
+            return is_long_prefix(long, "recursive");
         }
         flag[1..].chars().any(|c| c == 'r' || c == 'R')
     })
@@ -92,17 +148,32 @@ fn has_recursive(flags: &[&str]) -> bool {
 
 fn has_force(flags: &[&str]) -> bool {
     flags.iter().any(|flag| {
-        if *flag == "--force" {
-            return true;
-        }
-        if flag.starts_with("--") {
-            return false;
+        if let Some(long) = flag.strip_prefix("--") {
+            if let Some((name, value)) = long.split_once('=') {
+                // `--interactive=never` suppresses prompts like `-f`.
+                return is_long_prefix(name, "interactive")
+                    && matches!(value, "never" | "no" | "none");
+            }
+            return is_long_prefix(long, "force");
         }
         flag[1..].contains('f')
     })
 }
 
+/// GNU getopt_long accepts any unambiguous prefix of a long option
+/// (`--recursiv`, `--r`). Uniqueness is not checked: a prefix that GNU
+/// would reject as ambiguous only errs toward deny.
+fn is_long_prefix(given: &str, full: &str) -> bool {
+    !given.is_empty() && full.starts_with(given)
+}
+
 fn is_destructive_target(arg: &str) -> bool {
+    expansion_candidates(arg)
+        .iter()
+        .any(|candidate| is_destructive_literal(candidate))
+}
+
+fn is_destructive_literal(arg: &str) -> bool {
     if arg.contains("..") {
         return true;
     }
@@ -112,12 +183,99 @@ fn is_destructive_target(arg: &str) -> bool {
     if first_segment_has_glob(&normalized) {
         return true;
     }
+    if let Some(rest) = home_rest(&normalized) {
+        // The home itself, or a glob over its direct children (`~/*`,
+        // `~/.*`), empties the whole home directory.
+        return rest.is_empty() || leading_segment_has_glob(rest);
+    }
+    if let Some(user) = HOME_PARENTS
+        .iter()
+        .find_map(|p| normalized.strip_prefix(p).and_then(|r| r.strip_prefix('/')))
+        && !user.is_empty()
+        && (!user.contains('/') || leading_segment_has_glob(user))
+    {
+        return true;
+    }
     normalized == "/"
         || normalized == "/*"
-        || HOME_TARGETS.contains(&normalized.as_str())
+        || EXACT_ROOTS.contains(&normalized.as_str())
         || SYSTEM_ROOTS
             .iter()
             .any(|root| normalized == *root || normalized.starts_with(&format!("{root}/")))
+}
+
+/// When `path` names a home directory (`~`, `~NAME`, `~+`, `~-`,
+/// `$HOME`, `${HOME}`), the remainder after that prefix with its
+/// leading `/` stripped (empty for the home itself).
+fn home_rest(path: &str) -> Option<&str> {
+    let rest = if let Some(after) = path.strip_prefix('~') {
+        // `~NAME` is NAME's home; `~+` / `~-` are `$PWD` / `$OLDPWD`.
+        let end = after.find('/').unwrap_or(after.len());
+        let name = &after[..end];
+        // (`-` is covered by the user-name character set.)
+        let valid = name.is_empty()
+            || name == "+"
+            || name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+        if !valid {
+            return None;
+        }
+        &after[end..]
+    } else {
+        HOME_PREFIXES.iter().find_map(|p| {
+            path.strip_prefix(p)
+                .filter(|r| r.is_empty() || r.starts_with('/'))
+        })?
+    };
+    Some(rest.strip_prefix('/').unwrap_or(rest))
+}
+
+/// Literal targets a word may expand to once `${NAME<op>WORD}` runs:
+/// the bare `${NAME}` form, plus `WORD` itself for the operators that
+/// can substitute it (`-`, `=`, `+`, with or without `:`). `${HOME:?}`
+/// and friends therefore compare as `${HOME}`.
+fn expansion_candidates(arg: &str) -> Vec<String> {
+    if !arg.contains("${") {
+        return vec![arg.to_owned()];
+    }
+    let mut out = vec![String::new()];
+    let mut rest = arg;
+    while let Some(start) = rest.find("${") {
+        let (lit, after) = rest.split_at(start);
+        for c in &mut out {
+            c.push_str(lit);
+        }
+        let body_start = &after[2..];
+        let Some(close) = body_start.find('}') else {
+            rest = after;
+            break;
+        };
+        let body = &body_start[..close];
+        rest = &body_start[close + 1..];
+        let name_len = body
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(body.len());
+        let (name, op) = body.split_at(name_len);
+        let base = format!("${{{name}}}");
+        let op = op.strip_prefix(':').unwrap_or(op);
+        let word = ['-', '=', '+'].iter().find_map(|c| op.strip_prefix(*c));
+        let mut next = Vec::with_capacity(out.len() * 2);
+        for c in &out {
+            next.push(format!("{c}{base}"));
+            if let Some(w) = word {
+                next.push(format!("{c}{w}"));
+            }
+        }
+        // Bound the fan-out for adversarial inputs; the first
+        // candidates already cover the bare and substituted forms.
+        next.truncate(16);
+        out = next;
+    }
+    for c in &mut out {
+        c.push_str(rest);
+    }
+    out
 }
 
 /// Returns true when `path` is absolute and its first segment contains shell
@@ -127,31 +285,37 @@ fn first_segment_has_glob(path: &str) -> bool {
     let Some(rest) = path.strip_prefix('/') else {
         return false;
     };
-    let segment = rest.split('/').next().unwrap_or("");
+    leading_segment_has_glob(rest)
+}
+
+/// Whether the first `/`-separated segment of a relative path globs.
+fn leading_segment_has_glob(path: &str) -> bool {
+    segment_has_glob(path.split('/').next().unwrap_or(""))
+}
+
+fn segment_has_glob(segment: &str) -> bool {
     segment.contains(['*', '?', '['])
 }
 
-/// Collapse POSIX duplicate slashes and trim a trailing `/` before
-/// comparing rm targets. Parent-segment tokens are handled pessimistically
-/// by the caller because the resolved path cannot be known pre-shell.
+/// Collapse POSIX duplicate slashes, drop `.` segments (`/./etc` is
+/// `/etc`), and trim a trailing `/` before comparing rm targets.
+/// Parent-segment tokens are handled pessimistically by the caller
+/// because the resolved path cannot be known pre-shell.
 fn normalize_rm_target(arg: &str) -> String {
-    let mut out = String::with_capacity(arg.len());
-    let mut prev_slash = false;
-    for ch in arg.chars() {
-        if ch == '/' {
-            if !prev_slash {
-                out.push(ch);
-            }
-            prev_slash = true;
-        } else {
-            out.push(ch);
-            prev_slash = false;
-        }
+    let absolute = arg.starts_with('/');
+    let segments: Vec<&str> = arg
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect();
+    let joined = segments.join("/");
+    if absolute {
+        format!("/{joined}")
+    } else if joined.is_empty() {
+        // `.` / `./` stays the current directory.
+        arg.chars().take(1).collect()
+    } else {
+        joined
     }
-    if out.len() > 1 && out.ends_with('/') {
-        out.pop();
-    }
-    out
 }
 
 #[cfg(test)]
@@ -192,6 +356,40 @@ mod tests {
         assert_eq!(r.id(), RULE_ID);
         assert_eq!(r.severity(), Severity::Critical);
         assert!(r.hard_deny());
+    }
+
+    #[test]
+    fn denies_find_that_deletes_a_whole_protected_tree() {
+        for cmd in [
+            "find / -delete",
+            "find ~ -delete",
+            "find /etc -type f -delete",
+            "find -L /usr -xdev -delete",
+            "find / -exec rm -rf {} +",
+            "find / -exec rm {} \\;",
+            "find /var -execdir /bin/rm -f {} +",
+            "sudo find / -exec sudo rm -rf {} +",
+            "find build / -delete",
+        ] {
+            assert_deny(cmd);
+        }
+    }
+
+    #[test]
+    fn allows_find_that_is_narrowed_or_harmless() {
+        for cmd in [
+            "find / -name '*.pyc' -delete",
+            "find / -empty -delete",
+            "find ~ -mtime +30 -exec rm {} +",
+            "find /tmp/scratch -delete",
+            "find build -delete",
+            "find / -print",
+            "find / -exec ls {} +",
+            "find / -exec chmod 0 {} +",
+            "ls / -delete",
+        ] {
+            assert_allow(cmd);
+        }
     }
 
     #[test]
@@ -297,6 +495,96 @@ mod tests {
         assert_allow("rm -rf /procfs");
         assert_allow("rm -rf /tmp");
         assert_allow("rm -rf /home/user/projects");
+    }
+
+    #[test]
+    fn denies_dot_segments_in_system_paths() {
+        assert_deny("rm -rf /./etc");
+        assert_deny("rm -rf /./usr/lib");
+        assert_deny("rm -rf /usr/./");
+        assert_allow("rm -rf ./build");
+        assert_allow("rm -rf .");
+    }
+
+    #[test]
+    fn denies_globs_over_home_children() {
+        for cmd in [
+            "rm -rf ~/*",
+            "rm -rf ~/.*",
+            "rm -rf $HOME/*",
+            r#"rm -rf "$HOME"/*"#,
+            "rm -rf ${HOME}/*",
+        ] {
+            assert_deny(cmd);
+        }
+        assert_allow("rm -rf ~/.cache/*");
+        assert_allow("rm -rf ~/projects/x");
+    }
+
+    #[test]
+    // `${HOME:?}` is shell syntax, not a format string.
+    #[allow(clippy::literal_string_with_formatting_args)]
+    fn denies_parameter_expansion_operators() {
+        for cmd in [
+            "rm -rf ${HOME:?}",
+            r#"rm -rf "${HOME:?}/""#,
+            "rm -rf ${HOME%/}",
+            "rm -rf ${X:-/}",
+            "rm -rf ${X:=/etc}",
+            "rm -rf ${X+/usr}",
+        ] {
+            assert_deny(cmd);
+        }
+        assert_allow("rm -rf ${BUILD_DIR:-./build}");
+        assert_allow(r#"rm -rf "${TMPDIR:?}/foo""#);
+    }
+
+    #[test]
+    fn denies_abbreviated_long_options_and_interactive_never() {
+        assert_deny("rm --recursiv --forc /");
+        assert_deny("rm --r --f /etc");
+        assert_deny("rm -r --interactive=never /etc");
+        assert_deny("rm -r --inter=no /etc");
+        assert_allow("rm -r --interactive=always /etc");
+        assert_allow("rm -r --verbose /etc");
+    }
+
+    #[test]
+    fn denies_extra_roots_and_user_homes() {
+        for path in [
+            "/home",
+            "/Users",
+            "/srv",
+            "/mnt",
+            "/media",
+            "/run",
+            "/dev",
+            "/Library",
+            "/Applications",
+            "/private",
+            "/private/var",
+            "/Volumes",
+            "/System/Library",
+            "/private/etc/hosts",
+            "/home/alice",
+            "/Users/bob/",
+            "/home/*",
+        ] {
+            assert_deny(&format!("rm -rf {path}"));
+        }
+        assert_allow("rm -rf /home/alice/proj/target");
+        assert_allow("rm -rf /mnt/scratch/build");
+        assert_allow("rm -rf /private/var/folders/x");
+        assert_allow("rm -rf /Library/Caches/foo");
+    }
+
+    #[test]
+    fn denies_tilde_user_homes() {
+        assert_deny("rm -rf ~root");
+        assert_deny("rm -rf ~alice/");
+        assert_deny("rm -rf ~+");
+        assert_deny("rm -rf ~-");
+        assert_allow("rm -rf ~alice/tmp");
     }
 
     #[test]

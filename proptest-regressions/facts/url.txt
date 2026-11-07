@@ -5,3 +5,6 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 6cae01be1cd41821aab74870a33e20ab457a49c7545e0ee75172ee0d0e3140b4 # shrinks to user = "q", pass = "a", host = "a0"
+cc e71f84fdccec14ae088f8b04567dca728f8a08848ae426eb712f8a6823d9bd0b # shrinks to scheme = "http", host = "a.", path = ""
+cc 84db652151cdf63f4ddb2ed2ebe4e0704cddbbe0cf906c094eac51b06f73b36e # shrinks to scheme = "http", sep = "://", user = "", host = ".", port = "", tail = ""
+cc 7fcf964c41c159a351f792af85e69d0bebfb0de488affecd2a108ce974857da4 # shrinks to scheme = "http", sep = ":", user = "", host = "0", port = "", tail = ""

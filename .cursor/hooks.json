@@ -4,7 +4,7 @@
       {
         "command": "bash .cursor/ptuf-hook.sh",
         "failClosed": true,
-        "matcher": "Shell|Bash|Read|ReadFile|Write|Edit|MCP|WebFetch|Fetch|mcp__.*",
+        "matcher": "Shell|Bash|Read|ReadFile|Grep|Write|Edit|Delete|MCP|WebFetch|Fetch|mcp__.*",
         "timeout": 10,
         "type": "command"
       }

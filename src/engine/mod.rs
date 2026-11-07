@@ -29,8 +29,8 @@ use crate::rules::{self, ConfigRule};
 use crate::self_paths::ProtectedPaths;
 
 use filter::{
-    AllowlistContext, allowlist_hit_for, apply_rule_override, demote_for_mode, effective_severity,
-    is_pack_disabled,
+    AllowlistContext, allowlist_hit_for, apply_rule_override, demote_with_floor,
+    effective_severity, is_pack_disabled,
 };
 
 /// Resolved engine ready to evaluate hook payloads.
@@ -135,8 +135,8 @@ impl Engine {
         let config = config::load_for(repo_root)?;
         let mut plugins = PluginSet::new();
         plugins.load_paths(&config.plugin_paths)?;
-        let (audit_sink, audit_warning) = audit_sink_from_config(&config);
         let protected = ProtectedPaths::collect(repo_root, &config);
+        let (audit_sink, audit_warning) = audit_sink_from_config(&config, &protected);
         let plugin_versions = compute_plugin_versions(&plugins);
         let project_facts = facts::project::collect(repo_root, &config.protected_branches);
         let workspaces = compute_workspaces(repo_root, &config);
@@ -176,8 +176,8 @@ impl Engine {
     pub fn with_config(config: Config) -> Result<Self, EngineError> {
         let mut plugins = PluginSet::new();
         plugins.load_paths(&config.plugin_paths)?;
-        let (audit_sink, audit_warning) = audit_sink_from_config(&config);
         let protected = ProtectedPaths::collect(None, &config);
+        let (audit_sink, audit_warning) = audit_sink_from_config(&config, &protected);
         let plugin_versions = compute_plugin_versions(&plugins);
         let project_facts = facts::project::collect(None, &config.protected_branches);
         let workspaces = compute_workspaces(None, &config);
@@ -340,18 +340,20 @@ impl Engine {
             now,
         };
         let mut allowlist_hits: Vec<&str> = Vec::new();
-        let mut decisions: Vec<Decision> = Vec::new();
+        // Each fired rule's decision after overrides, paired with what the
+        // rule itself returned (the floor for monitor-mode demotion).
+        let mut decisions: Vec<(Decision, Decision)> = Vec::new();
         for rule in rules::iter() {
             if is_pack_disabled(rule, &self.config) {
                 continue;
             }
-            if let Some(d) = rule.evaluate(&facts, input)
-                && let Some(d) = apply_rule_override(rule, d, &self.config)
+            if let Some(raw) = rule.evaluate(&facts, input)
+                && let Some(d) = apply_rule_override(rule, raw.clone(), &self.config)
             {
                 if let Some(id) = allowlist_hit_for(rule, &d, &allowlist_ctx) {
                     allowlist_hits.push(id);
                 } else {
-                    decisions.push(d);
+                    decisions.push((d, raw));
                 }
             }
         }
@@ -360,20 +362,29 @@ impl Engine {
             if is_pack_disabled(rule, &self.config) {
                 continue;
             }
-            if let Some(d) = rule.evaluate(&facts, input)
-                && let Some(d) = apply_rule_override(rule, d, &self.config)
+            if let Some(raw) = rule.evaluate(&facts, input)
+                && let Some(d) = apply_rule_override(rule, raw.clone(), &self.config)
             {
                 if let Some(id) = allowlist_hit_for(rule, &d, &allowlist_ctx) {
                     allowlist_hits.push(id);
                 } else {
-                    decisions.push(d);
+                    decisions.push((d, raw));
                 }
             }
         }
-        let raw = aggregate(decisions);
-        let demoted_decision = demote_for_mode(raw.clone(), self.config.mode, &self.plugins);
-        let mode_demoted = matches!(raw, Decision::Deny { .. })
-            && matches!(demoted_decision, Decision::Monitor { .. });
+        // Demote each rule's decision before aggregating, not the aggregate:
+        // `aggregate` keeps the last of equal-kind decisions, so demoting
+        // only the winner would let a later non-hardDeny deny drag a
+        // co-firing hardDeny down to Monitor.
+        let raw_is_deny = decisions
+            .iter()
+            .any(|(d, _)| matches!(d, Decision::Deny { .. }));
+        let demoted_decision = aggregate(
+            decisions
+                .into_iter()
+                .map(|(d, raw)| demote_with_floor(d, raw, self.config.mode, &self.plugins)),
+        );
+        let mode_demoted = raw_is_deny && !matches!(demoted_decision, Decision::Deny { .. });
         let allowlist_ids: Vec<String> =
             allowlist_hits.iter().map(|id| (*id).to_string()).collect();
         let allowlist_id = if matches!(demoted_decision, Decision::Allow) {
@@ -468,7 +479,10 @@ pub(super) fn compute_workspaces(repo_root: Option<&Path>, config: &Config) -> V
     facts::path::canonical_workspaces(repo_root, &config.additional_workspaces, &SystemEnv)
 }
 
-fn audit_sink_from_config(config: &Config) -> (Box<dyn AuditSink>, Option<String>) {
+fn audit_sink_from_config(
+    config: &Config,
+    protected: &ProtectedPaths,
+) -> (Box<dyn AuditSink>, Option<String>) {
     if !config.audit.enabled {
         return (Box::new(NoopSink), None);
     }
@@ -478,6 +492,18 @@ fn audit_sink_from_config(config: &Config) -> (Box<dyn AuditSink>, Option<String
             Some("ptuf: audit is enabled but $HOME is not set; audit disabled".into()),
         );
     };
+    // Appending JSONL to a hook registration, config, plugin, or the
+    // binary would corrupt the very files self-protection guards.
+    if let Some(kind) = protected.match_path(&path) {
+        return (
+            Box::new(NoopSink),
+            Some(format!(
+                "ptuf: audit path {} is a protected {} file; audit disabled",
+                path.display(),
+                kind.as_str()
+            )),
+        );
+    }
     match JsonlSink::open(&path) {
         Ok(s) => (Box::new(s), None),
         Err(err) => (
@@ -694,7 +720,7 @@ rules:
         let cfg = Config::default();
         let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
         let _ = engine.decide(&bash("ls"));
-        assert!(captured.records().is_empty());
+        assert_eq!(captured.records().len(), 0);
     }
 
     #[test]
@@ -717,7 +743,7 @@ rules:
         cfg.audit.include_denied = false;
         let engine = engine_with(cfg).with_audit_sink(Box::new(SharedMemorySink(captured.clone())));
         let _ = engine.decide(&bash("rm -rf /"));
-        assert!(captured.records().is_empty());
+        assert_eq!(captured.records().len(), 0);
     }
 
     #[test]
@@ -851,6 +877,24 @@ rules:
     }
 
     #[test]
+    fn audit_sink_refuses_a_protected_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let settings = dir.path().join("settings.json");
+        std::fs::write(&settings, "{}").expect("write");
+        let protected = ProtectedPaths {
+            claude_settings: vec![settings.clone()],
+            ..ProtectedPaths::default()
+        };
+        let mut cfg = Config::default();
+        cfg.audit.enabled = true;
+        cfg.audit.path = Some(settings.clone());
+        let (_sink, warning) = audit_sink_from_config(&cfg, &protected);
+        let warning = warning.expect("protected audit path must warn");
+        assert!(warning.contains("protected"), "{warning}");
+        assert_eq!(std::fs::read_to_string(&settings).expect("read"), "{}");
+    }
+
+    #[test]
     fn record_audit_captures_write_failure_via_failing_sink() {
         // D9: write failures (permission denied, disk full, ...) used
         // to be silent. They should now accumulate in the engine and
@@ -859,7 +903,7 @@ rules:
         cfg.audit.include_denied = true;
         let engine = engine_with(cfg).with_audit_sink(Box::new(FailingSink));
         // Pre-condition: nothing captured before any decide call.
-        assert!(engine.drain_audit_write_warnings().is_empty());
+        assert_eq!(engine.drain_audit_write_warnings().len(), 0);
 
         let outcome = engine.decide(&bash("rm -rf /"));
         assert!(matches!(outcome.decision, Decision::Deny { .. }));
@@ -877,7 +921,7 @@ rules:
             warnings[0]
         );
         // Drain semantics: a second call returns nothing.
-        assert!(engine.drain_audit_write_warnings().is_empty());
+        assert_eq!(engine.drain_audit_write_warnings().len(), 0);
     }
 
     #[test]
@@ -1002,6 +1046,7 @@ rules:
         let _ = engine.decide(&bash("rm -rf /"));
     }
 
+    use super::filter::demote_for_mode;
     use crate::config::PackOverride;
     use crate::testing::proptest::{decision, hook_input};
     use proptest::prelude::*;

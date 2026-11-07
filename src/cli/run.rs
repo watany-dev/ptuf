@@ -90,6 +90,12 @@ fn invalid_payload_deny(problem: &str) -> Decision {
     }
 }
 
+/// Normalise `body` with `agent`'s adapter, then reject a Bash call
+/// without a string command (see [`require_bash_command`]).
+fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
+    adapt_hook_input(agent, body).and_then(require_bash_command)
+}
+
 /// Parse stdin into a [`HookInput`] using the agent-specific schema.
 ///
 /// Claude Code and Codex both speak the snake_case
@@ -99,14 +105,15 @@ fn invalid_payload_deny(problem: &str) -> Decision {
 /// payload routes through `cli::copilot_input::parse` for normalisation
 /// before the engine sees it. Kiro uses a snake_case shape but with its
 /// own tool-name vocabulary (`shell`, `read`, `write`, `@server/tool`,
-/// etc.), so its payload routes through `cli::kiro_input::parse`. Cline
+/// etc.), so its payload routes through `cli::kiro_input::parse` (v2) /
+/// `cli::kiro_input::parse_v3` (v3). Cline
 /// wraps its tool call in a `hookName` envelope (`tool_call` or legacy
 /// `preToolUse`), so its payload routes through `cli::cline_input::parse`.
 /// Cursor speaks a `hook_event_name`-dispatched shape (`preToolUse` /
 /// `beforeShellExecution` / `beforeReadFile` / `beforeMCPExecution`) with
 /// its own tool vocabulary, so its payload routes through
 /// `cli::cursor_input::parse`.
-fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput, String> {
+fn adapt_hook_input(agent: HookAgent, body: &str) -> Result<HookInput, String> {
     // Every adapter fails with the shared `input_helpers::InputError`,
     // which this single consumer flattens to its rendered message.
     let adapted = match agent {
@@ -115,16 +122,28 @@ fn parse_hook_input_for_agent(agent: HookAgent, body: &str) -> Result<HookInput,
                 .map_err(|err| format!("hook payload is not valid JSON ({err})"));
         },
         HookAgent::Copilot => copilot_input::parse(body),
-        HookAgent::Kiro => kiro_input::parse(body),
+        HookAgent::KiroV2 => kiro_input::parse(body),
+        HookAgent::KiroV3 => kiro_input::parse_v3(body),
         HookAgent::Cline => cline_input::parse(body),
         HookAgent::Cursor => cursor_input::parse(body),
         HookAgent::Pi => pi_input::parse(body),
-        HookAgent::Opencode => opencode_input::parse(body),
+        HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => opencode_input::parse(body),
     };
     adapted.map_err(|err| err.to_string())
 }
 
+/// Every Bash rule reads `tool_input.command` as a string; without one
+/// the parser never runs and the call would sail through as allow.
+/// Treat that shape as an invalid payload so it fails closed instead.
+fn require_bash_command(input: HookInput) -> Result<HookInput, String> {
+    if input.tool_name == "Bash" && input.bash_command().is_none() {
+        return Err("hook payload Bash tool_input.command must be a string".into());
+    }
+    Ok(input)
+}
+
 pub(super) fn run_check<W1: Write, W2: Write>(
+    globals: GlobalFlags,
     tool: &str,
     command: &str,
     stdout: &mut W1,
@@ -147,24 +166,39 @@ pub(super) fn run_check<W1: Write, W2: Write>(
         },
         Err(deny) => deny,
     };
-    let _ = writeln!(stdout, "Decision: {}", decision_label(&decision));
-    if let Some(rule_id) = decision.rule_id() {
-        let _ = writeln!(stdout, "Rule: {rule_id}");
-    }
-    if let Some(reason) = decision.reason() {
-        let _ = writeln!(stderr, "{reason}");
+    if globals.json {
+        let body = serde_json::json!({
+            "decision": decision_label(&decision),
+            "ruleId": decision.rule_id(),
+            "reason": decision.reason(),
+        });
+        let _ = writeln!(stdout, "{body}");
+    } else {
+        let _ = writeln!(stdout, "Decision: {}", decision_label(&decision));
+        if let Some(rule_id) = decision.rule_id() {
+            let _ = writeln!(stdout, "Rule: {rule_id}");
+        }
+        if let Some(reason) = decision.reason() {
+            let _ = writeln!(stderr, "{reason}");
+        }
     }
     decision_exit_code(HookAgent::ClaudeCode, &decision)
 }
 
 pub(super) fn run_plugin_check<W1: Write, W2: Write>(
+    globals: GlobalFlags,
     path: &std::path::Path,
     stdout: &mut W1,
     stderr: &mut W2,
 ) -> u8 {
     match plugin_runner::run(path) {
         Ok(report) => {
-            if report.render(stdout).is_err() {
+            let written = if globals.json {
+                writeln!(stdout, "{}", report.to_json())
+            } else {
+                report.render(stdout)
+            };
+            if written.is_err() {
                 let _ = writeln!(stderr, "ptuf: failed to write plugin test report");
                 return 1;
             }
@@ -215,7 +249,7 @@ where
         if detected.is_empty() {
             let _ = writeln!(
                 stderr,
-                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro | kiro-v2 | cline | cursor | pi | opencode)",
+                "ptuf init: no agent detected under cwd / $HOME; pass an explicit agent (claude-code | codex | copilot | kiro | kiro-v2 | cline | cursor | pi | opencode | opencode-v1 | opencode-v2)",
             );
             return 1;
         }
@@ -751,7 +785,7 @@ impl AgentPlan {
                     }),
                 })
             },
-            HookAgent::Kiro => {
+            HookAgent::KiroV2 => {
                 let targets = init::kiro::resolve_paths(cwd, &options.kiro)?;
                 let snapshot_paths = targets
                     .agent_config_paths
@@ -765,6 +799,17 @@ impl AgentPlan {
                         let (outcome, extras) =
                             init::kiro::install_with_report(&targets, &binary, dry_run)?;
                         Ok(init::AdapterRunReport::Kiro { outcome, extras })
+                    }),
+                })
+            },
+            HookAgent::KiroV3 => {
+                let targets = init::kiro_v3::resolve_paths(cwd, &options.kiro)?;
+                Ok(Self {
+                    snapshot_paths: vec![targets.hooks_path.clone()],
+                    install: Box::new(move |dry_run| {
+                        let binary = init::detect_binary();
+                        let outcome = init::kiro_v3::install(&targets, &binary, dry_run)?;
+                        Ok(init::AdapterRunReport::Simple(outcome))
                     }),
                 })
             },
@@ -801,13 +846,22 @@ impl AgentPlan {
                     }),
                 })
             },
-            HookAgent::Opencode => {
+            HookAgent::OpencodeV1 | HookAgent::OpencodeV2 => {
                 let targets = init::opencode::resolve_paths(cwd, &options.opencode)?;
+                let generation = if options.agent.is_none() {
+                    init::opencode::auto_generation(&targets)?
+                } else {
+                    agent.opencode_generation().unwrap_or_default()
+                };
                 Ok(Self {
-                    snapshot_paths: vec![targets.plugin_path.clone()],
+                    snapshot_paths: vec![
+                        targets.plugin_path.clone(),
+                        targets.legacy_plugin_path.clone(),
+                    ],
                     install: Box::new(move |dry_run| {
                         let binary = init::detect_binary();
-                        let outcome = init::opencode::install(&targets, &binary, dry_run)?;
+                        let outcome =
+                            init::opencode::install(&targets, &binary, generation, dry_run)?;
                         Ok(init::AdapterRunReport::Simple(outcome))
                     }),
                 })
@@ -959,9 +1013,9 @@ mod tests {
         })
     }
 
-    fn cmd_init_opencode_local(verify: bool, dry_run: bool) -> Command {
+    fn cmd_init_opencode_local(agent: HookAgent, verify: bool, dry_run: bool) -> Command {
         Command::Init(InitOptions {
-            agent: Some(HookAgent::Opencode),
+            agent: Some(agent),
             verify,
             dry_run,
             kiro: init::kiro::KiroInitOptions::default(),
@@ -1042,8 +1096,38 @@ mod tests {
         let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
         let (code, out, err) = run_with(&["hook", "claude-code"], payload);
         assert_eq!(code, 0);
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         assert!(err.is_empty(), "unexpected stderr: {err}");
+    }
+
+    #[test]
+    fn hook_fails_closed_when_bash_command_is_not_a_string() {
+        for (agent, payload) in [
+            (
+                "codex",
+                r#"{"tool_name":"Bash","tool_input":{"command":["bash","-lc","rm -rf /"]}}"#,
+            ),
+            (
+                "claude-code",
+                r#"{"tool_name":"Bash","tool_input":{"cmd":"rm -rf /"}}"#,
+            ),
+            (
+                "claude-code",
+                r#"{"tool_name":"Bash","tool_input":"rm -rf /"}"#,
+            ),
+            ("claude-code", r#"{"tool_name":"Bash"}"#),
+            (
+                "cline",
+                r#"{"hookName":"tool_call","tool_call":{"name":"execute_command","input":{}}}"#,
+            ),
+        ] {
+            // Cline blocks with exit 0 + `cancel: true`, so judge by the rule.
+            let (_code, out, err) = run_with(&["hook", agent], payload);
+            assert!(
+                err.contains(INVALID_PAYLOAD_RULE),
+                "{agent} {payload}: {out} {err}"
+            );
+        }
     }
 
     #[test]
@@ -1064,7 +1148,7 @@ mod tests {
         assert_eq!(code, 0);
         assert!(out.contains("USAGE"));
         assert!(out.contains("audit"));
-        assert!(err.is_empty());
+        assert_eq!(err.len(), 0);
     }
 
     #[test]
@@ -1175,7 +1259,7 @@ rules:
         let mut err = Vec::new();
         let code = run(
             GlobalFlags::default(),
-            cmd_init(Some(HookAgent::Kiro), false, true),
+            cmd_init(Some(HookAgent::KiroV2), false, true),
             b"" as &[u8],
             &mut out,
             &mut err,
@@ -1279,7 +1363,7 @@ rules:
         let mut err = Vec::new();
         let code = run(
             GlobalFlags::default(),
-            cmd_init_opencode_local(false, false),
+            cmd_init_opencode_local(HookAgent::OpencodeV2, false, false),
             b"" as &[u8],
             &mut out,
             &mut err,
@@ -1287,6 +1371,36 @@ rules:
         assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
         assert!(String::from_utf8_lossy(&out).contains("registered hook"));
         assert!(plugin_path.exists());
+        let body = std::fs::read_to_string(&plugin_path).unwrap();
+        assert!(body.contains("ptuf-agent: opencode-v2"));
+        assert!(body.contains(r#"["hook", "opencode-v2"]"#));
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_init_explicit_opencode_v1_writes_v1_plugin_at_same_path() {
+        let dir = workdir("init-opencode-v1-real");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let _guard = CwdGuard::change_to(&dir).expect("set_current_dir");
+        let plugin_path = dir.join(".opencode/plugins/ptuf.ts");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run(
+            GlobalFlags::default(),
+            cmd_init_opencode_local(HookAgent::OpencodeV1, false, false),
+            b"" as &[u8],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(plugin_path.exists());
+        let body = std::fs::read_to_string(&plugin_path).unwrap();
+        // The generation lives in the file content; the path is shared so
+        // a host only ever loads one ptuf plugin.
+        assert!(body.contains("ptuf-agent: opencode"));
+        assert!(body.contains(r#"["hook", "opencode-v1"]"#));
+        assert!(!body.contains("ptuf-agent: opencode-v2"));
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1301,7 +1415,7 @@ rules:
         let mut err = Vec::new();
         let code = run(
             GlobalFlags::default(),
-            cmd_init_opencode_local(false, true),
+            cmd_init_opencode_local(HookAgent::OpencodeV2, false, true),
             b"" as &[u8],
             &mut out,
             &mut err,
@@ -1576,28 +1690,28 @@ rules:
     #[test]
     fn run_hook_routes_opencode_payload_through_normaliser() {
         let payload = r#"{"tool_name":"bash","tool_input":{"command":"rm -rf /"}}"#;
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run(
-            GlobalFlags::default(),
-            Command::HookPreToolUse {
-                agent: HookAgent::Opencode,
-            },
-            payload.as_bytes(),
-            &mut out,
-            &mut err,
-        );
-        assert_eq!(code, 2, "OpenCode deny must exit 2");
-        let out_s = String::from_utf8_lossy(&out);
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&out_s)
-                .expect("OpenCode stdout must be JSON")["decision"],
-            "deny"
-        );
-        assert!(
-            !out_s.contains("hookSpecificOutput"),
-            "OpenCode must emit a bare envelope: {out_s}",
-        );
+        for agent in [HookAgent::OpencodeV1, HookAgent::OpencodeV2] {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = run(
+                GlobalFlags::default(),
+                Command::HookPreToolUse { agent },
+                payload.as_bytes(),
+                &mut out,
+                &mut err,
+            );
+            assert_eq!(code, 2, "OpenCode({agent:?}) deny must exit 2");
+            let out_s = String::from_utf8_lossy(&out);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&out_s)
+                    .expect("OpenCode stdout must be JSON")["decision"],
+                "deny"
+            );
+            assert!(
+                !out_s.contains("hookSpecificOutput"),
+                "OpenCode must emit a bare envelope: {out_s}",
+            );
+        }
     }
 
     #[test]
@@ -1761,7 +1875,7 @@ rules:
 
         let mut writer = FailingWriter { budget: 0 };
         let mut err = Vec::new();
-        let code = run_plugin_check(&path, &mut writer, &mut err);
+        let code = run_plugin_check(GlobalFlags::default(), &path, &mut writer, &mut err);
         assert_eq!(code, 1);
         assert!(
             String::from_utf8_lossy(&err).contains("failed to write plugin test report"),
@@ -2055,7 +2169,7 @@ rules:
         let code = run(
             GlobalFlags::default(),
             Command::HookPreToolUse {
-                agent: HookAgent::Kiro,
+                agent: HookAgent::KiroV2,
             },
             b"" as &[u8],
             &mut out,
@@ -2238,14 +2352,13 @@ rules:
         #[test]
         fn pbt_kiro_run_hook_fails_closed_for_arbitrary_stdin(
             bytes in arbitrary_utf8_bytes(),
+            agent in prop_oneof![Just(HookAgent::KiroV2), Just(HookAgent::KiroV3)],
         ) {
             let mut out = Vec::new();
             let mut err = Vec::new();
             let code = run(
                 GlobalFlags::default(),
-                Command::HookPreToolUse {
-                    agent: HookAgent::Kiro,
-                },
+                Command::HookPreToolUse { agent },
                 bytes.as_slice(),
                 &mut out,
                 &mut err,
@@ -2362,7 +2475,7 @@ rules:
         let (code, stdout, stderr) =
             run_with(&["audit", "--path", "/no/such/ptuf-audit.jsonl"], "");
         assert_eq!(code, 0);
-        assert!(stdout.is_empty());
+        assert_eq!(stdout.len(), 0);
         assert!(stderr.contains("0 matched, 0 returned"));
     }
 
@@ -2372,7 +2485,7 @@ rules:
         let path = dir.path().to_string_lossy().into_owned();
         let (code, stdout, stderr) = run_with(&["audit", "--path", &path], "");
         assert_eq!(code, 1);
-        assert!(stdout.is_empty());
+        assert_eq!(stdout.len(), 0);
         assert!(stderr.contains("directory"));
     }
 
@@ -2419,7 +2532,7 @@ rules:
         let _guard = CwdGuard::change_to(repo.path()).unwrap();
         let (code, stdout, stderr) = run_with(&["audit"], "");
         assert_eq!(code, 1);
-        assert!(stdout.is_empty());
+        assert_eq!(stdout.len(), 0);
         assert!(stderr.contains("ptuf:"));
         assert!(!stderr.contains("audit is currently disabled"));
     }
@@ -2453,7 +2566,7 @@ rules:
             "",
         );
         assert_eq!(code, 0);
-        assert!(stdout.is_empty());
+        assert_eq!(stdout.len(), 0);
         assert!(stderr.contains("0 matched, 0 returned"));
 
         let (code, stdout, stderr) = run_with(
@@ -2469,8 +2582,8 @@ rules:
         assert_eq!(code, 0, "stderr={stderr}");
         let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(v["matched"], 0);
-        assert!(v["byDecision"].as_array().unwrap().is_empty());
-        assert!(v["byRule"].as_array().unwrap().is_empty());
+        assert_eq!(v["byDecision"].as_array().unwrap().len(), 0);
+        assert_eq!(v["byRule"].as_array().unwrap().len(), 0);
         assert!(!stderr.contains("scanned"));
     }
 
@@ -2575,11 +2688,17 @@ rules:
         let mut denied = original.clone();
         denied.set_mode(0o000);
         std::fs::set_permissions(&path, denied).unwrap();
+        // root (or CAP_DAC_OVERRIDE) ignores the mode bits, so the file stays
+        // readable and there is no read error to observe.
+        if std::fs::File::open(&path).is_ok() {
+            let _ = std::fs::set_permissions(&path, original);
+            return;
+        }
         let path_s = path.to_string_lossy().into_owned();
         let (code, stdout, stderr) = run_with(&["audit", "--path", &path_s], "");
         let _ = std::fs::set_permissions(&path, original);
         assert_eq!(code, 1);
-        assert!(stdout.is_empty());
+        assert_eq!(stdout.len(), 0);
         assert!(stderr.contains("ptuf:"));
     }
 }

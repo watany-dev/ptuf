@@ -32,7 +32,7 @@ deny > ask > monitor > allow
 
 ## CLI / hook との対応
 
-| 条件 | Claude Code | Codex | GitHub Copilot | Kiro | Cline | Cursor | Pi |
+| 条件 | Claude Code | Codex | GitHub Copilot | Kiro (v2) | Cline | Cursor | Pi |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `Allow` | exit `0` | exit `0` | exit `0`、stdout 空 | exit `0` | exit `0`、stdout `{}` | exit `0`、bare `permission:allow` JSON | exit `0`、bare `decision:allow` JSON |
 | `Monitor` | exit `0` | exit `0` | exit `0`、stdout 空 | exit `0` | exit `0`、stdout `{}` | exit `0`、bare `permission:allow` JSON | exit `0`、bare `decision:monitor` JSON |
@@ -44,7 +44,9 @@ hook の非ゼロ exit を hook 失敗として扱うため、`Deny` / `Ask` で
 code は `0` のままで、判定は stdout の bare JSON envelope
 (`hookSpecificOutput` ラッパなし) で伝える。fail-closed 経路
 (`core.engine.invalid-payload` / `core.engine.policy-load-failed`) も同じ
-contract に従う。Kiro は JSON envelope を持たないため stderr のみで通知する。
+contract に従う。Kiro v2 は JSON envelope を持たないため stderr のみで通知する。
+Kiro v3 (既定) は Claude Code と同じく `Ask` を保持し、`hookSpecificOutput` ask を
+stdout に書いて exit `0`、`Deny` は stderr + exit `2` で返す。
 Cline も file hook の非ゼロ exit を hook 失敗扱いにするため、`Deny` / `Ask`
 でも exit code は `0` のままで、判定は stdout の cancel JSON envelope
 (`{"cancel":true,"errorMessage":"…"}`) で伝える。`Allow` / `Monitor` でも
@@ -61,7 +63,20 @@ stdout に `{}` を出し、`shouldContinue` は一切出さない。
 block する。repository 側の `.ptuf.yaml` で `mode: monitor` を指定しても、
 `destructive-rm` や `remote-script-pipe` などの critical rule は弱化できない。
 
-降格前の結果が `Deny` で、mode によって `Monitor` へ変わった場合は
+降格は集約前に rule ごとに適用する。`aggregate` は同じ kind の決定が複数あると
+最後のものを返すため、集約後の 1 件だけを降格すると、後ろに評価される
+非 `hardDeny` の `Deny` (rule override で格上げしたもの、plugin rule など) と
+同時に発火した `hardDeny` まで `Monitor` に落ちてしまう。rule ごとの降格では
+非 `hardDeny` の `Deny` だけが `Monitor` になり、同時に発火した `Ask` もそのまま残る。
+
+降格される `Deny` が `rules.<id>.decision: deny` による格上げで、rule 自身は
+`Ask` を返していた場合は `Monitor` ではなく元の `Ask` に戻す
+(`filter::demote_with_floor`)。厳しくする override が monitor mode で
+結果を弱めないためで、`formal/tla/DecisionPipeline.tla` の
+`StricterOverrideNeverWeakens` がこの性質を全探索で検査する。明示的な
+`decision: monitor` (緩める override) はそのまま `Monitor`。
+
+降格前にいずれかの rule が `Deny` を返し、mode による降格で最終結果が `Deny` でなくなった場合は
 `Outcome.mode_demoted = true` となり、audit の `modeDemoted` にも反映される。
 
 ## fail-closed の境界
