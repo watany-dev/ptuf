@@ -199,21 +199,25 @@ impl ValueFlag {
     }
 }
 
-/// A prefix wrapper that runs an inner command after its own flags
-/// (`sudo CMD`, `doas CMD`, `pkexec CMD`, `run0 CMD`, `env CMD`,
-/// `command CMD`).
+/// A prefix wrapper that runs an inner command after its own flags and
+/// operands (`sudo CMD`, `env CMD`, `command CMD`, `nohup CMD`,
+/// `timeout DURATION CMD`, ...).
 ///
 /// `su` is deliberately *not* a prefix wrapper: its payload is shell code
 /// carried by `-c`, surfaced through `augment_inner_commands` instead.
 struct PrefixWrapper {
-    /// Wrapper command basename (`sudo`, `doas`, `pkexec`, `run0`, `env`,
-    /// `command`).
+    /// Wrapper command basename (`sudo`, `env`, `timeout`, ...).
     name: &'static str,
     /// Value-taking options, each listed exactly once in whichever
     /// spellings the wrapper accepts. A single source of truth keeps the
     /// short and long views symmetric by construction — the asymmetry
     /// this guards against was a real bypass (`sudo -D /tmp rm -rf /`).
     value_flags: &'static [ValueFlag],
+    /// Positional operands the wrapper reads before the inner command
+    /// (`timeout DURATION CMD`, `chroot NEWROOT CMD`, `taskset MASK CMD`).
+    /// These wrappers stop option parsing at the first operand, so the
+    /// token after the last operand is always the command head.
+    operands: usize,
 }
 
 impl PrefixWrapper {
@@ -314,24 +318,29 @@ const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
     PrefixWrapper {
         name: "sudo",
         value_flags: SUDO_VALUE_FLAGS,
+        operands: 0,
     },
     PrefixWrapper {
         name: "doas",
         value_flags: DOAS_VALUE_FLAGS,
+        operands: 0,
     },
     PrefixWrapper {
         name: "pkexec",
         value_flags: PKEXEC_VALUE_FLAGS,
+        operands: 0,
     },
     PrefixWrapper {
         name: "run0",
         value_flags: RUN0_VALUE_FLAGS,
+        operands: 0,
     },
     // `env FOO=bar CMD ...` runs CMD after its own flags and inline
     // assignments; unwrapping to CMD keeps `env curl … | sh` visible.
     PrefixWrapper {
         name: "env",
         value_flags: ENV_VALUE_FLAGS,
+        operands: 0,
     },
     // `command CMD` runs CMD; its own `-p`/`-v`/`-V` are valueless. The
     // lookup-only `command -v curl` / `-V` never runs CMD and does not
@@ -339,24 +348,127 @@ const PREFIX_WRAPPERS: &[PrefixWrapper] = &[
     PrefixWrapper {
         name: "command",
         value_flags: &[],
+        operands: 0,
     },
     // `exec [-cl] [-a NAME] CMD` replaces the shell with CMD.
     PrefixWrapper {
         name: "exec",
         value_flags: &[Short('a')],
+        operands: 0,
     },
     // `builtin NAME` runs a shell builtin (`builtin source .env`).
     PrefixWrapper {
         name: "builtin",
         value_flags: &[],
+        operands: 0,
+    },
+    // Exec-style wrappers that run their operand as a command
+    // (issue #252). Option parsing stops at the first non-option, so
+    // only the wrapper's own value flags and leading operands are skipped.
+    PrefixWrapper {
+        name: "nohup",
+        value_flags: &[],
+        operands: 0,
+    },
+    PrefixWrapper {
+        name: "setsid",
+        value_flags: &[],
+        operands: 0,
+    },
+    // `nice [-n N] CMD`; the legacy `nice -10 CMD` is a valueless cluster.
+    PrefixWrapper {
+        name: "nice",
+        value_flags: &[Both('n', "adjustment")],
+        operands: 0,
+    },
+    PrefixWrapper {
+        name: "ionice",
+        value_flags: &[
+            Both('c', "class"),
+            Both('n', "classdata"),
+            Both('p', "pid"),
+            Both('P', "pgid"),
+            Both('u', "uid"),
+        ],
+        operands: 0,
+    },
+    PrefixWrapper {
+        name: "stdbuf",
+        value_flags: &[Both('i', "input"), Both('o', "output"), Both('e', "error")],
+        operands: 0,
+    },
+    // `/usr/bin/time [-f FMT] [-o FILE] CMD` (the `time` keyword is
+    // peeled by `peel_reserved_words`).
+    PrefixWrapper {
+        name: "time",
+        value_flags: &[Both('f', "format"), Both('o', "output")],
+        operands: 0,
+    },
+    // `timeout [-s SIG] [-k DUR] DURATION CMD`
+    PrefixWrapper {
+        name: "timeout",
+        value_flags: &[Both('s', "signal"), Both('k', "kill-after")],
+        operands: 1,
+    },
+    // `chroot [--userspec U:G] [--groups G] NEWROOT CMD`
+    PrefixWrapper {
+        name: "chroot",
+        value_flags: &[Long("userspec"), Long("groups")],
+        operands: 1,
+    },
+    // `chrt [-T|-P|-D NS] PRIORITY CMD`
+    PrefixWrapper {
+        name: "chrt",
+        value_flags: &[
+            Both('T', "sched-runtime"),
+            Both('P', "sched-period"),
+            Both('D', "sched-deadline"),
+        ],
+        operands: 1,
+    },
+    // `taskset [-c] MASK CMD`
+    PrefixWrapper {
+        name: "taskset",
+        value_flags: &[],
+        operands: 1,
+    },
+    // `flock [-w SEC] [-E CODE] FILE CMD` (the `-c STRING` form carries
+    // shell code and is not unwrapped here).
+    PrefixWrapper {
+        name: "flock",
+        value_flags: &[Both('w', "timeout"), Both('E', "conflict-exit-code")],
+        operands: 1,
+    },
+    PrefixWrapper {
+        name: "unshare",
+        value_flags: &[
+            Both('S', "setuid"),
+            Both('G', "setgid"),
+            Both('R', "root"),
+            Both('w', "wd"),
+            Long("propagation"),
+            Long("setgroups"),
+            Long("map-user"),
+            Long("map-group"),
+            Long("map-users"),
+            Long("map-groups"),
+        ],
+        operands: 0,
+    },
+    // `busybox APPLET ARGS` runs APPLET.
+    PrefixWrapper {
+        name: "busybox",
+        value_flags: &[],
+        operands: 0,
     },
 ];
 
 /// Return the command a prefix wrapper would execute.
 ///
-/// Covers privilege escalators (`sudo`/`doas`/`pkexec`/`run0`) and the
-/// POSIX command wrappers `env`/`command`, so `env curl ...` and
-/// `command rm ...` unwrap to the real head rather than hiding it.
+/// Covers privilege escalators (`sudo`/`doas`/`pkexec`/`run0`), the
+/// POSIX command wrappers `env`/`command`, and exec-style wrappers
+/// (`nohup`/`nice`/`timeout`/`stdbuf`/`chroot`/...), so `env curl ...` and
+/// `timeout 9 rm ...` unwrap to the real head rather than hiding it.
 ///
 /// Each wrapper's common value-taking options are understood so
 /// `sudo -u root git ...` unwraps to `git ...`, not to `root ...`, and
@@ -378,10 +490,12 @@ pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
     }
 
     let mut i = 0;
+    let operands = wrapper.operands;
     while i < argv.args.len() {
         let arg = argv.args[i].as_str();
         if arg == "--" {
-            i += 1;
+            // `timeout -- 5 CMD`: the operands still precede the command.
+            i += 1 + operands;
             break;
         }
         if !arg.starts_with('-') || arg == "-" {
@@ -391,6 +505,9 @@ pub(crate) fn unwrap_prefix_wrapper(argv: &Argv) -> Option<Argv> {
                 i += 1;
                 continue;
             }
+            // `timeout 5 CMD`: skip the operands; option parsing stops
+            // at the first one, so the head follows the last operand.
+            i += operands;
             break;
         }
         if let Some(flag) = arg.strip_prefix("--") {
@@ -699,9 +816,15 @@ fn tokenize(s: &str) -> TokenizeOutput {
                 saw_redirect = true;
                 i += 2;
             } else {
+                // `>|` (clobber) writes like `>`; the `|` is part of the
+                // operator, not a pipe (#258 / #262).
                 out.push(Token::Redirect(RedirectOp::Stdout));
                 saw_redirect = true;
-                i += 1;
+                i += if bytes.get(i + 1) == Some(&b'|') {
+                    2
+                } else {
+                    1
+                };
             }
             continue;
         }
@@ -731,7 +854,9 @@ fn tokenize(s: &str) -> TokenizeOutput {
                 };
                 out.push(Token::Redirect(op));
                 saw_redirect = true;
-                i = d + if append { 2 } else { 1 };
+                // `n>|` (clobber) is `n>` with the `|` kept in the operator.
+                let clobber = !append && bytes.get(d + 1) == Some(&b'|');
+                i = d + if append || clobber { 2 } else { 1 };
                 continue;
             }
             // `n<` — single stdin redirect. Leave `n<<` (numeric-fd
@@ -1609,7 +1734,24 @@ fn take_redirect_target(
     op: RedirectOp,
     current_words: &mut Vec<(String, Vec<String>)>,
 ) -> String {
-    let next = iter.next();
+    let mut next = iter.next();
+    // An unquoted `${IFS}` right after the operator (`>${IFS}out`) yields
+    // an empty word: bash drops the leading field separators and
+    // redirects to `out`. Skip such empty words so the real operand is
+    // the target instead of leaking into argv. Found by the metamorphic
+    // check in `tests/bash_quote_equivalence.rs`.
+    if op != RedirectOp::Heredoc {
+        while let Some(Token::Word { text, subst_bodies }) = &next
+            && text.is_empty()
+        {
+            current_words.extend(
+                subst_bodies
+                    .iter()
+                    .map(|b| (String::new(), vec![b.clone()])),
+            );
+            next = iter.next();
+        }
+    }
     match (op, next) {
         (RedirectOp::Heredoc, Some(Token::HeredocBody(b))) => b,
         (_, Some(Token::Word { text, subst_bodies })) if op != RedirectOp::Heredoc => {
@@ -1716,19 +1858,23 @@ fn peel_reserved_words(words: &mut std::collections::VecDeque<String>) {
 }
 
 fn augment_inner_commands(argv: &mut Argv, nesting_budget: usize) {
-    if let Some(code) = extract_shell_dash_c(argv) {
+    // `sudo su -c CODE` / `timeout 9 bash -c CODE` / `nohup xargs rm`: the
+    // payload carriers may sit behind prefix wrappers, so look through them
+    // (found by the wrapper rewrites in `tests/bash_quote_equivalence.rs`).
+    let carrier = unwrap_all_prefix_wrappers(argv);
+    if let Some(code) = extract_shell_dash_c(&carrier) {
         merge_inner_shell(argv, &code, nesting_budget);
     }
-    if let Some(code) = extract_su_command(argv) {
+    if let Some(code) = extract_su_command(&carrier) {
         merge_inner_shell(argv, &code, nesting_budget);
     }
-    if let Some(code) = extract_eval_code(argv) {
+    if let Some(code) = extract_eval_code(&carrier) {
         merge_inner_shell(argv, &code, nesting_budget);
     }
-    if let Some(inner) = extract_xargs_inner(argv, nesting_budget) {
+    if let Some(inner) = extract_xargs_inner(&carrier, nesting_budget) {
         argv.inner_argv.push(inner);
     }
-    if let Some(inner) = extract_find_exec_inner(argv, nesting_budget) {
+    if let Some(inner) = extract_find_exec_inner(&carrier, nesting_budget) {
         argv.inner_argv.push(inner);
     }
     // `git -c core.sshCommand='…'` / `alias.x='!…'` / `git config
@@ -1739,10 +1885,28 @@ fn augment_inner_commands(argv: &mut Argv, nesting_budget: usize) {
 }
 
 fn merge_inner_shell(argv: &mut Argv, code: &str, nesting_budget: usize) {
+    // The payload word was decoded byte-per-char (`push_latin1`); undo that
+    // before re-tokenising, or a non-ASCII byte is widened twice and
+    // `.еnv` (Cyrillic `е`) no longer folds to `.env`.
+    let code = undo_latin1_widening(code);
+    let code = code.as_ref();
     argv.inner_code.push(code.to_string());
     let inner = parse_inner_shell(code, nesting_budget);
     argv.inner_argv.extend(inner.commands);
     argv.inner_redirects.extend(inner.redirects);
+}
+
+/// Reverse [`push_latin1`]: when every char is a Latin-1 code point and
+/// the bytes form valid UTF-8, return that UTF-8 text.
+fn undo_latin1_widening(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.is_ascii() {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    text.chars()
+        .map(|c| u8::try_from(u32::from(c)).ok())
+        .collect::<Option<Vec<u8>>>()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map_or(std::borrow::Cow::Borrowed(text), std::borrow::Cow::Owned)
 }
 
 struct InnerShell {
@@ -2609,6 +2773,50 @@ mod tests {
         assert_eq!(p.redirects[0].target, "/tmp/y");
     }
 
+    // `>${IFS}out` redirects to `out`: the empty word the IFS expansion
+    // leaves must not become the target.
+    #[test]
+    fn ifs_between_redirect_operator_and_target_is_skipped() {
+        for (cmd, args, target) in [
+            ("echo hi >${IFS}out", 1, "out"),
+            ("echo hi >$IFS${IFS}out", 1, "out"),
+            ("cat <${IFS}in", 0, "in"),
+        ] {
+            let b = parse(cmd);
+            let p = &b.segments[0];
+            assert_eq!(
+                p.commands[0].args.len(),
+                args,
+                "{cmd:?}: {:?}",
+                p.commands[0]
+            );
+            assert_eq!(p.redirects[0].target, target, "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn clobber_redirect_keeps_its_target() {
+        for (cmd, op) in [
+            ("echo hi >| out", RedirectOp::Stdout),
+            ("echo hi >|out", RedirectOp::Stdout),
+            ("echo hi 1>| out", RedirectOp::Stdout),
+            ("echo hi 1>|out", RedirectOp::Stdout),
+            ("echo hi 2>| out", RedirectOp::Stderr),
+        ] {
+            let b = parse(cmd);
+            assert_eq!(b.segments.len(), 1, "{cmd:?}");
+            let p = &b.segments[0];
+            assert_eq!(p.commands.len(), 1, "{cmd:?}: no pipe");
+            assert_eq!(p.commands[0].args, vec!["hi".to_string()], "{cmd:?}");
+            assert_eq!(p.redirects[0].op, op, "{cmd:?}");
+            assert_eq!(p.redirects[0].target, "out", "{cmd:?}");
+        }
+        // `1>>|` is not an operator: append stays append, `|` pipes.
+        let b = parse("echo hi 1>> out | cat");
+        assert_eq!(b.segments[0].commands.len(), 2);
+        assert_eq!(b.segments[0].redirects[0].op, RedirectOp::StdoutAppend);
+    }
+
     #[test]
     fn separator_after_redirect_target_starts_new_segment() {
         let b = parse("echo hi > out; ls");
@@ -3133,6 +3341,79 @@ mod tests {
     }
 
     #[test]
+    fn unwrap_prefix_wrapper_peels_exec_style_wrappers() {
+        // issue #252: each of these runs `rm -rf /`.
+        let cases: &[(&str, &[&str])] = &[
+            ("nohup", &[]),
+            ("setsid", &["-f"]),
+            ("nice", &[]),
+            ("nice", &["-n", "5"]),
+            ("nice", &["-10"]),
+            ("ionice", &["-c3"]),
+            ("ionice", &["-c", "2", "-n", "7"]),
+            ("stdbuf", &["-o0"]),
+            ("stdbuf", &["-o", "L", "-e", "0"]),
+            ("/usr/bin/time", &["-o", "/dev/null", "-f", "%e"]),
+            ("timeout", &["9"]),
+            ("timeout", &["-s", "KILL", "9"]),
+            ("timeout", &["--kill-after", "3", "9"]),
+            ("timeout", &["--", "9"]),
+            ("chroot", &["/"]),
+            ("chroot", &["--userspec", "u:g", "/"]),
+            ("chrt", &["-o", "0"]),
+            ("chrt", &["-T", "100", "-d", "0"]),
+            ("taskset", &["1"]),
+            ("taskset", &["-c", "0-3"]),
+            ("flock", &["/tmp/l"]),
+            ("flock", &["-w", "5", "/tmp/l"]),
+            ("unshare", &["-r"]),
+            ("unshare", &["-R", "/", "-w", "/"]),
+            ("busybox", &[]),
+        ];
+        for &(wrapper, flags) in cases {
+            let mut args: Vec<&str> = flags.to_vec();
+            args.extend(["rm", "-rf", "/"]);
+            let inner = unwrap_prefix_wrapper(&argv(wrapper, &args))
+                .unwrap_or_else(|| panic!("{wrapper} {flags:?} should unwrap"));
+            assert_eq!(inner, argv("rm", &["-rf", "/"]), "{wrapper} {flags:?}");
+        }
+    }
+
+    #[test]
+    fn unwrap_prefix_wrapper_operands_without_command_return_none() {
+        assert_eq!(unwrap_prefix_wrapper(&argv("timeout", &["9"])), None);
+        assert_eq!(unwrap_prefix_wrapper(&argv("timeout", &["--", "9"])), None);
+        assert_eq!(unwrap_prefix_wrapper(&argv("chroot", &["/"])), None);
+        // The operand count is exact: the token after it is the head.
+        let inner = unwrap_prefix_wrapper(&argv("taskset", &["1", "2", "3"])).expect("unwraps");
+        assert_eq!(inner, argv("2", &["3"]));
+        let inner =
+            unwrap_prefix_wrapper(&argv("timeout", &["--", "1", "2", "3"])).expect("unwraps");
+        assert_eq!(inner, argv("2", &["3"]));
+    }
+
+    #[test]
+    fn payload_carriers_behind_prefix_wrappers_are_reparsed() {
+        for cmd in [
+            "sudo su -c 'rm -rf /'",
+            "timeout 9 bash -c 'rm -rf /'",
+            "command eval 'rm -rf /'",
+            r"nohup find . -exec rm -rf / \;",
+        ] {
+            let bash = parse(cmd);
+            let outer = &bash.segments[0].commands[0];
+            assert!(
+                outer.inner_argv.iter().any(|a| a.head == "rm"),
+                "{cmd}: inner_argv = {:?}",
+                outer.inner_argv
+            );
+        }
+        let bash = parse("env xargs rm -rf");
+        let outer = &bash.segments[0].commands[0];
+        assert_eq!(outer.inner_argv[0].head, "rm");
+    }
+
+    #[test]
     fn unwrap_prefix_wrapper_returns_none_for_non_wrapper() {
         assert_eq!(unwrap_prefix_wrapper(&argv("rm", &["-rf", "/"])), None);
         // `su` is not a prefix wrapper — its payload is handled via `-c`.
@@ -3163,6 +3444,29 @@ mod tests {
         let eq = extract_su_command(&argv("su", &["--command=rm -rf /"]))
             .expect("--command= inline form");
         assert_eq!(eq, "rm -rf /");
+    }
+
+    #[test]
+    fn payload_code_is_reparsed_from_the_original_bytes() {
+        // `е` is Cyrillic (U+0435): the payload must keep it as one char,
+        // not as its two UTF-8 bytes widened again.
+        let bash = parse("su -c 'cat .еnv'");
+        let outer = &bash.segments[0].commands[0];
+        assert_eq!(outer.inner_code, vec!["cat .еnv".to_string()]);
+        assert_eq!(
+            outer.inner_argv[0].args,
+            vec![".\u{d0}\u{b5}nv".to_string()]
+        );
+        assert!(matches!(
+            undo_latin1_widening("plain"),
+            std::borrow::Cow::Borrowed("plain")
+        ));
+        assert_eq!(undo_latin1_widening("\u{c3}\u{a9}"), "é");
+        // Not a widening (a char above U+00FF, or invalid UTF-8): unchanged.
+        assert_eq!(undo_latin1_widening("é\u{0435}"), "é\u{0435}");
+        assert_eq!(undo_latin1_widening("\u{ff}"), "\u{ff}");
+        // U+01A9 truncated to a byte would complete `é`; it must not be.
+        assert_eq!(undo_latin1_widening("\u{c3}\u{1a9}"), "\u{c3}\u{1a9}");
     }
 
     #[test]

@@ -80,7 +80,30 @@ engine end-to-end は `src/testing/engine_pbt.rs`、全 rule にまたがる否�
   ルール側の head 判定はこれ経由に統一されている (ADR 0005)
 - `unwrap_prefix_wrapper` は prefix (`sudo` / `env` / `timeout` 等) を 1 層
   peel し、`unwrap_all_prefix_wrappers` は inner head まで全層 peel する。
-  非 wrapper では clone (冪等)。rule / plugin DSL は後者を使う
+  非 wrapper では clone (冪等)。rule / plugin DSL は後者を使う。対象は
+  `PREFIX_WRAPPERS` (`sudo` / `doas` / `pkexec` / `run0` / `env` / `command` /
+  `exec` / `builtin` / `nohup` / `setsid` / `nice` / `ionice` / `stdbuf` /
+  `time` / `timeout` / `chroot` / `chrt` / `taskset` / `flock` / `unshare` /
+  `busybox`)。`timeout DURATION` / `chroot NEWROOT` などの先頭 operand も読み飛ばす。
+  `bash -c` / `su -c` / `eval` / `xargs` / `find -exec` の payload は wrapper の
+  内側にあっても再 parse される (`sudo su -c '…'`)
+- `tests/bash_quote_equivalence.rs` は metamorphic な有界網羅テスト。corpus の
+  must_catch な Bash ケースすべてについて、bash 上で同じ意味になる書き換え
+  (語の quote / `''` 挿入 / backslash、区切りの tab / 連続空白 / 行継続 /
+  `${IFS}`、subshell / brace group / 前置 no-op、透過的な exec wrapper の前置)
+  を 1 か所ずつ全通り生成し、判定が元より弱くならないことを検査する。
+  ここから `>${IFS}target` の redirect 先の取りこぼしと wrapper 経由の素通りを検出した。
+  同ファイルの `path_spelling_equivalent_rewrites_stay_caught` はパス語の
+  `/` → `//` / `/./` と、ファイル引数の dotfile への `./` 前置を全通り試す
+  (`~//.claude` の HOME 外への解決、機密パス・download-then-exec の照合漏れを検出)。
+  `redirect_placement_and_spelling_rewrites_stay_caught` は redirect の位置
+  (コマンド先頭 / head 直後) と表記 (`>f` / `1>` / `>|` / `0<`) を、
+  `git_global_option_insertions_stay_caught` は `git` と subcommand の間への
+  中立な global option (`-C .` / `--no-pager` / `-c k=v` など) の挿入を全通り試す。
+  `head_path_and_option_order_rewrites_stay_caught` は head の絶対パス化
+  (`/usr/bin/bash`) と、boolean option だけの coreutils での cluster の分割・逆順・
+  operand の後ろへの移動 (`rm / -rf`) を試す。最初のテストは各コマンドを
+  `bash -c '…'` / `sh -c` / `eval` / `su -c` / `sudo sh -c` で 1 段包む変形も含む
 - tokenizer は 1 byte 以上前進する (forward-progress;
   `debug_assert!(advanced > 0)`)
 

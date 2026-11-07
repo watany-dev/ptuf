@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc b347be962452189ac09107ffe08e11bb19c86519565ff305f3c061ff2192fa95 # shrinks to tail = ""
+cc 564e0cfc4a39f01ae5414fd52c7d7f7dce0b698d87a4e7dad9b1e152647cccca # shrinks to tail = "/", home = "/home/_"

@@ -331,6 +331,29 @@ fn push_canonical(path: PathBuf, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Collapse spellings the kernel resolves identically without looking at
+/// the filesystem: a run of `/` becomes one `/` and a `/./` becomes `/`
+/// (`~/.config//gh/./hosts.yml` → `~/.config/gh/hosts.yml`). `..` is left
+/// alone because `a/../b` depends on what `a` is. Works on any string, so
+/// it can fold a path embedded in a larger token; returns the input
+/// unchanged (borrowed) when there is nothing to fold.
+pub(crate) fn fold_redundant_separators(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains("//") && !s.contains("/./") {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        out.push(ch);
+        if out.ends_with("/./") {
+            out.truncate(out.len() - 2);
+        }
+        if out.ends_with("//") {
+            out.pop();
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// Resolve `.` and `..` components without touching the filesystem.
 /// Used as a final pass on paths whose tail does not exist on disk and
 /// therefore cannot be canonicalised by the OS. `..` at the root or in
@@ -461,6 +484,13 @@ fn push_redirect_fact(redirect: &Redirect, repo_root: Option<&Path>, out: &mut V
     ));
 }
 
+/// `home.join(rest)`, except that extra leading separators in `rest` stay
+/// under `home`: `~//.claude` is `$HOME/.claude`, whereas `Path::join`
+/// with the absolute `/.claude` would replace `home` entirely.
+fn join_home(home: &Path, rest: &str) -> PathBuf {
+    home.join(rest.trim_start_matches('/'))
+}
+
 /// Expand `~` / `$HOME` / `${HOME}` prefixes against the supplied env
 /// lookup. Falls back to the raw string when `HOME` is unset.
 fn expand_home(raw: &str, env: &dyn EnvLookup) -> PathBuf {
@@ -469,19 +499,19 @@ fn expand_home(raw: &str, env: &dyn EnvLookup) -> PathBuf {
     };
     let home = PathBuf::from(home_os);
     if let Some(rest) = raw.strip_prefix("~/") {
-        return home.join(rest);
+        return join_home(&home, rest);
     }
     if raw == "~" {
         return home;
     }
     if let Some(rest) = raw.strip_prefix("$HOME/") {
-        return home.join(rest);
+        return join_home(&home, rest);
     }
     if raw == "$HOME" {
         return home;
     }
     if let Some(rest) = raw.strip_prefix("${HOME}/") {
-        return home.join(rest);
+        return join_home(&home, rest);
     }
     if raw == "${HOME}" {
         return home;
@@ -944,6 +974,45 @@ mod tests {
         assert_eq!(resolved, real.canonicalize().expect("canon"));
     }
 
+    #[test]
+    fn fold_redundant_separators_collapses_slashes_and_dots() {
+        for (raw, want) in [
+            ("a//b", "a/b"),
+            ("a///b", "a/b"),
+            ("a/./b", "a/b"),
+            ("a/././b", "a/b"),
+            ("/.//x", "/x"),
+            ("//tmp/./i.sh", "/tmp/i.sh"),
+            ("~/.config//gh/./hosts.yml", "~/.config/gh/hosts.yml"),
+            ("a//", "a/"),
+        ] {
+            let got = fold_redundant_separators(raw);
+            assert!(matches!(got, std::borrow::Cow::Owned(_)), "{raw}");
+            assert_eq!(got, want, "{raw}");
+        }
+        for raw in ["a/b", "./x", "a/.b", "a/../b", "", "/"] {
+            let got = fold_redundant_separators(raw);
+            assert!(matches!(got, std::borrow::Cow::Borrowed(_)), "{raw}");
+            assert_eq!(got, raw);
+        }
+    }
+
+    #[test]
+    fn extra_separators_after_home_prefix_stay_under_home() {
+        let env = MapEnv::with_home("/h");
+        for raw in [
+            "~//.claude/settings.json",
+            "$HOME//.claude/settings.json",
+            "${HOME}///.claude/settings.json",
+        ] {
+            assert_eq!(
+                expand_home(raw, &env),
+                PathBuf::from("/h/.claude/settings.json"),
+                "{raw}"
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn resolve_prefix_keeps_retargeting_symlink_lexical() {
@@ -1030,7 +1099,10 @@ mod tests {
             };
             let env = MapEnv::with_home(&home);
             let out = extract_with_env(&i, &env).expect("path");
-            prop_assert_eq!(out.absolute, PathBuf::from(home).join(tail));
+            // Extra separators (`~//x`) stay under HOME: the kernel reads
+            // `$HOME//x` as `$HOME/x`, never as `/x`.
+            prop_assert!(out.absolute.starts_with(&home), "{} escaped {home}", out.absolute.display());
+            prop_assert_eq!(out.absolute, PathBuf::from(home).join(tail.trim_start_matches('/')));
         }
 
         // When HOME is unset, ~ paths fall back to the raw form rather
