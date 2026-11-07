@@ -108,4 +108,8 @@ exclude_re = [
     'replace \+= with [-*]= in (fnmatch_from|match_one)',
     # Never seeing a `*` (or seeing one everywhere) stalls the star loop.
     ':\d+:27: replace == with != in fnmatch_from',
+    # Loop indices in the heredoc substitution scanner and the `find`
+    # argument walkers: a step that does not advance only ever spins.
+    'replace \+= with [-*]= in (heredoc_substitution_bodies|find_leading_option_len|find_lists_every_entry|find_exec_commands)',
+    ':\d+:43: replace \+ with [-*] in find_lists_every_entry',
 ]

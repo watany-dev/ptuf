@@ -7,7 +7,9 @@
 
 use crate::decision::{Decision, DecisionKind, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, short_flag_cluster_contains, unwrap_all_prefix_wrappers};
+use crate::facts::shell::{
+    Argv, Bash, reads_script_from_stdin, short_flag_cluster_contains, unwrap_all_prefix_wrappers,
+};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -63,7 +65,8 @@ impl ConfigRule for DynamicEval {
 
     fn evaluate(&self, facts: &Facts, _input: &HookInput) -> Option<Decision> {
         let bash = facts.bash.as_ref()?;
-        let triggered = bash.commands().into_iter().any(invokes_dynamic_eval);
+        let triggered =
+            bash.commands().into_iter().any(invokes_dynamic_eval) || pipes_opaque_script(bash);
         if !triggered {
             return None;
         }
@@ -71,8 +74,10 @@ impl ConfigRule for DynamicEval {
         let reason = reason::build(
             RULE_ID,
             "The command loads code at runtime through an interpreter flag \
-             (`bash -c`, `python -c`, `node -e`, `eval`, …) or picks the command \
-             name at runtime (`$X …`, `$(…) …`, a glob such as `/bin/r?`). The \
+             (`bash -c`, `python -c`, `node -e`, `eval`, …), pipes a script the \
+             command line does not spell out into a shell (`… | base64 -d | sh`), \
+             or picks the command name at runtime (`$X …`, `$(…) …`, a glob such \
+             as `/bin/r?`). The \
              real command is opaque to ptuf, so other rules cannot inspect what \
              will actually run.",
             &[
@@ -87,6 +92,37 @@ impl ConfigRule for DynamicEval {
             reason,
         })
     }
+}
+
+/// A shell that reads its script from a pipe whose content the command
+/// line does not spell out (`… | base64 -d | sh`, `cat f | bash`). When
+/// the content is literal (`echo CODE | sh`) the parser re-parses it into
+/// `inner_code` / `inner_argv`, so other rules see it and this does not fire.
+fn pipes_opaque_script(bash: &Bash) -> bool {
+    pipes_opaque_script_in_shell(bash, crate::facts::shell::NESTING_BUDGET)
+}
+
+/// Shell code run by a command (`su -c '…'`, `eval '…'`) is its own shell
+/// with its own pipelines, so it is checked the same way (`su -c 'echo X |
+/// base64 -d | bash'`). The flattened `inner_argv` drops the inner
+/// pipeline boundaries.
+fn pipes_opaque_script_in_shell(bash: &Bash, depth: usize) -> bool {
+    pipes_opaque_script_at_top(bash)
+        || depth.checked_sub(1).is_some_and(|next| {
+            bash.segments
+                .iter()
+                .flat_map(|p| &p.commands)
+                .flat_map(|c| &c.inner_code)
+                .any(|code| pipes_opaque_script_in_shell(&crate::facts::shell::parse(code), next))
+        })
+}
+
+fn pipes_opaque_script_at_top(bash: &Bash) -> bool {
+    bash.segments.iter().any(|pipe| {
+        pipe.commands.iter().skip(1).any(|cmd| {
+            cmd.inner_code.is_empty() && reads_script_from_stdin(&unwrap_all_prefix_wrappers(cmd))
+        })
+    })
 }
 
 fn invokes_dynamic_eval(argv: &Argv) -> bool {
@@ -196,6 +232,45 @@ mod tests {
     }
 
     #[test]
+    fn asks_when_an_opaque_script_is_piped_into_a_shell() {
+        for cmd in [
+            "echo x | base64 -d | bash",
+            "cat script.sh | sh",
+            "rev <<< x | sudo bash",
+            "make | bash -s",
+            "a | bash /dev/stdin",
+            "{ a; } | bash",
+            // Inside shell payload code, within the nesting budget.
+            "su -c 'echo x | base64 -d | bash'",
+            "eval 'cat f | sh'",
+            "su -c \"su -c 'cat f | sh'\"",
+        ] {
+            assert_ask(cmd);
+        }
+    }
+
+    #[test]
+    fn allows_shells_whose_stdin_script_is_literal_or_absent() {
+        for cmd in [
+            "echo ls | bash",
+            "bash <<< ls",
+            "bash < script.sh",
+            "bash",
+            "cat x | bash script.sh",
+            "cat x | grep bash",
+            "a; bash",
+        ] {
+            assert_allow(cmd);
+        }
+    }
+
+    #[test]
+    fn allows_interpreter_script_with_trailing_arguments() {
+        assert_allow("python3 script.py --verbose");
+        assert_allow("bash -x build.sh arg");
+    }
+
+    #[test]
     fn asks_on_bash_dash_c() {
         assert_ask("bash -c 'echo hi'");
     }
@@ -249,7 +324,7 @@ mod tests {
         for cmd in [
             "$(echo rm) -rf /",
             "`echo rm` -rf /",
-            "X=rm; $X -rf /",
+            "$X -rf /",
             "${X:-rm} -rf /",
             "/bin/r? -rf /",
             "/bin/r* -rf /",
