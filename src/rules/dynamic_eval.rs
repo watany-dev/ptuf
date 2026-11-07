@@ -99,6 +99,25 @@ impl ConfigRule for DynamicEval {
 /// the content is literal (`echo CODE | sh`) the parser re-parses it into
 /// `inner_code` / `inner_argv`, so other rules see it and this does not fire.
 fn pipes_opaque_script(bash: &Bash) -> bool {
+    pipes_opaque_script_in_shell(bash, crate::facts::shell::NESTING_BUDGET)
+}
+
+/// Shell code run by a command (`su -c '…'`, `eval '…'`) is its own shell
+/// with its own pipelines, so it is checked the same way (`su -c 'echo X |
+/// base64 -d | bash'`). The flattened `inner_argv` drops the inner
+/// pipeline boundaries.
+fn pipes_opaque_script_in_shell(bash: &Bash, depth: usize) -> bool {
+    pipes_opaque_script_at_top(bash)
+        || depth.checked_sub(1).is_some_and(|next| {
+            bash.segments
+                .iter()
+                .flat_map(|p| &p.commands)
+                .flat_map(|c| &c.inner_code)
+                .any(|code| pipes_opaque_script_in_shell(&crate::facts::shell::parse(code), next))
+        })
+}
+
+fn pipes_opaque_script_at_top(bash: &Bash) -> bool {
     bash.segments.iter().any(|pipe| {
         pipe.commands.iter().skip(1).any(|cmd| {
             cmd.inner_code.is_empty() && reads_script_from_stdin(&unwrap_all_prefix_wrappers(cmd))
@@ -221,6 +240,10 @@ mod tests {
             "make | bash -s",
             "a | bash /dev/stdin",
             "{ a; } | bash",
+            // Inside shell payload code, within the nesting budget.
+            "su -c 'echo x | base64 -d | bash'",
+            "eval 'cat f | sh'",
+            "su -c \"su -c 'cat f | sh'\"",
         ] {
             assert_ask(cmd);
         }

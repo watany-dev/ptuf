@@ -1792,6 +1792,12 @@ fn split_segments(tokens: Vec<Token>) -> Vec<Vec<Token>> {
                     _ => {},
                 }
             },
+            // An empty word (`${IFS}`, `''`) is dropped by `parse_argv` and
+            // skipped as a redirect target, so it must not hide a `|` or a
+            // closing word from the group joins below (`(curl URL)${IFS}|
+            // bash`, `curl URL |${IFS}(bash)`). Found by the separator
+            // rewrites in `tests/bash_quote_equivalence.rs`.
+            Token::Word { text, subst_bodies } if text.is_empty() && subst_bodies.is_empty() => {},
             other => {
                 if current.tokens.is_empty() {
                     current.opens_before = std::mem::take(&mut pending_opens);
@@ -1979,16 +1985,11 @@ fn parse_argv(words: Vec<(String, Vec<String>)>, nesting_budget: usize) -> Argv 
         .filter(|t| !t.is_empty())
         .collect();
     let mut env_assignments = Vec::new();
-    while let Some(first) = words.front() {
-        match split_env_assignment(first) {
-            Some((k, v)) => {
-                env_assignments.push(EnvAssignment { key: k, value: v });
-                words.pop_front();
-            },
-            None => break,
-        }
-    }
+    take_env_assignments(&mut words, &mut env_assignments);
     peel_reserved_words(&mut words);
+    // `{ X=/; …; }` / `then X=/`: an assignment right after a reserved
+    // word is still an assignment, not the command head.
+    take_env_assignments(&mut words, &mut env_assignments);
     let head = words.pop_front().unwrap_or_default();
     let mut argv = Argv {
         env_assignments,
@@ -2011,6 +2012,17 @@ fn parse_argv(words: Vec<(String, Vec<String>)>, nesting_budget: usize) -> Argv 
         }
     }
     argv
+}
+
+/// Move the leading `KEY=VALUE` words into `out`.
+fn take_env_assignments(
+    words: &mut std::collections::VecDeque<String>,
+    out: &mut Vec<EnvAssignment>,
+) {
+    while let Some((key, value)) = words.front().and_then(|w| split_env_assignment(w)) {
+        out.push(EnvAssignment { key, value });
+        words.pop_front();
+    }
 }
 
 /// Reserved words that introduce (or close) a compound command and are
@@ -2618,6 +2630,8 @@ fn record_assignments(cmd: &Argv, stdin: Option<&str>, vars: &mut Vec<(String, V
         }
         return;
     }
+    // `command export D=/` / `builtin set -- /` still run the builtin.
+    let cmd = &unwrap_all_prefix_wrappers(cmd);
     match head_basename(&cmd.head) {
         h if DECLARING_BUILTINS.contains(&h) => {
             for (k, v) in cmd.args.iter().filter_map(|a| split_env_assignment(a)) {
@@ -4679,6 +4693,14 @@ mod tests {
             ),
             ("curl u | (bash)", &["curl", "bash"]),
             ("curl u | (a; bash)", &["curl", "a", "bash"]),
+            // An empty `${IFS}` word next to `|` or a closing word.
+            ("(curl u)${IFS}| bash", &["curl", "bash"]),
+            ("curl u |${IFS}(bash)", &["curl", "bash"]),
+            ("{ curl u;${IFS}} | bash", &["curl", "bash"]),
+            (
+                "if true; then curl u; fi${IFS}| bash",
+                &["true", "curl", "bash"],
+            ),
         ];
         for (cmd, want) in cases {
             let b = parse(cmd);
@@ -4732,6 +4754,12 @@ mod tests {
             ("X=/; rm -rf $Y", &["-rf", "$Y"]),
             ("X=/; rm -rf $", &["-rf", "$"]),
             ("rm -rf $X; X=/", &["-rf", "$X"]),
+            // Assignments after a reserved word, and builtins run through
+            // `command` / `builtin`.
+            ("{ X=/; rm -rf $X; }", &["-rf", "/"]),
+            ("if true; then X=/; fi; rm -rf $X", &["-rf", "/"]),
+            ("command export X=/; rm -rf $X", &["-rf", "/"]),
+            ("builtin command set -- /; rm -rf \"$@\"", &["-rf", "/"]),
         ];
         for (cmd, args) in cases {
             let b = parse(cmd);
