@@ -1,6 +1,8 @@
 use crate::decision::{Decision, Severity};
 use crate::facts::Facts;
-use crate::facts::shell::{Argv, unwrap_all_prefix_wrappers};
+use crate::facts::shell::{
+    Argv, find_exec_commands, find_lists_every_entry, find_start_paths, unwrap_all_prefix_wrappers,
+};
 use crate::hook_input::HookInput;
 use crate::reason;
 
@@ -77,7 +79,7 @@ impl ConfigRule for DestructiveRm {
         let triggered = bash
             .commands()
             .into_iter()
-            .any(is_destructive_rm_invocation);
+            .any(|argv| is_destructive_rm_invocation(argv) || is_destructive_find_invocation(argv));
         if !triggered {
             return None;
         }
@@ -105,6 +107,25 @@ fn is_destructive_rm_invocation(argv: &Argv) -> bool {
     is_rm_head(argv.head_basename())
         && has_recursive_force_flag(&argv)
         && argv.positional().any(is_destructive_target)
+}
+
+/// `find PATH -delete` / `find PATH -exec rm … {} +` with no test that
+/// narrows the match removes every entry under `PATH`, `PATH` itself
+/// included: the same as `rm -rf PATH`. A narrowing test (`-name`,
+/// `-mtime`, `-empty`, …) keeps the call out of this rule.
+fn is_destructive_find_invocation(argv: &Argv) -> bool {
+    let argv = unwrap_all_prefix_wrappers(argv);
+    if argv.head_basename() != "find" || !find_lists_every_entry(&argv) {
+        return false;
+    }
+    let deletes = argv.args.iter().any(|a| a == "-delete")
+        || find_exec_commands(&argv)
+            .iter()
+            .any(|c| is_rm_head(c.head_basename()));
+    deletes
+        && find_start_paths(&argv)
+            .into_iter()
+            .any(is_destructive_target)
 }
 
 fn is_rm_head(head: &str) -> bool {
@@ -335,6 +356,40 @@ mod tests {
         assert_eq!(r.id(), RULE_ID);
         assert_eq!(r.severity(), Severity::Critical);
         assert!(r.hard_deny());
+    }
+
+    #[test]
+    fn denies_find_that_deletes_a_whole_protected_tree() {
+        for cmd in [
+            "find / -delete",
+            "find ~ -delete",
+            "find /etc -type f -delete",
+            "find -L /usr -xdev -delete",
+            "find / -exec rm -rf {} +",
+            "find / -exec rm {} \\;",
+            "find /var -execdir /bin/rm -f {} +",
+            "sudo find / -exec sudo rm -rf {} +",
+            "find build / -delete",
+        ] {
+            assert_deny(cmd);
+        }
+    }
+
+    #[test]
+    fn allows_find_that_is_narrowed_or_harmless() {
+        for cmd in [
+            "find / -name '*.pyc' -delete",
+            "find / -empty -delete",
+            "find ~ -mtime +30 -exec rm {} +",
+            "find /tmp/scratch -delete",
+            "find build -delete",
+            "find / -print",
+            "find / -exec ls {} +",
+            "find / -exec chmod 0 {} +",
+            "ls / -delete",
+        ] {
+            assert_allow(cmd);
+        }
     }
 
     #[test]
