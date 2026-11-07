@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.7.1] - 2026-11-07
 
 ### Security
+- OpenCode adapter が `apply_patch` を `apply_patch` (パッチ本文を `command` へ
+  複製) として正規化するようにした。現行 OpenCode はパッチツールの id を
+  `patch` から `apply_patch` に改め、GPT 系モデルでは `edit` / `write` の代わりに
+  これを使う。従来は未知ツールとして `mcp__opencode__apply_patch` に落ち、パスが
+  抽出されないため `.env` などへのパッチが素通りしていた。旧 id `patch` も引き続き
+  受け付ける。
 - コマンド間のデータの流れで中身を運ぶ形の bypass をまとめて修正。いずれも修正前は allow。
   - シェルが stdin から読むスクリプト: `bash <<< 'CODE'` / `bash <<EOF` /
     `echo 'CODE' | sh` / `printf … | sh` / `cat <<EOF | bash` / `bash /dev/stdin`。

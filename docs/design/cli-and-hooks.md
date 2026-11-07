@@ -459,7 +459,7 @@ required marker (`Managed by ptuf…`, `ptuf-agent: opencode`) を持たない
 | --- | --- | --- |
 | bash (v1) / shell (v2) | Bash | 両世代とも `command` をシェル規則で評価 |
 | read / write / edit | Read / Write / Edit | camelCase `filePath` → `file_path` |
-| patch | apply_patch | patch 本文を `command` に複製 |
+| apply_patch / patch | apply_patch | patch 本文を `command` に複製。現行 OpenCode は `apply_patch` (GPT 系モデルでは `edit` / `write` の代替)、`patch` は旧 id |
 | webfetch | WebFetch | |
 | grep / glob / list | `mcp__opencode__grep` 等 | 既存 MCP 汎用 path 抽出 |
 | todowrite / todoread / task | `mcp__opencode__<name>` | |
