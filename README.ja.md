@@ -18,6 +18,24 @@
 対応ホスト: **Claude Code** / **Codex** / **GitHub Copilot** /
 **Kiro CLI** / **Cline** / **Cursor** / **Pi Coding Agent** / **OpenCode**
 
+- **シェル構文を理解** — クォート、パイプ、`bash -c`、`$(…)`、変数展開を解釈するので
+  `rm -rf "/"` や `$(echo rm) -rf /` も止まります。
+- **bypass をテストで固定** — 既知の回避手口はすべて版管理された回帰ケースにし、
+  fuzzing と mutation testing で継続検証しています。
+- **エージェントが無効化できない** — ptuf の設定・バイナリ・hook 登録の書き換えを
+  セッション中にブロックします。
+- **ランタイム不要** — オフラインで動く単一バイナリ、監査ログは JSONL。
+
+## クイックスタート
+
+```bash
+brew install watany-dev/tap/ptuf   # または: npm install -g @watany-dev/ptuf
+ptuf init claude-code              # codex / copilot / kiro / cline / cursor / pi / opencode も可
+ptuf check --tool Bash 'rm -rf /'  # Decision: deny
+```
+
+ビルド済みインストーラ・Windows・cargo などの導入方法は [インストール](#インストール) を参照。
+
 ## hooks の自作スクリプト、そのままで大丈夫ですか?
 
 Claude Code の hooks で `rm -rf` を grep してブロックする自作スクリプトは

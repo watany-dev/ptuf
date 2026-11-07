@@ -16,6 +16,25 @@ rules, not LLM heuristics.
 
 Supported hosts: **Claude Code**, **Codex**, **GitHub Copilot**, **Kiro CLI**, **Cline**, **Cursor**, **Pi Coding Agent**, **OpenCode**.
 
+- **Shell-aware** — parses quotes, pipes, `bash -c`, `$(…)` and variable
+  expansion, so `rm -rf "/"` and `$(echo rm) -rf /` are caught too.
+- **Bypass-tested** — every known evasion is a versioned regression case,
+  backed by fuzzing and mutation testing.
+- **Self-protecting** — the agent cannot edit ptuf's config, binary, or hook
+  registration to switch it off mid-session.
+- **Zero runtime** — a single offline binary with a JSONL audit log.
+
+## Quick start
+
+```bash
+brew install watany-dev/tap/ptuf   # or: npm install -g @watany-dev/ptuf
+ptuf init claude-code              # or codex / copilot / kiro / cline / cursor / pi / opencode
+ptuf check --tool Bash 'rm -rf /'  # Decision: deny
+```
+
+Other install methods (prebuilt installer, Windows, cargo, mise) are under
+[Install](#install).
+
 ## Why ptuf?
 
 Most guardrails today are hand-rolled hook scripts that grep the command
